@@ -18,7 +18,9 @@ The roadmap describes the intended product outcome, not the implementation strat
 
 ## Goal
 
-Deliver a reliable, self-contained quotation display that selects one eligible entry per display day and progressively reveals information on a physical e-paper screen.
+Deliver a reliable, self-contained quotation display that selects one eligible quotation per display day and progressively reveals information on a physical e-paper screen.
+
+The application must support multiple quotations per content entry, predictable selection precedence, repetition avoidance, durable daily selections, and pre-rendered presentation stages.
 
 The first release should be useful in normal household operation without depending on a web interface, cloud service, or external integration.
 
@@ -26,22 +28,29 @@ The first release should be useful in normal household operation without dependi
 
 ### Content library
 
-- Load quotation entries from local YAML files.
+- Load content entries from local YAML files.
+- Support multiple quotations per entry, sharing the entry's configuration and metadata.
 - Use stable entry identifiers independent of filenames.
-- Support defined semantic fields for primary content, source, and attribution.
+- Identify individual quotations by normalized message text for repetition purposes.
+- Support defined semantic fields for quotations, source, and attribution.
+- Support optional integer priorities and entry-level eligibility and reveal configuration.
 - Support entries whose optional attribution or source fields are absent.
 - Validate the content library and provide actionable diagnostics.
 - Support local content authoring without a content-management application.
 
 ### Daily content selection
 
-- Select one eligible entry per logical display day.
+- Select one eligible quotation per logical display day.
 - Support a configurable timezone and display-day start time.
-- Support ordinary and special-date content eligibility.
-- Give matching special-date content precedence over ordinary content.
-- Maintain independent repetition histories for ordinary and special-date selection contexts.
-- Exhaust eligible entries before repeating them within a selection cycle.
-- Preserve the selected entry and required history across application restarts.
+- Support ordinary and date-specific eligibility with absolute specificity precedence.
+- Apply repetition avoidance before priority-based selection.
+- Select randomly among equally eligible, highest-priority quotations.
+- Maintain a permanent chronological history of committed quotations.
+- Maintain separate, resettable repetition history that prevents quotation reuse until the applicable selection pool is exhausted.
+- Reset only the affected repetition pool without discarding unrelated repetition history.
+- Preserve selections and reveal progression through application restarts and clock adjustments.
+- Commit a complete, self-contained daily presentation snapshot independently of the content library.
+- Ensure that a committed selection and its corresponding history updates remain consistent across failures.
 
 ### Progressive reveals
 
@@ -49,7 +58,11 @@ The first release should be useful in normal household operation without dependi
 - Reveal additional semantic fields at configured times.
 - Provide global default reveal scheduling with optional per-entry overrides.
 - Preserve previously revealed information as new fields appear.
-- Resume the stage appropriate to the current time after startup or interruption.
+- Generate and persist all required reveal-stage images when preparing the committed daily selection.
+- Reuse prepared images for scheduled updates rather than rendering each stage on demand.
+- Recover missing or incomplete images without changing the committed selection.
+- Resume the appropriate reveal stage after startup or interruption.
+- Prevent backward clock adjustments from hiding previously revealed information.
 - Skip missed intermediate updates rather than replaying them.
 
 ### Visual presentation
@@ -75,8 +88,11 @@ The first release should be useful in normal household operation without dependi
 ### Development and validation
 
 - Allow content selection and presentation rendering to be exercised without display hardware.
-- Include automated coverage for selection, scheduling, persistence, validation, and rendering behavior where practical.
-- Provide an inspectable rendered-image output for development and troubleshooting.
+- Include automated coverage for quotation eligibility, specificity, priority, repetition, scheduling, persistence, validation, and rendering.
+- Verify atomic selection commitment and recovery from interrupted operations.
+- Verify recovery of committed selections and prepared images after application restarts.
+- Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
+- Provide inspectable rendered-image output for development and troubleshooting.
 - Validate physical display behavior on the target hardware.
 - Document installation, configuration, content creation, and ordinary operation.
 
@@ -216,13 +232,15 @@ Development should proceed in the following order:
 
 1. Establish repository documentation, engineering standards, and contributor workflow.
 2. Define and validate the initial content and configuration contracts.
-3. Implement and test content loading, daily selection, and persistent state.
-4. Implement and test reveal scheduling and hardware-independent rendering.
-5. Integrate and validate the physical e-paper display.
-6. Establish reliable unattended operation on the target Raspberry Pi.
-7. Complete Version 0.1 validation, documentation, and release.
-8. Proceed to the companion web presentation.
-9. Evaluate later integrations and public publishing independently.
+3. Implement and test content loading, quotation eligibility, and selection policy.
+4. Implement and test persistent histories, daily snapshots, and atomic selection commitment.
+5. Implement and test reveal scheduling and hardware-independent image preparation.
+6. Implement and test persisted presentation artifacts and recovery behavior.
+7. Integrate and validate the physical e-paper display.
+8. Establish reliable unattended operation on the target Raspberry Pi.
+9. Complete Version 0.1 validation, documentation, and release.
+10. Proceed to the companion web presentation.
+11. Evaluate later integrations and public publishing independently.
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
 
