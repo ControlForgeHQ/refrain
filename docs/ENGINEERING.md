@@ -453,61 +453,57 @@ Do not allow the renderer to depend directly on Waveshare-specific objects or AP
 
 Use Pillow-compatible font files for text rendering.
 
-Font identifiers and user-facing configuration rules are defined in `docs/CONTENT_FORMAT.md`.
+Font identifiers, paths, and validation rules are defined in `docs/CONTENT_FORMAT.md`.
 
-Resolve and validate every explicitly registered font when loading application configuration.
+Font-selection and fallback behavior are defined in `docs/ARCHITECTURE.md`.
 
-Validation must establish that each registered font exists, is readable, and can be loaded by the renderer.
+Validate registered font files when loading application configuration.
 
-A registered font that cannot be loaded is a configuration error, regardless of whether it is currently referenced by content.
+Validation must establish that each file exists, is readable, and can be loaded by the renderer.
 
-When loading the content library, identify entries requesting font identifiers that are not registered.
+Report unavailable content-entry font preferences during content-library loading rather than repeatedly during daily selection or scheduling.
 
-Log a warning for each affected entry without invalidating otherwise valid content.
+Use a controlled random source for deterministic testing of automatic font selection.
 
-When such an entry is selected, resolve its font using the configured default pool.
+Resolve the selected font before committing the daily snapshot.
 
-When no font override is provided, randomly select from the default pool.
+Pass the resolved font to the renderer through the committed presentation configuration.
 
-Use a controlled random source in tests so font-selection behavior can be verified deterministically.
+Do not independently select or substitute fonts during rendering, image regeneration, or scheduled display updates.
 
-Font selection occurs once per daily selection, before committing the daily snapshot.
+Preserve sufficient information to identify and validate the committed font during recovery.
 
-Pass the resolved font to the renderer as part of the committed presentation configuration.
+A font registry identifier or filesystem path alone does not guarantee that the underlying font file remains unchanged after configuration updates.
 
-Do not perform independent random font selection during rendering, image regeneration, or scheduled display updates.
-
-Preserve sufficient font identification information with the committed snapshot to verify that the required font remains available when prepared images must be regenerated.
-
-The persistence implementation must account for the fact that a font path or registry identifier alone does not guarantee that the same font file will remain available after configuration changes.
-
-If the required font is unavailable during recovery, retain valid prepared images and report the problem rather than silently substituting a different font for the committed presentation.
+If the committed font is unavailable during recovery, retain valid prepared images and report the problem rather than silently changing the presentation.
 
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
-Do not introduce a general font discovery, download, or substitution framework for Version 0.1.
+Do not introduce general font discovery, download, or substitution infrastructure without a demonstrated requirement.
 
 ### Keep presentation configuration focused
 
 The initial release provides one configurable layout.
 
-Configuration should expose meaningful presentation controls without becoming a general layout-programming language.
-
 Use the normalized quotation region and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
 
-The renderer must calculate the corresponding pixel geometry using the actual output-image dimensions.
+Convert normalized coordinates into pixel geometry using the actual output-image dimensions.
 
-Automatically determine suitable line wrapping and font size from the selected text, resolved font, and available quotation region.
+Use Pillow's font metrics and text-measurement facilities to determine suitable font size and line wrapping.
 
-Prefer the largest font size within the permitted bounds that fits the complete quotation.
+Text measurement must account for:
 
-Text measurement must account for actual font metrics, line spacing, paragraph structure, and explicit line breaks.
+- actual glyph dimensions;
+- line spacing;
+- preserved line breaks;
+- paragraph spacing;
+- the configured quotation region.
 
-Do not change wording or punctuation to make content fit.
+Avoid assumptions based solely on character counts or average character widths.
 
-If the complete quotation cannot fit within the permitted region at the minimum font size, report a meaningful preparation failure.
+The fitting implementation must satisfy the presentation behavior defined in `docs/ARCHITECTURE.md`.
 
-The renderer must not silently clip, truncate, or omit text.
+Prefer a straightforward deterministic fitting procedure over a general-purpose text-layout framework.
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
