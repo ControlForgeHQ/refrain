@@ -228,7 +228,13 @@ Do not introduce a generic framework merely to avoid a few direct dependencies b
 
 Use Black for Python formatting and Ruff for linting.
 
-Configuration belongs in the repository and must be applied consistently by contributors and automated checks.
+The project uses a target line length of 120 characters.
+
+Line length is a readability guideline rather than an absolute restriction. Prefer keeping a clear expression on one line when splitting it would make the code harder to understand.
+
+Do not introduce artificial line breaks solely to satisfy historical terminal-width conventions.
+
+Configuration belongs in `pyproject.toml` and must be applied consistently by contributors and automated checks.
 
 Source files should not require editor-specific configuration to maintain consistent formatting.
 
