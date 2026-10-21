@@ -341,13 +341,19 @@ Do not depend on YAML mapping order or filesystem enumeration order for selectio
 
 Configuration must be explicit, documented, and validated.
 
+Both application configuration and content entries use YAML, with separate schemas defined in `docs/CONTENT_FORMAT.md`.
+
 Use sensible defaults where the product requirements establish them.
 
 Do not silently substitute defaults for invalid user-supplied values when doing so could alter scheduling, selection, or presentation behavior.
 
-Resolve effective per-entry configuration before committing a daily snapshot.
+Application configuration must strictly validate explicitly registered resources, including fonts.
 
-After commitment, the selected presentation must not depend on changes to the original configuration files.
+An unavailable font preference in an otherwise valid content entry is not an application configuration failure. Report the unavailable preference and apply the documented default-font fallback.
+
+Resolve effective per-entry configuration, including font selection, before committing a daily snapshot.
+
+After commitment, the selected presentation must not depend on changes to the original content or configuration files.
 
 ### File paths
 
@@ -443,17 +449,71 @@ Display-specific conversion belongs at the boundary between prepared images and 
 
 Do not allow the renderer to depend directly on Waveshare-specific objects or APIs.
 
+### Font loading and resolution
+
+Use Pillow-compatible font files for text rendering.
+
+Font identifiers and user-facing configuration rules are defined in `docs/CONTENT_FORMAT.md`.
+
+Resolve and validate every explicitly registered font when loading application configuration.
+
+Validation must establish that each registered font exists, is readable, and can be loaded by the renderer.
+
+A registered font that cannot be loaded is a configuration error, regardless of whether it is currently referenced by content.
+
+When loading the content library, identify entries requesting font identifiers that are not registered.
+
+Log a warning for each affected entry without invalidating otherwise valid content.
+
+When such an entry is selected, resolve its font using the configured default pool.
+
+When no font override is provided, randomly select from the default pool.
+
+Use a controlled random source in tests so font-selection behavior can be verified deterministically.
+
+Font selection occurs once per daily selection, before committing the daily snapshot.
+
+Pass the resolved font to the renderer as part of the committed presentation configuration.
+
+Do not perform independent random font selection during rendering, image regeneration, or scheduled display updates.
+
+Preserve sufficient font identification information with the committed snapshot to verify that the required font remains available when prepared images must be regenerated.
+
+The persistence implementation must account for the fact that a font path or registry identifier alone does not guarantee that the same font file will remain available after configuration changes.
+
+If the required font is unavailable during recovery, retain valid prepared images and report the problem rather than silently substituting a different font for the committed presentation.
+
+Do not distribute third-party font files without verifying their licenses and redistribution terms.
+
+Do not introduce a general font discovery, download, or substitution framework for Version 0.1.
+
 ### Keep presentation configuration focused
 
 The initial release provides one configurable layout.
 
-Configuration should expose meaningful typography and spacing controls without becoming a general layout-programming language.
+Configuration should expose meaningful presentation controls without becoming a general layout-programming language.
 
-Use a clear, consistent coordinate and measurement model.
+Use the normalized quotation region and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
+
+The renderer must calculate the corresponding pixel geometry using the actual output-image dimensions.
+
+Automatically determine suitable line wrapping and font size from the selected text, resolved font, and available quotation region.
+
+Prefer the largest font size within the permitted bounds that fits the complete quotation.
+
+Text measurement must account for actual font metrics, line spacing, paragraph structure, and explicit line breaks.
+
+Do not change wording or punctuation to make content fit.
+
+If the complete quotation cannot fit within the permitted region at the minimum font size, report a meaningful preparation failure.
+
+The renderer must not silently clip, truncate, or omit text.
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
 The initial layout need only be validated at the resolution and color capabilities required for Version 0.1.
+
+Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
 
 ### Stable presentation geometry
 
@@ -661,9 +721,38 @@ Verify rendered-image dimensions, stage completeness, and stable layout geometry
 
 Use representative quotations of different lengths and combinations of optional metadata.
 
+Test automatic text fitting with:
+
+- short quotations;
+- long quotations requiring multiple wrapped lines;
+- explicit line breaks and paragraphs;
+- quotations that fit at the maximum permitted font size;
+- quotations requiring a smaller permitted font size;
+- quotations that cannot fit at the minimum permitted size.
+
+Verify that rendered text stays within the configured quotation region.
+
+Verify that the selected font, font size, wrapping, and quotation placement remain consistent across all reveal stages.
+
+Test font configuration and selection behavior, including:
+
+- valid registered fonts;
+- invalid or unreadable registered fonts;
+- empty default font pools;
+- default identifiers missing from the registry;
+- explicit content-entry font preferences;
+- unregistered content-entry fonts and their warnings;
+- randomized selection from the default pool;
+- persistence of the resolved font in committed state and global history;
+- recovery without independently reselecting a font.
+
+Use deterministic random sources where required.
+
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 
 Do not rely exclusively on exact pixel comparisons for behavior that is better validated through semantic or geometric assertions.
+
+Visual inspection remains appropriate for typography and layout quality.
 
 ### Hardware validation
 
