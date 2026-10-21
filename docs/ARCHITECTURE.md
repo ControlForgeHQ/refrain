@@ -565,14 +565,15 @@ For each new daily selection:
 8. Retain candidates having the highest priority.
 9. Randomly select one remaining distinct quotation identity.
 10. Resolve the selected occurrence and its inherited metadata.
-11. Prepare the complete daily snapshot.
-12. Atomically commit the snapshot and corresponding history updates.
+11. Resolve the font using the entry's preference or the configured default pool.
+12. Prepare the complete daily snapshot.
+13. Atomically commit the snapshot and corresponding history updates.
 
 Selection is not complete until commitment succeeds.
 
 A failed or interrupted commitment permits the selection procedure to run again.
 
-The random result of an uncommitted selection is not authoritative.
+The random results of an uncommitted selection, including font selection, are not authoritative.
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
 
@@ -851,25 +852,39 @@ The available region is configurable using resolution-independent coordinates.
 
 Automatic fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
+Font-size constraints establish acceptable presentation bounds rather than requiring every quotation to use a fixed size.
+
 The renderer must not silently clip, truncate, or omit quotation text when fitting it to the available area.
 
-Font-size constraints establish acceptable presentation bounds rather than requiring every quotation to use a fixed size.
+The initial release does not require arbitrary layout scripting, multiple layout templates, or automatic font-family selection based on fitting performance.
+
+### Font selection
 
 Application configuration defines the available fonts and a nonempty default font pool.
 
-When a content entry does not specify a font, Refrain randomly selects a font from the configured default pool for the daily presentation.
+Every explicitly registered font must be valid and loadable. An invalid registered font is an application configuration error.
 
-Content entries may specify an individual preferred font, inherited by all their quotations.
+A content entry may specify a preferred font, inherited by every quotation in that entry.
 
-An unavailable content-entry font preference falls back to the configured default pool with an appropriate warning.
+When the preferred font is registered, Refrain uses it for the selected quotation.
 
-Invalid or missing fonts explicitly registered in application configuration are configuration errors.
+When a content entry requests an unregistered font, Refrain retains the otherwise valid entry, logs an appropriate warning, and selects a font from the configured default pool.
 
-The actual font selected for the daily presentation is resolved before selection commitment and remains fixed throughout the display day.
+Content entries that omit a font preference also use the default pool.
 
-Font selection is independent of quotation repetition identity.
+Each font in the default pool has equal selection probability.
 
-The initial release does not require automatic typeface selection based on text-fitting results, font repetition tracking, arbitrary layout scripting, or multiple layout templates.
+Font selection is independent for each daily selection. Fonts do not have repetition histories, and a font may be used on consecutive days.
+
+The selected font is resolved after quotation selection and before daily snapshot commitment.
+
+The actual selected font is included in the committed snapshot and permanent global selection history.
+
+The resolved font remains fixed throughout the committed display day, including image regeneration and application recovery.
+
+Font selection does not influence quotation eligibility, priority, or repetition identity.
+
+The user-facing font configuration and validation rules are defined in `docs/CONTENT_FORMAT.md`.
 
 ### Stable progressive layout
 

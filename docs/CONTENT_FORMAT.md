@@ -160,8 +160,6 @@ The example illustrates the initial configuration structure, including a bounded
 
 Font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the fonts and presentation layout provided by an installation.
 
-This example describes the initial configuration structure. The presentation settings are intentionally limited until the first layout is defined and validated.
-
 ### General settings
 
 | Field | Type | Required | Default |
@@ -338,31 +336,19 @@ layout:
       - "liberation-sans"
 ```
 
-Every default identifier must exist in `layout.fonts.available`.
+Every identifier must exist in `layout.fonts.available`.
 
 Duplicate identifiers are not permitted.
 
-When a content entry does not specify a font, Refrain randomly selects one font from this pool for the new daily presentation.
+A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 
-Every default font has equal selection probability.
+The default pool identifies the fonts eligible for automatic selection when a content entry has no available preferred font.
 
-Font selection is independent for each committed daily selection.
-
-The default font pool does not maintain a repetition history or exhaustion cycle. A font may be selected on consecutive days.
-
-A registered font need not appear in the default pool. Such a font remains available for explicit selection by content entries.
-
-Font selection occurs before daily snapshot commitment.
-
-The actual resolved font is included in the committed daily snapshot and permanent global selection history.
-
-The font is not part of quotation repetition identity.
+Automatic font selection and its persistence are defined in `docs/ARCHITECTURE.md`.
 
 ### Automatic quotation fitting
 
-The renderer automatically determines the quotation font size and line wrapping required to fit the selected text inside the configured quotation region.
-
-The `layout.text` mapping establishes permitted font-size bounds.
+The `layout.text` mapping defines the permitted font-size bounds for the primary quotation.
 
 | Field | Type | Required |
 |---|---|---|
@@ -382,21 +368,11 @@ Font sizes are expressed in rendered-image pixels.
 
 The maximum must be greater than or equal to the minimum.
 
-The renderer selects the largest permitted font size that accommodates the complete quotation within the configured region.
+These fields define the acceptable range for automatic quotation sizing rather than specifying a fixed font size.
 
-It may wrap text at suitable word boundaries while preserving explicit line breaks and paragraph structure from the parsed quotation.
+The bounds apply to the primary quotation, not automatically to source or attribution text.
 
-Automatic fitting must not alter the quotation's wording or punctuation.
-
-Text must not be silently clipped, truncated, or omitted.
-
-If the quotation cannot fit at the minimum permitted font size, preparation fails with a meaningful diagnostic.
-
-The font-size bounds apply to the quotation region, not automatically to source or attribution text.
-
-The selected font and resolved presentation configuration remain stable across every reveal stage of the committed selection.
-
-The renderer's measurement and fitting implementation belongs in `docs/ENGINEERING.md`.
+The rendering and text-fitting behavior is defined in `docs/ARCHITECTURE.md`, with implementation guidance in `docs/ENGINEERING.md`.
 
 ### Initial layout limitations
 
@@ -415,6 +391,14 @@ The initial public format does not define:
 Display hardware selection and output resolution are not user-configurable through these layout fields in Version 0.1.
 
 The normalized quotation region preserves future resolution flexibility without promising that the initial layout has been validated at every possible resolution.
+
+## Content entries
+
+Each content file contains one entry with one or more quotations.
+
+A content entry defines shared metadata and configuration inherited by all its quotations.
+
+Quotations do not have individual metadata or scheduling overrides.
 
 ### Example: ordinary quotation entry
 
@@ -535,10 +519,6 @@ When supplied, each must be a nonempty string.
 
 If omitted, the corresponding reveal stage has no visible field to display.
 
-Source and attribution are metadata associated with the selected quotation.
-
-They do not participate in quotation identity or repetition tracking.
-
 ### Priority
 
 `priority` is a signed integer.
@@ -563,15 +543,11 @@ Boolean values and floating-point values are not valid priorities.
 
 All quotations in an entry inherit the same priority.
 
-Priority does not override date specificity or the preference for unused quotations.
-
-The architecture defines the ordering of priority and repetition rules.
-
 ### Font preference
 
 `font` is an optional string specifying the preferred font for every quotation in the entry.
 
-The value identifies a font in the application configuration's `layout.fonts.available` registry.
+The value refers to a font identifier defined in the application configuration's `layout.fonts.available` registry.
 
 For example:
 
@@ -588,31 +564,19 @@ quotations:
     followed by the second.
 ```
 
-When the specified identifier exists in the font registry, Refrain uses that font for the selected quotation.
+When supplied, `font` must be a nonempty string.
 
-A content entry may specify any registered font, including one that is not part of the default font pool.
+A registered font does not need to appear in the default font pool to be used as a content-entry preference.
 
-When `font` is omitted, Refrain randomly selects a font from `layout.fonts.default`.
+An unregistered font identifier is permitted and does not invalidate an otherwise valid content entry.
 
-When `font` identifies an unregistered font, Refrain:
+This allows content libraries to be shared between installations that have different font collections.
 
-1. Accepts the content entry as valid.
-2. Logs a warning identifying the entry and unavailable font.
-3. Uses the configured default font pool when resolving a daily selection from that entry.
+An absent `font` field means that no specific font preference is expressed.
 
-An unavailable content-entry font preference must not prevent an otherwise valid entry from participating in quotation selection.
+An explicit empty string or invalid field type is a validation error.
 
-The warning should be issued when loading and validating the content library rather than repeatedly during daily selection.
-
-An explicitly registered font whose underlying file is missing, unreadable, or invalid remains an application configuration error. Such errors must not trigger content-entry fallback.
-
-The selected font is resolved once for the daily presentation, before snapshot commitment.
-
-The actual selected font is included in the committed daily snapshot and permanent global selection history.
-
-The original requested font preference remains unchanged in the content file.
-
-The selected font does not influence quotation eligibility, priority, or repetition identity.
+The resolution of preferred fonts, fallback behavior, warnings, and persistence of the selected font are defined in `docs/ARCHITECTURE.md`.
 
 ## Eligibility rules
 
@@ -707,11 +671,13 @@ A day-of-month rule matches only months containing that day.
 
 For example, `day: 31` does not match April.
 
-### Specificity and repetition
+### Eligibility interpretation
 
-The format defines eligibility data; it does not redefine selection policy.
+Eligibility rules define the calendar conditions under which a content entry may participate in selection.
 
-The applicable specificity precedence is:
+When several rules match the same display date, Refrain uses the highest applicable specificity.
+
+The supported specificity categories are:
 
 1. Year-month-day
 2. Month-day
@@ -719,9 +685,9 @@ The applicable specificity precedence is:
 4. Month
 5. Ordinary
 
-Matching specificity takes precedence over priority and repetition status.
+The field combinations defining these categories are specified under `### Date-specific eligibility`.
 
-Repetition history, exhaustion, pool resets, and final selection are defined in `docs/ARCHITECTURE.md`.
+Selection precedence, repetition history, priority evaluation, and pool exhaustion are defined in `docs/ARCHITECTURE.md`.
 
 ## Per-entry reveal overrides
 
@@ -868,85 +834,48 @@ quotations:
   - "A quotation with more than one eligibility context."
 ```
 
-## Quotation identity
 
-Quotation identity is derived exclusively from the parsed quotation text.
-
-Refrain normalizes identity by:
-
-1. Applying Unicode NFC normalization.
-2. Replacing consecutive whitespace characters with a single space.
-3. Removing leading and trailing whitespace.
-
-For example, these strings have the same repetition identity:
-
-```yaml
-quotations:
-  - "A quotation with several words."
-  - >-
-    A quotation with
-    several words.
-```
-
-Normalization does not modify the text used for presentation.
-
-Spelling, capitalization, punctuation, and non-whitespace characters remain significant.
-
-Source, attribution, eligibility, entry ID, priority, and font selection do not form part of quotation identity.
-
-Selecting the same quotation with a different font does not make it a different quotation for repetition purposes.
-
-The permanent global history may record the selected font for each committed presentation without changing the quotation's repetition identity.
-
-Refrain is not required to detect semantically similar quotations with different text.
 
 ## Validation and diagnostics
 
-Both application configuration and content files must be validated before their data is accepted.
+Application configuration and content files must conform to their respective schemas before being accepted.
 
 Validation includes:
 
-- YAML syntax;
-- expected top-level structure;
-- required fields;
-- supported field names;
-- correct value types;
+- valid YAML syntax and one top-level mapping;
+- required fields and supported field names;
+- permitted value types;
 - valid timezone identifiers;
-- valid times and effective reveal schedules;
-- valid entry identifiers;
-- duplicate entry identifiers;
-- nonempty quotation sequences;
-- nonempty quotation strings;
-- supported eligibility rules;
-- valid calendar values;
-- permitted priority values;
+- valid time strings and reveal-schedule constraints;
+- valid entry identifiers and uniqueness across the content library;
+- nonempty quotation collections and quotation strings;
+- supported eligibility rules and valid calendar values;
+- valid integer priorities;
 - valid normalized quotation-region coordinates;
-- valid minimum and maximum font-size bounds;
-- nonempty font registry identifiers and paths;
-- existence, readability, and supported format of every registered font;
-- nonempty default font pool;
-- default font identifiers present in the font registry;
-- duplicate identifiers in the default font pool.
+- valid font-size bounds;
+- nonempty font identifiers and file paths;
+- existing, readable, supported registered font files;
+- a nonempty default font pool;
+- default font identifiers present in the registry;
+- no duplicate identifiers in the default font pool.
 
-Invalid explicit application configuration values must not be silently replaced by defaults.
+Invalid explicit configuration values must not be silently replaced by defaults.
 
-Every registered font must be valid. An invalid registered font is a configuration error even if no content entry currently references it.
+Every font explicitly registered in application configuration must be valid, even when no content entry currently references it.
 
-Content-entry font preferences are handled differently.
+Content-entry font preferences have a different validation rule: an unregistered but otherwise valid font identifier is permitted.
 
-An unregistered content-entry font preference produces a warning and uses the configured default pool when the entry's quotation is selected. It does not invalidate the content entry.
+An empty or non-string content-entry font value is invalid.
 
-An empty or otherwise invalid `font` value is a content validation error rather than a request for automatic selection.
+Diagnostics must identify the affected file and field, with sufficient information to correct the error.
 
-Diagnostics should identify the affected file, field, and reason for an error or warning.
+Warnings for unavailable content-entry font preferences are required by the architecture.
 
-Warnings for unavailable content-entry font preferences should identify the requested font and affected entry.
+Unknown fields are validation errors.
 
 A content library containing invalid entries must not be treated as successfully validated.
 
-The application may continue presenting a previously committed valid daily snapshot when the source library is unavailable or invalid, as required by the architecture.
-
-Font selection, fallback, and presentation resolution must occur before selection commitment. A committed selection must not be altered merely because font availability or configuration subsequently changes.
+Recovery from invalid or unavailable source content is defined in `docs/ARCHITECTURE.md`.
 
 ## Compatibility and extension
 
