@@ -603,29 +603,41 @@ The daily snapshot contains a complete copy of the selected quotation and all in
 
 It includes only the selected quotation from its containing content entry, not the entry's other quotations.
 
-The snapshot must contain resolved values rather than references to mutable content-library entries or configuration that may subsequently change.
+The snapshot must contain the resolved font selected for that daily presentation, together with the remaining presentation metadata, reveal schedule, and layout configuration required for rendering.
 
-It must be sufficient to recreate the prepared images without consulting the content library.
+Font selection occurs before the daily snapshot is committed.
+
+An entry's explicit font preference is used when the font is available in the configured registry. Otherwise, the presentation uses a font selected from the configured default pool according to the content-format specification.
+
+The resolved font remains fixed throughout the committed display day.
+
+The snapshot must contain resolved values rather than references to mutable content-library entries or configuration that may subsequently change.
 
 The snapshot is immutable after commitment.
 
-Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content.
+Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or font.
 
 ### Global history
 
 Global history is a chronological record of committed quotation selections.
 
-Each selection records the selected quotation text and its normalized identity.
+Each selection records:
+
+- the selected quotation text;
+- its normalized repetition identity;
+- the font actually selected for its presentation.
 
 Global history is independent of the containing entry's identifier, source, attribution, priority, and eligibility rules for repetition purposes.
+
+The selected font is historical presentation metadata. It does not participate in quotation identity or repetition tracking.
 
 Global history is append-only during normal operation.
 
 Its records are not removed or rewritten when repetition pools are exhausted.
 
-Global history provides a permanent record of Refrain's selection decisions.
+Global history provides a permanent record of Refrain's selection decisions, including the typography used for each committed presentation.
 
-A quotation is recorded when its daily selection is committed, not when the display backend confirms a physical refresh.
+A quotation and its selected font are recorded when the daily selection is committed, not when the display backend confirms a physical refresh.
 
 ### Repetition history
 
@@ -831,17 +843,45 @@ The design prioritizes:
 - a predominantly paper-white background;
 - dark text with optional color accents.
 
-Layout configuration may expose meaningful properties such as typography, spacing, alignment, and margins.
+The layout defines a bounded rectangular region for the primary quotation.
 
-A general-purpose theme engine, arbitrary layout scripting, and multiple layout templates are not required.
+Refrain automatically determines an appropriate font size and line wrapping to fit the selected quotation within that region.
+
+The available region is configurable using resolution-independent coordinates.
+
+Automatic fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
+
+The renderer must not silently clip, truncate, or omit quotation text when fitting it to the available area.
+
+Font-size constraints establish acceptable presentation bounds rather than requiring every quotation to use a fixed size.
+
+Application configuration defines the available fonts and a nonempty default font pool.
+
+When a content entry does not specify a font, Refrain randomly selects a font from the configured default pool for the daily presentation.
+
+Content entries may specify an individual preferred font, inherited by all their quotations.
+
+An unavailable content-entry font preference falls back to the configured default pool with an appropriate warning.
+
+Invalid or missing fonts explicitly registered in application configuration are configuration errors.
+
+The actual font selected for the daily presentation is resolved before selection commitment and remains fixed throughout the display day.
+
+Font selection is independent of quotation repetition identity.
+
+The initial release does not require automatic typeface selection based on text-fitting results, font repetition tracking, arbitrary layout scripting, or multiple layout templates.
 
 ### Stable progressive layout
 
-The primary quotation retains stable placement across reveal stages.
+The primary quotation retains stable placement and typography across reveal stages.
+
+Its configured rectangular region remains unchanged for the duration of the committed selection.
+
+The renderer may determine appropriate text wrapping and font size during presentation preparation, but the resulting composition must remain consistent across every reveal-stage image.
 
 Space for later source and attribution information is reserved in the composition.
 
-Revealing a new field must not cause the primary quotation to move or require the entire page to be reflowed merely because that field becomes visible.
+Revealing a new field must not cause the primary quotation to move, change font, change size, or require the entire page to be reflowed merely because that field becomes visible.
 
 Text layout must accommodate varying quotation lengths within the available presentation regions.
 
