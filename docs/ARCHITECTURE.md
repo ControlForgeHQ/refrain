@@ -69,11 +69,16 @@ These capabilities must not be implemented merely to demonstrate extensibility.
 
 The initial deployment targets:
 
-- Raspberry Pi 3 B+;
 - Raspberry Pi OS Lite;
 - Python;
 - Waveshare 13.3-inch e-Paper HAT+ (E);
 - 1600 × 1200 display resolution.
+
+The Raspberry Pi 3 B+ is the initial development and hardware-validation platform.
+
+The Raspberry Pi Zero 2 W is a candidate for compact deployments, subject to successful hardware integration and resource validation.
+
+The application must not depend on performance, memory capacity, peripheral availability, or other characteristics exclusive to the Raspberry Pi 3 B+.
 
 The display uses Spectra 6 color e-paper technology.
 
@@ -81,9 +86,15 @@ The intended presentation is predominantly black typography on a paper-white bac
 
 The initial display is a full-frame output device. Refrain must not depend on partial refresh, animation, or frequent screen updates.
 
+The renderer must produce images independently of the display backend.
+
 Other Linux hosts may be used for content, scheduling, and rendering development without the physical display.
 
-Support for additional display hardware is not an initial product requirement, although hardware-specific assumptions must remain isolated within the display-output responsibility.
+The display backend owns hardware-specific integration, including the Waveshare driver and its platform dependencies.
+
+Support for additional display hardware is not an initial product requirement, although display resolution, supported color capabilities, and hardware-specific operations must remain isolated from core content and scheduling logic.
+
+The runtime should avoid unnecessary memory use and background processing, particularly to preserve compatibility with resource-constrained Raspberry Pi models.
 
 ## Terminology
 
