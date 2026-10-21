@@ -1,0 +1,79 @@
+name: Implementation
+description: A scoped implementation, correction, or documentation task.
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for work assigned to an implementation contributor.
+
+        Describe the required outcome and observable acceptance criteria.
+        Reference authoritative project documentation rather than repeating
+        its requirements or prescribing unnecessary implementation details.
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What problem should be solved, or what capability should be delivered?
+      placeholder: Describe the desired outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Explain relevant background, existing behavior, or dependencies.
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: Identify the work this issue is expected to cover.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Identify related work that must not be included.
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and references
+      description: |
+        Include constraints specific to this issue and links to relevant
+        architecture, engineering, content-format, or roadmap sections.
+        Do not duplicate project-wide requirements.
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define observable conditions that establish completion.
+      placeholder: |
+        - [ ] The required behavior is implemented.
+        - [ ] Relevant failure conditions are handled.
+        - [ ] Required documentation is updated.
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Additional validation
+      description: |
+        Specify tests or manual validation unique to this issue.
+        Standard project validation remains governed by docs/ENGINEERING.md.
+        Identify required hardware validation when applicable.
+    validations:
+      required: false

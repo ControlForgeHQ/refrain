@@ -1,0 +1,18 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Architecture
+    url: https://github.com/ControlForgeHQ/refrain/blob/main/docs/ARCHITECTURE.md
+    about: Runtime behavior, component boundaries, and architectural decisions.
+
+  - name: Engineering
+    url: https://github.com/ControlForgeHQ/refrain/blob/main/docs/ENGINEERING.md
+    about: Implementation standards, testing, and contributor expectations.
+
+  - name: Content and configuration format
+    url: https://github.com/ControlForgeHQ/refrain/blob/main/docs/CONTENT_FORMAT.md
+    about: Supported YAML fields, schemas, and validation requirements.
+
+  - name: Roadmap
+    url: https://github.com/ControlForgeHQ/refrain/blob/main/docs/ROADMAP.md
+    about: Release scope, priorities, and future features.
