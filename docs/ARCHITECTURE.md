@@ -88,7 +88,7 @@ The initial display is a full-frame output device. Refrain must not depend on pa
 
 The renderer must produce images independently of the display backend.
 
-Other Linux hosts may be used for content, scheduling, and rendering development without the physical display.
+Hardware-independent content, selection, scheduling, persistence, and rendering components must remain portable across operating systems supported by the Python runtime and required dependencies, without unnecessary operating-system-specific assumptions. This permits their development and testing on non-Linux systems but does not imply that full application deployment has been validated or is supported there.
 
 The display backend owns hardware-specific integration, including the Waveshare driver and its platform dependencies.
 

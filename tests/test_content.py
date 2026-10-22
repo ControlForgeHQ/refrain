@@ -394,14 +394,16 @@ def test_non_utf8_content_file_is_reported(tmp_path: Path) -> None:
 
 def test_invalid_entries_anywhere_reject_the_entire_library(tmp_path: Path) -> None:
     write_entry(tmp_path / "valid.yaml", entry_data(id="valid-entry"))
-    write_entry(tmp_path / "nested" / "invalid.yaml", entry_data(id="invalid id"))
-    write_entry(tmp_path / "other.yaml", entry_data(id="also-invalid", quotations=[""]))
+    nested_invalid_file = tmp_path / "nested" / "invalid.yaml"
+    other_invalid_file = tmp_path / "other.yaml"
+    write_entry(nested_invalid_file, entry_data(id="invalid id"))
+    write_entry(other_invalid_file, entry_data(id="also-invalid", quotations=[""]))
 
     diagnostics = diagnostics_for(tmp_path)
 
     assert len(diagnostics) == 2
-    assert any("nested/invalid.yaml" in diagnostic and ": id:" in diagnostic for diagnostic in diagnostics)
-    assert any("other.yaml" in diagnostic and "quotations[0]" in diagnostic for diagnostic in diagnostics)
+    assert any(f"{nested_invalid_file}: id:" in diagnostic for diagnostic in diagnostics)
+    assert any(f"{other_invalid_file}: quotations[0]:" in diagnostic for diagnostic in diagnostics)
 
 
 def test_invalid_content_directory_is_reported(tmp_path: Path) -> None:
