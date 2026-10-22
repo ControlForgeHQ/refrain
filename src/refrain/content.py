@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import yaml
 from yaml.events import AliasEvent
@@ -174,23 +174,26 @@ def _validate_calendar_rule(
     year = values.get("year")
     month = values.get("month")
     day = values.get("day")
-    if month is not None and day is not None:
-        if year is not None:
-            try:
-                date(year, month, day)  # type: ignore[arg-type]
-            except ValueError:
-                _diagnose(diagnostics, file, field, "does not describe a valid calendar date")
-                return None
-        else:
-            month_lengths = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-            if day > month_lengths[month - 1]:  # type: ignore[operator]
-                _diagnose(diagnostics, file, field, "does not describe a valid calendar date")
-                return None
+    calendar_year = year if isinstance(year, int) else None
+    calendar_month = month if isinstance(month, int) else None
+    calendar_day = day if isinstance(day, int) else None
+    if calendar_month is not None and calendar_day is not None:
+        month_lengths = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        maximum_day = month_lengths[calendar_month - 1]
+        if calendar_year is not None:
+            is_leap_year = calendar_year % 4 == 0 and (
+                calendar_year % 100 != 0 or calendar_year % 400 == 0
+            )
+            if calendar_month == 2 and not is_leap_year:
+                maximum_day -= 1
+        if calendar_day > maximum_day:
+            _diagnose(diagnostics, file, field, "does not describe a valid calendar date")
+            return None
 
     return EligibilityRule(
-        year=year if isinstance(year, int) else None,
-        month=month if isinstance(month, int) else None,
-        day=day if isinstance(day, int) else None,
+        year=calendar_year,
+        month=calendar_month,
+        day=calendar_day,
     )
 
 
@@ -313,7 +316,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
     )
 
 
-def load_content_library(content_directory: str | Path) -> tuple[ContentEntry, ...]:
+def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEntry, ...]:
     """Load and validate every ``.yaml`` or ``.yml`` entry in a directory tree.
 
     Validation is all-or-nothing: if any file or entry is invalid, a
