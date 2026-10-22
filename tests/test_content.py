@@ -1,0 +1,302 @@
+from __future__ import annotations
+
+from datetime import time
+from pathlib import Path
+
+import pytest
+import yaml
+
+from refrain import (
+    ContentLibraryError,
+    EligibilityRule,
+    RevealOverrides,
+    load_content_library,
+    normalize_quotation,
+)
+
+
+def entry_data(**overrides: object) -> dict[str, object]:
+    data: dict[str, object] = {"id": "example-entry", "quotations": ["A sample quotation."]}
+    data.update(overrides)
+    return data
+
+
+def write_entry(path: Path, data: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def diagnostics_for(directory: Path) -> tuple[str, ...]:
+    with pytest.raises(ContentLibraryError) as error:
+        load_content_library(directory)
+    return tuple(str(diagnostic) for diagnostic in error.value.diagnostics)
+
+
+def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
+    write_entry(
+        tmp_path / "z-entry.yaml",
+        entry_data(
+            id="z-entry",
+            quotations=["First candidate.", "Second candidate."],
+            source="A source",
+            attribution="An author",
+            priority=-3,
+        ),
+    )
+    write_entry(tmp_path / "nested" / "a-entry.yml", entry_data(id="a-entry"))
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["a-entry", "z-entry"]
+    assert entries[0].source is None
+    assert entries[0].attribution is None
+    assert entries[0].priority == 0
+    assert entries[0].eligibility == (EligibilityRule(ordinary=True),)
+    assert entries[1].priority == -3
+    assert [quotation.text for quotation in entries[1].quotations] == ["First candidate.", "Second candidate."]
+    assert all(entry.file is not None for entry in entries)
+
+
+def test_entry_identity_does_not_depend_on_file_path(tmp_path: Path) -> None:
+    entry_file = write_entry(tmp_path / "first" / "entry.yaml", entry_data(id="stable-entry"))
+    first = load_content_library(tmp_path)[0]
+    entry_file.rename(tmp_path / "second.yaml")
+    second = load_content_library(tmp_path)[0]
+
+    assert first.id == second.id == "stable-entry"
+
+
+def test_duplicate_identifiers_are_rejected_across_files(tmp_path: Path) -> None:
+    write_entry(tmp_path / "first.yaml", entry_data())
+    second = write_entry(tmp_path / "nested" / "second.yaml", entry_data())
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert str(second) in diagnostics[0]
+    assert "id" in diagnostics[0]
+    assert "duplicate identifier 'example-entry'" in diagnostics[0]
+    assert "first.yaml" in diagnostics[0]
+
+
+@pytest.mark.parametrize(
+    ("data", "field"),
+    [
+        ({"quotations": ["A quotation."]}, "id"),
+        ({"id": "bad id", "quotations": ["A quotation."]}, "id"),
+        ({"id": "valid-id"}, "quotations"),
+        ({"id": "valid-id", "quotations": []}, "quotations"),
+        ({"id": "valid-id", "quotations": ["A quotation."], "unexpected": 1}, "unexpected"),
+    ],
+)
+def test_required_identifier_and_unknown_fields_are_validated(
+    tmp_path: Path, data: dict[str, object], field: str
+) -> None:
+    write_entry(tmp_path / "entry.yaml", data)
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(f": {field}:" in diagnostic for diagnostic in diagnostics)
+    assert all("entry.yaml" in diagnostic for diagnostic in diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source", ""),
+        ("source", 12),
+        ("attribution", "  "),
+        ("font", ""),
+        ("font", False),
+        ("priority", True),
+        ("priority", 1.5),
+        ("quotations", "not a sequence"),
+        ("quotations", [None]),
+        ("quotations", [[]]),
+    ],
+)
+def test_invalid_field_types_and_empty_values_are_rejected(tmp_path: Path, field: str, value: object) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(**{field: value}))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(f": {field}" in diagnostic for diagnostic in diagnostics)
+
+
+def test_signed_integer_priority_and_unregistered_font_are_preserved(tmp_path: Path) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(priority=-2**80, font="not-installed-here"))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.priority == -(2**80)
+    assert entry.font == "not-installed-here"
+
+
+def test_valid_eligibility_forms_and_leap_dates_are_preserved(tmp_path: Path) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(
+            eligibility=[
+                {"year": 2024, "month": 2, "day": 29},
+                {"month": 2, "day": 29},
+                {"day": 31},
+                {"month": 12},
+                {"ordinary": True},
+                {"year": 12000, "month": 2, "day": 29},
+            ]
+        ),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.eligibility == (
+        EligibilityRule(year=2024, month=2, day=29),
+        EligibilityRule(month=2, day=29),
+        EligibilityRule(day=31),
+        EligibilityRule(month=12),
+        EligibilityRule(ordinary=True),
+        EligibilityRule(year=12000, month=2, day=29),
+    )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"year": 2024},
+        {"year": 2024, "month": 2},
+        {"ordinary": True, "month": 2},
+        {"month": 2, "day": 30},
+        {"year": 2025, "month": 2, "day": 29},
+        {"year": 2024, "month": 4, "day": 31},
+        {"month": 13},
+        {"day": 0},
+        {"year": True, "month": 1, "day": 1},
+        {"ordinary": False},
+        {"week": 1},
+    ],
+)
+def test_invalid_eligibility_rules_are_rejected(tmp_path: Path, rule: dict[str, object]) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(eligibility=[rule]))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any("eligibility[0]" in diagnostic for diagnostic in diagnostics)
+
+
+def test_empty_eligibility_sequence_is_rejected(tmp_path: Path) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(eligibility=[]))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(": eligibility:" in diagnostic and "at least one rule" in diagnostic for diagnostic in diagnostics)
+
+
+def test_reveal_overrides_are_preserved_without_configuration_resolution(tmp_path: Path) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(reveal={"source": "09:00", "attribution": "23:59"}),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.reveal == RevealOverrides(source=time.fromisoformat("09:00"), attribution=time.fromisoformat("23:59"))
+
+
+@pytest.mark.parametrize(
+    "reveal",
+    [
+        "09:00",
+        {"source": "9:00"},
+        {"source": "24:00"},
+        {"attribution": 900},
+        {"quotation": "09:00"},
+    ],
+)
+def test_invalid_reveal_override_syntax_is_rejected(tmp_path: Path, reveal: object) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(reveal=reveal))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(": reveal" in diagnostic for diagnostic in diagnostics)
+
+
+@pytest.mark.parametrize("quotation", ["", " \t\r\n"])
+def test_empty_and_whitespace_only_quotations_are_rejected(tmp_path: Path, quotation: str) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(quotations=[quotation]))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any("quotations[0]" in diagnostic and "meaningful text" in diagnostic for diagnostic in diagnostics)
+
+
+def test_unicode_and_original_multiline_text_are_preserved(tmp_path: Path) -> None:
+    original = "Cafe\u0301\tat dawn.\nSecond line."
+    write_entry(tmp_path / "entry.yaml", entry_data(quotations=[original]))
+
+    quotation = load_content_library(tmp_path)[0].quotations[0]
+
+    assert quotation.text == original
+    assert quotation.identity == "Café at dawn. Second line."
+    assert normalize_quotation(" Café\nat dawn. ") == quotation.identity
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "id: [\n",
+        "id: one\nid: two\nquotations: ['A quotation.']\n",
+        "id: one\nquotations: ['A quotation.']\n---\nid: two\nquotations: ['Another.']\n",
+        "id: one\nquotations: !custom ['A quotation.']\n",
+        "defaults: &defaults\n  priority: 1\n",
+        "id: one\nquotations: ['A quotation.']\nextra: *missing\n",
+        "id: one\nquotations: ['A quotation.']\nextra: {<<: {priority: 1}}\n",
+        "1: not a string key\n",
+        "- not a top-level mapping\n",
+    ],
+)
+def test_malformed_or_unsupported_yaml_is_rejected(tmp_path: Path, contents: str) -> None:
+    (tmp_path / "entry.yaml").write_text(contents, encoding="utf-8")
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert "entry.yaml: $" in diagnostics[0]
+
+
+def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_file = tmp_path / "entry.yaml"
+    write_entry(entry_file, entry_data())
+    original_read_text = Path.read_text
+
+    def fail_for_entry(path: Path, *args: object, **kwargs: object) -> str:
+        if path == entry_file:
+            raise PermissionError("access denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_for_entry)
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert "entry.yaml: $" in diagnostics[0]
+    assert "access denied" in diagnostics[0]
+
+
+def test_invalid_entries_anywhere_reject_the_entire_library(tmp_path: Path) -> None:
+    write_entry(tmp_path / "valid.yaml", entry_data(id="valid-entry"))
+    write_entry(tmp_path / "nested" / "invalid.yaml", entry_data(id="invalid id"))
+    write_entry(tmp_path / "other.yaml", entry_data(id="also-invalid", quotations=[""]))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 2
+    assert any("nested/invalid.yaml" in diagnostic and ": id:" in diagnostic for diagnostic in diagnostics)
+    assert any("other.yaml" in diagnostic and "quotations[0]" in diagnostic for diagnostic in diagnostics)
+
+
+def test_invalid_content_directory_is_reported(tmp_path: Path) -> None:
+    diagnostics = diagnostics_for(tmp_path / "missing")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].endswith("$: content directory does not exist or is not a directory")
