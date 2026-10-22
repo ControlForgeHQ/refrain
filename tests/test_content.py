@@ -125,7 +125,7 @@ def test_invalid_field_types_and_empty_values_are_rejected(tmp_path: Path, field
 
 
 def test_signed_integer_priority_and_unregistered_font_are_preserved(tmp_path: Path) -> None:
-    write_entry(tmp_path / "entry.yaml", entry_data(priority=-2**80, font="not-installed-here"))
+    write_entry(tmp_path / "entry.yaml", entry_data(priority=-(2**80), font="not-installed-here"))
 
     entry = load_content_library(tmp_path)[0]
 
@@ -238,7 +238,7 @@ def test_unicode_and_original_multiline_text_are_preserved(tmp_path: Path) -> No
 
     assert quotation.text == original
     assert quotation.identity == "Café at dawn. Second line."
-    assert normalize_quotation(" Café\nat dawn. ") == quotation.identity
+    assert normalize_quotation(" Cafe\u0301\tat dawn.\nSecond line. ") == quotation.identity
 
 
 @pytest.mark.parametrize(
