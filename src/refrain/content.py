@@ -181,9 +181,7 @@ def _validate_calendar_rule(
         month_lengths = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
         maximum_day = month_lengths[calendar_month - 1]
         if calendar_year is not None:
-            is_leap_year = calendar_year % 4 == 0 and (
-                calendar_year % 100 != 0 or calendar_year % 400 == 0
-            )
+            is_leap_year = calendar_year % 4 == 0 and (calendar_year % 100 != 0 or calendar_year % 400 == 0)
             if calendar_month == 2 and not is_leap_year:
                 maximum_day -= 1
         if calendar_day > maximum_day:
@@ -225,9 +223,7 @@ def _validate_eligibility(
     return tuple(rules)
 
 
-def _validate_reveal(
-    value: object, file: Path, diagnostics: list[ContentDiagnostic]
-) -> Optional[RevealOverrides]:
+def _validate_reveal(value: object, file: Path, diagnostics: list[ContentDiagnostic]) -> Optional[RevealOverrides]:
     if not isinstance(value, dict):
         _diagnose(diagnostics, file, "reveal", "must be a mapping")
         return None
@@ -330,9 +326,7 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
     diagnostics: list[ContentDiagnostic] = []
     entries: list[ContentEntry] = []
     identifiers: dict[str, Path] = {}
-    files = sorted(
-        path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
-    )
+    files = sorted(path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in {".yaml", ".yml"})
 
     for file in files:
         try:
