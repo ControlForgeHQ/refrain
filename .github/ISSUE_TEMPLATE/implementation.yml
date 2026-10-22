@@ -76,3 +76,14 @@ body:
         Identify required hardware validation when applicable.
     validations:
       required: false
+
+  - type: textarea
+    id: documentation
+    attributes:
+      label: Documentation
+      description: |
+        Identify documentation that must be created or updated.
+        Follow the ownership boundaries established in AGENTS.md.
+        State "None" if no documentation changes are required.
+    validations:
+      required: false
