@@ -1,0 +1,39 @@
+[project]
+name = "refrain"
+version = "0.1.0"
+description = "Hardware-independent quotation content loading and validation"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0.3,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=26.3.1,<27",
+    "pytest>=8.4.2,<9",
+    "ruff>=0.17.1,<1",
+]
+
+[build-system]
+requires = ["setuptools>=80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+refrain = ["py.typed"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
