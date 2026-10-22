@@ -206,6 +206,14 @@ Avoid language features or third-party packages that unnecessarily exclude suppo
 
 The project's minimum supported Python version must be established in the project metadata once implementation begins.
 
+### Cross-platform development and testing
+
+Hardware-independent components should use platform-neutral Python interfaces and avoid unnecessary operating-system-specific assumptions. Use `pathlib.Path` or other standard path APIs rather than constructing filesystem paths with hard-coded separators.
+
+Tests should compare paths using native `Path` values or strings derived from them, not assume a particular separator in diagnostics. When testing intentionally platform-specific behavior, make the platform assumption explicit and keep that coverage scoped to the affected behavior.
+
+Run hardware-independent tests on the development platforms available and record the operating system and Python version. Passing tests on a non-Linux system does not establish that full application deployment or hardware-specific behavior is supported or validated there.
+
 ### Coding style
 
 Use:
