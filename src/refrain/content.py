@@ -135,6 +135,8 @@ def _load_yaml(contents: str) -> object:
     loader = _StrictSafeLoader(contents)
     try:
         return loader.get_single_data()
+    except (KeyError, ValueError) as error:
+        raise yaml.YAMLError(f"invalid YAML scalar: {error}") from error
     finally:
         loader.dispose()
 
@@ -331,7 +333,12 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
     ``ContentLibraryError`` contains the file- and field-specific diagnostics.
     """
     directory = Path(content_directory)
-    if not directory.is_dir():
+    try:
+        is_directory = directory.is_dir()
+    except OSError as error:
+        diagnostic = ContentDiagnostic(directory, "$", f"cannot access content directory: {error}")
+        raise ContentLibraryError((diagnostic,)) from error
+    if not is_directory:
         diagnostic = ContentDiagnostic(directory, "$", "content directory does not exist or is not a directory")
         raise ContentLibraryError((diagnostic,))
 
