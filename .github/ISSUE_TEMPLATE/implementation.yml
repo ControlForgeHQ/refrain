@@ -1,6 +1,5 @@
 name: Implementation
 description: A scoped implementation, correction, or documentation task.
-title: ""
 body:
   - type: markdown
     attributes:
