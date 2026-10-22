@@ -1,0 +1,21 @@
+id: "sample-poem"
+
+source: "A Sample Collection"
+attribution: "An Example Author"
+priority: 2
+font: "preferred-serif"
+
+eligibility:
+  - ordinary: true
+  - month: 2
+    day: 29
+
+reveal:
+  source: "09:30"
+  attribution: "10:00"
+
+quotations:
+  - "A short example quotation."
+  - |-
+    A quotation with intentional
+    line breaks.
