@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -68,7 +69,11 @@ class RevealOverrides:
 
 @dataclass(frozen=True)
 class ContentEntry:
-    """Validated entry metadata shared by its quotation candidates."""
+    """Entry metadata shared by its quotation candidates.
+
+    Instances returned by ``load_content_library`` are validated; direct
+    construction does not validate field values.
+    """
 
     id: str
     quotations: tuple[Quotation, ...]
@@ -132,6 +137,13 @@ def _load_yaml(contents: str) -> object:
         return loader.get_single_data()
     finally:
         loader.dispose()
+
+
+def _yaml_error_location(error: yaml.YAMLError) -> Optional[str]:
+    mark = getattr(error, "problem_mark", None)
+    if mark is None:
+        return None
+    return f"line {mark.line + 1}, column {mark.column + 1}"
 
 
 def _diagnose(diagnostics: list[ContentDiagnostic], file: Path, field: str, message: str) -> None:
@@ -326,9 +338,21 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
     diagnostics: list[ContentDiagnostic] = []
     entries: list[ContentEntry] = []
     identifiers: dict[str, Path] = {}
-    files = sorted(path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in {".yaml", ".yml"})
+    files: list[Path] = []
 
-    for file in files:
+    def report_walk_error(error: OSError) -> None:
+        affected_path = Path(error.filename) if error.filename else directory
+        _diagnose(diagnostics, affected_path, "$", f"cannot enumerate content directory: {error}")
+
+    try:
+        for root, _, filenames in os.walk(directory, onerror=report_walk_error):
+            files.extend(
+                Path(root) / filename for filename in filenames if Path(filename).suffix.lower() in {".yaml", ".yml"}
+            )
+    except OSError as error:
+        report_walk_error(error)
+
+    for file in sorted(files):
         try:
             contents = file.read_text(encoding="utf-8")
             data = _load_yaml(contents)
@@ -336,7 +360,9 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
             _diagnose(diagnostics, file, "$", f"cannot read UTF-8 YAML file: {error}")
             continue
         except yaml.YAMLError as error:
-            _diagnose(diagnostics, file, "$", f"invalid or unsupported YAML: {error}")
+            location = _yaml_error_location(error)
+            detail = f"{location}: {error}" if location else str(error)
+            _diagnose(diagnostics, file, "$", f"invalid or unsupported YAML: {detail}")
             continue
 
         entry = _validate_entry(data, file, diagnostics)

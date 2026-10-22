@@ -13,6 +13,7 @@ from refrain import (
     load_content_library,
     normalize_quotation,
 )
+from refrain import content as content_module
 
 
 def entry_data(**overrides: object) -> dict[str, object]:
@@ -276,6 +277,16 @@ def test_malformed_or_unsupported_yaml_is_rejected(tmp_path: Path, contents: str
     assert "entry.yaml: $" in diagnostics[0]
 
 
+def test_yaml_syntax_diagnostic_includes_line_and_column(tmp_path: Path) -> None:
+    (tmp_path / "entry.yaml").write_text("id: valid\nquotations:\n  - [\n", encoding="utf-8")
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert "entry.yaml: $" in diagnostics[0]
+    assert "line 4, column 1" in diagnostics[0]
+
+
 def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     entry_file = tmp_path / "entry.yaml"
     write_entry(entry_file, entry_data())
@@ -293,6 +304,42 @@ def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest
     assert len(diagnostics) == 1
     assert "entry.yaml: $" in diagnostics[0]
     assert "access denied" in diagnostics[0]
+
+
+def test_inaccessible_directory_during_traversal_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_entry(tmp_path / "available.yaml", entry_data(id="available"))
+    blocked_directory = tmp_path / "blocked"
+
+    def walk_with_inaccessible_directory(root: Path, onerror=None):
+        yield str(root), ["blocked"], ["available.yaml"]
+        if onerror is not None:
+            onerror(PermissionError(13, "permission denied", str(blocked_directory)))
+
+    monkeypatch.setattr(content_module.os, "walk", walk_with_inaccessible_directory)
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert str(blocked_directory) in diagnostics[0]
+    assert ": $: cannot enumerate content directory:" in diagnostics[0]
+    assert "permission denied" in diagnostics[0]
+
+
+def test_directory_enumeration_exception_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocked_directory = tmp_path / "blocked"
+
+    def walk_that_raises(root: Path, onerror=None):
+        yield str(root), [], []
+        raise OSError(5, "enumeration failed", str(blocked_directory))
+
+    monkeypatch.setattr(content_module.os, "walk", walk_that_raises)
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert str(blocked_directory) in diagnostics[0]
+    assert ": $: cannot enumerate content directory:" in diagnostics[0]
+    assert "enumeration failed" in diagnostics[0]
 
 
 def test_non_utf8_content_file_is_reported(tmp_path: Path) -> None:
