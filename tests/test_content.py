@@ -277,6 +277,29 @@ def test_malformed_or_unsupported_yaml_is_rejected(tmp_path: Path, contents: str
     assert "entry.yaml: $" in diagnostics[0]
 
 
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        "source: 2026-02-30",
+        "priority: !!int nope",
+        "priority: !!bool nope",
+    ],
+)
+def test_yaml_scalar_constructor_failures_are_reported_and_other_files_validated(tmp_path: Path, scalar: str) -> None:
+    (tmp_path / "a-invalid.yaml").write_text(
+        f"id: invalid-entry\nquotations:\n  - A quotation.\n{scalar}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "z-invalid.yaml").write_text("id: invalid id\nquotations: [A quotation.]\n", encoding="utf-8")
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 2
+    assert "a-invalid.yaml: $" in diagnostics[0]
+    assert "invalid YAML scalar" in diagnostics[0]
+    assert "z-invalid.yaml: id:" in diagnostics[1]
+
+
 def test_yaml_syntax_diagnostic_includes_line_and_column(tmp_path: Path) -> None:
     (tmp_path / "entry.yaml").write_text("id: valid\nquotations:\n  - [\n", encoding="utf-8")
 
@@ -340,6 +363,23 @@ def test_directory_enumeration_exception_is_reported(tmp_path: Path, monkeypatch
     assert str(blocked_directory) in diagnostics[0]
     assert ": $: cannot enumerate content directory:" in diagnostics[0]
     assert "enumeration failed" in diagnostics[0]
+
+
+def test_initial_directory_check_exception_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocked_directory = tmp_path / "blocked"
+
+    def is_dir_that_raises(path: Path) -> bool:
+        if path == blocked_directory:
+            raise PermissionError("access denied")
+        return False
+
+    monkeypatch.setattr(Path, "is_dir", is_dir_that_raises)
+
+    diagnostics = diagnostics_for(blocked_directory)
+
+    assert len(diagnostics) == 1
+    assert f"{blocked_directory}: $: cannot access content directory:" in diagnostics[0]
+    assert "access denied" in diagnostics[0]
 
 
 def test_non_utf8_content_file_is_reported(tmp_path: Path) -> None:
