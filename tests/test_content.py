@@ -52,7 +52,9 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert entries[0].source is None
     assert entries[0].attribution is None
     assert entries[0].priority == 0
+    assert entries[0].font is None
     assert entries[0].eligibility == (EligibilityRule(ordinary=True),)
+    assert entries[0].reveal == RevealOverrides()
     assert entries[1].priority == -3
     assert [quotation.text for quotation in entries[1].quotations] == ["First candidate.", "Second candidate."]
     assert all(entry.file is not None for entry in entries)
@@ -106,7 +108,7 @@ def test_required_identifier_and_unknown_fields_are_validated(
     [
         ("source", ""),
         ("source", 12),
-        ("attribution", "  "),
+        ("attribution", ""),
         ("font", ""),
         ("font", False),
         ("priority", True),
@@ -131,6 +133,16 @@ def test_signed_integer_priority_and_unregistered_font_are_preserved(tmp_path: P
 
     assert entry.priority == -(2**80)
     assert entry.font == "not-installed-here"
+
+
+def test_nonempty_optional_text_is_preserved_verbatim(tmp_path: Path) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(source=" ", attribution="\t", font=" "))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.source == " "
+    assert entry.attribution == "\t"
+    assert entry.font == " "
 
 
 def test_valid_eligibility_forms_and_leap_dates_are_preserved(tmp_path: Path) -> None:
@@ -281,6 +293,16 @@ def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest
     assert len(diagnostics) == 1
     assert "entry.yaml: $" in diagnostics[0]
     assert "access denied" in diagnostics[0]
+
+
+def test_non_utf8_content_file_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "entry.yaml").write_bytes(b"id: \xff\n")
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert len(diagnostics) == 1
+    assert "entry.yaml: $" in diagnostics[0]
+    assert "UTF-8" in diagnostics[0]
 
 
 def test_invalid_entries_anywhere_reject_the_entire_library(tmp_path: Path) -> None:

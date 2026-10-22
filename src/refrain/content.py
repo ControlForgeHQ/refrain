@@ -281,7 +281,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         value = data.get(field)
         if field not in data:
             optional_strings[field] = None
-        elif not isinstance(value, str) or not value.strip():
+        elif not isinstance(value, str) or value == "":
             _diagnose(diagnostics, file, field, "must be a nonempty string when supplied")
         else:
             optional_strings[field] = value
