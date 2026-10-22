@@ -90,6 +90,8 @@ The renderer must produce images independently of the display backend.
 
 Other Linux hosts may be used for content, scheduling, and rendering development without the physical display.
 
+Hardware-independent content, selection, scheduling, persistence, and rendering components should avoid unnecessary operating-system-specific assumptions. They may be developed and tested on other operating systems supported by the Python runtime and required dependencies; this does not imply that full application deployment has been validated or is supported there.
+
 The display backend owns hardware-specific integration, including the Waveshare driver and its platform dependencies.
 
 Support for additional display hardware is not an initial product requirement, although display resolution, supported color capabilities, and hardware-specific operations must remain isolated from core content and scheduling logic.
