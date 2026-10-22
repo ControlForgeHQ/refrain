@@ -154,7 +154,7 @@ def _validate_calendar_rule(
         return None
 
     valid = True
-    for key in keys:
+    for key in sorted(keys):
         value = values[key]
         if isinstance(value, bool) or not isinstance(value, int):
             _diagnose(diagnostics, file, f"{field}.{key}", "must be an integer")
@@ -211,7 +211,7 @@ def _validate_eligibility(
         if not isinstance(rule, dict):
             _diagnose(diagnostics, file, field, "must be a mapping")
             continue
-        for key in rule.keys() - _ELIGIBILITY_FIELDS:
+        for key in sorted(rule.keys() - _ELIGIBILITY_FIELDS):
             _diagnose(diagnostics, file, f"{field}.{key}", "is not a supported eligibility field")
         if rule.keys() - _ELIGIBILITY_FIELDS:
             continue
@@ -250,7 +250,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         _diagnose(diagnostics, file, "$", "must contain one top-level mapping")
         return None
 
-    for key in data.keys() - _ENTRY_FIELDS:
+    for key in sorted(data.keys() - _ENTRY_FIELDS):
         _diagnose(diagnostics, file, key, "is not a supported content-entry field")
 
     entry_id = data.get("id")
@@ -259,7 +259,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
             diagnostics,
             file,
             "id",
-            "must be a nonempty identifier using ASCII letters, digits, hyphens, or underscores, beginning with a letter or digit",
+            "must start with an ASCII letter or digit and contain only ASCII letters, digits, hyphens, or underscores",
         )
 
     quotation_values = data.get("quotations")
