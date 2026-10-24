@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Optional, Union
 
 import yaml
-from yaml.events import AliasEvent
-from yaml.nodes import MappingNode
+
+from ._yaml import load_yaml, yaml_error_location
 
 _ENTRY_FIELDS = {"id", "quotations", "source", "attribution", "priority", "font", "eligibility", "reveal"}
 _REVEAL_FIELDS = {"source", "attribution"}
@@ -86,66 +86,9 @@ class ContentEntry:
     file: Optional[Path] = None
 
 
-class _StrictSafeLoader(yaml.SafeLoader):
-    def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[str, object]:
-        if not isinstance(node, MappingNode):
-            return super().construct_mapping(node, deep=deep)
-
-        keys: set[str] = set()
-        for key_node, _ in node.value:
-            if key_node.tag == "tag:yaml.org,2002:merge":
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "merge keys are not supported",
-                    key_node.start_mark,
-                )
-            key = self.construct_object(key_node, deep=deep)
-            if not isinstance(key, str):
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "mapping keys must be strings",
-                    key_node.start_mark,
-                )
-            if key in keys:
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    f"duplicate mapping key {key!r}",
-                    key_node.start_mark,
-                )
-            keys.add(key)
-        return super().construct_mapping(node, deep=deep)
-
-
 def normalize_quotation(text: str) -> str:
     """Return the architecture-defined identity form without changing display text."""
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip()
-
-
-def _reject_anchors_and_aliases(contents: str) -> None:
-    for event in yaml.parse(contents, Loader=yaml.SafeLoader):
-        if isinstance(event, AliasEvent) or getattr(event, "anchor", None) is not None:
-            raise yaml.YAMLError("anchors and aliases are not supported")
-
-
-def _load_yaml(contents: str) -> object:
-    _reject_anchors_and_aliases(contents)
-    loader = _StrictSafeLoader(contents)
-    try:
-        return loader.get_single_data()
-    except (KeyError, ValueError) as error:
-        raise yaml.YAMLError(f"invalid YAML scalar: {error}") from error
-    finally:
-        loader.dispose()
-
-
-def _yaml_error_location(error: yaml.YAMLError) -> Optional[str]:
-    mark = getattr(error, "problem_mark", None)
-    if mark is None:
-        return None
-    return f"line {mark.line + 1}, column {mark.column + 1}"
 
 
 def _diagnose(diagnostics: list[ContentDiagnostic], file: Path, field: str, message: str) -> None:
@@ -362,12 +305,12 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
     for file in sorted(files):
         try:
             contents = file.read_text(encoding="utf-8")
-            data = _load_yaml(contents)
+            data = load_yaml(contents)
         except (OSError, UnicodeError) as error:
             _diagnose(diagnostics, file, "$", f"cannot read UTF-8 YAML file: {error}")
             continue
         except yaml.YAMLError as error:
-            location = _yaml_error_location(error)
+            location = yaml_error_location(error)
             detail = f"{location}: {error}" if location else str(error)
             _diagnose(diagnostics, file, "$", f"invalid or unsupported YAML: {detail}")
             continue
