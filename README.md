@@ -3,7 +3,7 @@ An open-source e-paper display for rotating quotations, progressive reveals, and
 
 ## Development setup
 
-Refrain's content loader is hardware-independent. Python 3.10 or newer is required.
+Refrain's configuration and content loaders are hardware-independent. Python 3.11 or newer is required.
 
 Create an isolated environment and install the package with its development tools:
 
@@ -19,6 +19,24 @@ Run the automated validation commands from the repository root:
 .venv/bin/ruff check src tests
 .venv/bin/pytest
 ```
+
+## Loading application configuration
+
+`load_application_config` reads and validates `config.yaml`, returning resolved paths, the effective font registry, and the settings required by downstream components. Relative content and user-font paths are based on the configuration file's directory. See [`examples/config.yaml`](examples/config.yaml) for a bundled-font example and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative configuration specification.
+
+```python
+from refrain import ApplicationConfigurationError, load_application_config
+
+try:
+    config = load_application_config("config.yaml")
+except ApplicationConfigurationError as error:
+    for diagnostic in error.diagnostics:
+        print(diagnostic)
+else:
+    font = config.fonts["lora"]
+```
+
+Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
 ## Loading content
 
