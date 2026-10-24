@@ -860,13 +860,15 @@ The initial release does not require arbitrary layout scripting, multiple layout
 
 ### Font selection
 
-Application configuration defines the available fonts and a nonempty default font pool.
+Refrain maintains an effective font registry containing bundled application fonts and fonts explicitly registered in application configuration.
 
-Every explicitly registered font must be valid and loadable. An invalid registered font is an application configuration error.
+Application configuration defines a nonempty default font pool using stable identifiers from the effective registry.
+
+Bundled font identifiers are reserved and cannot be overridden by application configuration. Every explicitly registered user font must be valid and loadable. An invalid user-registered font is an application configuration error.
 
 A content entry may specify a preferred font, inherited by every quotation in that entry.
 
-When the preferred font is registered, Refrain uses it for the selected quotation.
+When the preferred font is present in the effective registry, Refrain uses it for the selected quotation.
 
 When a content entry requests an unregistered font, Refrain retains the otherwise valid entry, logs an appropriate warning, and selects a font from the configured default pool.
 
@@ -879,12 +881,6 @@ Font selection is independent for each daily selection. Fonts do not have repeti
 The selected font is resolved after quotation selection and before daily snapshot commitment.
 
 The actual selected font is included in the committed snapshot and permanent global selection history.
-
-The resolved font remains fixed throughout the committed display day, including image regeneration and application recovery.
-
-Font selection does not influence quotation eligibility, priority, or repetition identity.
-
-The user-facing font configuration and validation rules are defined in `docs/CONTENT_FORMAT.md`.
 
 ### Stable progressive layout
 
