@@ -142,19 +142,27 @@ layout:
 
   fonts:
     default:
-      - "liberation-serif"
-      - "dejavu-serif"
-      - "liberation-sans"
+      - "libre-baskerville"
+      - "lora"
+      - "source-sans-3"
 
     available:
-      liberation-serif: "fonts/LiberationSerif-Regular.ttf"
-      dejavu-serif: "fonts/DejaVuSerif.ttf"
-      liberation-sans: "fonts/LiberationSans-Regular.ttf"
+      my-lora: "fonts/MyCustomLora.otf"
 
   text:
     min_font_size: 28
     max_font_size: 100
 ```
+
+The example illustrates the initial configuration structure, including a bounded quotation region, an explicit default font pool, an additional user-registered font, and font-size limits.
+
+Refrain automatically registers its bundled fonts. They can be referenced by their stable identifiers without declaring filesystem paths in application configuration.
+
+The `layout.fonts.available` mapping registers additional fonts supplied by the installation. It may be omitted when no additional fonts are required.
+
+The default font pool controls which registered fonts are eligible for automatic selection. A registered font that is not included in the default pool remains available for explicit selection by content entries.
+
+User-supplied font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the resources and presentation layout provided by an installation.
 
 The example illustrates the initial configuration structure, including a bounded quotation region, a font registry, an automatic font-selection pool, and font-size limits.
 
@@ -290,9 +298,31 @@ The initial release does not expose arbitrary positioning of every presentation 
 
 ### Font registry
 
-The `layout.fonts.available` mapping defines the fonts available to Refrain.
+Refrain maintains an effective font registry containing both bundled fonts and fonts explicitly registered in application configuration.
 
-Each mapping key is a font identifier, and its value is the path to a supported font file.
+Every font has a stable, case-sensitive identifier. Content entries and the default font pool refer to fonts by these identifiers rather than by filesystem paths.
+
+#### Bundled fonts
+
+Refrain automatically registers the following bundled fonts:
+
+| Identifier | Font family |
+|---|---|
+| `libre-baskerville` | Libre Baskerville |
+| `lora` | Lora |
+| `source-sans-3` | Source Sans 3 |
+
+Bundled fonts are application resources and do not require entries in `layout.fonts.available`.
+
+Their identifiers are reserved. Application configuration must not redefine or override a bundled font identifier.
+
+Bundled font identifiers form part of the public configuration interface and must remain stable across compatible releases.
+
+#### User-registered fonts
+
+The optional `layout.fonts.available` mapping registers additional fonts supplied by an installation.
+
+Each mapping key is a user-defined font identifier, and its value is the path to a supported font file.
 
 For example:
 
@@ -300,12 +330,15 @@ For example:
 layout:
   fonts:
     available:
-      liberation-serif: "fonts/LiberationSerif-Regular.ttf"
-      dejavu-serif: "fonts/DejaVuSerif.ttf"
-      liberation-sans: "fonts/LiberationSans-Regular.ttf"
+      my-lora: "fonts/MyCustomLora.otf"
+      family-handwriting: "fonts/FamilyHandwriting.ttf"
 ```
 
+When omitted, `layout.fonts.available` defaults to an empty mapping.
+
 Font identifiers must be nonempty strings and are case-sensitive.
+
+User-defined identifiers must not duplicate bundled identifiers. Such collisions are configuration validation errors; user-defined fonts cannot replace or shadow bundled fonts.
 
 Font paths must be nonempty strings.
 
@@ -313,17 +346,17 @@ Relative font paths are resolved relative to the directory containing `config.ya
 
 Absolute paths are permitted.
 
-Every registered font must resolve to an existing, readable font file supported by the renderer.
+Every explicitly registered font must resolve to an existing, readable font file supported by the renderer.
 
 An invalid, missing, or unreadable registered font is a configuration error, even if the font is not included in the automatic default pool.
 
 Registered font validation must not silently discard invalid entries.
 
-The font registry provides stable identifiers that content files can reference without embedding machine-specific filesystem paths.
+The effective registry contains all bundled fonts and all valid user-registered fonts. Both are available for explicit selection by content entries, whether or not they appear in the default font pool.
 
 ### Default font pool
 
-The `layout.fonts.default` field is a nonempty sequence of font identifiers.
+The required `layout.fonts.default` field is a nonempty sequence of font identifiers.
 
 For example:
 
@@ -331,14 +364,16 @@ For example:
 layout:
   fonts:
     default:
-      - "liberation-serif"
-      - "dejavu-serif"
-      - "liberation-sans"
+      - "libre-baskerville"
+      - "lora"
+      - "my-lora"
 ```
 
-Every identifier must exist in `layout.fonts.available`.
+Every identifier must exist in the effective font registry, including bundled fonts and fonts registered through `layout.fonts.available`.
 
 Duplicate identifiers are not permitted.
+
+The default pool is explicitly configured. Refrain must not automatically add bundled or newly registered fonts to the pool.
 
 A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 
@@ -547,14 +582,14 @@ All quotations in an entry inherit the same priority.
 
 `font` is an optional string specifying the preferred font for every quotation in the entry.
 
-The value refers to a font identifier defined in the application configuration's `layout.fonts.available` registry.
+The value refers to a stable identifier in Refrain's effective font registry. The identifier may represent either a bundled font or a font registered in application configuration.
 
 For example:
 
 ```yaml
 id: "example-poem"
 
-font: "dejavu-serif"
+font: "lora"
 
 source: "A Collection of Poetry"
 
@@ -853,10 +888,11 @@ Validation includes:
 - valid integer priorities;
 - valid normalized quotation-region coordinates;
 - valid font-size bounds;
-- nonempty font identifiers and file paths;
-- existing, readable, supported registered font files;
+- user-registered font identifiers that do not collide with reserved bundled identifiers;
+- nonempty user-registered font identifiers and file paths;
+- existing, readable, supported user-registered font files;
 - a nonempty default font pool;
-- default font identifiers present in the registry;
+- default font identifiers present in the effective font registry;
 - no duplicate identifiers in the default font pool.
 
 Invalid explicit configuration values must not be silently replaced by defaults.
