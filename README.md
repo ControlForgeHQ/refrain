@@ -3,7 +3,7 @@ An open-source e-paper display for rotating quotations, progressive reveals, and
 
 ## Development setup
 
-Refrain's configuration and content loaders are hardware-independent. Python 3.11 or newer is required.
+Refrain's configuration and content loaders are hardware-independent. Python 3.13 or newer is required.
 
 Create an isolated environment and install the package with its development tools:
 
