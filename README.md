@@ -3,22 +3,67 @@ An open-source e-paper display for rotating quotations, progressive reveals, and
 
 ## Development setup
 
-Refrain's configuration and content loaders are hardware-independent. Python 3.13 or newer is required.
+Refrain's hardware-independent components can be developed and tested on Windows, Linux, and macOS without physical display hardware.
 
-Create an isolated environment and install the package with its development tools:
+Python 3.13 or newer is required.
+
+Create a virtual environment in the repository root.
+
+### Windows (PowerShell)
+
+```powershell
+py -3.13 -m venv .venv
+```
+
+Install Refrain and its development dependencies:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Run the standard validation checks:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -v
+.\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\python.exe -m black --check src tests
+```
+
+### Linux and macOS
+
+Create the virtual environment:
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install --editable '.[dev]'
 ```
 
-Run the automated validation commands from the repository root:
+Install Refrain and its development dependencies:
 
 ```sh
-.venv/bin/black --check src tests
-.venv/bin/ruff check src tests
-.venv/bin/pytest
+.venv/bin/python -m pip install -e '.[dev]'
 ```
+
+Run the standard validation checks:
+
+```sh
+.venv/bin/python -m pytest -v
+.venv/bin/python -m ruff check src tests
+.venv/bin/python -m black --check src tests
+```
+
+### Validation expectations
+
+All three validation commands must pass before an implementation is considered ready for review.
+
+Run the commands from the repository root.
+
+Use the project's virtual environment so that validation does not depend on globally installed Python packages or development tools.
+
+The commands are intentionally identical across platforms apart from the virtual environment's Python executable path.
+
+Validation results should identify the operating system, Python version, and any tests that could not be performed.
+
+Hardware-independent validation does not replace physical display validation where required.
 
 ## Loading application configuration
 
