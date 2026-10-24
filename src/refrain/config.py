@@ -15,8 +15,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import yaml
 from PIL import ImageFont
-from yaml.events import AliasEvent
-from yaml.nodes import MappingNode
+
+from ._yaml import load_yaml, yaml_error_location
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "layout"}
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -111,59 +111,6 @@ class ApplicationConfiguration:
     max_font_size: int
 
 
-class _StrictSafeLoader(yaml.SafeLoader):
-    def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[str, object]:
-        if not isinstance(node, MappingNode):
-            return super().construct_mapping(node, deep=deep)
-
-        keys: set[str] = set()
-        for key_node, _ in node.value:
-            if key_node.tag == "tag:yaml.org,2002:merge":
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "merge keys are not supported",
-                    key_node.start_mark,
-                )
-            key = self.construct_object(key_node, deep=deep)
-            if not isinstance(key, str):
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "mapping keys must be strings",
-                    key_node.start_mark,
-                )
-            if key in keys:
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    f"duplicate mapping key {key!r}",
-                    key_node.start_mark,
-                )
-            keys.add(key)
-        return super().construct_mapping(node, deep=deep)
-
-
-def _load_yaml(contents: str) -> object:
-    for event in yaml.parse(contents, Loader=yaml.SafeLoader):
-        if isinstance(event, AliasEvent) or getattr(event, "anchor", None) is not None:
-            raise yaml.YAMLError("anchors and aliases are not supported")
-    loader = _StrictSafeLoader(contents)
-    try:
-        return loader.get_single_data()
-    except (KeyError, ValueError) as error:
-        raise yaml.YAMLError(f"invalid YAML scalar: {error}") from error
-    finally:
-        loader.dispose()
-
-
-def _yaml_error_location(error: yaml.YAMLError) -> str:
-    mark = getattr(error, "problem_mark", None)
-    if mark is None:
-        return ""
-    return f"line {mark.line + 1}, column {mark.column + 1}: "
-
-
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[[str, str], None]) -> None:
     for key in sorted(value.keys() - allowed):
         report(f"{field}.{key}" if field else key, "is not a supported configuration field")
@@ -207,12 +154,14 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     try:
         contents = file.read_text(encoding="utf-8")
-        data = _load_yaml(contents)
+        data = load_yaml(contents)
     except (OSError, UnicodeError) as error:
         report("$", f"cannot read UTF-8 YAML file: {error}")
         raise ApplicationConfigurationError(tuple(diagnostics)) from error
     except yaml.YAMLError as error:
-        report("$", f"invalid or unsupported YAML: {_yaml_error_location(error)}{error}")
+        location = yaml_error_location(error)
+        prefix = f"{location}: " if location else ""
+        report("$", f"invalid or unsupported YAML: {prefix}{error}")
         raise ApplicationConfigurationError(tuple(diagnostics)) from error
 
     if not isinstance(data, dict):
