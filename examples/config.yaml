@@ -1,0 +1,28 @@
+general:
+  timezone: "America/Toronto"
+  day_start: "06:00"
+
+content:
+  directory: "content"
+
+reveal:
+  quotation: "06:00"
+  source: "12:00"
+  attribution: "18:00"
+
+layout:
+  quotation_region:
+    x: 0.10
+    y: 0.15
+    width: 0.80
+    height: 0.55
+
+  fonts:
+    default:
+      - "libre-baskerville"
+      - "lora"
+      - "source-sans-3"
+
+  text:
+    min_font_size: 28
+    max_font_size: 100
