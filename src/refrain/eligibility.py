@@ -69,9 +69,7 @@ def _matching_specificity(rule: EligibilityRule, display_date: date) -> Optional
     return None
 
 
-def build_eligible_quotation_pool(
-    content_library: Iterable[ContentEntry], display_date: date
-) -> EligibleQuotationPool:
+def build_eligible_quotation_pool(content_library: Iterable[ContentEntry], display_date: date) -> EligibleQuotationPool:
     """Return quotation candidates at the highest specificity matching ``display_date``.
 
     The input is expected to contain validated entries, as returned by

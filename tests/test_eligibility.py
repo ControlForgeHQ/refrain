@@ -155,9 +155,11 @@ def test_overlapping_rules_and_rule_order_do_not_duplicate_candidates() -> None:
     second = build_eligible_quotation_pool((reverse,), date(2024, 2, 29))
 
     assert first.specificity is second.specificity is EligibilitySpecificity.YEAR_MONTH_DAY
-    assert {candidate.identity for candidate in first.candidates} == {
-        candidate.identity for candidate in second.candidates
-    } == {"First.", "Second."}
+    assert (
+        {candidate.identity for candidate in first.candidates}
+        == {candidate.identity for candidate in second.candidates}
+        == {"First.", "Second."}
+    )
     assert len(first.candidates) == len(second.candidates) == 2
 
 
@@ -212,9 +214,11 @@ def test_content_library_order_does_not_change_specificity_or_membership() -> No
     second = build_eligible_quotation_pool(tuple(reversed(entries)), date(2024, 2, 29))
 
     assert first.specificity is second.specificity is EligibilitySpecificity.YEAR_MONTH_DAY
-    assert {candidate.identity for candidate in first.candidates} == {
-        candidate.identity for candidate in second.candidates
-    } == {"Exact."}
+    assert (
+        {candidate.identity for candidate in first.candidates}
+        == {candidate.identity for candidate in second.candidates}
+        == {"Exact."}
+    )
 
 
 def test_evaluation_does_not_mutate_content_entries() -> None:
@@ -248,3 +252,13 @@ def test_yaml_loaded_content_can_be_evaluated_without_application_configuration(
     }
     assert all(candidate.priority == -2 for candidate in result.candidates)
     assert all(candidate.entry.source == "YAML source" for candidate in result.candidates)
+
+
+def test_yaml_loader_default_ordinary_eligibility_is_evaluated(tmp_path: Path) -> None:
+    data = {"id": "ordinary-entry", "quotations": ["Available every day."]}
+    (tmp_path / "entry.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    result = build_eligible_quotation_pool(load_content_library(tmp_path), date(2026, 5, 4))
+
+    assert result.specificity is EligibilitySpecificity.ORDINARY
+    assert result.candidates[0].text == "Available every day."

@@ -20,8 +20,8 @@ from .content import (
     normalize_quotation,
 )
 from .eligibility import (
-    EligibleQuotationPool,
     EligibilitySpecificity,
+    EligibleQuotationPool,
     QuotationCandidate,
     build_eligible_quotation_pool,
 )
