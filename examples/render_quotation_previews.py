@@ -16,7 +16,7 @@ from refrain import (
     layout_composition,
     render_reveal_stages,
 )
-from refrain.renderer import _render_reveal_stages
+from refrain.renderer import _layout_composition_with_gap, _render_reveal_stages
 
 _COMPOSITIONS = {
     "both-fields": (
@@ -63,6 +63,7 @@ _CONCEALMENTS = (
     ("glyph-blur", "aggressive-glyph-blur"),
     ("pixel-distortion", "dense-pixel-distortion"),
 )
+_GAP_RATIOS = (0.85, 1.0, 1.2)
 
 
 def main() -> None:
@@ -91,6 +92,30 @@ def main() -> None:
                     max_font_size=104,
                     presentation_style=style,
                 )
+                if composition_name == "both-fields":
+                    for gap_ratio in _GAP_RATIOS:
+                        spacing_layout = _layout_composition_with_gap(
+                            composition,
+                            font,
+                            region,
+                            background.size,
+                            min_font_size=32,
+                            max_font_size=104,
+                            presentation_style=style,
+                            gap_ratio=gap_ratio,
+                        )
+                        spacing_image = render_reveal_stages(
+                            background,
+                            font,
+                            spacing_layout,
+                            (CompositionVisibility(source=True, attribution=True),),
+                        )[0]
+                        spacing_path = font_directory / (f"both-fields-{style}-fully-revealed-gap-{gap_ratio:.2f}x.png")
+                        spacing_image.save(spacing_path)
+                        print(
+                            f"{spacing_path}: {spacing_layout.quotation.font_size}px, "
+                            f"{len(spacing_layout.quotation.lines)} lines"
+                        )
                 has_concealed_fields = composition.source is not None or composition.attribution is not None
                 if not has_concealed_fields:
                     images = render_reveal_stages(background, font, layout, stages)
