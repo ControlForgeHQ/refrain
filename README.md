@@ -205,4 +205,25 @@ if selection_boundary_recognized:
 recovered = PersistentStateStore(state_path).load()
 ```
 
+### Persisting reveal progress
+
+Reveal progress belongs to a selection revision, separately from its immutable snapshot. The caller supplies the stage; the store does not evaluate the schedule or current time.
+
+```python
+store = PersistentStateStore(state_path)
+current = store.load()
+if current is not None:
+    advanced = store.advance_reveal_progress(expected_revision=current.revision, stage=1)
+
+    # After an application restart:
+    recovered = PersistentStateStore(state_path).load()
+    assert recovered.snapshot == current.snapshot
+    assert recovered.highest_reveal_stage == advanced.highest_reveal_stage
+    assert recovered.highest_reveal_stage >= 1
+```
+
+Stages must be nonnegative integers (not booleans). Same or earlier-stage requests do not rewrite state. An obsolete revision raises `StateCommitError`, even for an earlier-stage request. A new `commit` starts at `initial_reveal_stage=0` unless the caller supplies another initial stage; retrying a committed selection preserves subsequent progress. Neither advancement nor its retries change the selection revision or either history.
+
+Serialize all writes to the same state path. If a write raises `StateCommitError`, inspect its `published` attribute and reload the authoritative state before retrying; a published update may have taken effect even when durability confirmation failed.
+
 The file format and atomic-replacement durability guarantees and limitations are documented in [Persistent storage](docs/ENGINEERING.md#persistent-storage).
