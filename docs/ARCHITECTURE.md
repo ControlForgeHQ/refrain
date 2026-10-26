@@ -1017,7 +1017,7 @@ A daily snapshot must contain every value needed to reproduce its presentation w
 `layout` contains:
 
 - `image_size`: a two-item sequence of positive integer pixel dimensions in width, height order;
-- `quotation_region`: a normalized rectangle with `x`, `y`, `width`, and `height`;
+- `presentation_region`: a normalized rectangle with `x`, `y`, `width`, and `height`;
 - `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
 
 The snapshot's existing resolved font contains the exact font bytes used during preparation. Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.

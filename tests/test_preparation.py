@@ -19,7 +19,7 @@ from refrain import (
 _IMAGE_SIZE = (320, 240)
 _LAYOUT = {
     "image_size": _IMAGE_SIZE,
-    "quotation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
     "min_font_size": 12,
     "max_font_size": 32,
 }
@@ -153,12 +153,12 @@ def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypa
         ({"presentation_style": "centered"}, {**_LAYOUT, "image_size": (0, 240)}, "image_size"),
         (
             {"presentation_style": "centered"},
-            {**_LAYOUT, "quotation_region": {"x": 0.1, "y": 0.1, "height": 0.8}},
-            "quotation_region is missing width",
+            {**_LAYOUT, "presentation_region": {"x": 0.1, "y": 0.1, "height": 0.8}},
+            "presentation_region is missing width",
         ),
         (
             {"presentation_style": "centered"},
-            {**_LAYOUT, "quotation_region": {"x": 0.9, "y": 0.1, "width": 0.2, "height": 0.8}},
+            {**_LAYOUT, "presentation_region": {"x": 0.9, "y": 0.1, "width": 0.2, "height": 0.8}},
             "normalized rectangle",
         ),
         ({"presentation_style": "centered"}, {**_LAYOUT, "min_font_size": 0}, "min_font_size"),
@@ -219,7 +219,7 @@ def test_unloadable_embedded_font_fails_clearly() -> None:
 def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: ResolvedFont) -> None:
     layout = {
         "image_size": (100, 100),
-        "quotation_region": {"x": 0.49, "y": 0.49, "width": 0.02, "height": 0.02},
+        "presentation_region": {"x": 0.49, "y": 0.49, "width": 0.02, "height": 0.02},
         "min_font_size": 24,
         "max_font_size": 28,
     }

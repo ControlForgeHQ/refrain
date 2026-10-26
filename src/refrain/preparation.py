@@ -30,9 +30,9 @@ def _require_mapping(value: object, field: str) -> Mapping[str, object]:
     return value
 
 
-def _resolve_presentation(snapshot: DailySnapshot) -> tuple[
-    LiteraryComposition, QuotationRegion, tuple[int, int], int, int, str
-]:
+def _resolve_presentation(
+    snapshot: DailySnapshot,
+) -> tuple[LiteraryComposition, QuotationRegion, tuple[int, int], int, int, str]:
     metadata = _require_mapping(snapshot.presentation_metadata, "presentation_metadata")
     style = metadata.get("presentation_style")
     if not isinstance(style, str) or style not in {"centered", "prose"}:
@@ -58,12 +58,12 @@ def _resolve_presentation(snapshot: DailySnapshot) -> tuple[
     ):
         raise DailyImagePreparationError("snapshot.layout.image_size must contain two positive integer dimensions")
 
-    region_data = _require_mapping(layout.get("quotation_region"), "layout.quotation_region")
+    region_data = _require_mapping(layout.get("presentation_region"), "layout.presentation_region")
     region_fields = ("x", "y", "width", "height")
     missing_region_fields = [field for field in region_fields if field not in region_data]
     if missing_region_fields:
         raise DailyImagePreparationError(
-            "snapshot.layout.quotation_region is missing " + ", ".join(missing_region_fields)
+            "snapshot.layout.presentation_region is missing " + ", ".join(missing_region_fields)
         )
     region = QuotationRegion(**{field: region_data[field] for field in region_fields})
 
