@@ -102,3 +102,19 @@ except ContentLibraryError as error:
 The loader rejects the entire library if any entry is invalid. Each diagnostic identifies its file and field. It validates intrinsic content rules only: eligibility is not evaluated for a date, reveal times are not resolved against application configuration, and font preferences are not checked against a font registry.
 
 See [`examples/content/sample.yaml`](examples/content/sample.yaml) for an example entry and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative YAML specification.
+
+## Evaluating quotation eligibility
+
+`build_eligible_quotation_pool` evaluates the entries for an explicit display date and returns the candidates at the winning specificity. Each candidate exposes its quotation text and identity, priority, and containing entry with its metadata. The result's `specificity` is `None` when no quotations are eligible. See [Content eligibility and selection](docs/ARCHITECTURE.md#content-eligibility-and-selection) for the authoritative precedence rules.
+
+```python
+from datetime import date
+
+from refrain import build_eligible_quotation_pool, load_content_library
+
+entries = load_content_library("examples/content")
+pool = build_eligible_quotation_pool(entries, date(2024, 2, 29))
+
+for candidate in pool.candidates:
+    print(candidate.text, candidate.entry.source, candidate.priority)
+```
