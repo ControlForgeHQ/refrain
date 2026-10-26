@@ -762,29 +762,8 @@ A global reveal schedule defines the default timing for supported semantic field
 
 Individual content entries may override that schedule.
 
-The effective schedule is resolved before the daily snapshot is committed.### View composition
+The effective schedule is resolved before the daily snapshot is committed.
 
-Refrain separates view-specific background composition from literary content rendering.
-
-A background generator produces a base image containing the visual elements owned by that view, including decorative elements, branding, diagnostic information, and other content outside the literary composition.
-
-The shared quotation renderer accepts a background image and a literary composition consisting of:
-
-- a required quotation;
-- optional source information;
-- optional attribution information.
-
-The renderer owns the typography, fitting, positioning, and drawing of all three fields within an explicitly supplied presentation region.
-
-The renderer is independent of the purpose of the background image. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
-
-For normal daily presentations, the presentation region is resolved from application configuration. Other views may supply their own presentation region without changing the renderer's behavior.
-
-The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
-
-The renderer does not require a content-library entry or committed daily snapshot as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
-
-The architecture does not require a general-purpose layout framework, externally supplied rendering components, or a plugin interface.
 Subsequent changes to global configuration or the original entry do not alter the committed schedule.
 
 Reveal schedules must be validated to prevent impossible or contradictory behavior.
