@@ -830,6 +830,46 @@ The renderer must not select content, modify selection history, or determine app
 
 Rendered output must be testable and inspectable without Raspberry Pi display hardware.
 
+### View composition
+
+Refrain separates view-specific background composition from primary quotation typography.
+
+A background generator produces a complete base image containing the visual elements owned by that view, including decorative elements, secondary text, and other non-primary-quotation content.
+
+The shared quotation renderer places a quotation onto the supplied background image within an explicitly resolved rectangular region.
+
+The quotation renderer is independent of the type or purpose of the background image. It does not read application configuration, select quotations or fonts, or generate view-specific metadata.
+
+For normal daily presentations, the quotation region is resolved from the configured layout. Other views may supply a different quotation region without modifying the shared text-fitting and typography behavior.
+
+The initial presentation uses a standard background generator. This composition model also accommodates a separate information view without introducing a general-purpose layout framework or requiring information-view-specific behavior in the quotation renderer.
+
+### Information view
+
+Refrain will provide an information view presenting application identity and selected diagnostic information in a format consistent with its quotation-based visual design.
+
+The information view contains:
+
+- a curated, application-owned quotation associated with the running release;
+- the Refrain and ControlForge project identity;
+- application version and available build or commit information;
+- selected runtime and environment details where available;
+- an appropriate copyright notice.
+
+The curated quotation is not drawn from the user content library and does not participate in daily selection, priority, repetition history, or global selection history.
+
+The information-view background generator owns its branding, diagnostic text, and other secondary presentation elements. The shared quotation renderer presents the curated quotation using the same typography and fitting facilities as normal daily quotations.
+
+The quotation remains visually primary. Branding and diagnostic information are subordinate and should not compromise readability.
+
+The information view is independent of the committed daily selection. Displaying it does not create a new selection, modify selection histories, or advance reveal progress.
+
+The information view may be requested independently of automatic presentation behavior.
+
+Application configuration will provide an optional automatic-display duration. A duration of zero disables automatic presentation without disabling the information view itself.
+
+An unavailable optional diagnostic value must not prevent the information view from being rendered.
+
 ### Initial visual design
 
 The initial release provides one configurable layout.
