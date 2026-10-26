@@ -85,7 +85,7 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Rendering a literary composition
 
-The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text remains in place as a deterministic blur; its dash and separator punctuation remain visible. The byline is centered in `centered` style and right-aligned in `prose` style. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
+The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once and vertically centers the complete composition as one group. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text remains visibly obscured in its final position, with the dash and separator punctuation visible. Attribution uses a restrained gray tone; the byline is centered in `centered` style and right-aligned in `prose` style. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
 
 ```python
 from importlib.resources import files
@@ -137,7 +137,7 @@ for style in ("centered", "prose"):
         image.save(f"{style}-{index}.png")
 ```
 
-The complete byline reads `— An Example Author, A Book of Examples`; if either optional field is absent, its separator is omitted. A `CompositionLayout` keeps quotation and byline geometry identical across stages. To generate inspectable 1600 × 1200 examples for both styles and all four optional-field combinations, run `python examples/render_quotation_previews.py /tmp/refrain-previews`.
+The complete byline reads `— An Example Author, A Book of Examples`; if either optional field is absent, its separator is omitted. A `CompositionLayout` keeps quotation and byline geometry identical across stages. To generate inspectable 1600 × 1200 examples for all four optional-field combinations, both styles, all three bundled fonts, and the preview-only blur and pixel-distortion concealment alternatives, run `python examples/render_quotation_previews.py /tmp/refrain-previews`. Output is grouped by font identifier; no concealment setting is exposed by the public renderer API.
 
 ## Loading content
 
