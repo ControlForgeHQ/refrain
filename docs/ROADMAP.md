@@ -69,11 +69,15 @@ The first release should be useful in normal household operation without dependi
 
 - Produce complete 1600 × 1200 presentation images.
 - Provide one attractive, typography-first default layout.
+- Separate view-specific background composition from shared quotation rendering.
 - Support meaningful typography and spacing configuration.
 - Preserve the primary quotation's positioning across reveal stages.
 - Reserve layout space for information revealed later.
 - Support predominantly dark text on a paper-white background, with optional restrained color accents.
 - Handle content that cannot fit the layout without silent truncation.
+- Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
+- Support optional automatic presentation of the information view for a configurable, bounded duration, enabled by default.
+- Allow the information view to be presented independently of the committed daily selection and its reveal progression.
 
 ### Physical display
 
@@ -219,8 +223,29 @@ These capabilities may be considered after the core presentation and companion e
 - Additional scheduling and eligibility rules when required.
 - Content import and export.
 - More convenient installation and update workflows.
+- Refrain-style diagnostic views for selected application failures.
 
-These items are not commitments to a particular release.
+### Diagnostic views
+
+A future diagnostic view could present a short, curated, quotation-style message alongside a smaller actionable technical diagnostic.
+
+The intent is to preserve Refrain's visual character while making recoverable or otherwise actionable failures visible without requiring immediate access to logs or a terminal.
+
+Diagnostic views could reuse the shared quotation renderer with a dedicated background generator responsible for secondary error details.
+
+A small set of messages associated with broad failure categories is preferable to maintaining a separate quotation for every possible exception.
+
+Some failures, including invalid application configuration, may prevent access to ordinary presentation settings. Any future implementation must therefore define a minimal, application-owned fallback sufficient to render useful diagnostics without depending on the failed configuration or a valid daily snapshot.
+
+Physical display failures may prevent a diagnostic view from being presented. Logging and other error-reporting mechanisms must remain independent of display availability.
+
+Diagnostic views are not required for Version 0.1.
+
+These ideas do not establish a commitment to a general-purpose error-presentation framework, additional runtime services, or a particular implementation.
+
+## Scope evaluation
+
+These capabilities are not commitments to a particular future release.
 
 Each should be evaluated against demonstrated user needs and the added maintenance cost.
 
