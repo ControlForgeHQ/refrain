@@ -37,7 +37,15 @@ from .persistence import (
     StateRecoveryError,
     UnsupportedStateVersionError,
 )
-from .renderer import QuotationLayout, QuotationRenderError, layout_quotation, render_quotation
+from .renderer import (
+    CompositionLayout,
+    CompositionVisibility,
+    LiteraryComposition,
+    QuotationRenderError,
+    TextFieldLayout,
+    layout_composition,
+    render_reveal_stages,
+)
 from .selection import SelectionProposal, select_quotation
 
 __all__ = [
@@ -55,8 +63,11 @@ __all__ = [
     "GlobalHistoryRecord",
     "QuotationRegion",
     "Quotation",
-    "QuotationLayout",
+    "CompositionLayout",
+    "CompositionVisibility",
+    "LiteraryComposition",
     "QuotationRenderError",
+    "TextFieldLayout",
     "QuotationCandidate",
     "PersistentState",
     "PersistentStateError",
@@ -71,9 +82,9 @@ __all__ = [
     "UnsupportedStateVersionError",
     "load_content_library",
     "load_application_config",
-    "layout_quotation",
+    "layout_composition",
     "normalize_quotation",
     "build_eligible_quotation_pool",
-    "render_quotation",
+    "render_reveal_stages",
     "select_quotation",
 ]

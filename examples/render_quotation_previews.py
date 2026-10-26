@@ -1,4 +1,4 @@
-"""Generate hardware-independent quotation renderer previews."""
+"""Generate hardware-independent literary composition previews."""
 
 from __future__ import annotations
 
@@ -8,19 +8,45 @@ from pathlib import Path
 
 from PIL import Image
 
-from refrain import QuotationRegion, ResolvedFont, layout_quotation, render_quotation
+from refrain import (
+    CompositionVisibility,
+    LiteraryComposition,
+    QuotationRegion,
+    ResolvedFont,
+    layout_composition,
+    render_reveal_stages,
+)
 
-_QUOTATIONS = {
-    "short": "Be still.",
-    "long": (
-        "A patient observer notices the changing light, the softened edges of the room, "
-        "and the small details that become visible only when attention has time to settle. "
-        "Each careful pause gives the ordinary world another chance to become unfamiliar."
+_COMPOSITIONS = {
+    "short": LiteraryComposition(
+        quotation="Be still.",
+        source="Notes on Attention",
+        attribution="An Example Author",
     ),
-    "paragraphs": (
-        "Begin with a little quiet.\nLet the thought arrive in its own time.\n\n" "Then leave room for what follows."
+    "long": LiteraryComposition(
+        quotation=(
+            "A patient observer notices the changing light, the softened edges of the room, "
+            "and the small details that become visible only when attention has time to settle. "
+            "Each careful pause gives the ordinary world another chance to become unfamiliar."
+        ),
+        source="A Study of Looking Carefully",
+        attribution="An Example Author",
+    ),
+    "paragraphs": LiteraryComposition(
+        quotation=(
+            "Begin with a little quiet.\nLet the thought arrive in its own time.\n\n"
+            "Then leave room for what follows."
+        ),
+        source="A Book of Patient Reading",
+        attribution="An Example Author",
     ),
 }
+_STAGES = (
+    CompositionVisibility(),
+    CompositionVisibility(source=True),
+    CompositionVisibility(source=True, attribution=True),
+)
+_STYLES = ("centered", "prose")
 
 
 def main() -> None:
@@ -34,11 +60,23 @@ def main() -> None:
         font = ResolvedFont("libre-baskerville", font_file.read())
 
     region = QuotationRegion(x=0.12, y=0.1, width=0.76, height=0.8)
-    for name, text in _QUOTATIONS.items():
-        background = Image.new("RGB", (1600, 1200), "#f8f6f0")
-        layout = layout_quotation(text, font, region, background.size, min_font_size=32, max_font_size=104)
-        render_quotation(background, font, layout).save(output_directory / f"{name}.png")
-        print(f"{output_directory / f'{name}.png'}: {layout.font_size}px, {len(layout.lines)} lines")
+    for composition_name, composition in _COMPOSITIONS.items():
+        for style in _STYLES:
+            background = Image.new("RGB", (1600, 1200), "#f8f6f0")
+            layout = layout_composition(
+                composition,
+                font,
+                region,
+                background.size,
+                min_font_size=32,
+                max_font_size=104,
+                presentation_style=style,
+            )
+            images = render_reveal_stages(background, font, layout, _STAGES)
+            for stage_index, image in enumerate(images):
+                path = output_directory / f"{composition_name}-{style}-stage-{stage_index}.png"
+                image.save(path)
+                print(f"{path}: {layout.quotation.font_size}px, {len(layout.quotation.lines)} lines")
 
 
 if __name__ == "__main__":
