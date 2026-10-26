@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import time
+from datetime import date, time
 from pathlib import Path
 
 import pytest
@@ -10,6 +10,7 @@ from refrain import (
     ContentLibraryError,
     EligibilityRule,
     RevealOverrides,
+    build_eligible_quotation_pool,
     load_content_library,
     normalize_quotation,
 )
@@ -54,11 +55,45 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert entries[0].attribution is None
     assert entries[0].priority == 0
     assert entries[0].font is None
+    assert entries[0].presentation_style == "centered"
     assert entries[0].eligibility == (EligibilityRule(ordinary=True),)
     assert entries[0].reveal == RevealOverrides()
     assert entries[1].priority == -3
     assert [quotation.text for quotation in entries[1].quotations] == ["First candidate.", "Second candidate."]
     assert all(entry.file is not None for entry in entries)
+
+
+@pytest.mark.parametrize("style", ["centered", "prose"])
+def test_explicit_presentation_styles_are_preserved(tmp_path: Path, style: str) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(presentation_style=style))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.presentation_style == style
+
+
+def test_presentation_style_is_shared_by_all_quotation_candidates(tmp_path: Path) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(presentation_style="prose", quotations=["First quotation.", "Second quotation."]),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+    pool = build_eligible_quotation_pool((entry,), date(2026, 10, 26))
+
+    assert len(pool.candidates) == 2
+    assert all(candidate.entry is entry for candidate in pool.candidates)
+    assert all(candidate.entry.presentation_style == "prose" for candidate in pool.candidates)
+
+
+@pytest.mark.parametrize("style", ["unknown", "Centered", "", None, 1, False])
+def test_invalid_presentation_styles_are_rejected(tmp_path: Path, style: object) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(presentation_style=style))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(": presentation_style:" in diagnostic for diagnostic in diagnostics)
+    assert any("centered" in diagnostic and "prose" in diagnostic for diagnostic in diagnostics)
 
 
 def test_entry_identity_does_not_depend_on_file_path(tmp_path: Path) -> None:

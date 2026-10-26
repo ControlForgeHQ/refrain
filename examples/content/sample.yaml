@@ -4,6 +4,7 @@ source: "A Sample Collection"
 attribution: "An Example Author"
 priority: 2
 font: "preferred-serif"
+presentation_style: "prose"
 
 eligibility:
   - ordinary: true

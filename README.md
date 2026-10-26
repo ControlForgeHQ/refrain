@@ -95,7 +95,7 @@ from PIL import Image
 from refrain import (
     CompositionVisibility,
     LiteraryComposition,
-    QuotationRegion,
+    PresentationRegion,
     ResolvedFont,
     layout_composition,
     render_reveal_stages,
@@ -106,7 +106,7 @@ with resource.open("rb") as font_file:
     font = ResolvedFont("lora", font_file.read())
 
 background = Image.new("RGB", (1600, 1200), "#f8f6f0")
-region = QuotationRegion(x=0.1, y=0.12, width=0.8, height=0.76)
+region = PresentationRegion(x=0.1, y=0.12, width=0.8, height=0.76)
 composition = LiteraryComposition(
     quotation="A resolved quotation is fitted to the supplied page.",
     source="A Book of Examples",
@@ -169,7 +169,7 @@ Run `python examples/prepare_daily_snapshot.py /tmp/refrain-daily-images` to gen
 
 ## Loading content
 
-`load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of validated `ContentEntry` objects; each entry contains its metadata, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
+`load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of validated `ContentEntry` objects; each entry contains its metadata, presentation style, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
 
 Validation is performed by `load_content_library`; directly constructing `ContentEntry`, `Quotation`, or other model dataclasses does not validate their fields.
 
@@ -271,25 +271,29 @@ if selection_boundary_recognized:
             presentation_metadata={
                 "source": candidate.entry.source,
                 "attribution": candidate.entry.attribution,
-                "presentation_style": "centered",
+                "presentation_style": candidate.entry.presentation_style,
             },
             reveal_schedule={
-                "quotation": config.reveal.quotation.isoformat(),
-                "source": config.reveal.source.isoformat(),
-                "attribution": config.reveal.attribution.isoformat(),
+                "quotation": config.reveal.quotation.strftime("%H:%M"),
+                "source": config.reveal.source.strftime("%H:%M"),
+                "attribution": config.reveal.attribution.strftime("%H:%M"),
             },
             layout={
                 "image_size": (1600, 1200),
                 "presentation_region": {
-                    "x": config.quotation_region.x,
-                    "y": config.quotation_region.y,
-                    "width": config.quotation_region.width,
-                    "height": config.quotation_region.height,
+                    "x": config.presentation_region.x,
+                    "y": config.presentation_region.y,
+                    "width": config.presentation_region.width,
+                    "height": config.presentation_region.height,
                 },
                 "min_font_size": config.min_font_size,
                 "max_font_size": config.max_font_size,
             },
-            scheduling=SchedulingContext(display_date, str(config.timezone), config.day_start.isoformat()),
+            scheduling=SchedulingContext(
+                display_date,
+                str(config.timezone),
+                config.day_start.strftime("%H:%M"),
+            ),
         )
         store.commit(proposal, snapshot)
 

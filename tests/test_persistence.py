@@ -65,9 +65,18 @@ def make_snapshot(
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
         font=ResolvedFont(identifier="test-font", data=b"resolved font contents"),
-        presentation_metadata={"source": "Resolved source", "attribution": "Resolved author"},
+        presentation_metadata={
+            "source": "Resolved source",
+            "attribution": "Resolved author",
+            "presentation_style": "centered",
+        },
         reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
-        layout={"quotation_region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6}},
+        layout={
+            "image_size": (320, 240),
+            "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6},
+            "min_font_size": 12,
+            "max_font_size": 32,
+        },
         scheduling=SchedulingContext(display_date, "Etc/UTC", "06:00"),
     )
 

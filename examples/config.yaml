@@ -11,7 +11,7 @@ reveal:
   attribution: "18:00"
 
 layout:
-  quotation_region:
+  presentation_region:
     x: 0.10
     y: 0.15
     width: 0.80

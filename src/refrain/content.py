@@ -14,11 +14,22 @@ import yaml
 
 from ._yaml import load_yaml, yaml_error_location
 
-_ENTRY_FIELDS = {"id", "quotations", "source", "attribution", "priority", "font", "eligibility", "reveal"}
+_ENTRY_FIELDS = {
+    "id",
+    "quotations",
+    "source",
+    "attribution",
+    "priority",
+    "font",
+    "presentation_style",
+    "eligibility",
+    "reveal",
+}
 _REVEAL_FIELDS = {"source", "attribution"}
 _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
+_PRESENTATION_STYLES = {"centered", "prose"}
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,7 @@ class ContentEntry:
     eligibility: tuple[EligibilityRule, ...] = (EligibilityRule(ordinary=True),)
     reveal: RevealOverrides = RevealOverrides()
     file: Optional[Path] = None
+    presentation_style: str = "centered"
 
 
 def normalize_quotation(text: str) -> str:
@@ -247,6 +259,10 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
     if isinstance(priority, bool) or not isinstance(priority, int):
         _diagnose(diagnostics, file, "priority", "must be a signed integer (booleans are not valid priorities)")
 
+    presentation_style = data.get("presentation_style", "centered")
+    if not isinstance(presentation_style, str) or presentation_style not in _PRESENTATION_STYLES:
+        _diagnose(diagnostics, file, "presentation_style", "must be one of 'centered' or 'prose'")
+
     eligibility = (
         _validate_eligibility(data["eligibility"], file, diagnostics)
         if "eligibility" in data
@@ -263,6 +279,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         attribution=optional_strings["attribution"],
         priority=priority,  # type: ignore[arg-type]
         font=optional_strings["font"],
+        presentation_style=presentation_style,  # type: ignore[arg-type]
         eligibility=eligibility,  # type: ignore[arg-type]
         reveal=reveal,  # type: ignore[arg-type]
         file=file,
