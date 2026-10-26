@@ -16,20 +16,26 @@ class SelectionProposal:
     selected_candidate: QuotationCandidate | None
     proposed_repetition_history: frozenset[str]
     pool_was_reset: bool
+    base_revision: int = 0
 
 
 def select_quotation(
     pool: EligibleQuotationPool,
     repetition_history: Iterable[str],
     random_source: random.Random | None = None,
+    *,
+    base_revision: int = 0,
 ) -> SelectionProposal:
-    """Propose a selection without modifying the pool or caller-owned history."""
+    """Propose a selection without modifying inputs, tied to its source state revision."""
+    if type(base_revision) is not int or base_revision < 0:
+        raise ValueError("base_revision must be a nonnegative integer")
     history = set(repetition_history)
     if not pool.candidates:
         return SelectionProposal(
             selected_candidate=None,
             proposed_repetition_history=frozenset(history),
             pool_was_reset=False,
+            base_revision=base_revision,
         )
 
     pool_identities = {candidate.identity for candidate in pool.candidates}
@@ -59,4 +65,5 @@ def select_quotation(
         selected_candidate=selected_candidate,
         proposed_repetition_history=frozenset(history),
         pool_was_reset=pool_was_reset,
+        base_revision=base_revision,
     )

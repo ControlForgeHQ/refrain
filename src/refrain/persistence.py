@@ -207,11 +207,14 @@ class PersistentStateStore:
     def commit(self, proposal: SelectionProposal, snapshot: DailySnapshot) -> PersistentState:
         """Commit a proposal, its self-contained snapshot, and proposed repetition history.
 
-        Repeating the exact same commitment is idempotent. The proposal and its
-        history are read only; neither is mutated by this operation.
+        The proposal's ``base_revision`` must identify the state generation
+        used to produce it. Repeating the exact same commitment is idempotent.
+        The proposal and its history are read only; neither is mutated.
         """
         if not isinstance(proposal, SelectionProposal):
             raise TypeError("proposal must be a SelectionProposal")
+        if type(proposal.base_revision) is not int or proposal.base_revision < 0:
+            raise StateCommitError("proposal base_revision must be a nonnegative integer")
         candidate = proposal.selected_candidate
         if candidate is None:
             raise StateCommitError("cannot commit a proposal without a selected quotation")
@@ -233,7 +236,8 @@ class PersistentStateStore:
             raise StateCommitError("proposed repetition history must contain the selected quotation identity")
 
         previous = self.load()
-        if previous is not None and previous.snapshot.display_date == snapshot.display_date:
+        current_revision = 0 if previous is None else previous.revision
+        if previous is not None and current_revision == proposal.base_revision + 1:
             if previous.snapshot == snapshot and previous.repetition_history == repetition_history:
                 try:
                     _sync_directory(self.path.parent)
@@ -243,7 +247,11 @@ class PersistentStateStore:
                         published=True,
                     ) from error
                 return previous
-            raise StateCommitError(f"a different selection is already committed for {snapshot.display_date}")
+        if current_revision != proposal.base_revision:
+            raise StateCommitError(
+                f"stale selection proposal: based on revision {proposal.base_revision}, "
+                f"but current state is revision {current_revision}"
+            )
 
         global_history = () if previous is None else previous.global_history
         record = GlobalHistoryRecord(
@@ -469,9 +477,6 @@ def _validate_state(state: PersistentState) -> None:
     actual = (last.display_date, last.quotation_text, last.quotation_identity, last.font_identifier)
     if actual != expected:
         raise ValueError("current snapshot does not match the latest global-history record")
-    dates = [record.display_date for record in state.global_history]
-    if len(dates) != len(set(dates)):
-        raise ValueError("global history contains multiple selections for one display date")
 
 
 def _state_payload(state: PersistentState) -> dict[str, object]:

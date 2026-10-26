@@ -138,6 +138,8 @@ if proposal.selected_candidate is not None:
 
 `PersistentStateStore` distinguishes an uninitialized location (`load()` returns `None`) from invalid existing state (a `StateRecoveryError`). A commit requires the caller's provisional selection and a complete `DailySnapshot` containing already-resolved presentation, scheduling, layout, and font information. Choose an absolute state-file path appropriate to the installation.
 
+The example assumes the caller has already recognized a display-day transition. Compare state revisions, not display dates, when deciding whether a proposal is stale; clock adjustments can legitimately lead to a later commit for a previously used date.
+
 ```python
 from datetime import date
 from pathlib import Path
@@ -160,11 +162,17 @@ display_date = date(2026, 10, 26)
 store = PersistentStateStore(state_path)
 previous = store.load()
 
-if previous is None or previous.snapshot.display_date != display_date:
+if selection_boundary_recognized:
     repetition_history = () if previous is None else previous.repetition_history
+    base_revision = 0 if previous is None else previous.revision
     entries = load_content_library("examples/content")
     pool = build_eligible_quotation_pool(entries, display_date)
-    proposal = select_quotation(pool, repetition_history, random_source=Random())
+    proposal = select_quotation(
+        pool,
+        repetition_history,
+        random_source=Random(),
+        base_revision=base_revision,
+    )
     candidate = proposal.selected_candidate
 
     if candidate is not None:

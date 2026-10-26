@@ -42,12 +42,18 @@ def make_candidate(text: str) -> QuotationCandidate:
     return QuotationCandidate(quotation=quotation, entry=entry)
 
 
-def make_proposal(text: str, history: frozenset[str] = frozenset()) -> SelectionProposal:
+def make_proposal(
+    text: str,
+    history: frozenset[str] = frozenset(),
+    *,
+    base_revision: int = 0,
+) -> SelectionProposal:
     candidate = make_candidate(text)
     return select_quotation(
         build_eligible_quotation_pool((candidate.entry,), date(2026, 10, 26)),
         history,
         random.Random(0),
+        base_revision=base_revision,
     )
 
 
@@ -70,7 +76,10 @@ def make_snapshot(
 
 
 def commit(store: PersistentStateStore, text: str, display_date: date = date(2026, 10, 26)):
-    proposal = make_proposal(text)
+    previous = store.load()
+    history = frozenset() if previous is None else previous.repetition_history
+    base_revision = 0 if previous is None else previous.revision
+    proposal = make_proposal(text, history, base_revision=base_revision)
     return store.commit(proposal, make_snapshot(text, display_date))
 
 
@@ -104,7 +113,11 @@ def test_uninitialized_location_and_initial_commit_recover_in_new_instance(tmp_p
 def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     first = commit(store, "First quotation.")
-    proposal = make_proposal("Second quotation.", frozenset({"First quotation.", "Unrelated identity."}))
+    proposal = make_proposal(
+        "Second quotation.",
+        frozenset({"First quotation.", "Unrelated identity."}),
+        base_revision=first.revision,
+    )
     second = store.commit(proposal, make_snapshot("Second quotation.", date(2026, 10, 27), stage=1))
 
     assert second.revision == 2
@@ -114,13 +127,17 @@ def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path
     assert first.global_history == (first.global_history[0],)
     assert PersistentStateStore(store.path).load() == second
 
-    reset = make_proposal("First quotation.", frozenset({"First quotation.", "Unrelated identity."}))
+    reset = make_proposal(
+        "First quotation.",
+        frozenset({"First quotation.", "Unrelated identity."}),
+        base_revision=second.revision,
+    )
     third = store.commit(reset, make_snapshot("First quotation.", date(2026, 10, 28)))
     assert third.repetition_history == {"First quotation.", "Unrelated identity."}
     assert [record.sequence for record in third.global_history] == [1, 2, 3]
 
 
-def test_exact_retry_is_idempotent_and_same_day_replacement_is_rejected(tmp_path: Path) -> None:
+def test_exact_retry_is_idempotent_and_repeated_display_date_is_allowed(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     proposal = make_proposal("Committed.")
     snapshot = make_snapshot("Committed.")
@@ -130,8 +147,37 @@ def test_exact_retry_is_idempotent_and_same_day_replacement_is_rejected(tmp_path
 
     assert retry == first
     assert len(retry.global_history) == 1
-    with pytest.raises(StateCommitError, match="already committed"):
-        store.commit(make_proposal("Replacement."), make_snapshot("Replacement."))
+
+    repeated_date_proposal = make_proposal(
+        "Replacement.",
+        first.repetition_history,
+        base_revision=first.revision,
+    )
+    repeated_date = store.commit(repeated_date_proposal, make_snapshot("Replacement."))
+    assert repeated_date.revision == 2
+    assert [record.display_date for record in repeated_date.global_history] == [
+        date(2026, 10, 26),
+        date(2026, 10, 26),
+    ]
+    assert repeated_date.global_history[0].sequence == 1
+    assert repeated_date.global_history[1].sequence == 2
+    assert store.commit(repeated_date_proposal, make_snapshot("Replacement.")) == repeated_date
+
+
+def test_stale_proposal_cannot_overwrite_a_newer_repetition_history_generation(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    initial = commit(store, "Initial.")
+    base_history = initial.repetition_history
+    stale = make_proposal("Stale selection.", base_history, base_revision=initial.revision)
+    current = make_proposal("Current selection.", base_history, base_revision=initial.revision)
+    current_state = store.commit(current, make_snapshot("Current selection.", date(2026, 10, 27)))
+    authoritative_bytes = store.path.read_bytes()
+
+    with pytest.raises(StateCommitError, match="stale selection proposal"):
+        store.commit(stale, make_snapshot("Stale selection.", date(2026, 10, 28)))
+
+    assert store.path.read_bytes() == authoritative_bytes
+    assert PersistentStateStore(store.path).load() == current_state
 
 
 def test_commit_does_not_mutate_caller_owned_selection_history(tmp_path: Path) -> None:
@@ -141,6 +187,7 @@ def test_commit_does_not_mutate_caller_owned_selection_history(tmp_path: Path) -
         build_eligible_quotation_pool((candidate.entry,), date(2026, 10, 26)),
         original_history,
         random.Random(0),
+        base_revision=0,
     )
     before_proposal = proposal
 
@@ -157,7 +204,7 @@ def test_failures_before_publication_preserve_previous_state(
 ) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     previous = commit(store, "Previous.")
-    proposal = make_proposal("Next.")
+    proposal = make_proposal("Next.", previous.repetition_history, base_revision=previous.revision)
 
     if failure_point == "flush":
         monkeypatch.setattr(persistence.os, "fsync", lambda _: (_ for _ in ()).throw(OSError("flush failed")))
@@ -170,7 +217,7 @@ def test_failures_before_publication_preserve_previous_state(
     assert not error.value.published
     assert PersistentStateStore(store.path).load() == previous
     assert proposal.selected_candidate.text == "Next."
-    assert proposal.proposed_repetition_history == {"Next."}
+    assert proposal.proposed_repetition_history == {"Previous.", "Next."}
     assert not list(tmp_path.glob(".state.json.*.tmp"))
 
 
@@ -179,7 +226,7 @@ def test_failure_after_atomic_replace_reports_published_state_and_recovers_it(
 ) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     previous = commit(store, "Previous.")
-    proposal = make_proposal("Next.")
+    proposal = make_proposal("Next.", previous.repetition_history, base_revision=previous.revision)
     snapshot = make_snapshot("Next.", date(2026, 10, 27))
     monkeypatch.setattr(
         persistence, "_sync_directory", lambda _: (_ for _ in ()).throw(OSError("directory fsync failed"))

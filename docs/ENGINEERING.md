@@ -435,9 +435,15 @@ The initial implementation stores the complete committed selection state in one 
 
 The configured state-file path must be absolute. A missing state file represents an uninitialized installation; malformed, incomplete, checksum-invalid, inconsistent, or unsupported state raises a recovery error and is never replaced automatically.
 
+Each `SelectionProposal` carries the base state revision supplied to `select_quotation`. The caller must obtain the revision and repetition history from the same recovered state, then pass that revision when producing the proposal. Commit accepts only the currently stored revision, except for an exact retry of that commit when the current revision is exactly one generation newer. Revisions are chronological commit generations; display dates may repeat or move backward after clock adjustments and are not history keys.
+
+The store assumes one writer at a time. Revision checks reject stale proposals but are not a cross-process compare-and-swap; callers must serialize commits from multiple threads or processes that share a state path. No general locking or transaction framework is provided.
+
 Commit writes a unique temporary file in the state file's directory, flushes and synchronizes its contents, then publishes it with `os.replace`. On POSIX, the implementation synchronizes parent-directory metadata when it creates the state directory and synchronizes the containing directory after replacement. The temporary and final files therefore share a filesystem, and the rename is the single publication point: a failure before replacement leaves the prior file authoritative; after replacement, the complete new state is authoritative. Temporary files are not recovery candidates.
 
 The file synchronization and atomic replacement use Python's standard filesystem facilities. POSIX directory synchronization strengthens persistence of the replacement across sudden power loss. The standard-library implementation does not synchronize directory metadata on Windows, so power-loss durability of the directory entry is weaker there; filesystem and storage-device guarantees still apply on every platform. If directory synchronization fails after replacement, the commit reports that publication occurred; callers must reload state before deciding whether to retry.
+
+The current version records the highest reveal stage in the daily snapshot at selection commitment. An independent monotonic stage-advancement operation is not part of this storage API; future work should persist that change without appending selection history or replacing the selected content and resolved presentation.
 
 ### Prepared image files
 
