@@ -25,6 +25,7 @@ from .eligibility import (
     QuotationCandidate,
     build_eligible_quotation_pool,
 )
+from .selection import SelectionProposal, select_quotation
 
 __all__ = [
     "ApplicationConfiguration",
@@ -40,10 +41,12 @@ __all__ = [
     "QuotationRegion",
     "Quotation",
     "QuotationCandidate",
+    "SelectionProposal",
     "RevealSchedule",
     "RevealOverrides",
     "load_content_library",
     "load_application_config",
     "normalize_quotation",
     "build_eligible_quotation_pool",
+    "select_quotation",
 ]
