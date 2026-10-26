@@ -95,7 +95,7 @@ from PIL import Image
 from refrain import (
     CompositionVisibility,
     LiteraryComposition,
-    QuotationRegion,
+    PresentationRegion,
     ResolvedFont,
     layout_composition,
     render_reveal_stages,
@@ -106,7 +106,7 @@ with resource.open("rb") as font_file:
     font = ResolvedFont("lora", font_file.read())
 
 background = Image.new("RGB", (1600, 1200), "#f8f6f0")
-region = QuotationRegion(x=0.1, y=0.12, width=0.8, height=0.76)
+region = PresentationRegion(x=0.1, y=0.12, width=0.8, height=0.76)
 composition = LiteraryComposition(
     quotation="A resolved quotation is fitted to the supplied page.",
     source="A Book of Examples",
