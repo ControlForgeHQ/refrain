@@ -5,16 +5,18 @@ from __future__ import annotations
 import hashlib
 import io
 import math
+import random
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 PixelBounds = tuple[int, int, int, int]
 PixelPosition = tuple[int, int]
 PresentationStyle = Literal["centered", "prose"]
+_Concealment = Literal["glyph-blur", "pixel-distortion"]
 
 
 class PresentationRegion(Protocol):
@@ -298,16 +300,14 @@ def _text_field(
     text: str,
     font: ImageFont.FreeTypeFont,
     position: PixelPosition,
-    *,
-    stroke_width: int = 0,
 ) -> TextFieldLayout:
     x, y = round(position[0]), round(position[1])
-    left, top, right, bottom = font.getbbox(text, stroke_width=stroke_width)
+    left, top, right, bottom = font.getbbox(text)
     bounds = (
-        x + left - stroke_width,
-        y + top - stroke_width,
-        x + right + stroke_width,
-        y + bottom + stroke_width,
+        x + left,
+        y + top,
+        x + right,
+        y + bottom,
     )
     return TextFieldLayout(text, font.size, (text,), ((x, y),), bounds)
 
@@ -335,14 +335,14 @@ def _layout_byline(
         separator_advance = pillow_font.getlength(separator_text) if separator_text else 0
         field_metrics = []
         if composition.attribution is not None:
-            field_metrics.append((pillow_font.getbbox(composition.attribution, stroke_width=1), 1))
+            field_metrics.append(pillow_font.getbbox(composition.attribution))
         if composition.source is not None:
-            field_metrics.append((pillow_font.getbbox(composition.source), 0))
-        field_metrics.append((pillow_font.getbbox(prefix_text), 0))
+            field_metrics.append(pillow_font.getbbox(composition.source))
+        field_metrics.append(pillow_font.getbbox(prefix_text))
         if separator_text:
-            field_metrics.append((pillow_font.getbbox(separator_text), 0))
-        text_top = min(bounds[1] - stroke for bounds, stroke in field_metrics)
-        text_bottom = max(bounds[3] + stroke for bounds, stroke in field_metrics)
+            field_metrics.append(pillow_font.getbbox(separator_text))
+        text_top = min(bounds[1] for bounds in field_metrics)
+        text_bottom = max(bounds[3] for bounds in field_metrics)
         byline_top = bottom - (text_bottom - text_top)
         if byline_top < top:
             byline_size -= 1
@@ -352,22 +352,16 @@ def _layout_byline(
         prefix = _text_field(prefix_text, pillow_font, (left, y))
         x = round(left + prefix_advance)
 
-        def place_after(
-            text: str,
-            position_x: int,
-            previous: TextFieldLayout,
-            *,
-            stroke_width: int = 0,
-        ) -> TextFieldLayout:
-            field = _text_field(text, pillow_font, (position_x, y), stroke_width=stroke_width)
+        def place_after(text: str, position_x: int, previous: TextFieldLayout) -> TextFieldLayout:
+            field = _text_field(text, pillow_font, (position_x, y))
             if field.bounds[0] < previous.bounds[2]:
                 position_x += previous.bounds[2] - field.bounds[0]
-                field = _text_field(text, pillow_font, (position_x, y), stroke_width=stroke_width)
+                field = _text_field(text, pillow_font, (position_x, y))
             return field
 
         attribution_layout = None
         if composition.attribution is not None:
-            attribution_layout = place_after(composition.attribution, x, prefix, stroke_width=1)
+            attribution_layout = place_after(composition.attribution, x, prefix)
             x = round(attribution_layout.positions[0][0] + attribution_advance)
         separator = None
         previous = attribution_layout or prefix
@@ -419,6 +413,29 @@ def _layout_byline(
     return None
 
 
+def _shift_field_y(field: TextFieldLayout, amount: int) -> TextFieldLayout:
+    return TextFieldLayout(
+        field.text,
+        field.font_size,
+        field.lines,
+        tuple((position[0], position[1] + amount) for position in field.positions),
+        (field.bounds[0], field.bounds[1] + amount, field.bounds[2], field.bounds[3] + amount),
+    )
+
+
+def _shift_byline_y(byline: BylineLayout, amount: int) -> BylineLayout:
+    def shifted(field: TextFieldLayout | None) -> TextFieldLayout | None:
+        return _shift_field_y(field, amount) if field is not None else None
+
+    return BylineLayout(
+        shifted(byline.attribution),
+        shifted(byline.source),
+        shifted(byline.prefix),
+        shifted(byline.separator),
+        (byline.bounds[0], byline.bounds[1] + amount, byline.bounds[2], byline.bounds[3] + amount),
+    )
+
+
 def _layout_at_size(
     composition: LiteraryComposition,
     font: ResolvedFontData,
@@ -433,15 +450,26 @@ def _layout_at_size(
     byline = _layout_byline(composition, font, quote_size, region, style)
     if quote is None or ((composition.source is not None or composition.attribution is not None) and byline is None):
         return None
-    field_gap = max(1, round(quote_size * 0.55))
+    align = _STYLE_LAYOUTS[style]
+    quote_layout = _place_field(quote, left, 0, region_width, align)
+    quotation_height = quote_layout.bounds[3] - quote_layout.bounds[1]
     byline_height = byline.bounds[3] - byline.bounds[1] if byline is not None else 0
-    quotation_area_height = region_height - byline_height - (field_gap if byline is not None else 0)
-    if quote.height > quotation_area_height:
+    byline_font_size = (
+        byline.attribution.font_size if byline and byline.attribution else byline.source.font_size if byline else 0
+    )
+    byline_line_height = sum(_load_font(font, byline_font_size).getmetrics()) if byline is not None else 0
+    field_gap = max(1, round(quote_size * 0.55)) if byline is not None else 0
+    metrics_height = quote.height + field_gap + byline_line_height
+    if metrics_height > region_height:
         return None
 
-    align = _STYLE_LAYOUTS[style]
-    quote_y = top + (quotation_area_height - quote.height) // 2
-    quote_layout = _place_field(quote, left, quote_y, region_width, align)
+    composition_height = quotation_height + field_gap + byline_height
+    composition_top = top + (region_height - composition_height) // 2
+    quote_layout = _place_field(quote, left, composition_top - quote_layout.bounds[1], region_width, align)
+    if byline is not None:
+        target_byline_top = composition_top + quotation_height + field_gap
+        byline = _shift_byline_y(byline, target_byline_top - byline.bounds[1])
+
     return CompositionLayout(
         composition=composition,
         font_identifier=font.identifier,
@@ -507,22 +535,70 @@ def _draw_field(
     font: ResolvedFontData,
     field: TextFieldLayout,
     color: tuple[int, ...] | int,
-    *,
-    stroke_width: int = 0,
 ) -> None:
     pillow_font = _load_font(font, field.font_size)
     for line, position in zip(field.lines, field.positions, strict=True):
         if line:
-            draw.text(position, line, font=pillow_font, fill=color, stroke_width=stroke_width, stroke_fill=color)
+            draw.text(position, line, font=pillow_font, fill=color)
 
 
-def _conceal_field(image: Image.Image, field: TextFieldLayout) -> None:
+def _conceal_field(
+    image: Image.Image,
+    font: ResolvedFontData,
+    field: TextFieldLayout,
+    technique: _Concealment,
+) -> None:
     left, top, right, bottom = field.bounds
+    width, height = right - left, bottom - top
+    radius = max(2, round(field.font_size * 0.42))
+    padding = radius * 2
+    glyphs = Image.new("L", (width + padding * 2, height + padding * 2), 0)
+    draw = ImageDraw.Draw(glyphs)
+    pillow_font = _load_font(font, field.font_size)
+    for line, position in zip(field.lines, field.positions, strict=True):
+        if line:
+            draw.text((position[0] - left + padding, position[1] - top + padding), line, font=pillow_font, fill=255)
+    core = (padding, padding, padding + width, padding + height)
+    if technique == "glyph-blur":
+        alpha = glyphs.filter(ImageFilter.GaussianBlur(radius=radius)).crop(core)
+    elif technique == "pixel-distortion":
+        cell_size = max(2, field.font_size // 4)
+        coarse_size = (max(1, math.ceil(width / cell_size)), max(1, math.ceil(height / cell_size)))
+        coarse_glyphs = glyphs.crop(core).resize(coarse_size, Image.Resampling.BOX)
+        seed = int.from_bytes(hashlib.sha256(f"{font.identifier}\0{field.text}".encode()).digest(), "big")
+        randomizer = random.Random(seed)
+        noise = Image.new("L", coarse_size)
+        noise.putdata(
+            [randomizer.randint(96, 255) if pixel >= 24 else 0 for pixel in coarse_glyphs.get_flattened_data()]
+        )
+        alpha = ImageChops.multiply(coarse_glyphs, noise).resize((width, height), Image.Resampling.NEAREST)
+    else:
+        raise QuotationRenderError("unknown internal concealment technique")
+
     crop = image.crop((left, top, right, bottom))
-    if crop.mode == "1":
-        crop = crop.convert("L")
-    concealed = crop.filter(ImageFilter.GaussianBlur(radius=max(4, field.font_size * 0.45)))
-    image.paste(concealed, (left, top))
+    if image.mode == "1":
+        base = crop.convert("L")
+        concealed = Image.composite(Image.new("L", crop.size, 128), base, alpha)
+        image.paste(concealed.convert("1", dither=Image.Dither.FLOYDSTEINBERG), (left, top))
+    elif image.mode == "L":
+        concealed = Image.composite(Image.new("L", crop.size, 64), crop, alpha)
+        image.paste(concealed, (left, top))
+    else:
+        base = crop.convert("RGB")
+        concealed = Image.composite(Image.new("RGB", crop.size, (64, 64, 64)), base, alpha)
+        if image.mode == "RGBA":
+            concealed.putalpha(crop.getchannel("A"))
+        image.paste(concealed, (left, top))
+
+
+def _attribution_color(mode: str) -> tuple[int, ...] | int:
+    if mode == "1":
+        return 0
+    if mode == "L":
+        return 48
+    if mode == "RGBA":
+        return (48, 48, 48, 255)
+    return (48, 48, 48)
 
 
 def render_reveal_stages(
@@ -532,6 +608,18 @@ def render_reveal_stages(
     stages: Sequence[CompositionVisibility],
 ) -> tuple[Image.Image, ...]:
     """Render requested cumulative visibility stages from one resolved layout."""
+    return _render_reveal_stages(background, font, layout, stages, concealment="glyph-blur")
+
+
+def _render_reveal_stages(
+    background: Image.Image,
+    font: ResolvedFontData,
+    layout: CompositionLayout,
+    stages: Sequence[CompositionVisibility],
+    *,
+    concealment: _Concealment,
+) -> tuple[Image.Image, ...]:
+    """Render using an internal concealment alternative for inspectable previews."""
     if not isinstance(background, Image.Image):
         raise QuotationRenderError("background must be a Pillow image")
     if background.mode not in {"1", "L", "RGB", "RGBA"}:
@@ -572,13 +660,15 @@ def render_reveal_stages(
         byline = layout.byline
         if byline is not None:
             if byline.attribution is not None:
-                _draw_field(draw, font, byline.attribution, fill, stroke_width=1)
                 if not stage.attribution:
-                    _conceal_field(image, byline.attribution)
+                    _conceal_field(image, font, byline.attribution, concealment)
+                else:
+                    _draw_field(draw, font, byline.attribution, _attribution_color(image.mode))
             if byline.source is not None:
-                _draw_field(draw, font, byline.source, fill)
                 if not stage.source:
-                    _conceal_field(image, byline.source)
+                    _conceal_field(image, font, byline.source, concealment)
+                else:
+                    _draw_field(draw, font, byline.source, fill)
             punctuation = ImageDraw.Draw(image)
             if byline.prefix is not None:
                 _draw_field(punctuation, font, byline.prefix, fill)

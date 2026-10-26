@@ -15,7 +15,7 @@ from refrain import (
     layout_composition,
     render_reveal_stages,
 )
-from refrain.renderer import QuotationRenderError
+from refrain.renderer import QuotationRenderError, _render_reveal_stages
 
 
 @pytest.fixture
@@ -257,6 +257,9 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_
         assert layout.region[0] <= field.bounds[0] < field.bounds[2] <= layout.region[2]
         assert layout.region[1] <= field.bounds[1] < field.bounds[3] <= layout.region[3]
     assert layout.quotation.bounds[3] < layout.byline.bounds[1]
+    composition_center = (layout.quotation.bounds[1] + layout.byline.bounds[3]) / 2
+    region_center = (layout.region[1] + layout.region[3]) / 2
+    assert abs(composition_center - region_center) <= 1
     assert len(images) == len(stages)
     assert images[0].crop(layout.quotation.bounds).tobytes() == images[1].crop(layout.quotation.bounds).tobytes()
     assert images[1].crop(layout.quotation.bounds).tobytes() == images[2].crop(layout.quotation.bounds).tobytes()
@@ -298,12 +301,16 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_
 
 
 @pytest.mark.parametrize(
-    ("source", "attribution", "expected_prefix", "expected_separator"),
+    ("source", "attribution", "expected_prefix", "expected_separator", "style"),
     [
-        ("A Source", "An Attribution", "— ", ", "),
-        ("A Source", None, "— ", None),
-        (None, "An Attribution", "— ", None),
-        (None, None, None, None),
+        ("A Source", "An Attribution", "— ", ", ", "centered"),
+        ("A Source", None, "— ", None, "centered"),
+        (None, "An Attribution", "— ", None, "centered"),
+        (None, None, None, None, "centered"),
+        ("A Source", "An Attribution", "— ", ", ", "prose"),
+        ("A Source", None, "— ", None, "prose"),
+        (None, "An Attribution", "— ", None, "prose"),
+        (None, None, None, None, "prose"),
     ],
 )
 def test_optional_byline_fields_have_only_required_punctuation(
@@ -312,6 +319,7 @@ def test_optional_byline_fields_have_only_required_punctuation(
     attribution: str | None,
     expected_prefix: str | None,
     expected_separator: str | None,
+    style: str,
 ) -> None:
     layout = layout_composition(
         LiteraryComposition("A quotation.", source=source, attribution=attribution),
@@ -320,7 +328,7 @@ def test_optional_byline_fields_have_only_required_punctuation(
         (600, 400),
         20,
         48,
-        "centered",
+        style,
     )
 
     if source is None and attribution is None:
@@ -350,9 +358,18 @@ def test_optional_byline_fields_have_only_required_punctuation(
     assert [field.bounds[0] for field in fields_in_order] == sorted(field.bounds[0] for field in fields_in_order)
     assert layout.region[0] <= layout.byline.bounds[0] < layout.byline.bounds[2] <= layout.region[2]
     assert layout.region[1] <= layout.byline.bounds[1] < layout.byline.bounds[3] <= layout.region[3]
+    composition_center = (layout.quotation.bounds[1] + layout.byline.bounds[3]) / 2
+    region_center = (layout.region[1] + layout.region[3]) / 2
+    assert abs(composition_center - region_center) <= 1
+    if style == "centered":
+        byline_center = (layout.byline.bounds[0] + layout.byline.bounds[2]) / 2
+        region_horizontal_center = (layout.region[0] + layout.region[2]) / 2
+        assert abs(byline_center - region_horizontal_center) <= 1
+    else:
+        assert layout.byline.bounds[2] == layout.region[2]
 
 
-def test_unrevealed_byline_fields_are_blurred_with_fixed_punctuation(resolved_font: ResolvedFont) -> None:
+def test_unrevealed_byline_fields_have_stable_concealment_alternatives(resolved_font: ResolvedFont) -> None:
     background = Image.new("RGB", (600, 400), "#f8f6f0")
     layout = layout_composition(
         LiteraryComposition("The quotation remains fixed.", source="A Clearly Readable Source", attribution="A Person"),
@@ -371,7 +388,22 @@ def test_unrevealed_byline_fields_are_blurred_with_fixed_punctuation(resolved_fo
         CompositionVisibility(source=True),
         CompositionVisibility(source=True, attribution=True),
     )
-    images = render_reveal_stages(background, resolved_font, layout, stages)
+    blurred_images = render_reveal_stages(background, resolved_font, layout, stages)
+    distorted_images = _render_reveal_stages(
+        background,
+        resolved_font,
+        layout,
+        stages,
+        concealment="pixel-distortion",
+    )
+    repeated_distorted_images = _render_reveal_stages(
+        background,
+        resolved_font,
+        layout,
+        stages,
+        concealment="pixel-distortion",
+    )
+    images = blurred_images
     source_bounds = layout.byline.source.bounds
     attribution_bounds = layout.byline.attribution.bounds
     background_pixel = background.getpixel((0, 0))
@@ -383,6 +415,12 @@ def test_unrevealed_byline_fields_are_blurred_with_fixed_punctuation(resolved_fo
         assert blurred.getextrema()[0][0] > 20
     assert images[0].crop(source_bounds).tobytes() != images[2].crop(source_bounds).tobytes()
     assert images[0].crop(attribution_bounds).tobytes() != images[2].crop(attribution_bounds).tobytes()
+    assert distorted_images[0].crop(source_bounds).tobytes() != images[0].crop(source_bounds).tobytes()
+    assert distorted_images[0].crop(attribution_bounds).tobytes() != images[0].crop(attribution_bounds).tobytes()
+    assert all(
+        first.tobytes() == second.tobytes()
+        for first, second in zip(distorted_images, repeated_distorted_images, strict=True)
+    )
 
     for region in (layout.byline.prefix.bounds, layout.byline.separator.bounds):
         assert images[0].crop(region).tobytes() == images[1].crop(region).tobytes()
@@ -399,6 +437,57 @@ def test_unrevealed_byline_fields_are_blurred_with_fixed_punctuation(resolved_fo
     assert source_bounds[1] <= changed_0_to_1[1] < changed_0_to_1[3] <= source_bounds[3]
     assert attribution_bounds[0] <= changed_1_to_2[0] < changed_1_to_2[2] <= attribution_bounds[2]
     assert attribution_bounds[1] <= changed_1_to_2[1] < changed_1_to_2[3] <= attribution_bounds[3]
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA"])
+def test_concealment_modes_preserve_attribution_tone_and_field_bounds(
+    resolved_font: ResolvedFont,
+    mode: str,
+) -> None:
+    background_color = 255 if mode in {"1", "L"} else ((248, 246, 240) if mode == "RGB" else (248, 246, 240, 255))
+    background = Image.new(mode, (600, 400), background_color)
+    layout = layout_composition(
+        LiteraryComposition("A quotation.", attribution="An Author"),
+        resolved_font,
+        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        background.size,
+        20,
+        48,
+        "centered",
+    )
+    assert layout.byline is not None and layout.byline.attribution is not None
+    field = layout.byline.attribution
+    stages = (CompositionVisibility(), CompositionVisibility(attribution=True))
+
+    for technique in ("glyph-blur", "pixel-distortion"):
+        images = _render_reveal_stages(
+            background,
+            resolved_font,
+            layout,
+            stages,
+            concealment=technique,
+        )
+        assert all(image.mode == mode for image in images)
+        difference = ImageChops.difference(images[0], images[1]).convert("RGB").getbbox()
+        assert difference is not None
+        assert field.bounds[0] <= difference[0] < difference[2] <= field.bounds[2]
+        assert field.bounds[1] <= difference[1] < difference[3] <= field.bounds[3]
+
+    if mode in {"L", "RGB", "RGBA"}:
+        revealed = (
+            _render_reveal_stages(
+                background,
+                resolved_font,
+                layout,
+                stages,
+                concealment="glyph-blur",
+            )[1]
+            .crop(field.bounds)
+            .convert("RGB")
+        )
+        minima = tuple(channel[0] for channel in revealed.getextrema())
+        assert min(minima) >= 40
+        assert max(minima) < 100
 
 
 def test_reveal_stage_inputs_must_be_cumulative_and_present(resolved_font: ResolvedFont) -> None:
