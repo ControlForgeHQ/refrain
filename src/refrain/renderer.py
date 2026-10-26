@@ -16,8 +16,6 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 PixelBounds = tuple[int, int, int, int]
 PixelPosition = tuple[int, int]
 PresentationStyle = Literal["centered", "prose"]
-_Concealment = Literal["glyph-blur", "pixel-distortion"]
-_DEFAULT_FIELD_GAP_RATIO = 1.0
 
 
 class PresentationRegion(Protocol):
@@ -90,6 +88,7 @@ class CompositionLayout:
     image_size: tuple[int, int]
     region: PixelBounds
     style: PresentationStyle
+    byline_gap: int
     quotation: TextFieldLayout
     byline: BylineLayout | None
 
@@ -444,7 +443,7 @@ def _layout_at_size(
     region: PixelBounds,
     quote_size: int,
     style: PresentationStyle,
-    gap_ratio: float,
+    byline_gap_factor: float,
 ) -> CompositionLayout | None:
     left, top, right, bottom = region
     region_width, region_height = right - left, bottom - top
@@ -460,7 +459,7 @@ def _layout_at_size(
         byline.attribution.font_size if byline and byline.attribution else byline.source.font_size if byline else 0
     )
     byline_line_height = sum(_load_font(font, byline_font_size).getmetrics()) if byline is not None else 0
-    field_gap = max(1, round(quote_size * gap_ratio)) if byline is not None else 0
+    field_gap = max(0, round(quote_size * byline_gap_factor)) if byline is not None else 0
     metrics_height = quote.height + field_gap + byline_line_height
     if metrics_height > region_height:
         return None
@@ -479,6 +478,7 @@ def _layout_at_size(
         image_size=image_size,
         region=region,
         style=style,
+        byline_gap=field_gap,
         quotation=quote_layout,
         byline=byline,
     )
@@ -492,39 +492,18 @@ def layout_composition(
     min_font_size: int,
     max_font_size: int,
     presentation_style: PresentationStyle,
+    *,
+    byline_gap_factor: float = 1.20,
 ) -> CompositionLayout:
     """Fit the complete literary composition once for reuse across reveal images."""
-    return _layout_composition_with_gap(
-        composition,
-        font,
-        presentation_region,
-        image_size,
-        min_font_size,
-        max_font_size,
-        presentation_style,
-        gap_ratio=_DEFAULT_FIELD_GAP_RATIO,
-    )
-
-
-def _layout_composition_with_gap(
-    composition: LiteraryComposition,
-    font: ResolvedFontData,
-    presentation_region: PresentationRegion,
-    image_size: tuple[int, int],
-    min_font_size: int,
-    max_font_size: int,
-    presentation_style: PresentationStyle,
-    *,
-    gap_ratio: float,
-) -> CompositionLayout:
     _validate_composition(composition)
     if (
-        isinstance(gap_ratio, bool)
-        or not isinstance(gap_ratio, (int, float))
-        or not math.isfinite(gap_ratio)
-        or gap_ratio <= 0
+        isinstance(byline_gap_factor, bool)
+        or not isinstance(byline_gap_factor, (int, float))
+        or not math.isfinite(byline_gap_factor)
+        or byline_gap_factor < 0
     ):
-        raise QuotationRenderError("internal field gap ratio must be a finite positive number")
+        raise QuotationRenderError("byline_gap_factor must be a finite nonnegative number")
     if not isinstance(image_size, tuple) or len(image_size) != 2:
         raise QuotationRenderError("image_size must be a (width, height) tuple")
     width, height = image_size
@@ -545,7 +524,15 @@ def _layout_composition_with_gap(
         raise QuotationRenderError("presentation_region is smaller than one pixel at the supplied image dimensions")
 
     low, high = min_font_size, max_font_size
-    best = _layout_at_size(composition, font, image_size, pixel_region, min_font_size, presentation_style, gap_ratio)
+    best = _layout_at_size(
+        composition,
+        font,
+        image_size,
+        pixel_region,
+        min_font_size,
+        presentation_style,
+        byline_gap_factor,
+    )
     if best is None:
         raise QuotationRenderError(
             f"literary composition does not fit within region {pixel_region} at "
@@ -553,7 +540,15 @@ def _layout_composition_with_gap(
         )
     while low <= high:
         size = (low + high) // 2
-        candidate = _layout_at_size(composition, font, image_size, pixel_region, size, presentation_style, gap_ratio)
+        candidate = _layout_at_size(
+            composition,
+            font,
+            image_size,
+            pixel_region,
+            size,
+            presentation_style,
+            byline_gap_factor,
+        )
         if candidate is None:
             high = size - 1
         else:
@@ -578,40 +573,28 @@ def _conceal_field(
     image: Image.Image,
     font: ResolvedFontData,
     field: TextFieldLayout,
-    technique: _Concealment,
 ) -> None:
     left, top, right, bottom = field.bounds
     width, height = right - left, bottom - top
-    radius = max(2, round(field.font_size * 0.42))
-    padding = radius * 2
-    glyphs = Image.new("L", (width + padding * 2, height + padding * 2), 0)
+    cell_size = max(2, field.font_size // 6)
+    coarse_size = (max(1, math.ceil(width / cell_size)), max(1, math.ceil(height / cell_size)))
+    glyphs = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(glyphs)
     pillow_font = _load_font(font, field.font_size)
     for line, position in zip(field.lines, field.positions, strict=True):
         if line:
-            draw.text((position[0] - left + padding, position[1] - top + padding), line, font=pillow_font, fill=255)
-    core = (padding, padding, padding + width, padding + height)
-    if technique == "glyph-blur":
-        alpha = glyphs.filter(ImageFilter.GaussianBlur(radius=radius)).crop(core)
-    elif technique == "pixel-distortion":
-        cell_size = max(2, field.font_size // 6)
-        coarse_size = (max(1, math.ceil(width / cell_size)), max(1, math.ceil(height / cell_size)))
-        coarse_glyphs = glyphs.crop(core).resize(coarse_size, Image.Resampling.BOX)
-        neighborhood = coarse_glyphs.filter(ImageFilter.GaussianBlur(radius=1.15))
-        seed = int.from_bytes(hashlib.sha256(f"{font.identifier}\0{field.text}".encode()).digest(), "big")
-        randomizer = random.Random(seed)
-        noise = Image.new("L", coarse_size)
-        garbled_cells = []
-        for density in neighborhood.get_flattened_data():
-            occupancy = min(0.56, 0.08 + density / 255 * 0.48)
-            if randomizer.random() < occupancy:
-                garbled_cells.append(randomizer.randint(112, 232))
-            else:
-                garbled_cells.append(0)
-        noise.putdata(garbled_cells)
-        alpha = noise.resize((width, height), Image.Resampling.NEAREST)
-    else:
-        raise QuotationRenderError("unknown internal concealment technique")
+            draw.text((position[0] - left, position[1] - top), line, font=pillow_font, fill=255)
+    coarse_glyphs = glyphs.resize(coarse_size, Image.Resampling.BOX)
+    neighborhood = coarse_glyphs.filter(ImageFilter.GaussianBlur(radius=1.15))
+    seed = int.from_bytes(hashlib.sha256(f"{font.identifier}\0{field.text}".encode()).digest(), "big")
+    randomizer = random.Random(seed)
+    alpha = Image.new("L", coarse_size)
+    garbled_cells = []
+    for density in neighborhood.get_flattened_data():
+        occupancy = min(0.56, 0.08 + density / 255 * 0.48)
+        garbled_cells.append(randomizer.randint(112, 232) if randomizer.random() < occupancy else 0)
+    alpha.putdata(garbled_cells)
+    alpha = alpha.resize((width, height), Image.Resampling.NEAREST)
 
     crop = image.crop((left, top, right, bottom))
     if image.mode == "1":
@@ -644,20 +627,12 @@ def render_reveal_stages(
     font: ResolvedFontData,
     layout: CompositionLayout,
     stages: Sequence[CompositionVisibility],
+    *,
+    concealment: Literal["pixel-distortion"] = "pixel-distortion",
 ) -> tuple[Image.Image, ...]:
     """Render requested cumulative visibility stages from one resolved layout."""
-    return _render_reveal_stages(background, font, layout, stages, concealment="pixel-distortion")
-
-
-def _render_reveal_stages(
-    background: Image.Image,
-    font: ResolvedFontData,
-    layout: CompositionLayout,
-    stages: Sequence[CompositionVisibility],
-    *,
-    concealment: _Concealment,
-) -> tuple[Image.Image, ...]:
-    """Render using an internal concealment alternative for inspectable previews."""
+    if concealment != "pixel-distortion":
+        raise QuotationRenderError("concealment must be 'pixel-distortion'")
     if not isinstance(background, Image.Image):
         raise QuotationRenderError("background must be a Pillow image")
     if background.mode not in {"1", "L", "RGB", "RGBA"}:
@@ -699,12 +674,12 @@ def _render_reveal_stages(
         if byline is not None:
             if byline.attribution is not None:
                 if not stage.attribution:
-                    _conceal_field(image, font, byline.attribution, concealment)
+                    _conceal_field(image, font, byline.attribution)
                 else:
                     _draw_field(draw, font, byline.attribution, _attribution_color(image.mode))
             if byline.source is not None:
                 if not stage.source:
-                    _conceal_field(image, font, byline.source, concealment)
+                    _conceal_field(image, font, byline.source)
                 else:
                     _draw_field(draw, font, byline.source, fill)
             punctuation = ImageDraw.Draw(image)
