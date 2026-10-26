@@ -429,6 +429,16 @@ Do not silently interpret incompatible state using an unrelated schema.
 
 Migration facilities should be added when a real format change requires them, rather than implementing speculative migration infrastructure in advance.
 
+### Version 0.1 state file
+
+The initial implementation stores the complete committed selection state in one UTF-8 JSON file. Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload. Format version 1 includes the current self-contained snapshot, an ordered global-history array, and the sorted repetition-history identities. The snapshot embeds the selected font bytes as base64 together with its stable identifier and content digest; resolved presentation metadata, reveal schedule, layout, scheduling context, and highest reached reveal stage are stored with it.
+
+The configured state-file path must be absolute. A missing state file represents an uninitialized installation; malformed, incomplete, checksum-invalid, inconsistent, or unsupported state raises a recovery error and is never replaced automatically.
+
+Commit writes a unique temporary file in the state file's directory, flushes and synchronizes its contents, then publishes it with `os.replace`. On POSIX, the implementation also synchronizes the containing directory after replacement. The temporary and final files therefore share a filesystem, and the rename is the single publication point: a failure before replacement leaves the prior file authoritative; after replacement, the complete new state is authoritative. Temporary files are not recovery candidates.
+
+The file synchronization and atomic replacement use Python's standard filesystem facilities. POSIX directory synchronization strengthens persistence of the replacement across sudden power loss. The standard-library implementation does not synchronize directory metadata on Windows, so power-loss durability of the directory entry is weaker there; filesystem and storage-device guarantees still apply on every platform. If directory synchronization fails after replacement, the commit reports that publication occurred; callers must reload state before deciding whether to retry.
+
 ### Prepared image files
 
 Persist all images required for the current committed selection.
