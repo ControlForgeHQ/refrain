@@ -85,7 +85,7 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Rendering a literary composition
 
-The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once and vertically centers the complete composition as one group, with a typographic gap of one quotation-font size. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text uses deterministic pixel distortion by default; the dash and separator punctuation remain visible. Attribution uses a restrained gray tone; the byline is centered in `centered` style and right-aligned in `prose` style. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
+The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once and vertically centers the complete composition as one group. Its keyword-only `byline_gap_factor` defaults to `1.20` times the fitted quotation font size; zero is valid, and no gap is reserved when the byline is absent. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text uses deterministic pixel distortion by default; the dash and separator punctuation remain visible. Attribution uses a restrained gray tone; the byline is centered in `centered` style and right-aligned in `prose` style. The keyword-only `concealment` parameter accepts only `"pixel-distortion"`. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
 
 ```python
 from importlib.resources import files
@@ -122,6 +122,7 @@ for style in ("centered", "prose"):
         min_font_size=28,
         max_font_size=100,
         presentation_style=style,
+        byline_gap_factor=1.20,
     )
     stages = render_reveal_stages(
         background,
@@ -132,12 +133,13 @@ for style in ("centered", "prose"):
             CompositionVisibility(source=True),
             CompositionVisibility(source=True, attribution=True),
         ),
+        concealment="pixel-distortion",
     )
     for index, image in enumerate(stages):
         image.save(f"{style}-{index}.png")
 ```
 
-The complete byline reads `— An Example Author, A Book of Examples`; if either optional field is absent, its separator is omitted. A `CompositionLayout` keeps quotation and byline geometry identical across stages. To generate inspectable 1600 × 1200 examples for all four optional-field combinations, both styles, all three bundled fonts, the preview-only blur alternative, and comparisons for `0.85`, `1.0`, and `1.2`-font-size gaps, run `python examples/render_quotation_previews.py /tmp/refrain-previews`. Output is grouped by font identifier; no concealment or spacing option is exposed by the public renderer API.
+The complete byline reads `— An Example Author, A Book of Examples`; if either optional field is absent, its separator is omitted. A `CompositionLayout` keeps quotation and byline geometry identical across stages. To generate inspectable 1600 × 1200 examples for all four optional-field combinations, both styles, and all three bundled fonts, run `python examples/render_quotation_previews.py /tmp/refrain-previews`. Output is grouped by font identifier. To compare another spacing while keeping the layout fixed across reveal stages, pass a different `byline_gap_factor` to `layout_composition`; concealment remains deterministic pixel distortion.
 
 ## Loading content
 

@@ -15,7 +15,7 @@ from refrain import (
     layout_composition,
     render_reveal_stages,
 )
-from refrain.renderer import QuotationRenderError, _layout_composition_with_gap, _render_reveal_stages
+from refrain.renderer import QuotationRenderError
 
 
 @pytest.fixture
@@ -257,7 +257,7 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_
         assert layout.region[0] <= field.bounds[0] < field.bounds[2] <= layout.region[2]
         assert layout.region[1] <= field.bounds[1] < field.bounds[3] <= layout.region[3]
     assert layout.quotation.bounds[3] < layout.byline.bounds[1]
-    assert layout.byline.bounds[1] - layout.quotation.bounds[3] == round(layout.quotation.font_size)
+    assert layout.byline.bounds[1] - layout.quotation.bounds[3] == layout.byline_gap
     composition_center = (layout.quotation.bounds[1] + layout.byline.bounds[3]) / 2
     region_center = (layout.region[1] + layout.region[3]) / 2
     assert abs(composition_center - region_center) <= 1
@@ -370,7 +370,7 @@ def test_optional_byline_fields_have_only_required_punctuation(
         assert layout.byline.bounds[2] == layout.region[2]
 
 
-def test_unrevealed_byline_fields_have_stable_concealment_alternatives(resolved_font: ResolvedFont) -> None:
+def test_unrevealed_byline_fields_use_deterministic_pixel_distortion(resolved_font: ResolvedFont) -> None:
     background = Image.new("RGB", (600, 400), "#f8f6f0")
     layout = layout_composition(
         LiteraryComposition("The quotation remains fixed.", source="A Clearly Readable Source", attribution="A Person"),
@@ -389,51 +389,26 @@ def test_unrevealed_byline_fields_have_stable_concealment_alternatives(resolved_
         CompositionVisibility(source=True),
         CompositionVisibility(source=True, attribution=True),
     )
-    blurred_images = _render_reveal_stages(
-        background,
-        resolved_font,
-        layout,
-        stages,
-        concealment="glyph-blur",
-    )
-    distorted_images = _render_reveal_stages(
+    images = render_reveal_stages(background, resolved_font, layout, stages)
+    repeated_images = render_reveal_stages(
         background,
         resolved_font,
         layout,
         stages,
         concealment="pixel-distortion",
     )
-    repeated_distorted_images = _render_reveal_stages(
-        background,
-        resolved_font,
-        layout,
-        stages,
-        concealment="pixel-distortion",
-    )
-    public_images = render_reveal_stages(background, resolved_font, layout, stages)
-    images = distorted_images
     source_bounds = layout.byline.source.bounds
     attribution_bounds = layout.byline.attribution.bounds
     background_pixel = background.getpixel((0, 0))
 
-    assert all(
-        public.tobytes() == distorted.tobytes()
-        for public, distorted in zip(public_images, distorted_images, strict=True)
-    )
     for field in (layout.byline.source, layout.byline.attribution):
         distorted = images[0].crop(field.bounds)
-        blurred = blurred_images[0].crop(field.bounds)
         assert distorted.getbbox() is not None
-        assert blurred.getbbox() is not None
-        assert distorted.tobytes() != blurred.tobytes()
         assert distorted.getextrema()[0][0] < background_pixel[0]
         assert distorted.getextrema()[0][0] > 20
     assert images[0].crop(source_bounds).tobytes() != images[2].crop(source_bounds).tobytes()
     assert images[0].crop(attribution_bounds).tobytes() != images[2].crop(attribution_bounds).tobytes()
-    assert all(
-        first.tobytes() == second.tobytes()
-        for first, second in zip(distorted_images, repeated_distorted_images, strict=True)
-    )
+    assert all(first.tobytes() == second.tobytes() for first, second in zip(images, repeated_images, strict=True))
 
     for region in (layout.byline.prefix.bounds, layout.byline.separator.bounds):
         assert images[0].crop(region).tobytes() == images[1].crop(region).tobytes()
@@ -460,7 +435,7 @@ def test_unrevealed_byline_fields_have_stable_concealment_alternatives(resolved_
         assert ImageChops.difference(images[0], images[1]).crop(bounds).getbbox() is None
 
 
-def test_larger_gap_is_included_in_fitting_and_whole_composition_centering(resolved_font: ResolvedFont) -> None:
+def test_byline_gap_default_and_explicit_factor_are_fitted_and_centered(resolved_font: ResolvedFont) -> None:
     composition = LiteraryComposition(
         "A long quotation whose paragraphs make the available vertical space matter.",
         source="A Source",
@@ -468,41 +443,74 @@ def test_larger_gap_is_included_in_fitting_and_whole_composition_centering(resol
     )
     region = QuotationRegion(0.1, 0.1, 0.8, 0.50)
     image_size = (600, 400)
-    standard = _layout_composition_with_gap(
-        composition, resolved_font, region, image_size, 14, 54, "centered", gap_ratio=0.55
-    )
     default = layout_composition(composition, resolved_font, region, image_size, 14, 54, "centered")
+    explicit = layout_composition(
+        composition,
+        resolved_font,
+        region,
+        image_size,
+        14,
+        54,
+        "centered",
+        byline_gap_factor=0.55,
+    )
 
-    assert default.quotation.font_size < standard.quotation.font_size
     assert default.byline is not None
     gap = default.byline.bounds[1] - default.quotation.bounds[3]
-    assert gap == round(default.quotation.font_size)
-    center = (default.quotation.bounds[1] + default.byline.bounds[3]) / 2
-    region_center = (default.region[1] + default.region[3]) / 2
-    assert abs(center - region_center) <= 1
+    assert default.byline_gap == round(default.quotation.font_size * 1.20)
+    assert gap == default.byline_gap
+    assert explicit.byline is not None
+    assert explicit.byline_gap == round(explicit.quotation.font_size * 0.55)
+    assert explicit.byline.bounds[1] - explicit.quotation.bounds[3] == explicit.byline_gap
+    assert default.quotation.font_size < explicit.quotation.font_size
+    for layout in (default, explicit):
+        composition_center = (layout.quotation.bounds[1] + layout.byline.bounds[3]) / 2
+        region_center = (layout.region[1] + layout.region[3]) / 2
+        assert abs(composition_center - region_center) <= 1
 
 
-@pytest.mark.parametrize("gap_ratio", [0.85, 1.0, 1.2])
-def test_comparative_gap_ratios_are_resolved_and_centered(
-    resolved_font: ResolvedFont,
-    gap_ratio: float,
-) -> None:
-    layout = _layout_composition_with_gap(
-        LiteraryComposition("A quotation.", source="A Book", attribution="An Author"),
+@pytest.mark.parametrize("factor", [-1, float("nan"), float("inf"), float("-inf"), True, "1.2", None])
+def test_invalid_byline_gap_factors_are_rejected(resolved_font: ResolvedFont, factor: object) -> None:
+    with pytest.raises(QuotationRenderError, match="byline_gap_factor"):
+        layout_composition(
+            LiteraryComposition("A quotation.", source="A Book", attribution="An Author"),
+            resolved_font,
+            QuotationRegion(0.1, 0.1, 0.8, 0.8),
+            (400, 300),
+            16,
+            42,
+            "centered",
+            byline_gap_factor=factor,  # type: ignore[arg-type]
+        )
+
+
+def test_zero_byline_gap_is_valid_and_no_byline_reserves_no_gap(resolved_font: ResolvedFont) -> None:
+    region = QuotationRegion(0.1, 0.1, 0.8, 0.8)
+    background_size = (400, 300)
+    with_byline = layout_composition(
+        LiteraryComposition("A quotation.", source="A Source"),
         resolved_font,
-        QuotationRegion(0.1, 0.225, 0.8, 0.55),
-        (1600, 1200),
-        32,
-        104,
+        region,
+        background_size,
+        18,
+        42,
         "centered",
-        gap_ratio=gap_ratio,
+        byline_gap_factor=0,
     )
-
-    assert layout.byline is not None
-    assert layout.byline.bounds[1] - layout.quotation.bounds[3] == round(layout.quotation.font_size * gap_ratio)
-    center = (layout.quotation.bounds[1] + layout.byline.bounds[3]) / 2
-    region_center = (layout.region[1] + layout.region[3]) / 2
-    assert abs(center - region_center) <= 1
+    without_byline = layout_composition(
+        LiteraryComposition("A quotation."),
+        resolved_font,
+        region,
+        background_size,
+        18,
+        42,
+        "centered",
+        byline_gap_factor=1.20,
+    )
+    assert with_byline.byline is not None and with_byline.byline_gap == 0
+    assert with_byline.byline.bounds[1] - with_byline.quotation.bounds[3] == 0
+    assert without_byline.byline is None
+    assert without_byline.byline_gap == 0
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA"])
@@ -525,35 +533,39 @@ def test_concealment_modes_preserve_attribution_tone_and_field_bounds(
     field = layout.byline.attribution
     stages = (CompositionVisibility(), CompositionVisibility(attribution=True))
 
-    for technique in ("glyph-blur", "pixel-distortion"):
-        images = _render_reveal_stages(
-            background,
-            resolved_font,
-            layout,
-            stages,
-            concealment=technique,
-        )
-        assert all(image.mode == mode for image in images)
-        difference = ImageChops.difference(images[0], images[1]).convert("RGB").getbbox()
-        assert difference is not None
-        assert field.bounds[0] <= difference[0] < difference[2] <= field.bounds[2]
-        assert field.bounds[1] <= difference[1] < difference[3] <= field.bounds[3]
+    images = render_reveal_stages(background, resolved_font, layout, stages)
+    assert all(image.mode == mode for image in images)
+    difference = ImageChops.difference(images[0], images[1]).convert("RGB").getbbox()
+    assert difference is not None
+    assert field.bounds[0] <= difference[0] < difference[2] <= field.bounds[2]
+    assert field.bounds[1] <= difference[1] < difference[3] <= field.bounds[3]
 
     if mode in {"L", "RGB", "RGBA"}:
-        revealed = (
-            _render_reveal_stages(
-                background,
-                resolved_font,
-                layout,
-                stages,
-                concealment="glyph-blur",
-            )[1]
-            .crop(field.bounds)
-            .convert("RGB")
-        )
+        revealed = images[1].crop(field.bounds).convert("RGB")
         minima = tuple(channel[0] for channel in revealed.getextrema())
         assert min(minima) >= 40
         assert max(minima) < 100
+
+
+@pytest.mark.parametrize("concealment", ["glyph-blur", "", None, True])
+def test_unsupported_concealment_is_rejected(resolved_font: ResolvedFont, concealment: object) -> None:
+    layout = layout_composition(
+        LiteraryComposition("A quotation.", source="A source"),
+        resolved_font,
+        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        (400, 300),
+        18,
+        32,
+        "centered",
+    )
+    with pytest.raises(QuotationRenderError, match="concealment must be 'pixel-distortion'"):
+        render_reveal_stages(
+            Image.new("RGB", layout.image_size, "white"),
+            resolved_font,
+            layout,
+            (CompositionVisibility(),),
+            concealment=concealment,  # type: ignore[arg-type]
+        )
 
 
 def test_pixel_distortion_adds_spatial_noise_and_breaks_glyph_cells(resolved_font: ResolvedFont) -> None:
