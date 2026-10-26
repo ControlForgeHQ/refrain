@@ -60,8 +60,6 @@ def make_proposal(
 def make_snapshot(
     text: str,
     display_date: date = date(2026, 10, 26),
-    *,
-    stage: int = 0,
 ) -> DailySnapshot:
     return DailySnapshot(
         quotation_text=text,
@@ -71,7 +69,6 @@ def make_snapshot(
         reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
         layout={"quotation_region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6}},
         scheduling=SchedulingContext(display_date, "Etc/UTC", "06:00"),
-        highest_reveal_stage=stage,
     )
 
 
@@ -107,7 +104,7 @@ def test_uninitialized_location_and_initial_commit_recover_in_new_instance(tmp_p
     assert recovered.global_history[0].sequence == 1
     assert recovered.global_history[0].font_identifier == "test-font"
     assert recovered.repetition_history == {"First quotation."}
-    assert recovered.snapshot.highest_reveal_stage == 0
+    assert recovered.highest_reveal_stage == 0
 
 
 def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path: Path) -> None:
@@ -118,12 +115,12 @@ def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path
         frozenset({"First quotation.", "Unrelated identity."}),
         base_revision=first.revision,
     )
-    second = store.commit(proposal, make_snapshot("Second quotation.", date(2026, 10, 27), stage=1))
+    second = store.commit(proposal, make_snapshot("Second quotation.", date(2026, 10, 27)), initial_reveal_stage=1)
 
     assert second.revision == 2
     assert [record.quotation_text for record in second.global_history] == ["First quotation.", "Second quotation."]
     assert second.repetition_history == {"First quotation.", "Second quotation.", "Unrelated identity."}
-    assert second.snapshot.highest_reveal_stage == 1
+    assert second.highest_reveal_stage == 1
     assert first.global_history == (first.global_history[0],)
     assert PersistentStateStore(store.path).load() == second
 
@@ -331,7 +328,7 @@ def test_integrity_checksum_and_font_digest_are_validated(tmp_path: Path) -> Non
     with pytest.raises(StateRecoveryError, match="font data checksum"):
         PersistentStateStore(state_path).load()
 
-    state_path.write_text('{"format_version": 1, "state": {}, "sha256": "bad"}', encoding="utf-8")
+    state_path.write_text('{"format_version": 2, "state": {}, "sha256": "bad"}', encoding="utf-8")
     with pytest.raises(StateRecoveryError, match="checksum"):
         PersistentStateStore(state_path).load()
 
@@ -339,3 +336,183 @@ def test_integrity_checksum_and_font_digest_are_validated(tmp_path: Path) -> Non
 def test_store_requires_an_absolute_configured_path() -> None:
     with pytest.raises(ValueError, match="must be absolute"):
         PersistentStateStore("relative/state.json")
+
+
+@pytest.mark.parametrize("stages", [(1,), (2,), (1, 2, 3)])
+def test_reveal_progress_advances_without_changing_selection(tmp_path: Path, stages: tuple[int, ...]) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    original = commit(store, "Committed.")
+    original_payload = json.loads(store.path.read_bytes())["state"]
+
+    for stage in stages:
+        advanced = store.advance_reveal_progress(original.revision, stage)
+        assert advanced.highest_reveal_stage == stage
+        assert advanced.snapshot == original.snapshot
+        assert advanced.revision == original.revision
+        assert advanced.global_history == original.global_history
+        assert advanced.repetition_history == original.repetition_history
+        assert PersistentStateStore(store.path).load() == advanced
+        payload = json.loads(store.path.read_bytes())["state"]
+        assert payload.pop("highest_reveal_stage") == stage
+        assert payload == {key: value for key, value in original_payload.items() if key != "highest_reveal_stage"}
+
+    assert original.highest_reveal_stage == 0
+
+
+@pytest.mark.parametrize("requested_stage", [0, 1, 2])
+def test_same_or_earlier_reveal_stage_does_not_rewrite_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requested_stage: int
+) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Committed.")
+    advanced = store.advance_reveal_progress(committed.revision, 2)
+    contents = store.path.read_bytes()
+    stat = store.path.stat()
+
+    def unexpected_publication(*_: object) -> None:
+        pytest.fail("idempotent reveal progression must not publish state")
+
+    monkeypatch.setattr(store, "_publish", unexpected_publication)
+    assert store.advance_reveal_progress(committed.revision, requested_stage) == advanced
+    assert store.path.read_bytes() == contents
+    assert store.path.stat().st_mtime_ns == stat.st_mtime_ns
+    assert store.path.stat().st_ino == stat.st_ino
+
+
+def test_reveal_progress_restart_and_new_selection_integration(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    first = commit(store, "First.")
+    store.advance_reveal_progress(first.revision, 1)
+    store.advance_reveal_progress(first.revision, 2)
+
+    restarted = PersistentStateStore(store.path)
+    recovered = restarted.load()
+    assert recovered.highest_reveal_stage == 2
+    assert recovered.snapshot == first.snapshot
+    assert recovered.revision == first.revision
+    assert recovered.global_history == first.global_history
+    assert recovered.repetition_history == first.repetition_history
+
+    second = commit(restarted, "Second.", date(2026, 10, 27))
+    assert second.highest_reveal_stage == 0
+    assert second.revision == first.revision + 1
+    contents = store.path.read_bytes()
+    for stage in (0, 1, 3):
+        with pytest.raises(StateCommitError, match="stale reveal-progress update"):
+            store.advance_reveal_progress(first.revision, stage)
+        assert store.path.read_bytes() == contents
+        assert PersistentStateStore(store.path).load() == second
+    assert restarted.advance_reveal_progress(second.revision, 1).highest_reveal_stage == 1
+
+
+def test_selection_retry_preserves_subsequent_reveal_progress(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    proposal = make_proposal("Committed.")
+    snapshot = make_snapshot("Committed.")
+    first = store.commit(proposal, snapshot, initial_reveal_stage=1)
+    advanced = store.advance_reveal_progress(first.revision, 2)
+    contents = store.path.read_bytes()
+
+    assert store.commit(proposal, snapshot, initial_reveal_stage=1) == advanced
+    assert store.path.read_bytes() == contents
+
+
+def test_uninitialized_state_cannot_accept_reveal_progress(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "missing" / "state.json")
+    with pytest.raises(StateCommitError, match="without a committed selection"):
+        store.advance_reveal_progress(1, 1)
+    assert store.load() is None
+    assert not store.path.parent.exists()
+
+
+@pytest.mark.parametrize("stage", [-1, 1.5, "1", True, False, None, [], {}])
+def test_invalid_reveal_stages_are_rejected_without_changing_state(tmp_path: Path, stage: object) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Committed.")
+    contents = store.path.read_bytes()
+    with pytest.raises(ValueError, match="highest_reveal_stage must be a nonnegative integer"):
+        store.advance_reveal_progress(committed.revision, stage)
+    proposal = make_proposal("Next.", committed.repetition_history, base_revision=committed.revision)
+    with pytest.raises(ValueError, match="highest_reveal_stage must be a nonnegative integer"):
+        store.commit(proposal, make_snapshot("Next."), initial_reveal_stage=stage)
+    assert store.path.read_bytes() == contents
+
+
+@pytest.mark.parametrize("revision", [0, -1, 1.0, "1", True, None])
+def test_invalid_reveal_generation_is_rejected(tmp_path: Path, revision: object) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Committed.")
+    contents = store.path.read_bytes()
+    with pytest.raises(StateCommitError, match="expected_revision must be a positive integer"):
+        store.advance_reveal_progress(revision, 1)
+    assert store.path.read_bytes() == contents
+
+
+@pytest.mark.parametrize("failure_point", ["flush", "replace", "directory_sync"])
+def test_interrupted_reveal_advancement_recovers_complete_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Committed.")
+    previous = store.advance_reveal_progress(committed.revision, 1)
+    original_payload = json.loads(store.path.read_bytes())["state"]
+
+    def fail(*_: object) -> None:
+        raise OSError("injected failure")
+
+    with monkeypatch.context() as patch:
+        if failure_point == "flush":
+            patch.setattr(persistence.os, "fsync", fail)
+        elif failure_point == "replace":
+            patch.setattr(persistence.os, "replace", fail)
+        else:
+            patch.setattr(persistence, "_sync_directory", fail)
+        with pytest.raises(StateCommitError) as error:
+            store.advance_reveal_progress(previous.revision, 2)
+        published = failure_point == "directory_sync"
+        assert error.value.published is published
+        recovered = PersistentStateStore(store.path).load()
+        assert recovered.highest_reveal_stage == (2 if published else 1)
+        payload = json.loads(store.path.read_bytes())["state"]
+        payload["highest_reveal_stage"] = original_payload["highest_reveal_stage"]
+        assert payload == original_payload
+        assert not list(tmp_path.glob(".state.json.*.tmp"))
+        if published:
+            with pytest.raises(StateCommitError) as retry_error:
+                store.advance_reveal_progress(previous.revision, 2)
+            assert retry_error.value.published
+
+    synced: list[Path] = []
+    monkeypatch.setattr(persistence, "_sync_directory", lambda path: synced.append(path))
+    retried = store.advance_reveal_progress(previous.revision, 2)
+    assert retried.highest_reveal_stage == 2
+    assert synced == [store.path.parent]
+    assert PersistentStateStore(store.path).load() == retried
+
+
+def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Committed.")
+    document = json.loads(store.path.read_bytes())
+    assert document["format_version"] == 2
+    document["format_version"] = 1
+    document["state"]["snapshot"]["highest_reveal_stage"] = document["state"].pop("highest_reveal_stage")
+    _write_document(store.path, document)
+    contents = store.path.read_bytes()
+
+    with pytest.raises(UnsupportedStateVersionError, match="format version 1"):
+        store.load()
+    with pytest.raises(UnsupportedStateVersionError, match="format version 1"):
+        store.advance_reveal_progress(1, 1)
+    assert store.path.read_bytes() == contents
+
+
+@pytest.mark.parametrize("stage", [-1, True, "1", None])
+def test_invalid_persisted_reveal_progress_is_not_recovered(tmp_path: Path, stage: object) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Committed.")
+    document = json.loads(store.path.read_bytes())
+    document["state"]["highest_reveal_stage"] = stage
+    _write_document(store.path, document)
+    with pytest.raises(StateRecoveryError, match="highest_reveal_stage must be a nonnegative integer"):
+        store.load()
