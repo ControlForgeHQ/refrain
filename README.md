@@ -156,30 +156,43 @@ from refrain import (
 
 state_path = Path("/absolute/path/chosen-for-this-installation/state.json")
 config = load_application_config("config.yaml")
+display_date = date(2026, 10, 26)
 store = PersistentStateStore(state_path)
 previous = store.load()
-repetition_history = () if previous is None else previous.repetition_history
 
-display_date = date(2026, 10, 26)
-entries = load_content_library("examples/content")
-pool = build_eligible_quotation_pool(entries, display_date)
-proposal = select_quotation(pool, repetition_history, random_source=Random())
-candidate = proposal.selected_candidate
+if previous is None or previous.snapshot.display_date != display_date:
+    repetition_history = () if previous is None else previous.repetition_history
+    entries = load_content_library("examples/content")
+    pool = build_eligible_quotation_pool(entries, display_date)
+    proposal = select_quotation(pool, repetition_history, random_source=Random())
+    candidate = proposal.selected_candidate
 
-if candidate is not None:
-    # Earlier application logic has already resolved this candidate's font.
-    with font_resource.path.open("rb") as font_file:
-        font = ResolvedFont(font_resource.identifier, font_file.read())
-    snapshot = DailySnapshot(
-        quotation_text=candidate.text,
-        quotation_identity=candidate.identity,
-        font=font,
-        presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
-        reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
-        layout={"quotation_region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6}},
-        scheduling=SchedulingContext(display_date, str(config.timezone), config.day_start.isoformat()),
-    )
-    store.commit(proposal, snapshot)
+    if candidate is not None:
+        # Assume the application's policy resolved this candidate to "lora".
+        font_resource = config.fonts["lora"]
+        with font_resource.path.open("rb") as font_file:
+            font = ResolvedFont(font_resource.identifier, font_file.read())
+        snapshot = DailySnapshot(
+            quotation_text=candidate.text,
+            quotation_identity=candidate.identity,
+            font=font,
+            presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
+            reveal_schedule={
+                "quotation": config.reveal.quotation.isoformat(),
+                "source": config.reveal.source.isoformat(),
+                "attribution": config.reveal.attribution.isoformat(),
+            },
+            layout={
+                "quotation_region": {
+                    "x": config.quotation_region.x,
+                    "y": config.quotation_region.y,
+                    "width": config.quotation_region.width,
+                    "height": config.quotation_region.height,
+                }
+            },
+            scheduling=SchedulingContext(display_date, str(config.timezone), config.day_start.isoformat()),
+        )
+        store.commit(proposal, snapshot)
 
 recovered = PersistentStateStore(state_path).load()
 ```
