@@ -298,7 +298,7 @@ Absent optional fields do not require reserved space.
 
 Version 0.1 does not expose separate configurable source or attribution regions.
 
-The previous `layout.quotation_region` field is replaced by `layout.presentation_region`. Both names are not supported concurrently.
+Only `layout.presentation_region` is supported.
 
 ### Font registry
 
