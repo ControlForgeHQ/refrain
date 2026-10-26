@@ -2,21 +2,35 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from PIL import Image, ImageDraw, ImageFont
-
-from .config import QuotationRegion
-from .persistence import ResolvedFont
 
 PixelBounds = tuple[int, int, int, int]
 PixelPosition = tuple[int, int]
 PresentationStyle = Literal["centered", "prose"]
+
+
+class PresentationRegion(Protocol):
+    """Normalized presentation rectangle supplied by the caller."""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class ResolvedFontData(Protocol):
+    """Resolved Pillow font bytes supplied independently of font selection."""
+
+    identifier: str
+    data: bytes
 
 
 class QuotationRenderError(ValueError):
@@ -78,10 +92,11 @@ class _MeasuredField:
     height: int
 
 
-def _validate_region(region: QuotationRegion) -> None:
-    if not isinstance(region, QuotationRegion):
-        raise QuotationRenderError("presentation_region must be a QuotationRegion")
-    values = (region.x, region.y, region.width, region.height)
+def _validate_region(region: PresentationRegion) -> None:
+    try:
+        values = (region.x, region.y, region.width, region.height)
+    except AttributeError as error:
+        raise QuotationRenderError("presentation_region must provide x, y, width, and height") from error
     if any(
         isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values
     ):
@@ -118,9 +133,22 @@ def _validate_composition(composition: LiteraryComposition) -> None:
             raise QuotationRenderError(f"{field_name} must be a nonempty string when supplied")
 
 
-def _load_font(font: ResolvedFont, size: int) -> ImageFont.FreeTypeFont:
-    if not isinstance(font, ResolvedFont):
-        raise QuotationRenderError("font must be a ResolvedFont")
+def _validate_font(font: ResolvedFontData) -> None:
+    if (
+        not isinstance(getattr(font, "identifier", None), str)
+        or not font.identifier
+        or not isinstance(getattr(font, "data", None), bytes)
+        or not font.data
+    ):
+        raise QuotationRenderError("font must provide a nonempty identifier and resolved font bytes")
+
+
+def _font_sha256(font: ResolvedFontData) -> str:
+    return hashlib.sha256(font.data).hexdigest()
+
+
+def _load_font(font: ResolvedFontData, size: int) -> ImageFont.FreeTypeFont:
+    _validate_font(font)
     try:
         return ImageFont.truetype(io.BytesIO(font.data), size=size)
     except (OSError, ValueError) as error:
@@ -178,7 +206,7 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, width: int) -> tuple[tup
 
 def _measure_field(
     text: str,
-    font: ResolvedFont,
+    font: ResolvedFontData,
     font_size: int,
     width: int,
 ) -> _MeasuredField | None:
@@ -258,7 +286,7 @@ def _place_field(
 
 def _layout_at_size(
     composition: LiteraryComposition,
-    font: ResolvedFont,
+    font: ResolvedFontData,
     image_size: tuple[int, int],
     region: PixelBounds,
     quote_size: int,
@@ -282,6 +310,8 @@ def _layout_at_size(
     if composition.attribution is not None and attribution is None:
         return None
 
+    if quote_size == 1 and (source is not None or attribution is not None):
+        return None
     field_gap = max(1, round(quote_size * 0.55))
     metadata = [field for field in (source, attribution) if field is not None]
     metadata_height = sum(field.height for field in metadata) + field_gap * max(0, len(metadata) - 1)
@@ -306,7 +336,7 @@ def _layout_at_size(
     return CompositionLayout(
         composition=composition,
         font_identifier=font.identifier,
-        font_sha256=font.sha256,
+        font_sha256=_font_sha256(font),
         image_size=image_size,
         region=region,
         style=style,
@@ -318,8 +348,8 @@ def _layout_at_size(
 
 def layout_composition(
     composition: LiteraryComposition,
-    font: ResolvedFont,
-    presentation_region: QuotationRegion,
+    font: ResolvedFontData,
+    presentation_region: PresentationRegion,
     image_size: tuple[int, int],
     min_font_size: int,
     max_font_size: int,
@@ -336,8 +366,7 @@ def layout_composition(
     _validate_sizes(min_font_size, max_font_size)
     if not isinstance(presentation_style, str) or presentation_style not in _STYLE_LAYOUTS:
         raise QuotationRenderError("presentation_style must be 'centered' or 'prose'")
-    if not isinstance(font, ResolvedFont):
-        raise QuotationRenderError("font must be a ResolvedFont")
+    _validate_font(font)
     pixel_region = (
         math.floor(presentation_region.x * width),
         math.floor(presentation_region.y * height),
@@ -367,7 +396,7 @@ def layout_composition(
 
 def _draw_field(
     draw: ImageDraw.ImageDraw,
-    font: ResolvedFont,
+    font: ResolvedFontData,
     field: TextFieldLayout,
     color: tuple[int, ...] | int,
 ) -> None:
@@ -379,7 +408,7 @@ def _draw_field(
 
 def render_reveal_stages(
     background: Image.Image,
-    font: ResolvedFont,
+    font: ResolvedFontData,
     layout: CompositionLayout,
     stages: Sequence[CompositionVisibility],
 ) -> tuple[Image.Image, ...]:
@@ -392,9 +421,8 @@ def render_reveal_stages(
         raise QuotationRenderError("layout must be a CompositionLayout")
     if background.size != layout.image_size:
         raise QuotationRenderError("background dimensions do not match the composition layout")
-    if not isinstance(font, ResolvedFont):
-        raise QuotationRenderError("font must be a ResolvedFont")
-    if font.identifier != layout.font_identifier or font.sha256 != layout.font_sha256:
+    _validate_font(font)
+    if font.identifier != layout.font_identifier or _font_sha256(font) != layout.font_sha256:
         raise QuotationRenderError("font does not match the resolved font used to create the composition layout")
     if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
         raise QuotationRenderError("stages must be a nonempty sequence of CompositionVisibility values")
@@ -432,8 +460,10 @@ __all__ = [
     "CompositionLayout",
     "CompositionVisibility",
     "LiteraryComposition",
+    "PresentationRegion",
     "PresentationStyle",
     "QuotationRenderError",
+    "ResolvedFontData",
     "TextFieldLayout",
     "layout_composition",
     "render_reveal_stages",

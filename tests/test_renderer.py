@@ -317,6 +317,19 @@ def test_reveal_stage_inputs_must_be_cumulative_and_present(resolved_font: Resol
         )
 
 
+def test_secondary_fields_remain_subordinate_at_smallest_supported_size(resolved_font: ResolvedFont) -> None:
+    with pytest.raises(QuotationRenderError, match="minimum quotation font size 1"):
+        layout_composition(
+            LiteraryComposition("Q", source="Source"),
+            resolved_font,
+            QuotationRegion(0, 0, 1, 1),
+            (100, 100),
+            1,
+            1,
+            "centered",
+        )
+
+
 @pytest.mark.parametrize(
     ("region", "size_bounds", "image_size"),
     [
