@@ -113,7 +113,7 @@ from datetime import date
 from refrain import build_eligible_quotation_pool, load_content_library
 
 entries = load_content_library("examples/content")
-pool = build_eligible_quotation_pool(entries, date(2026, 2, 29))
+pool = build_eligible_quotation_pool(entries, date(2024, 2, 29))
 
 for candidate in pool.candidates:
     print(candidate.text, candidate.entry.source, candidate.priority)
