@@ -824,11 +824,11 @@ A subsequent successful update may skip intermediate stages and present the late
 
 ### Rendering independence
 
-The renderer accepts a committed daily snapshot and its resolved presentation configuration.
+Daily-image preparation accepts a committed daily snapshot and an explicit sequence of cumulative reveal stages.
 
-It produces complete images without accessing physical display hardware.
+Preparation resolves the snapshot's literary content and presentation settings, generates the view-specific background, and uses the shared renderer to produce complete images without accessing physical display hardware.
 
-The renderer must not select content, modify selection history, or determine application lifecycle policy.
+Neither preparation nor the renderer selects content, modifies selection history, or determines application lifecycle policy.
 
 Rendered output must be testable and inspectable without Raspberry Pi display hardware.
 
@@ -855,6 +855,8 @@ The same quotation renderer serves normal daily presentations, the information v
 The renderer does not require a content-library entry or committed daily snapshot as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
 
 The architecture does not require a general-purpose layout framework, externally supplied rendering components, or a plugin interface.
+
+For daily images, preparation generates a paper-white background independently of literary rendering. The background contains no quotation, source, or attribution text.
 
 ### Information view
 
@@ -1006,9 +1008,25 @@ All reveal stages use the same resolved composition layout.
 
 Content that cannot be rendered legibly within the supported presentation region must be handled explicitly rather than silently clipped, truncated, or omitted.
 
+### Committed daily presentation data
+
+A daily snapshot must contain every value needed to reproduce its presentation without consulting current application configuration or the content library.
+
+`presentation_metadata` contains optional nonempty `source` and `attribution` strings, plus the required built-in `presentation_style` (`centered` or `prose`). An absent optional field is represented by a missing key or `null`.
+
+`layout` contains:
+
+- `image_size`: a two-item sequence of positive integer pixel dimensions in width, height order;
+- `presentation_region`: a normalized rectangle with `x`, `y`, `width`, and `height`;
+- `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
+
+The snapshot's existing resolved font contains the exact font bytes used during preparation. Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
+
+Missing or invalid required presentation data, an unusable embedded font, or a composition that does not fit is a preparation error. Preparation does not change the committed snapshot or persistent selection state.
+
 ### Complete stage preparation
 
-Presentation preparation resolves the complete literary composition once and produces every image required by the committed selection's effective reveal schedule.
+Presentation preparation resolves the complete literary composition once and produces every image requested for the committed selection. The caller supplies the cumulative stage sequence; preparation does not calculate reveal times or determine the current stage.
 
 Each image represents a cumulative visibility stage of the same composition.
 
