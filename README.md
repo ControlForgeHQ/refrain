@@ -141,6 +141,32 @@ for style in ("centered", "prose"):
 
 The complete byline reads `— An Example Author, A Book of Examples`; if either optional field is absent, its separator is omitted. A `CompositionLayout` keeps quotation and byline geometry identical across stages. To generate inspectable 1600 × 1200 examples for all four optional-field combinations, both styles, and all three bundled fonts, run `python examples/render_quotation_previews.py /tmp/refrain-previews`. Output is grouped by font identifier. To compare another spacing while keeping the layout fixed across reveal stages, pass a different `byline_gap_factor` to `layout_composition`; concealment remains deterministic pixel distortion.
 
+## Preparing images from a daily snapshot
+
+`prepare_daily_images(snapshot, stages)` produces complete RGB Pillow images from a committed `DailySnapshot` and an explicit sequence of cumulative `CompositionVisibility` stages. It uses only the snapshot's literary fields, presentation metadata, layout values, and embedded font bytes; missing or invalid required presentation data and content that cannot fit raise `DailyImagePreparationError`. It does not load current configuration or content, or modify persistent state. See the [committed daily presentation data contract](docs/ARCHITECTURE.md#committed-daily-presentation-data).
+
+```python
+from refrain import CompositionVisibility, PersistentStateStore, prepare_daily_images
+
+state = PersistentStateStore("/absolute/path/chosen-for-this-installation/state.json").load()
+if state is None:
+    raise RuntimeError("there is no committed daily snapshot")
+
+metadata = state.snapshot.presentation_metadata
+source_revealed = False
+stages = [CompositionVisibility()]
+if metadata.get("source") is not None:
+    source_revealed = True
+    stages.append(CompositionVisibility(source=True))
+if metadata.get("attribution") is not None:
+    stages.append(CompositionVisibility(source=source_revealed, attribution=True))
+images = prepare_daily_images(state.snapshot, tuple(stages))
+for index, image in enumerate(images):
+    image.save(f"daily-stage-{index}.png")
+```
+
+Run `python examples/prepare_daily_snapshot.py /tmp/refrain-daily-images` to generate full-resolution inspectable images from synthetic committed snapshot data without display hardware.
+
 ## Loading content
 
 `load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of validated `ContentEntry` objects; each entry contains its metadata, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
@@ -242,19 +268,26 @@ if selection_boundary_recognized:
             quotation_text=candidate.text,
             quotation_identity=candidate.identity,
             font=font,
-            presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
+            presentation_metadata={
+                "source": candidate.entry.source,
+                "attribution": candidate.entry.attribution,
+                "presentation_style": "centered",
+            },
             reveal_schedule={
                 "quotation": config.reveal.quotation.isoformat(),
                 "source": config.reveal.source.isoformat(),
                 "attribution": config.reveal.attribution.isoformat(),
             },
             layout={
+                "image_size": (1600, 1200),
                 "quotation_region": {
                     "x": config.quotation_region.x,
                     "y": config.quotation_region.y,
                     "width": config.quotation_region.width,
                     "height": config.quotation_region.height,
-                }
+                },
+                "min_font_size": config.min_font_size,
+                "max_font_size": config.max_font_size,
             },
             scheduling=SchedulingContext(display_date, str(config.timezone), config.day_start.isoformat()),
         )
