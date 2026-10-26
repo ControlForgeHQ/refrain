@@ -104,7 +104,7 @@ class ApplicationConfiguration:
     day_start: time
     content_directory: Path
     reveal: RevealSchedule
-    quotation_region: QuotationRegion
+    presentation_region: QuotationRegion
     fonts: Mapping[str, FontResource]
     default_fonts: tuple[str, ...]
     min_font_size: int
@@ -226,14 +226,16 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     )
 
     layout = _mapping(data.get("layout", {}), "layout", report)
-    _known_fields(layout, {"quotation_region", "fonts", "text"}, "layout", report)
-    region_data = _mapping(layout.get("quotation_region", {}), "layout.quotation_region", report)
-    _known_fields(region_data, {"x", "y", "width", "height"}, "layout.quotation_region", report)
+    _known_fields(layout, {"presentation_region", "quotation_region", "fonts", "text"}, "layout", report)
+    if "quotation_region" in layout:
+        report("layout.quotation_region", "is obsolete; use layout.presentation_region instead")
+    region_data = _mapping(layout.get("presentation_region", {}), "layout.presentation_region", report)
+    _known_fields(region_data, {"x", "y", "width", "height"}, "layout.presentation_region", report)
     region_values: dict[str, float] = {}
     for field in ("x", "y", "width", "height"):
         value = region_data.get(field)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-            report(f"layout.quotation_region.{field}", "is required and must be a finite number")
+            report(f"layout.presentation_region.{field}", "is required and must be a finite number")
         else:
             region_values[field] = float(value)
     if len(region_values) == 4:
@@ -244,20 +246,20 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             region_values["height"],
         )
         if not 0 <= x < 1:
-            report("layout.quotation_region.x", "must satisfy 0 <= x < 1")
+            report("layout.presentation_region.x", "must satisfy 0 <= x < 1")
         if not 0 <= y < 1:
-            report("layout.quotation_region.y", "must satisfy 0 <= y < 1")
+            report("layout.presentation_region.y", "must satisfy 0 <= y < 1")
         if not 0 < width <= 1:
-            report("layout.quotation_region.width", "must satisfy 0 < width <= 1")
+            report("layout.presentation_region.width", "must satisfy 0 < width <= 1")
         if not 0 < height <= 1:
-            report("layout.quotation_region.height", "must satisfy 0 < height <= 1")
+            report("layout.presentation_region.height", "must satisfy 0 < height <= 1")
         if x + width > 1:
-            report("layout.quotation_region.width", "x + width must not exceed 1")
+            report("layout.presentation_region.width", "x + width must not exceed 1")
         if y + height > 1:
-            report("layout.quotation_region.height", "y + height must not exceed 1")
-        quotation_region = QuotationRegion(x=x, y=y, width=width, height=height)
+            report("layout.presentation_region.height", "y + height must not exceed 1")
+        presentation_region = QuotationRegion(x=x, y=y, width=width, height=height)
     else:
-        quotation_region = None
+        presentation_region = None
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
     _known_fields(fonts_data, {"default", "available"}, "layout.fonts", report)
@@ -334,7 +336,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     assert day_start is not None
     assert content_directory is not None
     assert reveal is not None
-    assert quotation_region is not None
+    assert presentation_region is not None
     assert default_fonts is not None
     return ApplicationConfiguration(
         file=file,
@@ -342,7 +344,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         day_start=day_start,
         content_directory=content_directory,
         reveal=reveal,
-        quotation_region=quotation_region,
+        presentation_region=presentation_region,
         fonts=MappingProxyType(font_registry),
         default_fonts=default_fonts,
         min_font_size=sizes["min_font_size"],

@@ -16,7 +16,7 @@ def configuration_data(**overrides: object) -> dict[str, object]:
         "general": {"timezone": "America/Toronto"},
         "content": {"directory": "content"},
         "layout": {
-            "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         },
@@ -49,6 +49,10 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.reveal.quotation == time(6)
     assert config.reveal.source == time(12)
     assert config.reveal.attribution == time(18)
+    assert config.presentation_region.x == 0.1
+    assert config.presentation_region.y == 0.15
+    assert config.presentation_region.width == 0.8
+    assert config.presentation_region.height == 0.55
     assert config.default_fonts == ("lora",)
     assert config.min_font_size == 28
     assert config.max_font_size == 100
@@ -108,7 +112,7 @@ def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path)
         shutil.copyfileobj(source, destination)
     data = configuration_data(
         layout={
-            "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"], "available": {"extra": "fonts/additional.font"}},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
@@ -128,7 +132,7 @@ def test_absolute_user_font_path_is_preserved(tmp_path: Path) -> None:
         shutil.copyfileobj(source, destination)
     data = configuration_data(
         layout={
-            "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"], "available": {"extra": str(user_font)}},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
@@ -142,25 +146,60 @@ def test_absolute_user_font_path_is_preserved(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("region", "expected_field"),
     [
-        ({"x": -0.1, "y": 0.1, "width": 0.2, "height": 0.2}, "layout.quotation_region.x"),
-        ({"x": 0.1, "y": 1, "width": 0.2, "height": 0.2}, "layout.quotation_region.y"),
-        ({"x": 0.1, "y": 0.1, "width": 0, "height": 0.2}, "layout.quotation_region.width"),
-        ({"x": 0.1, "y": 0.1, "width": 0.2, "height": 0}, "layout.quotation_region.height"),
-        ({"x": 0.1, "y": 0.8, "width": 0.2, "height": 0.3}, "layout.quotation_region.height"),
+        ({}, "layout.presentation_region.x"),
+        ({"x": -0.1, "y": 0.1, "width": 0.2, "height": 0.2}, "layout.presentation_region.x"),
+        ({"x": 0.1, "y": 1, "width": 0.2, "height": 0.2}, "layout.presentation_region.y"),
+        ({"x": 0.1, "y": 0.1, "width": 0, "height": 0.2}, "layout.presentation_region.width"),
+        ({"x": 0.1, "y": 0.1, "width": 0.2, "height": 0}, "layout.presentation_region.height"),
+        ({"x": 0.1, "y": 0.8, "width": 0.2, "height": 0.3}, "layout.presentation_region.height"),
     ],
 )
-def test_invalid_quotation_region_geometry_is_rejected(
+def test_invalid_presentation_region_geometry_is_rejected(
     tmp_path: Path, region: dict[str, float], expected_field: str
 ) -> None:
     data = configuration_data(
         layout={
-            "quotation_region": region,
+            "presentation_region": region,
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
     )
 
     assert expected_field in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+
+
+def test_presentation_region_accepts_full_normalized_image(tmp_path: Path) -> None:
+    data = configuration_data(
+        layout={
+            "presentation_region": {"x": 0, "y": 0, "width": 1, "height": 1},
+            "fonts": {"default": ["lora"]},
+            "text": {"min_font_size": 1, "max_font_size": 2},
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.presentation_region.x == 0
+    assert config.presentation_region.y == 0
+    assert config.presentation_region.width == 1
+    assert config.presentation_region.height == 1
+
+
+def test_obsolete_quotation_region_is_rejected_with_replacement_guidance(tmp_path: Path) -> None:
+    data = configuration_data(
+        layout={
+            "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "fonts": {"default": ["lora"]},
+            "text": {"min_font_size": 1, "max_font_size": 2},
+        }
+    )
+
+    config_path = write_config(tmp_path / "config.yaml", data)
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert "layout.quotation_region" in {diagnostic.field for diagnostic in error.value.diagnostics}
+    assert "use layout.presentation_region instead" in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -179,27 +218,27 @@ def test_invalid_quotation_region_geometry_is_rejected(
         (
             configuration_data(
                 layout={
-                    "quotation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
             ),
-            "layout.quotation_region.width",
+            "layout.presentation_region.width",
         ),
         (
             configuration_data(
                 layout={
-                    "quotation_region": {"x": True, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_region": {"x": True, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
             ),
-            "layout.quotation_region.x",
+            "layout.presentation_region.x",
         ),
         (
             configuration_data(
                 layout={
-                    "quotation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 10, "max_font_size": 9},
                 }
@@ -209,7 +248,7 @@ def test_invalid_quotation_region_geometry_is_rejected(
         (
             configuration_data(
                 layout={
-                    "quotation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": []},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
@@ -219,7 +258,7 @@ def test_invalid_quotation_region_geometry_is_rejected(
         (
             configuration_data(
                 layout={
-                    "quotation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": ["lora", "lora"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
@@ -229,7 +268,7 @@ def test_invalid_quotation_region_geometry_is_rejected(
         (
             configuration_data(
                 layout={
-                    "quotation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": ["missing"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
@@ -291,7 +330,7 @@ def test_user_font_collisions_missing_files_and_unsupported_files_are_rejected(t
             (tmp_path / font_path).write_bytes(b"not a font")
         data = configuration_data(
             layout={
-                "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+                "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
                 "fonts": {"default": ["lora"], "available": {identifier: font_path}},
                 "text": {"min_font_size": 28, "max_font_size": 100},
             }
@@ -307,7 +346,7 @@ def test_unreadable_user_font_is_rejected(tmp_path: Path, monkeypatch: pytest.Mo
     user_font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
     data = configuration_data(
         layout={
-            "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"], "available": {"extra": str(user_font)}},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
