@@ -83,6 +83,31 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
+## Rendering a quotation
+
+The shared renderer accepts an existing Pillow image, the original quotation text, a resolved font, a normalized quotation region, and font-size bounds. It returns a new image and leaves the supplied background unchanged. A `QuotationRenderError` is raised when the inputs are invalid or the text cannot fit at the minimum size. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Quotation region](docs/CONTENT_FORMAT.md#quotation-region) for the authoritative behavior and geometry.
+
+```python
+from importlib.resources import files
+
+from PIL import Image
+
+from refrain import QuotationRegion, ResolvedFont, layout_quotation, render_quotation
+
+resource = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
+with resource.open("rb") as font_file:
+    font = ResolvedFont("lora", font_file.read())
+
+background = Image.new("RGB", (1600, 1200), "#f8f6f0")
+region = QuotationRegion(x=0.1, y=0.15, width=0.8, height=0.65)
+text = "A resolved quotation is fitted to the supplied page."
+layout = layout_quotation(text, font, region, background.size, min_font_size=28, max_font_size=100)
+rendered = render_quotation(background, font, layout)
+rendered.save("quotation.png")
+```
+
+The reusable `QuotationLayout` keeps wrapping, font size, and placement identical when rendered on multiple backgrounds of the same dimensions. To generate three inspectable 1600 × 1200 examples without display hardware, run `python examples/render_quotation_previews.py /tmp/refrain-previews`.
+
 ## Loading content
 
 `load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of validated `ContentEntry` objects; each entry contains its metadata, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
