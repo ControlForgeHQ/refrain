@@ -513,13 +513,17 @@ Do not introduce general font discovery, download, or substitution infrastructur
 
 ### Keep presentation configuration focused
 
-The initial release provides one configurable layout.
+The initial release provides one configurable presentation layout.
 
-Use the normalized quotation region and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
+Use the normalized presentation region and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
 
 Convert normalized coordinates into pixel geometry using the actual output-image dimensions.
 
-Use Pillow's font metrics and text-measurement facilities to determine suitable font size and line wrapping.
+The shared quotation renderer is responsible for arranging and drawing the quotation and its optional source and attribution within that region.
+
+Layout calculation must account for all present fields before generating any reveal-stage image.
+
+Use Pillow's font metrics and text-measurement facilities to determine suitable font sizes, line wrapping, and placement.
 
 Text measurement must account for:
 
@@ -527,7 +531,9 @@ Text measurement must account for:
 - line spacing;
 - preserved line breaks;
 - paragraph spacing;
-- the configured quotation region.
+- the complete presentation region;
+- space occupied by source and attribution;
+- the effective presentation style.
 
 Avoid assumptions based solely on character counts or average character widths.
 
@@ -543,23 +549,43 @@ Do not introduce a general-purpose layout framework or font-selection optimizati
 
 ### Stable presentation geometry
 
-All reveal stages for one committed quotation must use consistent layout geometry.
+Resolve the complete literary composition once, including all present source and attribution fields.
 
-Reserved space for future reveals must not cause the primary quotation to move when additional information becomes visible.
+The resulting layout must contain sufficient information to reproduce the same typography and field positions across every reveal stage.
 
-The renderer must not silently clip, truncate, or omit required text merely to produce an image.
+Presentation styles determine layout geometry. Image drawing uses the resolved geometry rather than independently interpreting style identifiers.
 
-If content cannot fit the supported presentation regions, report a meaningful error.
+Keep style-specific layout behavior isolated so additional built-in styles can be introduced without changing content-selection policy, persistence mechanisms, scheduling, or display integration.
+
+The initial implementation needs only the `centered` and `prose` styles.
+
+A small internal dispatch mechanism for selecting built-in layout behavior is sufficient. Do not introduce a public styling plugin interface or generalized layout framework without a demonstrated requirement.
+
+All reveal stages for one committed selection must use consistent layout geometry.
+
+Reserved space for future reveals must not cause previously visible content to move when additional information becomes visible.
+
+The renderer must not silently clip, truncate, overlap, or omit required text merely to produce an image.
+
+If the complete composition cannot fit within the supported presentation region, report a meaningful error.
 
 ### Preparation and validation
 
 Prepare the complete set of required reveal-stage images from the committed daily snapshot.
 
+Resolve the complete composition layout once and reuse it for every required cumulative visibility stage.
+
 Each prepared image must be independently displayable.
+
+Normal reveal transitions select an existing prepared image rather than invoking text fitting, layout calculation, or image rendering.
 
 Do not require intermediate stages to have been physically displayed before preparing or presenting a later stage.
 
-Test image dimensions, supported output format, reveal progression, and significant layout constraints without physical display hardware.
+The same rendering facilities must support preparation of a single fully visible image for views that do not require progressive reveals.
+
+Test image dimensions, supported output formats, presentation styles, field visibility, layout stability, and significant fitting constraints without physical display hardware.
+
+Tests must verify that all present quotation, source, and attribution text remains within the configured presentation region without overlap or clipping.
 
 Visual inspection remains appropriate for typography and layout quality.
 
@@ -756,7 +782,7 @@ Test automatic text fitting with:
 - quotations requiring a smaller permitted font size;
 - quotations that cannot fit at the minimum permitted size.
 
-Verify that rendered text stays within the configured quotation region.
+Verify that all rendered literary content stays within the configured presentation region.
 
 Verify that the selected font, font size, wrapping, and quotation placement remain consistent across all reveal stages.
 

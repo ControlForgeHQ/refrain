@@ -134,11 +134,11 @@ reveal:
   attribution: "18:00"
 
 layout:
-  quotation_region:
+  presentation_region:
     x: 0.10
     y: 0.15
     width: 0.80
-    height: 0.55
+    height: 0.65
 
   fonts:
     default:
@@ -154,7 +154,7 @@ layout:
     max_font_size: 100
 ```
 
-The example illustrates the initial configuration structure, including a bounded quotation region, an explicit default font pool, an additional user-registered font, and font-size limits.
+The example illustrates the initial configuration structure, including a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
 
 Refrain automatically registers its bundled fonts. They can be referenced by their stable identifiers without declaring filesystem paths in application configuration.
 
@@ -163,10 +163,6 @@ The `layout.fonts.available` mapping registers additional fonts supplied by the 
 The default font pool controls which registered fonts are eligible for automatic selection. A registered font that is not included in the default pool remains available for explicit selection by content entries.
 
 User-supplied font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the resources and presentation layout provided by an installation.
-
-The example illustrates the initial configuration structure, including a bounded quotation region, a font registry, an automatic font-selection pool, and font-size limits.
-
-Font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the fonts and presentation layout provided by an installation.
 
 ### General settings
 
@@ -235,27 +231,29 @@ The runtime behavior of clock adjustments, missed stages, and restarts is define
 
 The initial release provides one configurable, typography-first presentation layout.
 
-The quotation occupies a defined rectangular region. The renderer automatically determines an appropriate font size and line wrapping within that region.
+The complete literary composition consists of the primary quotation and its optional source and attribution.
 
 The layout configuration defines:
 
-- the permitted quotation region;
+- the presentation region available to the complete composition;
 - available fonts;
 - fonts eligible for automatic daily selection;
-- minimum and maximum quotation font sizes.
+- minimum and maximum primary quotation font sizes.
+
+The renderer determines the arrangement and fitting of all present fields within the presentation region.
 
 A fixed quotation font size is not required.
 
-### Quotation region
+### Presentation region
 
-The `layout.quotation_region` mapping defines the rectangular area available for the primary quotation.
+The `layout.presentation_region` mapping defines the rectangular area available for the complete literary composition.
 
 | Field | Type | Required |
 |---|---|---|
-| `layout.quotation_region.x` | Number | Yes |
-| `layout.quotation_region.y` | Number | Yes |
-| `layout.quotation_region.width` | Number | Yes |
-| `layout.quotation_region.height` | Number | Yes |
+| `layout.presentation_region.x` | Number | Yes |
+| `layout.presentation_region.y` | Number | Yes |
+| `layout.presentation_region.width` | Number | Yes |
+| `layout.presentation_region.height` | Number | Yes |
 
 Coordinates are normalized proportions of the rendered image dimensions.
 
@@ -270,11 +268,11 @@ For example:
 
 ```yaml
 layout:
-  quotation_region:
+  presentation_region:
     x: 0.10
     y: 0.15
     width: 0.80
-    height: 0.55
+    height: 0.65
 ```
 
 The values must satisfy:
@@ -288,13 +286,19 @@ The values must satisfy:
 
 Boolean values are not valid coordinates.
 
-The quotation region remains fixed throughout all reveal stages of a committed presentation.
+The presentation region contains the quotation and all source and attribution fields present in the selected entry.
 
-The renderer may wrap text and adjust font size within this region but must not silently draw quotation text outside it.
+All included fields must fit within this region without overlapping, clipping, or truncation.
 
-Source and attribution information occupy separate reserved presentation regions defined by the initial layout. Their appearance must not cause the quotation region to change.
+The region remains fixed throughout every reveal stage of the committed selection.
 
-The initial release does not expose arbitrary positioning of every presentation element.
+The layout accounts for all present fields regardless of whether they are currently visible. Unrevealed fields retain their allocated positions until their reveal stages are reached.
+
+Absent optional fields do not require reserved space.
+
+Version 0.1 does not expose separate configurable source or attribution regions.
+
+The previous `layout.quotation_region` field is replaced by `layout.presentation_region`. Both names are not supported concurrently.
 
 ### Font registry
 
@@ -411,21 +415,27 @@ The rendering and text-fitting behavior is defined in `docs/ARCHITECTURE.md`, wi
 
 ### Initial layout limitations
 
-Version 0.1 provides one presentation layout.
+Version 0.1 provides one presentation layout with two built-in presentation styles.
 
 The initial public format does not define:
 
 - arbitrary layout templates;
 - custom drawing commands;
 - independent positioning of every presentation field;
-- per-entry quotation regions;
+- per-entry presentation regions;
 - per-entry font-size overrides;
+- per-quotation presentation-style overrides;
+- user-defined presentation styles;
+- configurable source and attribution regions;
+- configurable concealment effects for unrevealed fields;
 - automatic selection among different fonts based on fitting results;
 - a general-purpose theme engine.
 
+Additional built-in presentation styles may be introduced in future versions without changing the content-entry structure.
+
 Display hardware selection and output resolution are not user-configurable through these layout fields in Version 0.1.
 
-The normalized quotation region preserves future resolution flexibility without promising that the initial layout has been validated at every possible resolution.
+The normalized presentation region preserves future resolution flexibility without promising that the initial layout has been validated at every possible resolution.
 
 ## Content entries
 
@@ -471,12 +481,13 @@ Each quotation is a separate selection candidate.
 | `attribution` | String | No | Absent |
 | `priority` | Integer | No | `0` |
 | `font` | String | No | Automatic selection from default font pool |
+| `presentation_style` | String | No | `"centered"` |
 | `eligibility` | Sequence of eligibility rules | No | Ordinary eligibility |
 | `reveal` | Mapping of reveal overrides | No | Global reveal schedule |
 
 No other entry-level fields are defined for Version 0.1.
 
-All quotations in an entry inherit the entry's metadata, priority, font preference, eligibility, and reveal configuration.
+All quotations in an entry inherit the entry's metadata, priority, font preference, presentation style, eligibility, and reveal configuration.
 
 Individual quotations do not have independent overrides.
 
@@ -612,6 +623,50 @@ An absent `font` field means that no specific font preference is expressed.
 An explicit empty string or invalid field type is a validation error.
 
 The resolution of preferred fonts, fallback behavior, warnings, and persistence of the selected font are defined in `docs/ARCHITECTURE.md`.
+
+### Presentation style
+
+The optional `presentation_style` field selects the built-in style used to arrange the literary composition.
+
+It is defined at the content-entry level and applies to every quotation in that entry.
+
+Version 0.1 supports the following values:
+
+| Value | Behavior |
+|---|---|
+| `"centered"` | Each quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space. |
+| `"prose"` | Quotation lines share a common left edge. The complete text block is horizontally centered according to its widest rendered line, and the block is vertically centered within its allocated space. |
+
+For example:
+
+```yaml
+id: "example-prose"
+
+presentation_style: "prose"
+
+source: "An Example Book"
+attribution: "An Author"
+
+quotations:
+  - |-
+    A longer quotation whose lines
+    are better presented with a
+    common left margin.
+```
+
+The default is `"centered"` when the field is omitted.
+
+Style identifiers are case-sensitive.
+
+Unknown identifiers, empty strings, and non-string values are validation errors.
+
+The selected style governs the composition's layout. Both initial styles use consistent subordinate presentation for source and attribution.
+
+The effective style is preserved in the committed daily snapshot. Subsequent content-library changes do not alter the active presentation.
+
+Version 0.1 does not support per-quotation style overrides.
+
+Future releases may introduce additional built-in style identifiers. Content using an unsupported style identifier is invalid rather than silently falling back to another style.
 
 ## Eligibility rules
 
@@ -940,7 +995,7 @@ The initial formats do not define:
 - dynamically downloaded content;
 - inline scripts;
 - arbitrary presentation templates;
-- per-entry quotation regions or font-size limits;
+- per-entry presentation regions or font-size limits;
 - per-entry layout customization beyond the defined font preference;
 - automatic font-family selection based on text-fitting performance;
 - font repetition histories or weighted font selection;

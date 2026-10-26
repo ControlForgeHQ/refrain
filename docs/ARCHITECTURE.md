@@ -604,19 +604,21 @@ The daily snapshot contains a complete copy of the selected quotation and all in
 
 It includes only the selected quotation from its containing content entry, not the entry's other quotations.
 
-The snapshot must contain the resolved font selected for that daily presentation, together with the remaining presentation metadata, reveal schedule, and layout configuration required for rendering.
+The snapshot contains the selected quotation, available source and attribution, resolved font, effective presentation style, reveal schedule, and presentation configuration required for rendering.
 
 Font selection occurs before the daily snapshot is committed.
 
 An entry's explicit font preference is used when the font is available in the configured registry. Otherwise, the presentation uses a font selected from the configured default pool according to the content-format specification.
 
-The resolved font remains fixed throughout the committed display day.
+The resolved font and presentation style remain fixed throughout the committed display day.
 
 The snapshot must contain resolved values rather than references to mutable content-library entries or configuration that may subsequently change.
 
 The snapshot is immutable after commitment.
 
-Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or font.
+The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. A regenerated presentation must retain the same content, effective style, font, and presentation configuration.
+
+Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or resolved presentation configuration.
 
 ### Global history
 
@@ -760,8 +762,29 @@ A global reveal schedule defines the default timing for supported semantic field
 
 Individual content entries may override that schedule.
 
-The effective schedule is resolved before the daily snapshot is committed.
+The effective schedule is resolved before the daily snapshot is committed.### View composition
 
+Refrain separates view-specific background composition from literary content rendering.
+
+A background generator produces a base image containing the visual elements owned by that view, including decorative elements, branding, diagnostic information, and other content outside the literary composition.
+
+The shared quotation renderer accepts a background image and a literary composition consisting of:
+
+- a required quotation;
+- optional source information;
+- optional attribution information.
+
+The renderer owns the typography, fitting, positioning, and drawing of all three fields within an explicitly supplied presentation region.
+
+The renderer is independent of the purpose of the background image. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
+
+For normal daily presentations, the presentation region is resolved from application configuration. Other views may supply their own presentation region without changing the renderer's behavior.
+
+The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
+
+The renderer does not require a content-library entry or committed daily snapshot as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
+
+The architecture does not require a general-purpose layout framework, externally supplied rendering components, or a plugin interface.
 Subsequent changes to global configuration or the original entry do not alter the committed schedule.
 
 Reveal schedules must be validated to prevent impossible or contradictory behavior.
@@ -832,17 +855,27 @@ Rendered output must be testable and inspectable without Raspberry Pi display ha
 
 ### View composition
 
-Refrain separates view-specific background composition from primary quotation typography.
+Refrain separates view-specific background composition from literary content rendering.
 
-A background generator produces a complete base image containing the visual elements owned by that view, including decorative elements, secondary text, and other non-primary-quotation content.
+A background generator produces a base image containing the visual elements owned by that view, including decorative elements, branding, diagnostic information, and other content outside the literary composition.
 
-The shared quotation renderer places a quotation onto the supplied background image within an explicitly resolved rectangular region.
+The shared quotation renderer accepts a background image and a literary composition consisting of:
 
-The quotation renderer is independent of the type or purpose of the background image. It does not read application configuration, select quotations or fonts, or generate view-specific metadata.
+- a required quotation;
+- optional source information;
+- optional attribution information.
 
-For normal daily presentations, the quotation region is resolved from the configured layout. Other views may supply a different quotation region without modifying the shared text-fitting and typography behavior.
+The renderer owns the typography, fitting, positioning, and drawing of all three fields within an explicitly supplied presentation region.
 
-The initial presentation uses a standard background generator. This composition model also accommodates a separate information view without introducing a general-purpose layout framework or requiring information-view-specific behavior in the quotation renderer.
+The renderer is independent of the purpose of the background image. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
+
+For normal daily presentations, the presentation region is resolved from application configuration. Other views may supply their own presentation region without changing the renderer's behavior.
+
+The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
+
+The renderer does not require a content-library entry or committed daily snapshot as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
+
+The architecture does not require a general-purpose layout framework, externally supplied rendering components, or a plugin interface.
 
 ### Information view
 
@@ -851,16 +884,19 @@ Refrain will provide an information view presenting application identity and sel
 The information view contains:
 
 - a curated, application-owned quotation associated with the running release;
+- optional source and attribution identifying the quotation's context;
 - the Refrain and ControlForge project identity;
 - application version and available build or commit information;
 - selected runtime and environment details where available;
 - an appropriate copyright notice.
 
-The curated quotation is not drawn from the user content library and does not participate in daily selection, priority, repetition history, or global selection history.
+The curated literary content is not drawn from the user content library and does not participate in daily selection, priority, repetition history, or global selection history.
 
-The information-view background generator owns its branding, diagnostic text, and other secondary presentation elements. The shared quotation renderer presents the curated quotation using the same typography and fitting facilities as normal daily quotations.
+The information-view background generator owns branding, diagnostic information, and other non-literary presentation elements.
 
-The quotation remains visually primary. Branding and diagnostic information are subordinate and should not compromise readability.
+The shared quotation renderer presents the curated quotation and its optional source and attribution using the same composition and typography facilities as normal daily quotations.
+
+The literary composition remains visually primary. Branding and diagnostic information are subordinate and should not compromise readability.
 
 The information view is independent of the committed daily selection. Displaying it does not create a new selection, modify selection histories, or advance reveal progress.
 
@@ -872,7 +908,7 @@ An unavailable optional diagnostic value must not prevent the information view f
 
 ### Initial visual design
 
-The initial release provides one configurable layout.
+The initial release provides one configurable presentation layout.
 
 Its intended appearance is that of a carefully typeset printed page rather than a conventional electronic interface.
 
@@ -884,19 +920,34 @@ The design prioritizes:
 - a predominantly paper-white background;
 - dark text with optional color accents.
 
-The layout defines a bounded rectangular region for the primary quotation.
+The layout defines a bounded rectangular presentation region containing the complete literary composition: the quotation and its optional source and attribution.
 
-Refrain automatically determines an appropriate font size and line wrapping to fit the selected quotation within that region.
+The shared quotation renderer determines the arrangement of all present fields within that region.
 
-The available region is configurable using resolution-independent coordinates.
+The quotation remains visually dominant. Source and attribution use subordinate typography and are positioned as part of the same composition.
 
-Automatic fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
+Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
-Font-size constraints establish acceptable presentation bounds rather than requiring every quotation to use a fixed size.
+The presentation region is configurable using resolution-independent coordinates.
 
-The renderer must not silently clip, truncate, or omit quotation text when fitting it to the available area.
+Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
-The initial release does not require arbitrary layout scripting, multiple layout templates, or automatic font-family selection based on fitting performance.
+The renderer supports named presentation styles that determine how literary content is arranged within the presentation region.
+
+Version 0.1 provides two built-in styles:
+
+- `centered`: Each rendered quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space.
+- `prose`: Rendered quotation lines share a common left edge. The resulting text block is horizontally centered according to its widest rendered line, and the block is vertically centered within its allocated space.
+
+Both initial styles use consistent subordinate presentation for source and attribution.
+
+The selected presentation style is defined at the content-entry level and applies to every quotation in that entry. The default is `centered`.
+
+The rendering design must accommodate additional built-in presentation styles without changes to content-selection policy, persistence mechanisms, reveal scheduling, or physical display integration.
+
+Future styles may control line positioning, spacing, and the arrangement of source and attribution, provided they preserve required content, respect the presentation region, and maintain stable geometry across reveal stages.
+
+The initial release does not require additional styles, arbitrary layout scripting, externally supplied style implementations, or a general-purpose styling framework.
 
 ### Font selection
 
@@ -924,29 +975,43 @@ The actual selected font is included in the committed snapshot and permanent glo
 
 ### Stable progressive layout
 
-The primary quotation retains stable placement and typography across reveal stages.
+The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage.
 
-Its configured rectangular region remains unchanged for the duration of the committed selection.
+The configured presentation region remains unchanged throughout the committed selection.
 
-The renderer may determine appropriate text wrapping and font size during presentation preparation, but the resulting composition must remain consistent across every reveal-stage image.
+The resolved layout establishes the positions, typography, wrapping, and spacing of all present fields.
 
-Space for later source and attribution information is reserved in the composition.
+Optional fields that are not yet visible retain their allocated space. Revealing a field changes visibility without changing the geometry of the composition.
 
-Revealing a new field must not cause the primary quotation to move, change font, change size, or require the entire page to be reflowed merely because that field becomes visible.
+Previously visible text must not move, resize, or reflow when another field is revealed.
 
-Text layout must accommodate varying quotation lengths within the available presentation regions.
+Absent optional fields do not require reserved space.
 
-Content that cannot be rendered legibly within the supported layout must be handled explicitly rather than silently clipped or truncated.
+The selected presentation style remains fixed throughout the committed selection.
+
+Version 0.1 conceals unrevealed fields by leaving their allocated positions visually blank. Blurring, pixelation, placeholders, and other concealment effects are not required.
+
+All reveal stages use the same resolved composition layout.
+
+Content that cannot be rendered legibly within the supported presentation region must be handled explicitly rather than silently clipped, truncated, or omitted.
 
 ### Complete stage preparation
 
-The renderer produces the complete set of images required for a committed selection.
+Presentation preparation resolves the complete literary composition once and produces every image required by the committed selection's effective reveal schedule.
 
-All stages must use consistent content, typography, and layout geometry.
+Each image represents a cumulative visibility stage of the same composition.
 
-Each prepared image must be suitable for independent presentation without requiring a previous image to have been displayed.
+All stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes.
+
+The renderer does not independently recalculate the composition for each reveal stage.
+
+The same preparation facilities may produce a single fully visible image for views that do not require progressive reveals, including the information view.
+
+Every prepared image must be independently displayable without requiring a previous image to have been presented.
 
 Prepared images are persisted for reuse throughout the current display day and after application restarts.
+
+Normal reveal transitions select an existing prepared image. They do not invoke quotation fitting, layout calculation, or image rendering.
 
 The preparation process must not expose incomplete images as valid presentation artifacts.
 
