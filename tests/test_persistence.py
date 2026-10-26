@@ -5,6 +5,7 @@ import json
 import random
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -178,18 +179,31 @@ def test_failure_after_atomic_replace_reports_published_state_and_recovers_it(
 ) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     previous = commit(store, "Previous.")
+    proposal = make_proposal("Next.")
+    snapshot = make_snapshot("Next.", date(2026, 10, 27))
     monkeypatch.setattr(
         persistence, "_sync_directory", lambda _: (_ for _ in ()).throw(OSError("directory fsync failed"))
     )
 
     with pytest.raises(StateCommitError) as error:
-        store.commit(make_proposal("Next."), make_snapshot("Next.", date(2026, 10, 27)))
+        store.commit(proposal, snapshot)
 
     assert error.value.published
     recovered = PersistentStateStore(store.path).load()
     assert recovered.snapshot.quotation_text == "Next."
     assert [record.quotation_text for record in recovered.global_history] == ["Previous.", "Next."]
     assert previous.snapshot.quotation_text == "Previous."
+
+    synced: list[Path] = []
+    monkeypatch.setattr(persistence, "_sync_directory", lambda path: synced.append(path))
+    assert store.commit(proposal, snapshot) == recovered
+    assert synced == [store.path.parent]
+
+
+def test_windows_directory_synchronization_is_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "os", SimpleNamespace(name="nt"))
+
+    persistence._sync_directory(tmp_path)
 
 
 def test_recovery_does_not_require_original_content_or_configuration(tmp_path: Path) -> None:

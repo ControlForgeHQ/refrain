@@ -150,10 +150,12 @@ from refrain import (
     SchedulingContext,
     build_eligible_quotation_pool,
     load_content_library,
+    load_application_config,
     select_quotation,
 )
 
 state_path = Path("/absolute/path/chosen-for-this-installation/state.json")
+config = load_application_config("config.yaml")
 store = PersistentStateStore(state_path)
 previous = store.load()
 repetition_history = () if previous is None else previous.repetition_history
@@ -165,8 +167,7 @@ proposal = select_quotation(pool, repetition_history, random_source=Random())
 candidate = proposal.selected_candidate
 
 if candidate is not None:
-    # Resolve the font before this point; persistence never selects a font.
-    font_resource = config.fonts["lora"]
+    # Earlier application logic has already resolved this candidate's font.
     with font_resource.path.open("rb") as font_file:
         font = ResolvedFont(font_resource.identifier, font_file.read())
     snapshot = DailySnapshot(

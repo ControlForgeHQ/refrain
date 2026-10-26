@@ -235,6 +235,13 @@ class PersistentStateStore:
         previous = self.load()
         if previous is not None and previous.snapshot.display_date == snapshot.display_date:
             if previous.snapshot == snapshot and previous.repetition_history == repetition_history:
+                try:
+                    _sync_directory(self.path.parent)
+                except OSError as error:
+                    raise StateCommitError(
+                        f"cannot confirm persistent-state durability at {self.path}: {error}",
+                        published=True,
+                    ) from error
                 return previous
             raise StateCommitError(f"a different selection is already committed for {snapshot.display_date}")
 
@@ -261,7 +268,7 @@ class PersistentStateStore:
         temporary_path: Path | None = None
         published = False
         try:
-            parent.mkdir(parents=True, exist_ok=True)
+            _create_parent_directories(parent)
             contents = _encode_document(state)
             with tempfile.NamedTemporaryFile(
                 mode="wb",
@@ -525,3 +532,16 @@ def _sync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _create_parent_directories(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    path.mkdir(parents=True, exist_ok=True)
+    for directory in reversed(missing):
+        _sync_directory(directory.parent)
