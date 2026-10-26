@@ -5,7 +5,7 @@ from importlib.resources import files
 from io import BytesIO
 
 import pytest
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from refrain import (
     CompositionVisibility,
@@ -245,41 +245,160 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_
     )
     images = render_reveal_stages(background, resolved_font, layout, stages)
 
-    assert layout.source is not None
-    assert layout.attribution is not None
-    assert layout.quotation.font_size > layout.source.font_size > layout.attribution.font_size
+    assert layout.byline is not None
+    assert layout.byline.source is not None
+    assert layout.byline.attribution is not None
+    assert layout.quotation.font_size > layout.byline.attribution.font_size
     assert layout.quotation.lines == ("A deliberately long line", "and a shorter one.", "", "A new paragraph.")
     assert layout.region[0] <= layout.quotation.bounds[0] < layout.quotation.bounds[2] <= layout.region[2]
-    for field in (layout.quotation, layout.source, layout.attribution):
+    assert layout.region[0] <= layout.byline.bounds[0] < layout.byline.bounds[2] <= layout.region[2]
+    assert layout.region[1] <= layout.byline.bounds[1] < layout.byline.bounds[3] <= layout.region[3]
+    for field in (layout.quotation, layout.byline.source, layout.byline.attribution):
         assert layout.region[0] <= field.bounds[0] < field.bounds[2] <= layout.region[2]
         assert layout.region[1] <= field.bounds[1] < field.bounds[3] <= layout.region[3]
-    assert layout.quotation.bounds[3] < layout.source.bounds[1]
-    assert layout.source.bounds[3] < layout.attribution.bounds[1]
+    assert layout.quotation.bounds[3] < layout.byline.bounds[1]
     assert len(images) == len(stages)
     assert images[0].crop(layout.quotation.bounds).tobytes() == images[1].crop(layout.quotation.bounds).tobytes()
     assert images[1].crop(layout.quotation.bounds).tobytes() == images[2].crop(layout.quotation.bounds).tobytes()
-    assert images[0].crop(layout.source.bounds).tobytes() != images[1].crop(layout.source.bounds).tobytes()
-    assert images[1].crop(layout.source.bounds).tobytes() == images[2].crop(layout.source.bounds).tobytes()
-    assert images[1].crop(layout.attribution.bounds).tobytes() != images[2].crop(layout.attribution.bounds).tobytes()
+    assert (
+        images[0].crop(layout.byline.source.bounds).tobytes() != images[1].crop(layout.byline.source.bounds).tobytes()
+    )
+    assert (
+        images[1].crop(layout.byline.source.bounds).tobytes() == images[2].crop(layout.byline.source.bounds).tobytes()
+    )
+    assert (
+        images[1].crop(layout.byline.attribution.bounds).tobytes()
+        != images[2].crop(layout.byline.attribution.bounds).tobytes()
+    )
+    assert (
+        images[0].crop(layout.byline.prefix.bounds).tobytes() == images[1].crop(layout.byline.prefix.bounds).tobytes()
+    )
+    assert (
+        images[1].crop(layout.byline.separator.bounds).tobytes()
+        == images[2].crop(layout.byline.separator.bounds).tobytes()
+    )
 
     quote_font = ImageFont.truetype(BytesIO(resolved_font.data), size=layout.quotation.font_size)
-    ink_lefts = tuple(
-        position[0] + quote_font.getbbox(line)[0]
+    line_bounds = tuple(
+        (
+            position[0] + quote_font.getbbox(line)[0],
+            position[0] + quote_font.getbbox(line)[2],
+        )
         for line, position in zip(layout.quotation.lines, layout.quotation.positions, strict=True)
         if line
     )
     if style == "centered":
-        ink_centers = tuple(
-            left + (quote_font.getbbox(line)[2] - quote_font.getbbox(line)[0]) // 2
-            for line, left in zip(
-                (line for line in layout.quotation.lines if line),
-                ink_lefts,
-                strict=True,
-            )
-        )
-        assert len(set(ink_centers)) == 1
+        region_center = (layout.region[0] + layout.region[2]) / 2
+        for ink_left, ink_right in line_bounds:
+            assert abs((ink_left + ink_right) / 2 - region_center) <= 1
+        assert abs((layout.byline.bounds[0] + layout.byline.bounds[2]) / 2 - region_center) <= 1
     else:
-        assert len(set(ink_lefts)) == 1
+        assert len({bounds[0] for bounds in line_bounds}) == 1
+        assert layout.byline.bounds[2] == layout.region[2]
+
+
+@pytest.mark.parametrize(
+    ("source", "attribution", "expected_prefix", "expected_separator"),
+    [
+        ("A Source", "An Attribution", "— ", ", "),
+        ("A Source", None, "— ", None),
+        (None, "An Attribution", "— ", None),
+        (None, None, None, None),
+    ],
+)
+def test_optional_byline_fields_have_only_required_punctuation(
+    resolved_font: ResolvedFont,
+    source: str | None,
+    attribution: str | None,
+    expected_prefix: str | None,
+    expected_separator: str | None,
+) -> None:
+    layout = layout_composition(
+        LiteraryComposition("A quotation.", source=source, attribution=attribution),
+        resolved_font,
+        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        (600, 400),
+        20,
+        48,
+        "centered",
+    )
+
+    if source is None and attribution is None:
+        assert layout.byline is None
+        assert layout.quotation.bounds[1] > layout.region[1]
+        quotation_center = (layout.quotation.bounds[1] + layout.quotation.bounds[3]) / 2
+        region_center = (layout.region[1] + layout.region[3]) / 2
+        assert abs(quotation_center - region_center) <= 1
+        return
+
+    assert layout.byline is not None
+    assert layout.byline.prefix is not None
+    assert layout.byline.prefix.text == expected_prefix
+    assert (layout.byline.separator.text if layout.byline.separator is not None else None) == expected_separator
+    assert (layout.byline.source.text if layout.byline.source is not None else None) == source
+    assert (layout.byline.attribution.text if layout.byline.attribution is not None else None) == attribution
+    fields_in_order = [
+        field
+        for field in (
+            layout.byline.prefix,
+            layout.byline.attribution,
+            layout.byline.separator,
+            layout.byline.source,
+        )
+        if field is not None
+    ]
+    assert [field.bounds[0] for field in fields_in_order] == sorted(field.bounds[0] for field in fields_in_order)
+    assert layout.region[0] <= layout.byline.bounds[0] < layout.byline.bounds[2] <= layout.region[2]
+    assert layout.region[1] <= layout.byline.bounds[1] < layout.byline.bounds[3] <= layout.region[3]
+
+
+def test_unrevealed_byline_fields_are_blurred_with_fixed_punctuation(resolved_font: ResolvedFont) -> None:
+    background = Image.new("RGB", (600, 400), "#f8f6f0")
+    layout = layout_composition(
+        LiteraryComposition("The quotation remains fixed.", source="A Clearly Readable Source", attribution="A Person"),
+        resolved_font,
+        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        background.size,
+        24,
+        48,
+        "centered",
+    )
+    assert layout.byline is not None
+    assert layout.byline.source is not None
+    assert layout.byline.attribution is not None
+    stages = (
+        CompositionVisibility(),
+        CompositionVisibility(source=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+    images = render_reveal_stages(background, resolved_font, layout, stages)
+    source_bounds = layout.byline.source.bounds
+    attribution_bounds = layout.byline.attribution.bounds
+    background_pixel = background.getpixel((0, 0))
+
+    for field, image in ((layout.byline.source, images[0]), (layout.byline.attribution, images[0])):
+        blurred = image.crop(field.bounds)
+        assert blurred.getbbox() is not None
+        assert blurred.getextrema()[0][0] < background_pixel[0]
+        assert blurred.getextrema()[0][0] > 20
+    assert images[0].crop(source_bounds).tobytes() != images[2].crop(source_bounds).tobytes()
+    assert images[0].crop(attribution_bounds).tobytes() != images[2].crop(attribution_bounds).tobytes()
+
+    for region in (layout.byline.prefix.bounds, layout.byline.separator.bounds):
+        assert images[0].crop(region).tobytes() == images[1].crop(region).tobytes()
+        assert images[1].crop(region).tobytes() == images[2].crop(region).tobytes()
+    for bounds in (layout.quotation.bounds, layout.byline.prefix.bounds, layout.byline.separator.bounds):
+        assert images[0].crop(bounds).tobytes() == images[1].crop(bounds).tobytes()
+        assert images[1].crop(bounds).tobytes() == images[2].crop(bounds).tobytes()
+
+    changed_0_to_1 = ImageChops.difference(images[0], images[1]).getbbox()
+    changed_1_to_2 = ImageChops.difference(images[1], images[2]).getbbox()
+    assert changed_0_to_1 is not None
+    assert changed_1_to_2 is not None
+    assert source_bounds[0] <= changed_0_to_1[0] < changed_0_to_1[2] <= source_bounds[2]
+    assert source_bounds[1] <= changed_0_to_1[1] < changed_0_to_1[3] <= source_bounds[3]
+    assert attribution_bounds[0] <= changed_1_to_2[0] < changed_1_to_2[2] <= attribution_bounds[2]
+    assert attribution_bounds[1] <= changed_1_to_2[1] < changed_1_to_2[3] <= attribution_bounds[3]
 
 
 def test_reveal_stage_inputs_must_be_cumulative_and_present(resolved_font: ResolvedFont) -> None:

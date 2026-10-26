@@ -85,7 +85,7 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Rendering a literary composition
 
-The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits every present field once; `render_reveal_stages` then draws requested cumulative visibility stages using that same geometry. Both functions are hardware-independent and do not read configuration, select content, or interpret a reveal schedule. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
+The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text remains in place as a deterministic blur; its dash and separator punctuation remain visible. The byline is centered in `centered` style and right-aligned in `prose` style. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
 
 ```python
 from importlib.resources import files
@@ -115,7 +115,13 @@ composition = LiteraryComposition(
 
 for style in ("centered", "prose"):
     layout = layout_composition(
-        composition, font, region, background.size, min_font_size=28, max_font_size=100, presentation_style=style
+        composition,
+        font,
+        region,
+        background.size,
+        min_font_size=28,
+        max_font_size=100,
+        presentation_style=style,
     )
     stages = render_reveal_stages(
         background,
@@ -131,7 +137,7 @@ for style in ("centered", "prose"):
         image.save(f"{style}-{index}.png")
 ```
 
-The reusable `CompositionLayout` keeps wrapping, font sizes, and placement identical across reveal stages and backgrounds of the same dimensions. To generate inspectable 1600 × 1200 examples for both styles, all three literary fields, and the progressive reveal stages, run `python examples/render_quotation_previews.py /tmp/refrain-previews`.
+The complete byline reads `— An Example Author, A Book of Examples`; if either optional field is absent, its separator is omitted. A `CompositionLayout` keeps quotation and byline geometry identical across stages. To generate inspectable 1600 × 1200 examples for both styles and all four optional-field combinations, run `python examples/render_quotation_previews.py /tmp/refrain-previews`.
 
 ## Loading content
 
