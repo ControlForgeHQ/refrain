@@ -903,7 +903,27 @@ The layout defines a bounded rectangular presentation region containing the comp
 
 The shared quotation renderer determines the arrangement of all present fields within that region.
 
-The quotation remains visually dominant. Source and attribution use subordinate typography and are positioned as part of the same composition.
+The quotation remains visually dominant. Source and attribution use subordinate typography and are presented together as a compact byline beneath the quotation.
+
+When both fields are present, the byline presents the attribution first, followed by the source:
+
+`— Attribution, Source`
+
+The attribution uses a restrained, visually distinct text treatment. The source is preferably italicized where an appropriate resolved font variant is available.
+
+Version 0.1 does not require italic font support or automatic font substitution. The byline must remain legible and correctly arranged when only the regular resolved font is available.
+
+When only attribution is present, the byline uses the form `— Attribution`. When only source is present, it uses `— Source`. Absent fields do not introduce unnecessary separator punctuation.
+
+The complete byline is horizontally centered beneath the quotation for the `centered` presentation style and right-aligned within the presentation region for the `prose` style.
+
+Unrevealed source and attribution fields remain visibly represented within the byline rather than leaving blank space or displaying literal placeholder characters.
+
+Their representation must be sufficiently obscured that the original text is not legible, while preserving the visual footprint and placement of the eventual revealed content.
+
+Suitable treatments include aggressive blurring or dense pixel-level distortion. The initial implementation should select a deterministic treatment appropriate to the target e-paper display rather than expose configurable concealment styles.
+
+The byline retains its applicable leading dash and separator punctuation throughout progressive reveal.
 
 Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
@@ -915,10 +935,8 @@ The renderer supports named presentation styles that determine how literary cont
 
 Version 0.1 provides two built-in styles:
 
-- `centered`: Each rendered quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space.
-- `prose`: Rendered quotation lines share a common left edge. The resulting text block is horizontally centered according to its widest rendered line, and the block is vertically centered within its allocated space.
-
-Both initial styles use consistent subordinate presentation for source and attribution.
+- `centered`: Each rendered quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space, with the byline centered beneath it.
+- `prose`: Rendered quotation lines share a common left edge. The resulting text block is horizontally centered according to its widest rendered line, with the quotation block vertically centered within its allocated space and the byline right-aligned.
 
 The selected presentation style is defined at the content-entry level and applies to every quotation in that entry. The default is `centered`.
 
@@ -960,15 +978,29 @@ The configured presentation region remains unchanged throughout the committed se
 
 The resolved layout establishes the positions, typography, wrapping, and spacing of all present fields.
 
-Optional fields that are not yet visible retain their allocated space. Revealing a field changes visibility without changing the geometry of the composition.
+The byline is laid out using its complete final content, including both attribution and source when available, regardless of which fields are currently revealed.
 
-Previously visible text must not move, resize, or reflow when another field is revealed.
+Its punctuation, alignment, and geometry are determined from the complete composition rather than recalculated for each reveal stage.
 
-Absent optional fields do not require reserved space.
+The complete byline determines the positions and visual footprints of its individual fields.
+
+An unrevealed field displays a visibly obscured representation within its allocated position. Concealment must prevent the original text from being legible while retaining an apparent visual presence comparable to the revealed field.
+
+Revealing a field replaces its obscured representation with readable text without changing the field's allocated position or the surrounding composition.
+
+The leading dash and applicable separator punctuation remain visible throughout the reveal sequence.
+
+Previously visible quotation text, revealed byline fields, and punctuation must not move, resize, or reflow when another field is revealed.
+
+Absent optional fields do not require reserved space, concealment, or separator punctuation.
 
 The selected presentation style remains fixed throughout the committed selection.
 
-Version 0.1 conceals unrevealed fields by leaving their allocated positions visually blank. Blurring, pixelation, placeholders, and other concealment effects are not required.
+Version 0.1 requires a deterministic visual concealment treatment suitable for the target e-paper display. The choice between techniques such as aggressive blurring and dense pixel distortion is an implementation decision informed by rendered-image inspection and hardware validation.
+
+The treatment must not reveal readable text through insufficient distortion or introduce visual artifacts outside the field's allocated area.
+
+Additional configurable concealment styles are not required.
 
 All reveal stages use the same resolved composition layout.
 
