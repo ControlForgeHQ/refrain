@@ -118,3 +118,18 @@ pool = build_eligible_quotation_pool(entries, date(2024, 2, 29))
 for candidate in pool.candidates:
     print(candidate.text, candidate.entry.source, candidate.priority)
 ```
+
+`select_quotation` proposes a repetition-aware selection without changing the input history. Its proposed history is not committed; the application must commit the selected quotation and history together. See [Content eligibility and selection](docs/ARCHITECTURE.md#content-eligibility-and-selection) for the authoritative selection policy.
+
+```python
+from random import Random
+
+from refrain import select_quotation
+
+history = {"A previously selected normalized quotation."}
+proposal = select_quotation(pool, history, random_source=Random())
+
+if proposal.selected_candidate is not None:
+    candidate = proposal.selected_candidate
+    proposed_history = proposal.proposed_repetition_history
+```
