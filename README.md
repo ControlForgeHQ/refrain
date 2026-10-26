@@ -133,3 +133,76 @@ if proposal.selected_candidate is not None:
     candidate = proposal.selected_candidate
     proposed_history = proposal.proposed_repetition_history
 ```
+
+## Persisting and recovering a selection
+
+`PersistentStateStore` distinguishes an uninitialized location (`load()` returns `None`) from invalid existing state (a `StateRecoveryError`). A commit requires the caller's provisional selection and a complete `DailySnapshot` containing already-resolved presentation, scheduling, layout, and font information. Choose an absolute state-file path appropriate to the installation.
+
+The example assumes the caller has already recognized a display-day transition. Compare state revisions, not display dates, when deciding whether a proposal is stale; clock adjustments can legitimately lead to a later commit for a previously used date.
+
+```python
+from datetime import date
+from pathlib import Path
+from random import Random
+
+from refrain import (
+    DailySnapshot,
+    PersistentStateStore,
+    ResolvedFont,
+    SchedulingContext,
+    build_eligible_quotation_pool,
+    load_content_library,
+    load_application_config,
+    select_quotation,
+)
+
+state_path = Path("/absolute/path/chosen-for-this-installation/state.json")
+config = load_application_config("config.yaml")
+display_date = date(2026, 10, 26)
+store = PersistentStateStore(state_path)
+previous = store.load()
+
+if selection_boundary_recognized:
+    repetition_history = () if previous is None else previous.repetition_history
+    base_revision = 0 if previous is None else previous.revision
+    entries = load_content_library("examples/content")
+    pool = build_eligible_quotation_pool(entries, display_date)
+    proposal = select_quotation(
+        pool,
+        repetition_history,
+        random_source=Random(),
+        base_revision=base_revision,
+    )
+    candidate = proposal.selected_candidate
+
+    if candidate is not None:
+        # Assume the application's policy resolved this candidate to "lora".
+        font_resource = config.fonts["lora"]
+        with font_resource.path.open("rb") as font_file:
+            font = ResolvedFont(font_resource.identifier, font_file.read())
+        snapshot = DailySnapshot(
+            quotation_text=candidate.text,
+            quotation_identity=candidate.identity,
+            font=font,
+            presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
+            reveal_schedule={
+                "quotation": config.reveal.quotation.isoformat(),
+                "source": config.reveal.source.isoformat(),
+                "attribution": config.reveal.attribution.isoformat(),
+            },
+            layout={
+                "quotation_region": {
+                    "x": config.quotation_region.x,
+                    "y": config.quotation_region.y,
+                    "width": config.quotation_region.width,
+                    "height": config.quotation_region.height,
+                }
+            },
+            scheduling=SchedulingContext(display_date, str(config.timezone), config.day_start.isoformat()),
+        )
+        store.commit(proposal, snapshot)
+
+recovered = PersistentStateStore(state_path).load()
+```
+
+The file format and atomic-replacement durability guarantees and limitations are documented in [Persistent storage](docs/ENGINEERING.md#persistent-storage).
