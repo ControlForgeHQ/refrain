@@ -12,7 +12,7 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -21,7 +21,7 @@ from typing import Any
 from .content import normalize_quotation
 from .selection import SelectionProposal
 
-_FORMAT_VERSION = 1
+_FORMAT_VERSION = 2
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -129,7 +129,6 @@ class DailySnapshot:
     reveal_schedule: Mapping[str, Any]
     layout: Mapping[str, Any]
     scheduling: SchedulingContext
-    highest_reveal_stage: int = 0
 
     def __post_init__(self) -> None:
         _nonempty_string(self.quotation_text, "quotation_text")
@@ -140,8 +139,6 @@ class DailySnapshot:
             raise TypeError("font must be a ResolvedFont")
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")
-        if type(self.highest_reveal_stage) is not int or self.highest_reveal_stage < 0:
-            raise ValueError("highest_reveal_stage must be a nonnegative integer")
         for field in ("presentation_metadata", "reveal_schedule", "layout"):
             value = getattr(self, field)
             if not isinstance(value, Mapping):
@@ -167,12 +164,13 @@ class GlobalHistoryRecord:
 
 @dataclass(frozen=True)
 class PersistentState:
-    """The current snapshot and both histories committed as one state generation."""
+    """An immutable snapshot, its reveal progress, and both selection histories."""
 
     revision: int
     snapshot: DailySnapshot
     global_history: tuple[GlobalHistoryRecord, ...]
     repetition_history: frozenset[str]
+    highest_reveal_stage: int
 
 
 class PersistentStateStore:
@@ -204,13 +202,22 @@ class PersistentStateStore:
         except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError, binascii.Error) as error:
             raise StateRecoveryError(f"invalid persistent state at {self.path}: {error}") from error
 
-    def commit(self, proposal: SelectionProposal, snapshot: DailySnapshot) -> PersistentState:
+    def commit(
+        self,
+        proposal: SelectionProposal,
+        snapshot: DailySnapshot,
+        *,
+        initial_reveal_stage: int = 0,
+    ) -> PersistentState:
         """Commit a proposal, its self-contained snapshot, and proposed repetition history.
 
         The proposal's ``base_revision`` must identify the state generation
         used to produce it. Repeating the exact same commitment is idempotent.
+        A new selection starts at ``initial_reveal_stage``; a retry preserves
+        any subsequent reveal progress.
         The proposal and its history are read only; neither is mutated.
         """
+        _validate_reveal_stage(initial_reveal_stage)
         if not isinstance(proposal, SelectionProposal):
             raise TypeError("proposal must be a SelectionProposal")
         if type(proposal.base_revision) is not int or proposal.base_revision < 0:
@@ -239,13 +246,7 @@ class PersistentStateStore:
         current_revision = 0 if previous is None else previous.revision
         if previous is not None and current_revision == proposal.base_revision + 1:
             if previous.snapshot == snapshot and previous.repetition_history == repetition_history:
-                try:
-                    _sync_directory(self.path.parent)
-                except OSError as error:
-                    raise StateCommitError(
-                        f"cannot confirm persistent-state durability at {self.path}: {error}",
-                        published=True,
-                    ) from error
+                self._confirm_durability()
                 return previous
         if current_revision != proposal.base_revision:
             raise StateCommitError(
@@ -266,10 +267,45 @@ class PersistentStateStore:
             snapshot=snapshot,
             global_history=(*global_history, record),
             repetition_history=repetition_history,
+            highest_reveal_stage=initial_reveal_stage,
         )
         _validate_state(state)
         self._publish(state)
         return state
+
+    def advance_reveal_progress(self, expected_revision: int, stage: int) -> PersistentState:
+        """Persist a higher stage for the specified current selection generation.
+
+        Same or earlier stages do not rewrite state. They still confirm directory
+        durability, allowing retries after a published but unconfirmed update.
+        Callers must serialize writers, just as for selection commitment.
+        """
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise StateCommitError("expected_revision must be a positive integer")
+        _validate_reveal_stage(stage)
+        previous = self.load()
+        if previous is None:
+            raise StateCommitError("cannot advance reveal progress without a committed selection")
+        if previous.revision != expected_revision:
+            raise StateCommitError(
+                f"stale reveal-progress update: expected revision {expected_revision}, "
+                f"but current state is revision {previous.revision}"
+            )
+        if stage <= previous.highest_reveal_stage:
+            self._confirm_durability()
+            return previous
+        state = replace(previous, highest_reveal_stage=stage)
+        self._publish(state)
+        return state
+
+    def _confirm_durability(self) -> None:
+        try:
+            _sync_directory(self.path.parent)
+        except OSError as error:
+            raise StateCommitError(
+                f"cannot confirm persistent-state durability at {self.path}: {error}",
+                published=True,
+            ) from error
 
     def _publish(self, state: PersistentState) -> None:
         parent = self.path.parent
@@ -314,6 +350,11 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise ValueError(f"duplicate JSON field {key!r}")
         result[key] = value
     return result
+
+
+def _validate_reveal_stage(stage: object) -> None:
+    if type(stage) is not int or stage < 0:
+        raise ValueError("highest_reveal_stage must be a nonnegative integer")
 
 
 def _require_mapping(value: object, field: str, fields: set[str]) -> dict[str, object]:
@@ -371,7 +412,6 @@ def _decode_snapshot(value: object) -> DailySnapshot:
             "reveal_schedule",
             "layout",
             "scheduling",
-            "highest_reveal_stage",
         },
     )
     scheduling_data = _require_mapping(
@@ -392,7 +432,6 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         reveal_schedule=data["reveal_schedule"],
         layout=data["layout"],
         scheduling=scheduling,
-        highest_reveal_stage=data["highest_reveal_stage"],
     )
 
 
@@ -436,7 +475,9 @@ def _decode_document(value: object) -> PersistentState:
     if not hmac.compare_digest(digest, expected_digest):
         raise ValueError("state document checksum does not match its contents")
 
-    data = _require_mapping(payload, "state", {"revision", "snapshot", "global_history", "repetition_history"})
+    data = _require_mapping(
+        payload, "state", {"revision", "snapshot", "global_history", "repetition_history", "highest_reveal_stage"}
+    )
     history_data = data["global_history"]
     repetition_data = data["repetition_history"]
     if not isinstance(history_data, list) or not history_data:
@@ -455,12 +496,14 @@ def _decode_document(value: object) -> PersistentState:
         snapshot=snapshot,
         global_history=history,
         repetition_history=frozenset(_valid_identity(item, "repetition-history identity") for item in repetition_data),
+        highest_reveal_stage=data["highest_reveal_stage"],
     )
     _validate_state(state)
     return state
 
 
 def _validate_state(state: PersistentState) -> None:
+    _validate_reveal_stage(state.highest_reveal_stage)
     if not state.global_history:
         raise ValueError("global history must contain the current committed selection")
     if state.revision != len(state.global_history):
@@ -483,6 +526,7 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
     snapshot = state.snapshot
     return {
         "revision": state.revision,
+        "highest_reveal_stage": state.highest_reveal_stage,
         "snapshot": {
             "quotation_text": snapshot.quotation_text,
             "quotation_identity": snapshot.quotation_identity,
@@ -499,7 +543,6 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
                 "timezone": snapshot.scheduling.timezone,
                 "day_start": snapshot.scheduling.day_start,
             },
-            "highest_reveal_stage": snapshot.highest_reveal_stage,
         },
         "global_history": [
             {
