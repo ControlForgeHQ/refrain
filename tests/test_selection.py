@@ -215,6 +215,37 @@ def test_pool_membership_is_evaluated_dynamically_for_each_context() -> None:
     assert shared_result.proposed_repetition_history == {"Unrelated.", shared.identity}
 
 
+def test_proposed_history_carries_shared_identity_into_selective_reset_in_another_context() -> None:
+    shared_first = make_candidate("shared-first", "Shared.")
+    first_context_only = make_candidate("first-context", "First context.")
+    second_context_only = make_candidate("second-context", "Second context.")
+    unrelated = "Unrelated."
+    initial_history = {second_context_only.identity, unrelated}
+
+    first_result = select_quotation(
+        make_pool(shared_first, first_context_only),
+        initial_history,
+        FixedRandom(1, 0),
+    )
+    shared_second = make_candidate("shared-second", "Shared.", source="Second context source")
+    second_result = select_quotation(
+        make_pool(shared_second, second_context_only),
+        first_result.proposed_repetition_history,
+        FixedRandom(1, 0),
+    )
+
+    assert first_result.selected_candidate is shared_first
+    assert first_result.proposed_repetition_history == {
+        shared_first.identity,
+        second_context_only.identity,
+        unrelated,
+    }
+    assert second_result.selected_candidate is shared_second
+    assert second_result.pool_was_reset
+    assert second_result.proposed_repetition_history == {shared_second.identity, unrelated}
+    assert initial_history == {second_context_only.identity, unrelated}
+
+
 def test_empty_pool_returns_nonexceptional_unchanged_proposal() -> None:
     history = {"Previously consumed."}
 
