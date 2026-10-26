@@ -38,6 +38,7 @@ from .persistence import (
     UnsupportedStateVersionError,
 )
 from .renderer import (
+    BylineLayout,
     CompositionLayout,
     CompositionVisibility,
     LiteraryComposition,
@@ -68,6 +69,7 @@ __all__ = [
     "Quotation",
     "CompositionLayout",
     "CompositionVisibility",
+    "BylineLayout",
     "LiteraryComposition",
     "PresentationRegion",
     "PresentationStyle",

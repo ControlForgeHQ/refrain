@@ -18,34 +18,40 @@ from refrain import (
 )
 
 _COMPOSITIONS = {
-    "short": LiteraryComposition(
-        quotation="Be still.",
-        source="Notes on Attention",
-        attribution="An Example Author",
-    ),
-    "long": LiteraryComposition(
-        quotation=(
-            "A patient observer notices the changing light, the softened edges of the room, "
-            "and the small details that become visible only when attention has time to settle. "
-            "Each careful pause gives the ordinary world another chance to become unfamiliar."
+    "both-fields": (
+        LiteraryComposition(
+            quotation=(
+                "A patient observer notices the changing light, the softened edges of the room, "
+                "and the small details that attention brings into view."
+            ),
+            source="Notes on Patient Looking",
+            attribution="An Example Author",
         ),
-        source="A Study of Looking Carefully",
-        attribution="An Example Author",
-    ),
-    "paragraphs": LiteraryComposition(
-        quotation=(
-            "Begin with a little quiet.\nLet the thought arrive in its own time.\n\n"
-            "Then leave room for what follows."
+        (
+            CompositionVisibility(),
+            CompositionVisibility(source=True),
+            CompositionVisibility(source=True, attribution=True),
         ),
-        source="A Book of Patient Reading",
-        attribution="An Example Author",
+    ),
+    "source-only": (
+        LiteraryComposition(
+            quotation="Begin with a little quiet, and let the thought arrive in its own time.",
+            source="A Book of Patient Reading",
+        ),
+        (CompositionVisibility(), CompositionVisibility(source=True)),
+    ),
+    "attribution-only": (
+        LiteraryComposition(
+            quotation="The ordinary world has room for another careful look.",
+            attribution="An Example Author",
+        ),
+        (CompositionVisibility(), CompositionVisibility(attribution=True)),
+    ),
+    "neither": (
+        LiteraryComposition(quotation="Be still."),
+        (CompositionVisibility(),),
     ),
 }
-_STAGES = (
-    CompositionVisibility(),
-    CompositionVisibility(source=True),
-    CompositionVisibility(source=True, attribution=True),
-)
 _STYLES = ("centered", "prose")
 
 
@@ -59,8 +65,8 @@ def main() -> None:
     with font_resource.open("rb") as font_file:
         font = ResolvedFont("libre-baskerville", font_file.read())
 
-    region = QuotationRegion(x=0.12, y=0.1, width=0.76, height=0.8)
-    for composition_name, composition in _COMPOSITIONS.items():
+    region = QuotationRegion(x=0.1, y=0.15, width=0.8, height=0.55)
+    for composition_name, (composition, stages) in _COMPOSITIONS.items():
         for style in _STYLES:
             background = Image.new("RGB", (1600, 1200), "#f8f6f0")
             layout = layout_composition(
@@ -72,9 +78,9 @@ def main() -> None:
                 max_font_size=104,
                 presentation_style=style,
             )
-            images = render_reveal_stages(background, font, layout, _STAGES)
+            images = render_reveal_stages(background, font, layout, stages)
             for stage_index, image in enumerate(images):
-                path = output_directory / f"{composition_name}-{style}-stage-{stage_index}.png"
+                path = output_directory / f"{composition_name}-{style}-reveal-stage-{stage_index}.png"
                 image.save(path)
                 print(f"{path}: {layout.quotation.font_size}px, {len(layout.quotation.lines)} lines")
 
