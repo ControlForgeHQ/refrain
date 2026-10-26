@@ -185,7 +185,7 @@ def test_presentation_region_accepts_full_normalized_image(tmp_path: Path) -> No
     assert config.presentation_region.height == 1
 
 
-def test_obsolete_quotation_region_is_rejected_with_replacement_guidance(tmp_path: Path) -> None:
+def test_unsupported_layout_field_is_rejected_as_unknown(tmp_path: Path) -> None:
     data = configuration_data(
         layout={
             "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
@@ -198,8 +198,10 @@ def test_obsolete_quotation_region_is_rejected_with_replacement_guidance(tmp_pat
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    assert "layout.quotation_region" in {diagnostic.field for diagnostic in error.value.diagnostics}
-    assert "use layout.presentation_region instead" in str(error.value)
+    diagnostic = next(
+        diagnostic for diagnostic in error.value.diagnostics if diagnostic.field == "layout.quotation_region"
+    )
+    assert diagnostic.message == "is not a supported configuration field"
 
 
 @pytest.mark.parametrize(

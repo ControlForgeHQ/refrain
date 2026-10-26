@@ -10,7 +10,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont
 from refrain import (
     CompositionVisibility,
     LiteraryComposition,
-    QuotationRegion,
+    PresentationRegion,
     ResolvedFont,
     layout_composition,
     render_reveal_stages,
@@ -30,7 +30,7 @@ def make_layout(
     font: ResolvedFont,
     *,
     size: tuple[int, int] = (800, 600),
-    region: QuotationRegion = QuotationRegion(0.1, 0.1, 0.8, 0.8),
+    region: PresentationRegion = PresentationRegion(0.1, 0.1, 0.8, 0.8),
     sizes: tuple[int, int] = (20, 72),
     style: str = "centered",
 ):
@@ -70,7 +70,7 @@ def test_ordinary_paragraph_wraps_using_font_measurements(resolved_font: Resolve
         text,
         resolved_font,
         size=(500, 400),
-        region=QuotationRegion(0.1, 0.1, 0.36, 0.8),
+        region=PresentationRegion(0.1, 0.1, 0.36, 0.8),
         sizes=(20, 42),
     )
 
@@ -89,7 +89,7 @@ def test_long_quotation_uses_smaller_font_size(resolved_font: ResolvedFont) -> N
         text,
         resolved_font,
         size=(500, 300),
-        region=QuotationRegion(0.08, 0.1, 0.84, 0.72),
+        region=PresentationRegion(0.08, 0.1, 0.84, 0.72),
         sizes=(18, 56),
     )
 
@@ -119,7 +119,7 @@ def test_long_unbroken_word_that_cannot_fit_fails_clearly(resolved_font: Resolve
         layout_composition(
             LiteraryComposition("Supercalifragilisticexpialidocious"),
             resolved_font,
-            QuotationRegion(0.49, 0.1, 0.02, 0.8),
+            PresentationRegion(0.49, 0.1, 0.02, 0.8),
             (500, 300),
             20,
             40,
@@ -133,7 +133,7 @@ def test_quotation_can_fit_exactly_at_minimum_font_size(resolved_font: ResolvedF
     layout = layout_composition(
         LiteraryComposition("A"),
         resolved_font,
-        QuotationRegion(0, 0, 1, exact_height / exact_height),
+        PresentationRegion(0, 0, 1, exact_height / exact_height),
         (400, exact_height),
         18,
         32,
@@ -149,7 +149,7 @@ def test_intermediate_size_selected_when_maximum_does_not_fit(resolved_font: Res
         "A modest line of text.",
         resolved_font,
         size=(260, 110),
-        region=QuotationRegion(0.08, 0.08, 0.84, 0.84),
+        region=PresentationRegion(0.08, 0.08, 0.84, 0.84),
         sizes=(16, 90),
     )
 
@@ -159,13 +159,13 @@ def test_intermediate_size_selected_when_maximum_does_not_fit(resolved_font: Res
 @pytest.mark.parametrize(
     ("size", "region"),
     [
-        ((400, 300), QuotationRegion(0.0, 0.0, 0.2, 0.2)),
-        ((1600, 1200), QuotationRegion(0.8, 0.85, 0.2, 0.15)),
-        ((320, 240), QuotationRegion(0.2, 0.3, 0.5, 0.4)),
+        ((400, 300), PresentationRegion(0.0, 0.0, 0.2, 0.2)),
+        ((1600, 1200), PresentationRegion(0.8, 0.85, 0.2, 0.15)),
+        ((320, 240), PresentationRegion(0.2, 0.3, 0.5, 0.4)),
     ],
 )
 def test_normalized_regions_use_actual_image_dimensions(
-    resolved_font: ResolvedFont, size: tuple[int, int], region: QuotationRegion
+    resolved_font: ResolvedFont, size: tuple[int, int], region: PresentationRegion
 ) -> None:
     layout = layout_composition(LiteraryComposition("I"), resolved_font, region, size, 16, 30, "centered")
     expected = (
@@ -185,7 +185,7 @@ def test_normalized_regions_use_actual_image_dimensions(
 
 def test_same_layout_renders_consistently_on_different_backgrounds(resolved_font: ResolvedFont) -> None:
     text = "The geometry is independent of the page beneath it."
-    region = QuotationRegion(0.1, 0.2, 0.8, 0.6)
+    region = PresentationRegion(0.1, 0.2, 0.8, 0.6)
     first_layout = layout_composition(LiteraryComposition(text), resolved_font, region, (320, 240), 18, 44, "centered")
     second_layout = layout_composition(LiteraryComposition(text), resolved_font, region, (320, 240), 18, 44, "centered")
     first = render_layout(Image.new("RGB", (320, 240), "white"), resolved_font, first_layout)
@@ -207,7 +207,7 @@ def test_grayscale_background_is_supported_and_preserved(resolved_font: Resolved
     layout = layout_composition(
         LiteraryComposition("A quiet page."),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         background.size,
         16,
         30,
@@ -232,7 +232,7 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_
     layout = layout_composition(
         composition,
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         background.size,
         20,
         50,
@@ -325,7 +325,7 @@ def test_optional_byline_fields_have_only_required_punctuation(
     layout = layout_composition(
         LiteraryComposition("A quotation.", source=source, attribution=attribution),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         (600, 400),
         20,
         48,
@@ -375,7 +375,7 @@ def test_unrevealed_byline_fields_use_deterministic_pixel_distortion(resolved_fo
     layout = layout_composition(
         LiteraryComposition("The quotation remains fixed.", source="A Clearly Readable Source", attribution="A Person"),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         background.size,
         24,
         48,
@@ -441,7 +441,7 @@ def test_byline_gap_default_and_explicit_factor_are_fitted_and_centered(resolved
         source="A Source",
         attribution="An Author",
     )
-    region = QuotationRegion(0.1, 0.1, 0.8, 0.50)
+    region = PresentationRegion(0.1, 0.1, 0.8, 0.50)
     image_size = (600, 400)
     default = layout_composition(composition, resolved_font, region, image_size, 14, 54, "centered")
     explicit = layout_composition(
@@ -475,7 +475,7 @@ def test_invalid_byline_gap_factors_are_rejected(resolved_font: ResolvedFont, fa
         layout_composition(
             LiteraryComposition("A quotation.", source="A Book", attribution="An Author"),
             resolved_font,
-            QuotationRegion(0.1, 0.1, 0.8, 0.8),
+            PresentationRegion(0.1, 0.1, 0.8, 0.8),
             (400, 300),
             16,
             42,
@@ -485,7 +485,7 @@ def test_invalid_byline_gap_factors_are_rejected(resolved_font: ResolvedFont, fa
 
 
 def test_zero_byline_gap_is_valid_and_no_byline_reserves_no_gap(resolved_font: ResolvedFont) -> None:
-    region = QuotationRegion(0.1, 0.1, 0.8, 0.8)
+    region = PresentationRegion(0.1, 0.1, 0.8, 0.8)
     background_size = (400, 300)
     with_byline = layout_composition(
         LiteraryComposition("A quotation.", source="A Source"),
@@ -523,7 +523,7 @@ def test_concealment_modes_preserve_attribution_tone_and_field_bounds(
     layout = layout_composition(
         LiteraryComposition("A quotation.", attribution="An Author"),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         background.size,
         20,
         48,
@@ -552,7 +552,7 @@ def test_unsupported_concealment_is_rejected(resolved_font: ResolvedFont, concea
     layout = layout_composition(
         LiteraryComposition("A quotation.", source="A source"),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         (400, 300),
         18,
         32,
@@ -573,7 +573,7 @@ def test_pixel_distortion_adds_spatial_noise_and_breaks_glyph_cells(resolved_fon
     layout = layout_composition(
         LiteraryComposition("A quotation.", attribution="An Author"),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         background.size,
         20,
         48,
@@ -607,7 +607,7 @@ def test_reveal_stage_inputs_must_be_cumulative_and_present(resolved_font: Resol
     layout = layout_composition(
         LiteraryComposition("A quotation.", source="A source"),
         resolved_font,
-        QuotationRegion(0.1, 0.1, 0.8, 0.8),
+        PresentationRegion(0.1, 0.1, 0.8, 0.8),
         (400, 300),
         18,
         32,
@@ -643,7 +643,7 @@ def test_secondary_fields_remain_subordinate_at_smallest_supported_size(resolved
         layout_composition(
             LiteraryComposition("Q", source="Source"),
             resolved_font,
-            QuotationRegion(0, 0, 1, 1),
+            PresentationRegion(0, 0, 1, 1),
             (100, 100),
             1,
             1,
@@ -654,16 +654,16 @@ def test_secondary_fields_remain_subordinate_at_smallest_supported_size(resolved
 @pytest.mark.parametrize(
     ("region", "size_bounds", "image_size"),
     [
-        (QuotationRegion(-0.1, 0, 0.5, 0.5), (10, 20), (100, 100)),
-        (QuotationRegion(0.8, 0.8, 0.3, 0.3), (10, 20), (100, 100)),
-        (QuotationRegion(0, 0, 1, 1), (0, 20), (100, 100)),
-        (QuotationRegion(0, 0, 1, 1), (20, 10), (100, 100)),
-        (QuotationRegion(0, 0, 1, 1), (10, 20), (100, 0)),
+        (PresentationRegion(-0.1, 0, 0.5, 0.5), (10, 20), (100, 100)),
+        (PresentationRegion(0.8, 0.8, 0.3, 0.3), (10, 20), (100, 100)),
+        (PresentationRegion(0, 0, 1, 1), (0, 20), (100, 100)),
+        (PresentationRegion(0, 0, 1, 1), (20, 10), (100, 100)),
+        (PresentationRegion(0, 0, 1, 1), (10, 20), (100, 0)),
     ],
 )
 def test_invalid_rendering_inputs_are_rejected(
     resolved_font: ResolvedFont,
-    region: QuotationRegion,
+    region: PresentationRegion,
     size_bounds: tuple[int, int],
     image_size: tuple[int, int],
 ) -> None:

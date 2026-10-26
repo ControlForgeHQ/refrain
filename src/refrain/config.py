@@ -86,8 +86,8 @@ class RevealSchedule:
 
 
 @dataclass(frozen=True)
-class QuotationRegion:
-    """Normalized rectangle reserved for the primary quotation."""
+class PresentationRegion:
+    """Normalized rectangle reserved for a literary composition."""
 
     x: float
     y: float
@@ -104,7 +104,7 @@ class ApplicationConfiguration:
     day_start: time
     content_directory: Path
     reveal: RevealSchedule
-    presentation_region: QuotationRegion
+    presentation_region: PresentationRegion
     fonts: Mapping[str, FontResource]
     default_fonts: tuple[str, ...]
     min_font_size: int
@@ -226,9 +226,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     )
 
     layout = _mapping(data.get("layout", {}), "layout", report)
-    _known_fields(layout, {"presentation_region", "quotation_region", "fonts", "text"}, "layout", report)
-    if "quotation_region" in layout:
-        report("layout.quotation_region", "is obsolete; use layout.presentation_region instead")
+    _known_fields(layout, {"presentation_region", "fonts", "text"}, "layout", report)
     region_data = _mapping(layout.get("presentation_region", {}), "layout.presentation_region", report)
     _known_fields(region_data, {"x", "y", "width", "height"}, "layout.presentation_region", report)
     region_values: dict[str, float] = {}
@@ -257,7 +255,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             report("layout.presentation_region.width", "x + width must not exceed 1")
         if y + height > 1:
             report("layout.presentation_region.height", "y + height must not exceed 1")
-        presentation_region = QuotationRegion(x=x, y=y, width=width, height=height)
+        presentation_region = PresentationRegion(x=x, y=y, width=width, height=height)
     else:
         presentation_region = None
 

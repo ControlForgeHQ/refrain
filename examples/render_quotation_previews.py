@@ -11,7 +11,7 @@ from PIL import Image
 from refrain import (
     CompositionVisibility,
     LiteraryComposition,
-    QuotationRegion,
+    PresentationRegion,
     ResolvedFont,
     layout_composition,
     render_reveal_stages,
@@ -66,7 +66,7 @@ def main() -> None:
     output_directory = parser.parse_args().output_directory
     output_directory.mkdir(parents=True, exist_ok=True)
 
-    region = QuotationRegion(x=0.1, y=0.225, width=0.8, height=0.55)
+    region = PresentationRegion(x=0.1, y=0.225, width=0.8, height=0.55)
     for font_identifier, filename in _FONTS.items():
         font_resource = files("refrain").joinpath("assets", "fonts", font_identifier, filename)
         with font_resource.open("rb") as font_file:

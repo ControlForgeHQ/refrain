@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from PIL import Image
 
-from .config import QuotationRegion
+from .config import PresentationRegion
 from .persistence import DailySnapshot
 from .renderer import (
     CompositionVisibility,
@@ -32,7 +32,7 @@ def _require_mapping(value: object, field: str) -> Mapping[str, object]:
 
 def _resolve_presentation(
     snapshot: DailySnapshot,
-) -> tuple[LiteraryComposition, QuotationRegion, tuple[int, int], int, int, str]:
+) -> tuple[LiteraryComposition, PresentationRegion, tuple[int, int], int, int, str]:
     metadata = _require_mapping(snapshot.presentation_metadata, "presentation_metadata")
     style = metadata.get("presentation_style")
     if not isinstance(style, str) or style not in {"centered", "prose"}:
@@ -65,7 +65,7 @@ def _resolve_presentation(
         raise DailyImagePreparationError(
             "snapshot.layout.presentation_region is missing " + ", ".join(missing_region_fields)
         )
-    region = QuotationRegion(**{field: region_data[field] for field in region_fields})
+    region = PresentationRegion(**{field: region_data[field] for field in region_fields})
 
     min_font_size = layout.get("min_font_size")
     max_font_size = layout.get("max_font_size")
