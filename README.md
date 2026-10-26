@@ -280,7 +280,7 @@ if selection_boundary_recognized:
             },
             layout={
                 "image_size": (1600, 1200),
-                "quotation_region": {
+                "presentation_region": {
                     "x": config.quotation_region.x,
                     "y": config.quotation_region.y,
                     "width": config.quotation_region.width,

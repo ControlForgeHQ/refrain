@@ -42,7 +42,7 @@ def _example_snapshot() -> DailySnapshot:
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout={
             "image_size": (1600, 1200),
-            "quotation_region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6},
+            "presentation_region": {"x": 0.1, "y": 0.225, "width": 0.8, "height": 0.55},
             "min_font_size": 28,
             "max_font_size": 100,
         },
