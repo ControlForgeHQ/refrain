@@ -37,6 +37,7 @@ from .persistence import (
     StateRecoveryError,
     UnsupportedStateVersionError,
 )
+from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import (
     BylineLayout,
     CompositionLayout,
@@ -60,6 +61,7 @@ __all__ = [
     "ContentEntry",
     "ContentLibraryError",
     "DailySnapshot",
+    "DailyImagePreparationError",
     "EligibilityRule",
     "EligibilitySpecificity",
     "EligibleQuotationPool",
@@ -92,6 +94,7 @@ __all__ = [
     "load_application_config",
     "layout_composition",
     "normalize_quotation",
+    "prepare_daily_images",
     "build_eligible_quotation_pool",
     "render_reveal_stages",
     "select_quotation",
