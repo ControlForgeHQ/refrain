@@ -128,7 +128,7 @@ def test_preparation_is_deterministic(embedded_font: ResolvedFont) -> None:
 
 
 def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypatch: pytest.MonkeyPatch) -> None:
-    snapshot = make_snapshot(embedded_font, style="prose")
+    snapshot = make_snapshot(embedded_font, style="left-aligned")
     original_layout = preparation.layout_composition
     resolved_layouts = []
 
@@ -141,7 +141,7 @@ def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypa
 
     prepare_daily_images(snapshot, (CompositionVisibility(),))
 
-    assert resolved_layouts[0].style == "prose"
+    assert resolved_layouts[0].style == "left-aligned"
 
 
 @pytest.mark.parametrize(
@@ -149,6 +149,7 @@ def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypa
     [
         ({}, _LAYOUT, "presentation_style"),
         ({"presentation_style": "unknown"}, _LAYOUT, "presentation_style"),
+        ({"presentation_style": "prose"}, _LAYOUT, "presentation_style"),
         ({"presentation_style": "centered", "source": ""}, _LAYOUT, "source"),
         ({"presentation_style": "centered"}, {**_LAYOUT, "image_size": (0, 240)}, "image_size"),
         (

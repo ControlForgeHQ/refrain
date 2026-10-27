@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 PixelBounds = tuple[int, int, int, int]
 PixelPosition = tuple[int, int]
-PresentationStyle = Literal["centered", "prose"]
+PresentationStyle = Literal["centered", "left-aligned"]
 
 
 class PresentationRegion(Protocol):
@@ -247,7 +247,7 @@ def _centered_line_lefts(field: _MeasuredField, region_width: int) -> tuple[int,
     return tuple((region_width - (box[2] - box[0])) // 2 for box in field.line_boxes)
 
 
-def _prose_line_lefts(field: _MeasuredField, region_width: int) -> tuple[int, ...]:
+def _left_aligned_line_lefts(field: _MeasuredField, region_width: int) -> tuple[int, ...]:
     widest_line = max(box[2] - box[0] for line, box in zip(field.lines, field.line_boxes, strict=True))
     block_left = (region_width - widest_line) // 2
     return (block_left,) * len(field.lines)
@@ -255,7 +255,7 @@ def _prose_line_lefts(field: _MeasuredField, region_width: int) -> tuple[int, ..
 
 _STYLE_LAYOUTS = {
     "centered": _centered_line_lefts,
-    "prose": _prose_line_lefts,
+    "left-aligned": _left_aligned_line_lefts,
 }
 
 LineAlignment = Callable[[_MeasuredField, int], tuple[int, ...]]
@@ -512,7 +512,7 @@ def layout_composition(
     _validate_region(presentation_region)
     _validate_sizes(min_font_size, max_font_size)
     if not isinstance(presentation_style, str) or presentation_style not in _STYLE_LAYOUTS:
-        raise QuotationRenderError("presentation_style must be 'centered' or 'prose'")
+        raise QuotationRenderError("presentation_style must be 'centered' or 'left-aligned'")
     _validate_font(font)
     pixel_region = (
         math.floor(presentation_region.x * width),

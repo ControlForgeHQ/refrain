@@ -29,7 +29,7 @@ _REVEAL_FIELDS = {"source", "attribution"}
 _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
-_PRESENTATION_STYLES = {"centered", "prose"}
+_PRESENTATION_STYLES = {"centered", "left-aligned"}
 
 
 @dataclass(frozen=True)
@@ -261,7 +261,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
 
     presentation_style = data.get("presentation_style", "centered")
     if not isinstance(presentation_style, str) or presentation_style not in _PRESENTATION_STYLES:
-        _diagnose(diagnostics, file, "presentation_style", "must be one of 'centered' or 'prose'")
+        _diagnose(diagnostics, file, "presentation_style", "must be one of 'centered' or 'left-aligned'")
 
     eligibility = (
         _validate_eligibility(data["eligibility"], file, diagnostics)

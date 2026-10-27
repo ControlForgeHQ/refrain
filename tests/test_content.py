@@ -63,7 +63,7 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert all(entry.file is not None for entry in entries)
 
 
-@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
 def test_explicit_presentation_styles_are_preserved(tmp_path: Path, style: str) -> None:
     write_entry(tmp_path / "entry.yaml", entry_data(presentation_style=style))
 
@@ -75,7 +75,7 @@ def test_explicit_presentation_styles_are_preserved(tmp_path: Path, style: str) 
 def test_presentation_style_is_shared_by_all_quotation_candidates(tmp_path: Path) -> None:
     write_entry(
         tmp_path / "entry.yaml",
-        entry_data(presentation_style="prose", quotations=["First quotation.", "Second quotation."]),
+        entry_data(presentation_style="left-aligned", quotations=["First quotation.", "Second quotation."]),
     )
 
     entry = load_content_library(tmp_path)[0]
@@ -83,17 +83,17 @@ def test_presentation_style_is_shared_by_all_quotation_candidates(tmp_path: Path
 
     assert len(pool.candidates) == 2
     assert all(candidate.entry is entry for candidate in pool.candidates)
-    assert all(candidate.entry.presentation_style == "prose" for candidate in pool.candidates)
+    assert all(candidate.entry.presentation_style == "left-aligned" for candidate in pool.candidates)
 
 
-@pytest.mark.parametrize("style", ["unknown", "Centered", "", None, 1, False])
+@pytest.mark.parametrize("style", ["prose", "unknown", "Centered", "", None, 1, False])
 def test_invalid_presentation_styles_are_rejected(tmp_path: Path, style: object) -> None:
     write_entry(tmp_path / "entry.yaml", entry_data(presentation_style=style))
 
     diagnostics = diagnostics_for(tmp_path)
 
     assert any(": presentation_style:" in diagnostic for diagnostic in diagnostics)
-    assert any("centered" in diagnostic and "prose" in diagnostic for diagnostic in diagnostics)
+    assert any("centered" in diagnostic and "left-aligned" in diagnostic for diagnostic in diagnostics)
 
 
 def test_entry_identity_does_not_depend_on_file_path(tmp_path: Path) -> None:

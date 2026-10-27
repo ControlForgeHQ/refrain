@@ -85,7 +85,7 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Rendering a literary composition
 
-The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once and vertically centers the complete composition as one group. Its keyword-only `byline_gap_factor` defaults to `1.20` times the fitted quotation font size; zero is valid, and no gap is reserved when the byline is absent. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text uses deterministic pixel distortion by default; the dash and separator punctuation remain visible. Attribution uses a restrained gray tone; the byline is centered in `centered` style and right-aligned in `prose` style. The keyword-only `concealment` parameter accepts only `"pixel-distortion"`. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
+The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once and vertically centers the complete composition as one group. Its keyword-only `byline_gap_factor` defaults to `1.20` times the fitted quotation font size; zero is valid, and no gap is reserved when the byline is absent. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text uses deterministic pixel distortion by default; the dash and separator punctuation remain visible. Attribution uses a restrained gray tone; the byline is centered in `centered` style and right-aligned in `left-aligned` style. The `left-aligned` style aligns quotation lines at a common left edge while centering the whole quotation block within the presentation region. The keyword-only `concealment` parameter accepts only `"pixel-distortion"`. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
 
 ```python
 from importlib.resources import files
@@ -113,7 +113,7 @@ composition = LiteraryComposition(
     attribution="An Example Author",
 )
 
-for style in ("centered", "prose"):
+for style in ("centered", "left-aligned"):
     layout = layout_composition(
         composition,
         font,

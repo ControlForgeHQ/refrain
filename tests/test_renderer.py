@@ -64,7 +64,7 @@ def test_short_quotation_uses_maximum_and_returns_background_copy(resolved_font:
                 assert rendered.getpixel((x, y)) == original.getpixel((x, y))
 
 
-@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
 def test_ordinary_paragraph_wraps_using_font_measurements(resolved_font: ResolvedFont, style: str) -> None:
     text = "Measured letters make a careful line; words move together without being cut."
     layout = make_layout(
@@ -117,7 +117,7 @@ def test_explicit_line_breaks_and_blank_paragraph_lines_are_preserved(resolved_f
     assert layout.quotation.positions[2][1] > layout.quotation.positions[1][1]
 
 
-@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 @pytest.mark.parametrize("height", [180, 500])
 def test_authored_lines_take_priority_over_larger_wrapped_text(
@@ -151,7 +151,7 @@ def test_authored_lines_take_priority_over_larger_wrapped_text(
     assert layout.byline.bounds[1] - layout.quotation.bounds[3] == layout.byline_gap
 
 
-@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
 def test_authored_lines_wrap_when_they_cannot_be_preserved_at_minimum(resolved_font: ResolvedFont, style: str) -> None:
     text = "A deliberately long line\nand a shorter one."
     region = PresentationRegion(0, 0, 1, 1)
@@ -185,7 +185,7 @@ def test_unicode_punctuation_and_original_text_are_retained(resolved_font: Resol
     assert "".join(layout.quotation.lines) == text
 
 
-@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
 @pytest.mark.parametrize("text", ["Supercalifragilisticexpialidocious", "A line\nSupercalifragilisticexpialidocious"])
 def test_long_unbroken_word_that_cannot_fit_fails_clearly(resolved_font: ResolvedFont, style: str, text: str) -> None:
     with pytest.raises(QuotationRenderError, match="does not fit.*minimum.*font size"):
@@ -294,7 +294,7 @@ def test_grayscale_background_is_supported_and_preserved(resolved_font: Resolved
     assert background.getpixel((0, 0)) == 50
 
 
-@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
 @pytest.mark.parametrize(
     "text",
     [
@@ -381,6 +381,9 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(
     else:
         assert len({bounds[0] for bounds in line_bounds}) == 1
         assert layout.byline.bounds[2] == layout.region[2]
+        widest_line = max(ink_right - ink_left for ink_left, ink_right in line_bounds)
+        expected_block_left = layout.region[0] + (layout.region[2] - layout.region[0] - widest_line) // 2
+        assert min(ink_left for ink_left, _ in line_bounds) == expected_block_left
 
 
 @pytest.mark.parametrize(
@@ -390,10 +393,10 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(
         ("A Source", None, "— ", None, "centered"),
         (None, "An Attribution", "— ", None, "centered"),
         (None, None, None, None, "centered"),
-        ("A Source", "An Attribution", "— ", ", ", "prose"),
-        ("A Source", None, "— ", None, "prose"),
-        (None, "An Attribution", "— ", None, "prose"),
-        (None, None, None, None, "prose"),
+        ("A Source", "An Attribution", "— ", ", ", "left-aligned"),
+        ("A Source", None, "— ", None, "left-aligned"),
+        (None, "An Attribution", "— ", None, "left-aligned"),
+        (None, None, None, None, "left-aligned"),
     ],
 )
 def test_optional_byline_fields_have_only_required_punctuation(
@@ -450,6 +453,11 @@ def test_optional_byline_fields_have_only_required_punctuation(
         assert abs(byline_center - region_horizontal_center) <= 1
     else:
         assert layout.byline.bounds[2] == layout.region[2]
+
+
+def test_obsolete_presentation_style_is_rejected(resolved_font: ResolvedFont) -> None:
+    with pytest.raises(QuotationRenderError, match="presentation_style must be 'centered' or 'left-aligned'"):
+        make_layout("A quotation.", resolved_font, style="prose")
 
 
 def test_unrevealed_byline_fields_use_deterministic_pixel_distortion(resolved_font: ResolvedFont) -> None:
