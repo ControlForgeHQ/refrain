@@ -43,7 +43,7 @@ Maintain separation between:
 - persistent state and commitment;
 - reveal scheduling;
 - image preparation and rendering;
-- physical display output;
+- display output;
 - application lifecycle coordination.
 
 Components should communicate through narrow, explicit interfaces.
@@ -67,7 +67,7 @@ Distinguish between:
 - active repetition history;
 - persisted reveal progress;
 - prepared presentation artifacts;
-- physical display state.
+- backend-owned presentation state.
 
 Components must not modify state owned by unrelated responsibilities merely because a reference to that state is available.
 
@@ -679,6 +679,47 @@ The desktop backend is a development and testing presentation destination, not a
 Use the platform's Tk support and Pillow's `ImageTk` presentation adapter. Import them only when constructing the window backend; configuration, rendering, and other hardware-independent imports must not require a graphical environment. Keep the Tk event loop in a backend-owned thread so updates remain synchronous without requiring the caller to run a GUI loop.
 
 The window backend must preserve caller-owned image data, replace the image in its existing window, and report initialization, presentation, and cleanup failures. On Linux, a Tk-capable Python installation and an active graphical session are required; standard Windows Python installations typically include Tk.
+
+### HTTP image-server backend
+
+Implement the `image-server` backend using standard HTTP facilities suitable for the supported Python runtime.
+
+Prefer the Python standard library unless an additional dependency provides a demonstrated benefit.
+
+Keep HTTP request handling and network-resource ownership within the backend. The application scheduler must not run a server event loop or process individual HTTP requests.
+
+The service must remain responsive between calls to `update(image)`.
+
+Backend construction must establish that the configured listening address and port are usable before reporting successful initialization. Binding and startup failures must produce actionable diagnostics through the common display-backend error interface.
+
+Encode incoming Pillow images as complete PNG representations before making them available to HTTP clients. Retain the encoded bytes and associated entity tag in backend-owned memory.
+
+Replacement of the currently served representation must be synchronized with concurrent HTTP requests. A request must observe one consistent image and its corresponding entity tag, without holding backend state locked during network transmission.
+
+Preserve the previously accepted representation when a replacement cannot be completed successfully.
+
+Use standard HTTP conditional-request semantics rather than introducing a custom image-version or polling protocol.
+
+Keep the HTTP interface narrowly scoped and read-only. Do not expose arbitrary filesystem paths, application configuration, content-library data, persistent state, or administrative operations.
+
+Handle unsupported methods and paths explicitly. Malformed requests and individual client disconnections must not terminate the backend or corrupt its current representation.
+
+The backend must stop accepting requests and release its listening resources during `close()`. Coordinate concurrent request handling and shutdown so that inactive or slow clients cannot indefinitely prevent orderly application termination.
+
+Test the backend without physical display hardware or external network services. Automated tests should exercise the HTTP interface through a real local listening socket, including:
+
+- successful retrieval of the current PNG image;
+- correct response content type and image contents;
+- entity-tag generation and conditional requests;
+- replacement of the current image and invalidation of the previous entity tag;
+- requests made before the first successful image update;
+- failed image replacement preserving the previous representation;
+- concurrent requests and image updates;
+- invalid HTTP methods and paths;
+- initialization failures caused by unavailable listening addresses or ports;
+- orderly shutdown, repeated cleanup, and rejection of updates after closure.
+
+Use locally allocated test ports rather than assuming a fixed port is available. Tests must not depend on access to an external network, a particular LAN configuration, or Raspberry Pi-specific facilities.
 
 ### Waveshare model-specific backend
 
