@@ -1,5 +1,13 @@
 """Hardware-independent Refrain components."""
 
+from .artifacts import (
+    ArtifactCleanupError,
+    ArtifactStoreError,
+    ArtifactValidationError,
+    ArtifactWriteError,
+    PreparedImageArtifactSet,
+    PreparedImageArtifactStore,
+)
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
@@ -53,6 +61,12 @@ from .renderer import (
 from .selection import SelectionProposal, select_quotation
 
 __all__ = [
+    "ArtifactCleanupError",
+    "ArtifactStoreError",
+    "ArtifactValidationError",
+    "ArtifactWriteError",
+    "PreparedImageArtifactSet",
+    "PreparedImageArtifactStore",
     "ApplicationConfiguration",
     "ApplicationConfigurationError",
     "ConfigurationDiagnostic",

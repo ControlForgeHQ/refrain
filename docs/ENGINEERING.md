@@ -467,6 +467,41 @@ Generated image files should be managed separately from user-authored content.
 
 Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
+#### Revision-scoped artifact representation
+
+`PreparedImageArtifactStore` owns a caller-specified absolute root, separate from the authoritative state file. Its artifact-set identifier is the existing positive committed state revision; the store neither reads global history nor changes persistent state. Callers supply the snapshot and complete ordered image sequence on storage, and the snapshot and expected positive stage count on loading. Stage ordinals are supplied by the caller, not derived from schedules.
+
+The internal layout is:
+
+```text
+<artifact-root>/
+  revision-1/
+    manifest.json
+    images-<transaction-suffix>/
+      stage-0.png
+      stage-1.png
+  .tmp-revision-2-<transaction-suffix>/
+    ...
+```
+
+The suffix is a random filesystem transaction name, not a second snapshot or artifact-set identity. A revision directory has one authoritative manifest pointing to one immutable image directory. This indirection permits atomic replacement of an existing complete set using standard file replacement on both POSIX and Windows, without attempting to replace a nonempty directory. Every stage is an independently readable, complete lossless PNG. Supported modes are `1`, `L`, `LA`, `RGB`, and `RGBA`; dimensions must match the committed snapshot's `layout.image_size`, and every stage must have the same mode. No image conversion or resizing occurs.
+
+The version 1 UTF-8 JSON manifest contains an `artifacts` object and its canonical JSON SHA-256 checksum. Metadata records `format_version`, `revision`, `snapshot_sha256`, the relative `image_directory`, `image_size`, `mode`, and an ordered `stages` array containing exact filenames and PNG-file SHA-256 digests. The snapshot fingerprint covers quotation text and identity, font identifier and exact font-content digest, all presentation metadata, reveal schedule, layout, and complete scheduling context. It excludes reveal progress and selection histories. A revision reused after state replacement therefore does not suffice to establish snapshot association. Checksums detect accidental damage; they do not authenticate files against a malicious writer.
+
+Loading rejects missing metadata, unsupported or inconsistent manifest fields, checksum failures, snapshot mismatches, unexpected stage sequences/counts or extra payload entries, incorrect dimensions/modes, non-PNG or multi-frame images, unreadable files, and PNG verification/decoding failures. Manifest-derived paths must match fixed owned names, not arbitrary paths. Files and directories must be real regular files/directories rather than symbolic links or junctions, including ancestors of the artifact root. Validation checks and closes each decoded stage before proceeding to the next; the returned handle retains only metadata and paths. Individual stage loading revalidates the file rather than trusting earlier validation.
+
+#### Artifact publication and cleanup
+
+Storage writes every PNG and its manifest into a unique root-level `.tmp-revision-<revision>-<suffix>` directory, flushing and synchronizing each file. After synchronizing that directory, it renames the complete directory into the revision directory as `images-<suffix>` and synchronizes the affected directories. The single publication point is `os.replace` of the prepared manifest into `revision-<revision>/manifest.json`. Before that point, the previous manifest and all its images remain untouched. Afterward, the complete new set is visible. The image directory and revision directory are synchronized again after publication.
+
+Directory entries, including the root's ancestor chain, are synchronized in their parents on every storage attempt, so retries also confirm entries left by interrupted directory creation. POSIX directory synchronization strengthens power-loss durability; the standard-library implementation does not synchronize directory metadata on Windows, so its directory-entry durability guarantee is weaker. Filesystem and storage-device guarantees still apply. `ArtifactWriteError.published` reports whether manifest replacement occurred; failure afterward means a complete set was published but durability could not be confirmed, not that the old set remains current. Reload before retrying.
+
+No automatic cleanup is coupled to storage or loading. Interrupted writes can leave root-level temporary directories or unreferenced image directories. Replaced image directories also remain intact, allowing existing handles to retain their original paths until explicitly coordinated cleanup. `cleanup(current_revision)` removes recognized obsolete revision trees, including their abandoned payloads, and recognized root-level temporary transactions. It preserves the entire current revision directory, even if incomplete or invalid; unreferenced payloads within it remain until that revision becomes obsolete.
+
+Cleanup inspects tree contents before removal. It skips unrelated root entries, noncanonical revision/transaction names, trees with unrecognized children, and any symbolic links or junctions, without following them. Removal and directory-synchronization errors raise `ArtifactCleanupError`; they do not invalidate a successfully published current set. Cleanup can partially remove obsolete artifacts before reporting a failure and may be retried. The root is an owned storage directory, not a general-purpose directory for user files.
+
+Callers must serialize artifact operations and coordinate cleanup with every reader still using a returned stage handle or path. The no-follow checks assume no concurrent hostile filesystem mutation; this is not a cross-process locking or adversarial filesystem sandbox. Cleanup never inspects or modifies authoritative state outside the owned root. Recovery orchestration and regeneration remain separate responsibilities.
+
 ## Rendering and image preparation
 
 ### Use Pillow for image composition
