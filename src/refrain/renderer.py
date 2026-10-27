@@ -538,6 +538,8 @@ def layout_composition(
             f"literary composition does not fit within region {pixel_region} at "
             f"the minimum quotation font size {min_font_size}"
         )
+    authored_line_count = len(composition.quotation.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    preserve_authored_lines = authored_line_count > 1 and len(best.quotation.lines) == authored_line_count
     while low <= high:
         size = (low + high) // 2
         candidate = _layout_at_size(
@@ -549,7 +551,7 @@ def layout_composition(
             presentation_style,
             byline_gap_factor,
         )
-        if candidate is None:
+        if candidate is None or (preserve_authored_lines and len(candidate.quotation.lines) > authored_line_count):
             high = size - 1
         else:
             best = candidate

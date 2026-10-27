@@ -933,6 +933,8 @@ The presentation region is configurable using resolution-independent coordinates
 
 Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
+For quotations with explicit line breaks, fitting prioritizes the largest permitted font size that preserves authored lines without additional wrapping while fitting the complete composition. If authored lines cannot fit at the minimum permitted quotation font size, automatic word wrapping remains available. Quotations without explicit line breaks retain automatic wrapping and largest-fitting-font behavior.
+
 The renderer supports named presentation styles that determine how literary content is arranged within the presentation region.
 
 Version 0.1 provides two built-in styles:
