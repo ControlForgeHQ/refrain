@@ -64,7 +64,8 @@ def test_short_quotation_uses_maximum_and_returns_background_copy(resolved_font:
                 assert rendered.getpixel((x, y)) == original.getpixel((x, y))
 
 
-def test_ordinary_paragraph_wraps_using_font_measurements(resolved_font: ResolvedFont) -> None:
+@pytest.mark.parametrize("style", ["centered", "prose"])
+def test_ordinary_paragraph_wraps_using_font_measurements(resolved_font: ResolvedFont, style: str) -> None:
     text = "Measured letters make a careful line; words move together without being cut."
     layout = make_layout(
         text,
@@ -72,12 +73,22 @@ def test_ordinary_paragraph_wraps_using_font_measurements(resolved_font: Resolve
         size=(500, 400),
         region=PresentationRegion(0.1, 0.1, 0.36, 0.8),
         sizes=(20, 42),
+        style=style,
     )
 
     assert len(layout.quotation.lines) > 1
     assert " ".join(" ".join(line.split()) for line in layout.quotation.lines) == text
     assert layout.quotation.font_size < 42
     assert all(line for line in layout.quotation.lines)
+    with pytest.raises(QuotationRenderError, match="does not fit"):
+        make_layout(
+            text,
+            resolved_font,
+            size=(500, 400),
+            region=PresentationRegion(0.1, 0.1, 0.36, 0.8),
+            sizes=(layout.quotation.font_size + 1, layout.quotation.font_size + 1),
+            style=style,
+        )
 
 
 def test_long_quotation_uses_smaller_font_size(resolved_font: ResolvedFont) -> None:
@@ -106,6 +117,66 @@ def test_explicit_line_breaks_and_blank_paragraph_lines_are_preserved(resolved_f
     assert layout.quotation.positions[2][1] > layout.quotation.positions[1][1]
 
 
+@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("height", [180, 500])
+def test_authored_lines_take_priority_over_larger_wrapped_text(
+    resolved_font: ResolvedFont, style: str, newline: str, height: int
+) -> None:
+    lines = ("A deliberately long line", "and a shorter one.")
+    composition = LiteraryComposition(
+        newline.join(lines), source="Notes on Patient Reading", attribution="An Example Author"
+    )
+    region = PresentationRegion(0, 0, 1, 1)
+    size = (480, height)
+    layout = layout_composition(composition, resolved_font, region, size, 20, 50, style)
+
+    assert layout.quotation.lines == lines
+    assert 20 < layout.quotation.font_size < 50
+    valid_sizes = []
+    for font_size in range(20, 51):
+        try:
+            candidate = layout_composition(composition, resolved_font, region, size, font_size, font_size, style)
+        except QuotationRenderError:
+            continue
+        if candidate.quotation.lines == lines:
+            valid_sizes.append(font_size)
+    assert layout.quotation.font_size == max(valid_sizes)
+    assert layout.byline is not None
+    assert layout.byline.source is not None
+    assert layout.byline.attribution is not None
+    for field in (layout.quotation, layout.byline.source, layout.byline.attribution):
+        assert 0 <= field.bounds[0] < field.bounds[2] <= size[0]
+        assert 0 <= field.bounds[1] < field.bounds[3] <= size[1]
+    assert layout.byline.bounds[1] - layout.quotation.bounds[3] == layout.byline_gap
+
+
+@pytest.mark.parametrize("style", ["centered", "prose"])
+def test_authored_lines_wrap_when_they_cannot_be_preserved_at_minimum(resolved_font: ResolvedFont, style: str) -> None:
+    text = "A deliberately long line\nand a shorter one."
+    region = PresentationRegion(0, 0, 1, 1)
+    minimum = make_layout(text, resolved_font, size=(180, 400), region=region, sizes=(20, 20), style=style)
+    layout = make_layout(text, resolved_font, size=(180, 400), region=region, sizes=(20, 42), style=style)
+
+    assert len(minimum.quotation.lines) > 2
+    assert len(layout.quotation.lines) > 2
+    assert layout.quotation.font_size > 20
+    assert " ".join(layout.quotation.lines) == text.replace("\n", " ")
+    assert any(
+        " ".join(layout.quotation.lines[:index]) == text.split("\n")[0]
+        for index in range(1, len(layout.quotation.lines))
+    )
+    with pytest.raises(QuotationRenderError, match="does not fit"):
+        make_layout(
+            text,
+            resolved_font,
+            size=(180, 400),
+            region=region,
+            sizes=(layout.quotation.font_size + 1, layout.quotation.font_size + 1),
+            style=style,
+        )
+
+
 def test_unicode_punctuation_and_original_text_are_retained(resolved_font: ResolvedFont) -> None:
     text = "“Wait,” she said—then smiled: déjà vu?"
     layout = make_layout(text, resolved_font, sizes=(20, 32))
@@ -114,16 +185,18 @@ def test_unicode_punctuation_and_original_text_are_retained(resolved_font: Resol
     assert "".join(layout.quotation.lines) == text
 
 
-def test_long_unbroken_word_that_cannot_fit_fails_clearly(resolved_font: ResolvedFont) -> None:
+@pytest.mark.parametrize("style", ["centered", "prose"])
+@pytest.mark.parametrize("text", ["Supercalifragilisticexpialidocious", "A line\nSupercalifragilisticexpialidocious"])
+def test_long_unbroken_word_that_cannot_fit_fails_clearly(resolved_font: ResolvedFont, style: str, text: str) -> None:
     with pytest.raises(QuotationRenderError, match="does not fit.*minimum.*font size"):
         layout_composition(
-            LiteraryComposition("Supercalifragilisticexpialidocious"),
+            LiteraryComposition(text),
             resolved_font,
             PresentationRegion(0.49, 0.1, 0.02, 0.8),
             (500, 300),
             20,
             40,
-            "centered",
+            style,
         )
 
 
@@ -222,10 +295,19 @@ def test_grayscale_background_is_supported_and_preserved(resolved_font: Resolved
 
 
 @pytest.mark.parametrize("style", ["centered", "prose"])
-def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_font: ResolvedFont, style: str) -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A deliberately long line\nand a shorter one.\n\nA new paragraph.",
+        "A deliberately long line\nand a shorter one.",
+    ],
+)
+def test_complete_composition_reuses_geometry_across_cumulative_stages(
+    resolved_font: ResolvedFont, style: str, text: str
+) -> None:
     background = Image.new("RGB", (600, 500), "#f8f6f0")
     composition = LiteraryComposition(
-        "A deliberately long line\nand a shorter one.\n\nA new paragraph.",
+        text,
         source="Notes on Patient Reading",
         attribution="An Example Author",
     )
@@ -249,7 +331,7 @@ def test_complete_composition_reuses_geometry_across_cumulative_stages(resolved_
     assert layout.byline.source is not None
     assert layout.byline.attribution is not None
     assert layout.quotation.font_size > layout.byline.attribution.font_size
-    assert layout.quotation.lines == ("A deliberately long line", "and a shorter one.", "", "A new paragraph.")
+    assert layout.quotation.lines == tuple(text.split("\n"))
     assert layout.region[0] <= layout.quotation.bounds[0] < layout.quotation.bounds[2] <= layout.region[2]
     assert layout.region[0] <= layout.byline.bounds[0] < layout.byline.bounds[2] <= layout.region[2]
     assert layout.region[1] <= layout.byline.bounds[1] < layout.byline.bounds[3] <= layout.region[3]
