@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
 from dataclasses import dataclass
@@ -19,7 +20,8 @@ from PIL import ImageFont
 from ._yaml import load_yaml, yaml_error_location
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout"}
-_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e"}
+_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
+_HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _TIMEZONE_ABBREVIATIONS = {
     "ADT",
@@ -111,6 +113,8 @@ class ApplicationConfiguration:
     default_fonts: tuple[str, ...]
     min_font_size: int
     max_font_size: int
+    image_server_host: str = "127.0.0.1"
+    image_server_port: int = 8080
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[[str, str], None]) -> None:
@@ -130,6 +134,24 @@ def _parse_time(value: object, field: str, report: Callable[[str, str], None]) -
         report(field, "must be a valid HH:MM local time")
         return None
     return time.fromisoformat(value)
+
+
+def _valid_image_server_host(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        hostname = value[:-1] if value.endswith(".") else value
+        try:
+            ascii_hostname = hostname.encode("idna").decode("ascii")
+        except UnicodeError:
+            return False
+        labels = ascii_hostname.split(".")
+        return 0 < len(ascii_hostname) <= 253 and all(
+            0 < len(label) <= 63 and _HOSTNAME_LABEL.fullmatch(label) for label in labels
+        )
 
 
 def _load_font(path: Union[Path, Traversable], field: str, report: Callable[[str, str], None]) -> bool:
@@ -172,20 +194,38 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
 
     display = _mapping(data.get("display", {}), "display", report)
-    _known_fields(display, {"backend"}, "display", report)
+    _known_fields(display, {"backend", "image-server"}, "display", report)
     display_backend = display.get("backend")
     if not isinstance(display_backend, str) or display_backend not in _DISPLAY_BACKENDS:
         if display_backend is None:
             report(
                 "display.backend",
-                "is required and must be one of: 'window', 'waveshare-13in3-e'",
+                "is required and must be one of: 'window', 'waveshare-13in3-e', 'image-server'",
             )
         else:
             report(
                 "display.backend",
-                "must be one of the supported backends: 'window', 'waveshare-13in3-e'",
+                "must be one of the supported backends: 'window', 'waveshare-13in3-e', 'image-server'",
             )
         display_backend = None
+    image_server_host = "127.0.0.1"
+    image_server_port = 8080
+    if "image-server" in display:
+        image_server_data = _mapping(display["image-server"], "display.image-server", report)
+        _known_fields(image_server_data, {"host", "port"}, "display.image-server", report)
+        host_value = image_server_data.get("host", image_server_host)
+        if _valid_image_server_host(host_value):
+            image_server_host = host_value
+        else:
+            report(
+                "display.image-server.host",
+                "must be a nonempty local bind address or hostname",
+            )
+        port_value = image_server_data.get("port", image_server_port)
+        if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
+            report("display.image-server.port", "must be an integer between 1 and 65535")
+        else:
+            image_server_port = port_value
 
     general = _mapping(data.get("general", {}), "general", report)
     _known_fields(general, {"timezone", "day_start"}, "general", report)
@@ -367,4 +407,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         default_fonts=default_fonts,
         min_font_size=sizes["min_font_size"],
         max_font_size=sizes["max_font_size"],
+        image_server_host=image_server_host,
+        image_server_port=image_server_port,
     )

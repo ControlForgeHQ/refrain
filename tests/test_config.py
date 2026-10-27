@@ -88,6 +88,57 @@ def test_recognizes_reserved_waveshare_backend(tmp_path: Path) -> None:
     assert config.display_backend == "waveshare-13in3-e"
 
 
+def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Path) -> None:
+    default_config = load_application_config(
+        write_config(
+            tmp_path / "default.yaml",
+            configuration_data(display={"backend": "image-server"}),
+        )
+    )
+    configured = load_application_config(
+        write_config(
+            tmp_path / "configured.yaml",
+            configuration_data(
+                display={
+                    "backend": "image-server",
+                    "image-server": {"host": "0.0.0.0", "port": 8123},
+                }
+            ),
+        )
+    )
+
+    assert default_config.display_backend == "image-server"
+    assert default_config.image_server_host == "127.0.0.1"
+    assert default_config.image_server_port == 8080
+    assert configured.image_server_host == "0.0.0.0"
+    assert configured.image_server_port == 8123
+
+
+@pytest.mark.parametrize(
+    ("image_server", "expected_field"),
+    [
+        ([], "display.image-server"),
+        ({"unknown": 1}, "display.image-server.unknown"),
+        ({"host": ""}, "display.image-server.host"),
+        ({"host": "not a hostname"}, "display.image-server.host"),
+        ({"host": True}, "display.image-server.host"),
+        ({"port": True}, "display.image-server.port"),
+        ({"port": "8080"}, "display.image-server.port"),
+        ({"port": 0}, "display.image-server.port"),
+        ({"port": 65536}, "display.image-server.port"),
+    ],
+)
+def test_invalid_image_server_settings_are_rejected(tmp_path: Path, image_server: object, expected_field: str) -> None:
+    fields = diagnostic_fields(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(display={"backend": "window", "image-server": image_server}),
+        )
+    )
+
+    assert expected_field in fields
+
+
 @pytest.mark.parametrize(
     ("display", "expected_message"),
     [
