@@ -917,7 +917,7 @@ Version 0.1 does not require italic font support or automatic font substitution.
 
 When only attribution is present, the byline uses the form `— Attribution`. When only source is present, it uses `— Source`. Absent fields do not introduce unnecessary separator punctuation.
 
-The complete byline is horizontally centered beneath the quotation for the `centered` presentation style and right-aligned within the presentation region for the `prose` style.
+The complete byline is horizontally centered beneath the quotation for the `centered` presentation style and right-aligned within the presentation region for the `left-aligned` style.
 
 Unrevealed source and attribution fields remain visibly represented within the byline rather than leaving blank space or displaying literal placeholder characters.
 
@@ -940,7 +940,7 @@ The renderer supports named presentation styles that determine how literary cont
 Version 0.1 provides two built-in styles:
 
 - `centered`: Each rendered quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space, with the byline centered beneath it.
-- `prose`: Rendered quotation lines share a common left edge. The resulting text block is horizontally centered according to its widest rendered line, with the quotation block vertically centered within its allocated space and the byline right-aligned.
+- `left-aligned`: Rendered quotation lines share a common left edge. The resulting text block remains horizontally centered according to its widest rendered line, rather than anchored to the region's left edge, with the quotation block vertically centered within its allocated space and the byline right-aligned.
 
 The selected presentation style is defined at the content-entry level and applies to every quotation in that entry. The default is `centered`.
 
@@ -1014,7 +1014,7 @@ Content that cannot be rendered legibly within the supported presentation region
 
 A daily snapshot must contain every value needed to reproduce its presentation without consulting current application configuration or the content library.
 
-`presentation_metadata` contains optional nonempty `source` and `attribution` strings, plus the required built-in `presentation_style` (`centered` or `prose`). An absent optional field is represented by a missing key or `null`.
+`presentation_metadata` contains optional nonempty `source` and `attribution` strings, plus the required built-in `presentation_style` (`centered` or `left-aligned`). An absent optional field is represented by a missing key or `null`.
 
 `layout` contains:
 

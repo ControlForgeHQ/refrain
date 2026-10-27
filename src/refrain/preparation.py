@@ -35,9 +35,9 @@ def _resolve_presentation(
 ) -> tuple[LiteraryComposition, PresentationRegion, tuple[int, int], int, int, str]:
     metadata = _require_mapping(snapshot.presentation_metadata, "presentation_metadata")
     style = metadata.get("presentation_style")
-    if not isinstance(style, str) or style not in {"centered", "prose"}:
+    if not isinstance(style, str) or style not in {"centered", "left-aligned"}:
         raise DailyImagePreparationError(
-            "snapshot.presentation_metadata.presentation_style must be 'centered' or 'prose'"
+            "snapshot.presentation_metadata.presentation_style must be 'centered' or 'left-aligned'"
         )
 
     optional_fields: dict[str, str | None] = {}

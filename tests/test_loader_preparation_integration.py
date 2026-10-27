@@ -46,7 +46,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
                 "quotations": ["A quiet moment settles.", "A second thought remains."],
                 "source": "A Sample Collection",
                 "attribution": "An Example Author",
-                "presentation_style": "prose",
+                "presentation_style": "left-aligned",
             },
             sort_keys=False,
         ),
@@ -95,6 +95,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
             config.day_start.strftime("%H:%M"),
         ),
     )
+    assert snapshot.presentation_metadata["presentation_style"] == "left-aligned"
 
     config_path.unlink()
     content_path.unlink()
