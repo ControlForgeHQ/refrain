@@ -517,3 +517,39 @@ def test_successful_publication_synchronizes_files_and_directories(store, snapsh
     monkeypatch.setattr(artifacts.os, "fsync", capture)
     store.store(1, snapshot, images)
     assert len(calls) >= len(images) + 1 + 4
+
+
+@pytest.mark.parametrize("created", ["ancestor", "root", "revision"])
+def test_retry_resynchronizes_parent_of_previously_created_directory(
+    store, snapshot, images, monkeypatch, created
+) -> None:
+    directory = {
+        "ancestor": store.root.parent,
+        "root": store.root,
+        "revision": store.root / "revision-1",
+    }[created]
+    original = artifacts._sync_directory
+    failed = False
+
+    def interrupt_creation(path):
+        nonlocal failed
+        if path == directory.parent and directory.exists() and not failed:
+            failed = True
+            raise OSError("new directory entry not synchronized")
+        original(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(artifacts, "_sync_directory", interrupt_creation)
+        with pytest.raises(ArtifactWriteError, match="not synchronized"):
+            store.store(1, snapshot, images)
+    assert directory.exists()
+    calls = []
+
+    def capture(path):
+        calls.append(path)
+        original(path)
+
+    monkeypatch.setattr(artifacts, "_sync_directory", capture)
+    store.store(1, snapshot, images)
+    assert directory.parent in calls
+    assert store.load(1, snapshot, stage_count=3) is not None

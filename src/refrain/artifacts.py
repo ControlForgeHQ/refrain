@@ -114,11 +114,12 @@ def _sync_directory(path: Path) -> None:
 
 
 def _create_directories(path: Path) -> None:
+    if path.parent != path:
+        _create_directories(path.parent)
     if path.exists():
         _require_directory(path)
-        return
-    _create_directories(path.parent)
-    path.mkdir()
+    else:
+        path.mkdir()
     _sync_directory(path.parent)
 
 
