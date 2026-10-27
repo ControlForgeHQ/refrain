@@ -676,6 +676,10 @@ Do not require desktop GUI dependencies for ordinary hardware-independent import
 
 The desktop backend is a development and testing presentation destination, not an alternative image renderer.
 
+Use the platform's Tk support and Pillow's `ImageTk` presentation adapter. Import them only when constructing the window backend; configuration, rendering, and other hardware-independent imports must not require a graphical environment. Keep the Tk event loop in a backend-owned thread so updates remain synchronous without requiring the caller to run a GUI loop.
+
+The window backend must preserve caller-owned image data, replace the image in its existing window, and report initialization, presentation, and cleanup failures. On Linux, a Tk-capable Python installation and an active graphical session are required; standard Windows Python installations typically include Tk.
+
 ### Waveshare model-specific backend
 
 Use the Waveshare Python implementation appropriate for the supported 13.3-inch e-Paper HAT+ (E).

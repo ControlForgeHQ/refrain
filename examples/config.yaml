@@ -10,6 +10,9 @@ reveal:
   source: "12:00"
   attribution: "18:00"
 
+display:
+  backend: "window"
+
 layout:
   presentation_region:
     x: 0.10

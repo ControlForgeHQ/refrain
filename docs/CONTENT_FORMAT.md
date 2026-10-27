@@ -176,7 +176,7 @@ Version 0.1 defines the following built-in backend identifiers:
 | Value | Description |
 |---|---|
 | `"window"` | Displays complete presentation images in a desktop window on a supported graphical Windows or Linux environment. |
-| `"waveshare-13in3-e"` | Drives the supported Waveshare 13.3-inch e-Paper HAT+ (E) display. |
+| `"waveshare-13in3-e"` | Reserved for the supported Waveshare 13.3-inch e-Paper HAT+ (E) display; unavailable until implemented. |
 
 Only implemented backends may be selected at runtime. A recognized backend whose implementation is unavailable must produce an actionable error rather than silently selecting another backend.
 

@@ -83,6 +83,20 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
+## Display backend selection
+
+Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; `waveshare-13in3-e` is reserved for the physical panel and is not implemented yet. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
+
+The desktop backend uses the Python installation's Tk support and Pillow. Linux may require installing the matching Tk package (for example, `python3-tk`) and running in a graphical session. GUI modules are imported only when the window backend is constructed.
+
+To display two PNG files in the same responsive window and close cleanly, run:
+
+```sh
+python examples/display_window.py first.png second.png
+```
+
+The example waits for Enter between updates while the window continues to process GUI events. It does not perform content selection or image preparation.
+
 ## Rendering a literary composition
 
 The shared renderer accepts an existing Pillow image, resolved quotation/source/attribution content, a resolved font, a normalized presentation region, a built-in presentation style, and quotation font-size bounds. `layout_composition` fits all present fields—including the complete unified byline—once and vertically centers the complete composition as one group. Its keyword-only `byline_gap_factor` defaults to `1.20` times the fitted quotation font size; zero is valid, and no gap is reserved when the byline is absent. `render_reveal_stages` then renders requested cumulative visibility stages from that same geometry. Unrevealed byline text uses deterministic pixel distortion by default; the dash and separator punctuation remain visible. Attribution uses a restrained gray tone; the byline is centered in `centered` style and right-aligned in `left-aligned` style. The `left-aligned` style aligns quotation lines at a common left edge while centering the whole quotation block within the presentation region. The keyword-only `concealment` parameter accepts only `"pixel-distortion"`. Rendering returns copies and leaves the supplied background unchanged. A `QuotationRenderError` is raised for invalid inputs or content that cannot fit. See [Presentation and rendering](docs/ARCHITECTURE.md#presentation-and-rendering) and [Presentation region](docs/CONTENT_FORMAT.md#presentation-region) for the authoritative behavior and geometry.
