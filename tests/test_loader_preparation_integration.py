@@ -29,6 +29,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
             {
                 "general": {"timezone": "Etc/UTC"},
                 "content": {"directory": "content"},
+                "display": {"backend": "window"},
                 "layout": {
                     "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
                     "fonts": {"default": ["lora"]},

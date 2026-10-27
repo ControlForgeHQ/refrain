@@ -18,7 +18,8 @@ from PIL import ImageFont
 
 from ._yaml import load_yaml, yaml_error_location
 
-_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "layout"}
+_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout"}
+_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e"}
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _TIMEZONE_ABBREVIATIONS = {
     "ADT",
@@ -100,6 +101,7 @@ class ApplicationConfiguration:
     """Validated, hardware-independent application configuration."""
 
     file: Path
+    display_backend: str
     timezone: ZoneInfo
     day_start: time
     content_directory: Path
@@ -168,6 +170,22 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         report("$", "must contain one top-level mapping")
         raise ApplicationConfigurationError(tuple(diagnostics))
     _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
+
+    display = _mapping(data.get("display", {}), "display", report)
+    _known_fields(display, {"backend"}, "display", report)
+    display_backend = display.get("backend")
+    if not isinstance(display_backend, str) or display_backend not in _DISPLAY_BACKENDS:
+        if display_backend is None:
+            report(
+                "display.backend",
+                "is required and must be one of: 'window', 'waveshare-13in3-e'",
+            )
+        else:
+            report(
+                "display.backend",
+                "must be one of the supported backends: 'window', 'waveshare-13in3-e'",
+            )
+        display_backend = None
 
     general = _mapping(data.get("general", {}), "general", report)
     _known_fields(general, {"timezone", "day_start"}, "general", report)
@@ -336,8 +354,10 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     assert reveal is not None
     assert presentation_region is not None
     assert default_fonts is not None
+    assert display_backend is not None
     return ApplicationConfiguration(
         file=file,
+        display_backend=display_backend,
         timezone=timezone,
         day_start=day_start,
         content_directory=content_directory,

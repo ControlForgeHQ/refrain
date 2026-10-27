@@ -1077,9 +1077,13 @@ A display backend provides two operations:
 
 The application selects one built-in backend through validated runtime configuration. Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
 
-Version 0.1 supports a desktop window backend and a backend specific to the Waveshare 13.3-inch e-Paper HAT+ (E). The interface permits additional implementations without changing content selection, image preparation, persistence, or scheduling.
+Version 0.1 provides a desktop window backend. The `waveshare-13in3-e` identifier is reserved for the supported Waveshare 13.3-inch e-Paper HAT+ (E) and remains unavailable until its separate implementation.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
+
+The window backend owns its GUI event loop and keeps the window responsive between synchronous image updates. It replaces the existing image in one window and releases that window when `close()` returns.
+
+The backend reports initialization, presentation, and cleanup failures through common display-backend errors. It reports an unavailable graphical environment with guidance to install Tk support and use a graphical session.
 
 The Waveshare backend owns model-specific hardware operations, including:
 
