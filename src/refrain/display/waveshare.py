@@ -39,8 +39,9 @@ class WaveshareDisplayBackend:
             self._epd = driver.EPD()
         except Exception as error:
             raise DisplayBackendInitializationError(
-                "could not load the Waveshare 13.3-inch E driver; use a supported Raspberry Pi "
-                f"installation with its bundled native library available: {error}"
+                "could not load the Waveshare 13.3-inch E driver; install the architecture-compatible "
+                "Waveshare DEV_Config native library beside the vendored driver, in /usr/local/lib, "
+                f"or in /usr/lib: {error}"
             ) from error
 
     @staticmethod
