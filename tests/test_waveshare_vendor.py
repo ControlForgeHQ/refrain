@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import importlib.util
 import io
+import os
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -42,7 +43,7 @@ def load_epdconfig(
     init_result: int = 0,
     close_result: int = 1,
     library_present: bool = True,
-    library_directory: str | None = None,
+    library_directory: str | os.PathLike[str] | None = None,
 ) -> tuple[ModuleType, NativeLibrary, list[str]]:
     events: list[str] = []
     library = NativeLibrary(events, init_result, close_result)
@@ -52,12 +53,24 @@ def load_epdconfig(
         "CDLL",
         lambda path: (setattr(library, "loaded_path", path), library)[1],
     )
-    monkeypatch.setattr(
-        "os.path.exists",
-        lambda path: library_present
-        and path.endswith(selected_path)
-        and (library_directory is None or path.startswith(library_directory)),
+    original_exists = os.path.exists
+    candidate_paths = {
+        os.path.normcase(os.path.abspath(os.path.join(directory, selected_path)))
+        for directory in (_VENDOR.resolve(), Path("/usr/local/lib"), Path("/usr/lib"))
+    }
+    selected_library_path = (
+        None
+        if library_directory is None
+        else os.path.normcase(os.path.abspath(os.path.join(library_directory, selected_path)))
     )
+
+    def exists(path: str | os.PathLike[str]) -> bool:
+        normalized_path = os.path.normcase(os.path.abspath(os.fsdecode(os.fspath(path))))
+        if normalized_path in candidate_paths:
+            return library_present and (selected_library_path is None or normalized_path == selected_library_path)
+        return original_exists(path)
+
+    monkeypatch.setattr(os.path, "exists", exists)
     monkeypatch.setattr(
         "os.popen",
         lambda command: io.StringIO(
@@ -84,10 +97,14 @@ def test_external_library_is_loaded_from_existing_search_path(monkeypatch: pytes
     module, library, _events = load_epdconfig(
         monkeypatch,
         variant="b",
-        library_directory="/usr/local/lib/",
+        library_directory=Path("/usr/local/lib"),
     )
 
-    assert library.loaded_path == "/usr/local/lib/DEV_Config_64_b.so"
+    assert library.loaded_path is not None
+    expected_path = os.path.join("/usr/local/lib", "DEV_Config_64_b.so")
+    assert os.path.normcase(os.path.abspath(library.loaded_path)) == os.path.normcase(os.path.abspath(expected_path))
+    assert os.path.exists(Path("/usr/local/lib") / "DEV_Config_64_b.so")
+    assert os.path.exists(_VENDOR / "epdconfig.py")
     assert module.spi is library
 
 
