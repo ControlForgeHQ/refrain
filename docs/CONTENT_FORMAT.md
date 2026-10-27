@@ -133,6 +133,9 @@ reveal:
   source: "12:00"
   attribution: "18:00"
 
+display:
+  backend: "window"
+
 layout:
   presentation_region:
     x: 0.10
@@ -154,7 +157,7 @@ layout:
     max_font_size: 100
 ```
 
-The example illustrates the initial configuration structure, including a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
+The example illustrates the initial configuration structure, including a selected display backend, a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
 
 Refrain automatically registers its bundled fonts. They can be referenced by their stable identifiers without declaring filesystem paths in application configuration.
 
@@ -163,6 +166,29 @@ The `layout.fonts.available` mapping registers additional fonts supplied by the 
 The default font pool controls which registered fonts are eligible for automatic selection. A registered font that is not included in the default pool remains available for explicit selection by content entries.
 
 User-supplied font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the resources and presentation layout provided by an installation.
+
+### Display backend
+
+The required `display.backend` field selects the implementation used to present complete rendered images.
+
+Version 0.1 defines the following built-in backend identifiers:
+
+| Value | Description |
+|---|---|
+| `"window"` | Displays complete presentation images in a desktop window on a supported graphical Windows or Linux environment. |
+| `"waveshare-13in3-e"` | Drives the supported Waveshare 13.3-inch e-Paper HAT+ (E) display. |
+
+Only implemented backends may be selected at runtime. A recognized backend whose implementation is unavailable must produce an actionable error rather than silently selecting another backend.
+
+The field is required and has no implicit default. Development example configurations may select `"window"`; installations using the physical e-paper panel must explicitly select `"waveshare-13in3-e"`.
+
+Backend selection is independent of content selection, reveal scheduling, and image preparation.
+
+Display backends consume complete rendered images. Backend selection does not change the configured presentation region, typography, or committed snapshot.
+
+Unsupported backend identifiers are configuration errors.
+
+Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
 
 ### General settings
 

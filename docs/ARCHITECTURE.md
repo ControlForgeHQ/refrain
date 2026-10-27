@@ -1068,16 +1068,37 @@ Normal scheduled updates select among prepared images rather than invoking image
 
 ### Backend responsibility
 
-The display backend owns hardware-specific operations, including:
+Refrain presents complete rendered images through a narrow, hardware-independent display backend interface.
+
+A display backend provides two operations:
+
+- `update(image)` presents a complete Pillow image.
+- `close()` releases resources owned by the backend.
+
+The application selects one built-in backend through validated runtime configuration. Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
+
+Version 0.1 supports a desktop window backend and a backend specific to the Waveshare 13.3-inch e-Paper HAT+ (E). The interface permits additional implementations without changing content selection, image preparation, persistence, or scheduling.
+
+The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
+
+The Waveshare backend owns model-specific hardware operations, including:
 
 - device initialization;
-- image transfer;
+- image conversion and transfer;
 - full-screen refresh;
 - controller sleep or release where supported;
 - hardware error reporting;
 - cleanup.
 
-It must not contain quotation-selection or reveal-scheduling policy.
+The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, or refresh mechanisms.
+
+The backend validates image compatibility with its destination rather than silently resizing or otherwise changing the prepared presentation.
+
+A completed `update()` indicates that the backend's presentation operation completed successfully. Failures and uncertain hardware outcomes must remain distinguishable where the underlying implementation permits.
+
+Display backends must not perform quotation selection, reveal scheduling, image preparation, or persistent-state updates.
+
+Backend implementations are built-in application components. Version 0.1 does not define a general display plugin system.
 
 ### Update behavior
 

@@ -626,15 +626,65 @@ Visual inspection remains appropriate for typography and layout quality.
 
 ## Display backend
 
-### Driver integration
+### Interface and implementation boundaries
 
-Use the Waveshare Python implementation appropriate for the supported display model as the initial hardware integration.
+Provide a small display backend interface equivalent to:
+
+```python
+class DisplayBackend(Protocol):
+    def update(self, image: Image.Image) -> None: ...
+    def close(self) -> None: ...
+```
+
+The interface operates on complete Pillow images rather than artifact paths.
+
+Callers own the supplied images and their lifetimes. A backend must not require an image to remain available after `update()` returns unless it has independently retained the data it requires.
+
+Keep the interface independent of Waveshare, SPI, GPIO, desktop GUI libraries, selection, persistence, and reveal scheduling.
+
+Implement display backends in a dedicated `refrain.display` package.
+
+Use a small explicit selection mechanism for built-in implementations. Select backends by stable configuration identifiers rather than Python module paths.
+
+Do not introduce dynamic plugin discovery, entry-point registration, generalized dependency injection, or a display plugin framework.
+
+### Backend selection
+
+Select the configured backend at application startup.
+
+Use explicit mappings or conditional construction for supported built-in implementations. Import backend-specific dependencies only when the corresponding implementation is selected.
+
+A recognized but unimplemented backend must fail with an actionable diagnostic.
+
+Do not silently fall back to another backend if construction or initialization fails.
+
+Keep configuration validation separate from actual hardware availability checks.
+
+### Desktop window backend
+
+Provide a desktop window backend for graphical Windows and Linux environments.
+
+Use an established GUI facility rather than creating a custom windowing system.
+
+The backend must support successive complete-image updates in a persistent window.
+
+The window must remain responsive between updates, including while the application is otherwise idle.
+
+Keep GUI dependencies and event-loop requirements isolated from the application scheduler and non-window backends.
+
+Do not require desktop GUI dependencies for ordinary hardware-independent imports or for headless Waveshare deployments.
+
+The desktop backend is a development and testing presentation destination, not an alternative image renderer.
+
+### Waveshare model-specific backend
+
+Use the Waveshare Python implementation appropriate for the supported 13.3-inch e-Paper HAT+ (E).
 
 Keep the imported driver surface as small as practical.
 
 Do not include support for unrelated Waveshare display models merely because those implementations are distributed together.
 
-Record the provenance, version or revision, and license of any vendor code incorporated into the repository.
+Record the provenance, version or revision, and license of vendor code incorporated into the repository.
 
 Do not modify vendor driver behavior without understanding the relevant hardware requirements.
 
@@ -642,19 +692,23 @@ When modifications are necessary, keep them reviewable and explain why they are 
 
 ### Hardware isolation
 
-Only the display backend should depend on the Waveshare driver, SPI, or GPIO facilities.
+Only the Waveshare backend should depend on its vendor driver, SPI, or GPIO facilities.
 
 The application must remain testable without physical hardware.
 
-The backend should accept prepared presentation images through a narrow interface.
+Do not expose GPIO pins, controller commands, or driver-specific state to content, scheduling, rendering, or persistence components.
 
-Do not expose GPIO pins, controller commands, or driver-specific state to the content or scheduling components.
+Backend implementations must validate incoming image dimensions and representation against their supported destination. Do not silently resize or recolor prepared images.
 
 ### Hardware lifecycle
 
-The backend owns initialization, full-frame updates, controller sleep or release, and cleanup.
+A physical backend owns initialization, full-frame updates, controller sleep or release, and cleanup.
 
 Use supported driver lifecycle operations rather than assuming a controller can resume from sleep without reinitialization.
+
+The shared interface must not force the application to manage hardware-specific initialization or sleep operations.
+
+`close()` must support orderly release of resources and should be safe during ordinary shutdown and failure cleanup.
 
 Validate initialization, repeated updates, sleep behavior, and recovery using the actual display.
 
@@ -672,7 +726,9 @@ Avoid overlapping display operations.
 
 ### Display failures
 
-Classify hardware failures sufficiently to support meaningful diagnostics and bounded recovery.
+Classify failures sufficiently to support meaningful diagnostics and bounded recovery.
+
+Distinguish failures occurring before presentation, failures during presentation, and uncertain outcomes when the underlying implementation permits.
 
 Use bounded retry behavior rather than unrestricted rapid retry loops.
 
