@@ -21,7 +21,6 @@ from . import (
 
 _LOGGER = logging.getLogger(__name__)
 _CURRENT_IMAGE_PATH = "/display/current"
-_REQUEST_TIMEOUT = 10
 _REQUEST_LIFETIME = 10
 
 
@@ -50,14 +49,21 @@ class _ImageRequestHandler(BaseHTTPRequestHandler):
     """Serve only the currently accepted PNG representation."""
 
     backend: ClassVar[ImageServerDisplayBackend]
-    protocol_version = "HTTP/1.1"
+    protocol_version = "HTTP/1.0"
 
     def setup(self) -> None:
-        self.request.settimeout(_REQUEST_TIMEOUT)
+        self.request.settimeout(_REQUEST_LIFETIME)
         super().setup()
         self._request_timer = Timer(_REQUEST_LIFETIME, self._expire_request)
         self._request_timer.daemon = True
         self._request_timer.start()
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except OSError:
+            self.close_connection = True
+            _LOGGER.debug("image-server client disconnected while processing a request")
 
     def finish(self) -> None:
         timer = getattr(self, "_request_timer", None)

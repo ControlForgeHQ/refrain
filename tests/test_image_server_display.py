@@ -51,7 +51,7 @@ def wait_for_handler_threads(backend: ImageServerDisplayBackend) -> tuple[thread
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         threads = getattr(backend._server, "_threads", ())
-        if isinstance(threads, list) and threads:
+        if isinstance(threads, list) and threads and all(thread.is_alive() for thread in threads):
             return tuple(threads)
         time.sleep(0.01)
     raise AssertionError("the server did not start a request-handler thread")
@@ -107,6 +107,35 @@ def test_conditional_requests_and_replacement_use_content_etags() -> None:
         assert second_headers["ETag"] != first_tag
         assert second_headers["ETag"] == f'"{hashlib.sha256(second_body).hexdigest()}"'
     finally:
+        backend.close()
+
+
+def test_browser_refresh_uses_a_new_connection_after_each_response() -> None:
+    backend, port = backend_at_available_port()
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    first_image = Image.new("RGB", (2, 2), "red")
+    second_image = Image.new("RGB", (2, 2), "blue")
+    try:
+        backend.update(first_image)
+        connection.request("GET", "/display/current")
+        first_response = connection.getresponse()
+        first_body = first_response.read()
+
+        assert first_response.status == 200
+        assert first_response.version == 10
+        assert connection.sock is None
+
+        backend.update(second_image)
+        connection.request("GET", "/display/current")
+        second_response = connection.getresponse()
+        second_body = second_response.read()
+
+        assert second_response.status == 200
+        assert second_body != first_body
+    finally:
+        first_image.close()
+        second_image.close()
+        connection.close()
         backend.close()
 
 
@@ -256,7 +285,6 @@ def test_disconnected_incomplete_client_does_not_leave_handler_running() -> None
 def test_total_request_lifetime_bounds_slow_trickling_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     import refrain.display.image_server as image_server_module
 
-    monkeypatch.setattr(image_server_module, "_REQUEST_TIMEOUT", 1)
     monkeypatch.setattr(image_server_module, "_REQUEST_LIFETIME", 0.2)
     backend, port = backend_at_available_port()
     stop_sending = Event()
