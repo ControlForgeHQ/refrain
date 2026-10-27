@@ -1094,7 +1094,7 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare backend accepts complete 1200 × 1600 portrait and 1600 × 1200 landscape images. Each update initializes the controller, converts and transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare backend accepts complete RGB 1200 × 1600 portrait and 1600 × 1200 landscape images; images with alpha or palette transparency are unsupported. It converts the complete image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, or refresh mechanisms.
 

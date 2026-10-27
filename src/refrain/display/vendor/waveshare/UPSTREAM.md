@@ -32,7 +32,9 @@ The general-purpose driver collection under `RaspberryPi_JetsonNano/python/lib/w
 
 ## Local Modifications
 
-`epd13in3E.py` uses a package-relative import for `epdconfig` so the model-specific driver can be loaded from Refrain's vendored package. This changes only how the sibling module is resolved; controller and image-conversion behavior remain unchanged.
+`epd13in3E.py` uses a package-relative import for `epdconfig` so the model-specific driver can be loaded from Refrain's vendored package. Its BUSY polling has a monotonic 120-second timeout; controller commands, timing, image quantization, and refresh operations are unchanged.
+
+`epdconfig.py` checks the native `DEV_ModuleInit()` result before GPIO access. It calls `bcm2835_close()` after the bcm2835 variant's GPIO cleanup, checks its success result, and refuses further access after uncertain cleanup. The wiringPi variant does not use `bcm2835_close()`; `DEV_ModuleExit()` is void for both variants.
 
 Any subsequent modifications to the upstream files must be documented and kept distinguishable from Refrain's own display-backend implementation.
 
