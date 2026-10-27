@@ -74,7 +74,9 @@ class WaveshareDisplayBackend:
             if self._closed:
                 raise DisplayBackendUpdateError("cannot update a closed Waveshare display")
             if self._failed:
-                raise DisplayBackendUpdateError("cannot update a Waveshare display after a hardware cleanup failure")
+                raise DisplayBackendUpdateError(
+                    "cannot update a Waveshare display after an unrecoverable hardware failure"
+                )
             try:
                 driver_image = image.copy()
             except Exception as error:
