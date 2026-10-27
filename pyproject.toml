@@ -24,7 +24,10 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-refrain = ["py.typed", "assets/fonts/**/*", "display/vendor/waveshare/*.md", "display/vendor/waveshare/*.so"]
+refrain = ["py.typed", "assets/fonts/**/*", "display/vendor/waveshare/*.md"]
+
+[tool.setuptools.exclude-package-data]
+refrain = ["display/vendor/waveshare/DEV_Config_*.so"]
 
 [tool.black]
 line-length = 120

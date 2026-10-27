@@ -32,6 +32,7 @@ class NativeLibrary:
         self.DEV_ModuleExit = NativeFunction("module-exit", events)
         self.DEV_Digital_Write = NativeFunction("digital-write", events)
         self.bcm2835_close = NativeFunction("bcm2835-close", events, close_result)
+        self.loaded_path: str | None = None
 
 
 def load_epdconfig(
@@ -40,14 +41,29 @@ def load_epdconfig(
     variant: str,
     init_result: int = 0,
     close_result: int = 1,
+    library_present: bool = True,
+    library_directory: str | None = None,
 ) -> tuple[ModuleType, NativeLibrary, list[str]]:
     events: list[str] = []
     library = NativeLibrary(events, init_result, close_result)
     selected_path = f"DEV_Config_64_{variant}.so"
-    monkeypatch.setattr(ctypes, "CDLL", lambda _path: library)
-    monkeypatch.setattr("os.path.exists", lambda path: path.endswith(selected_path))
-    outputs = iter((io.StringIO("64\n"), io.StringIO("Raspberry Pi 5" if variant == "w" else "")))
-    monkeypatch.setattr("os.popen", lambda _command: next(outputs))
+    monkeypatch.setattr(
+        ctypes,
+        "CDLL",
+        lambda path: (setattr(library, "loaded_path", path), library)[1],
+    )
+    monkeypatch.setattr(
+        "os.path.exists",
+        lambda path: library_present
+        and path.endswith(selected_path)
+        and (library_directory is None or path.startswith(library_directory)),
+    )
+    monkeypatch.setattr(
+        "os.popen",
+        lambda command: io.StringIO(
+            "64\n" if command == "getconf LONG_BIT" else ("Raspberry Pi 5" if variant == "w" else "")
+        ),
+    )
     spec = importlib.util.spec_from_file_location(
         f"refrain.display.vendor.waveshare.epdconfig_test_{variant}_{init_result}_{close_result}",
         _VENDOR / "epdconfig.py",
@@ -56,6 +72,23 @@ def load_epdconfig(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module, library, events
+
+
+def test_missing_external_library_error_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = r"DEV_Config_64_b\.so.*Waveshare.*beside epdconfig\.py.*usr/local/lib.*usr/lib"
+    with pytest.raises(RuntimeError, match=message):
+        load_epdconfig(monkeypatch, variant="b", library_present=False)
+
+
+def test_external_library_is_loaded_from_existing_search_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    module, library, _events = load_epdconfig(
+        monkeypatch,
+        variant="b",
+        library_directory="/usr/local/lib/",
+    )
+
+    assert library.loaded_path == "/usr/local/lib/DEV_Config_64_b.so"
+    assert module.spi is library
 
 
 @pytest.mark.parametrize("variant", ["b", "w"])

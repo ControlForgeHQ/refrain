@@ -71,7 +71,11 @@ for find_dir in find_dirs:
         _library_variant = os.path.basename(so_filename).split("_")[-1][0]
         break
 if spi is None:
-    raise RuntimeError('Cannot find DEV_Config.so')
+    raise RuntimeError(
+        f"required Waveshare native library {os.path.basename(so_filename)} was not found; "
+        "obtain the matching architecture/variant from Waveshare and install it beside epdconfig.py, "
+        "in /usr/local/lib, or in /usr/lib"
+    )
 
 spi.DEV_ModuleInit.restype = ctypes.c_ubyte
 spi.DEV_ModuleExit.restype = None

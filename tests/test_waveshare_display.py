@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-from importlib.resources import files
 from types import ModuleType
 from typing import Any
 
@@ -119,7 +118,10 @@ def test_driver_loading_failure_has_actionable_initialization_error(monkeypatch:
 
     monkeypatch.setattr(waveshare_module, "import_module", fail_import)
 
-    with pytest.raises(DisplayBackendInitializationError, match="bundled native library.*native library unavailable"):
+    with pytest.raises(
+        DisplayBackendInitializationError,
+        match="architecture-compatible Waveshare DEV_Config native library.*native library unavailable",
+    ):
         create_display_backend("waveshare-13in3-e")
 
 
@@ -267,15 +269,3 @@ def test_instances_serialize_process_global_hardware_operations(monkeypatch: pyt
     assert not second.is_alive()
     assert not errors
     assert second_entered.is_set()
-
-
-def test_vendor_native_libraries_are_package_resources() -> None:
-    vendor = files("refrain.display.vendor.waveshare")
-
-    for name in (
-        "DEV_Config_32_b.so",
-        "DEV_Config_32_w.so",
-        "DEV_Config_64_b.so",
-        "DEV_Config_64_w.so",
-    ):
-        assert vendor.joinpath(name).is_file()
