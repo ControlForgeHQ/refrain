@@ -15,6 +15,7 @@ def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "general": {"timezone": "America/Toronto"},
         "content": {"directory": "content"},
+        "display": {"backend": "window"},
         "layout": {
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"]},
@@ -44,6 +45,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     config = load_application_config(config_path)
 
     assert config.timezone.key == "America/Toronto"
+    assert config.display_backend == "window"
     assert config.day_start == time(6)
     assert config.content_directory == tmp_path / "content"
     assert config.reveal.quotation == time(6)
@@ -74,7 +76,42 @@ def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> 
 def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 
+    assert config.display_backend == "window"
     assert config.default_fonts == ("libre-baskerville", "lora", "source-sans-3")
+
+
+def test_recognizes_reserved_waveshare_backend(tmp_path: Path) -> None:
+    config = load_application_config(
+        write_config(tmp_path / "config.yaml", configuration_data(display={"backend": "waveshare-13in3-e"}))
+    )
+
+    assert config.display_backend == "waveshare-13in3-e"
+
+
+@pytest.mark.parametrize(
+    ("display", "expected_message"),
+    [
+        (None, "is required"),
+        ({}, "is required"),
+        ({"backend": "unknown"}, "supported backends"),
+        ({"backend": 1}, "supported backends"),
+    ],
+)
+def test_required_and_invalid_display_backend_are_rejected(
+    tmp_path: Path, display: object, expected_message: str
+) -> None:
+    data = configuration_data()
+    if display is None:
+        data.pop("display")
+    else:
+        data["display"] = display
+    config_path = write_config(tmp_path / "config.yaml", data)
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    diagnostic = next(item for item in error.value.diagnostics if item.field == "display.backend")
+    assert expected_message in diagnostic.message
 
 
 def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Path) -> None:
