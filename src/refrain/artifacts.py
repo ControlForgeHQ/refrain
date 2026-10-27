@@ -157,14 +157,21 @@ class PreparedImageArtifactSet:
                 stream.seek(0)
                 with Image.open(stream) as image:
                     if image.format != "PNG" or image.size != self.image_size or image.mode != self.mode:
-                        raise ValueError("expected a PNG with the manifest dimensions and mode")
+                        raise ValueError(
+                            f"expected PNG size {self.image_size} mode {self.mode}; "
+                            f"found {image.format} size {image.size} mode {image.mode}"
+                        )
                     if getattr(image, "n_frames", 1) != 1:
                         raise ValueError("stage must contain exactly one complete image")
                     image.verify()
                 stream.seek(0)
-                with Image.open(stream) as image:
+                image = Image.open(stream)
+                try:
                     image.load()
-                    return image.copy()
+                except BaseException:
+                    image.close()
+                    raise
+                return image
         except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
             raise ArtifactValidationError(f"invalid prepared stage {path}: {error}") from error
 
@@ -241,7 +248,11 @@ class PreparedImageArtifactStore:
             _sync_directory(payload)
             _sync_directory(directory)
         except (OSError, ValueError) as error:
-            status = "complete set published; reload to confirm durability" if published else "prior manifest unchanged"
+            status = (
+                "complete set published; directory durability unconfirmed; reload before retry"
+                if published
+                else "prior manifest unchanged"
+            )
             raise ArtifactWriteError(
                 f"cannot store prepared images at {directory}: {error}; {status}", published=published
             ) from error

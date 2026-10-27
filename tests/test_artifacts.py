@@ -340,6 +340,31 @@ def test_cleanup_removes_old_revisions_and_abandoned_transactions_but_preserves_
     assert all(path.exists() for path in current.stage_paths)
 
 
+@pytest.mark.parametrize("point", ["save", "manifest"])
+def test_cleanup_handles_real_interrupted_transactions(store, snapshot, images, monkeypatch, point) -> None:
+    original = artifacts.os.replace
+
+    def fail(*args, **kwargs):
+        raise OSError("interrupted")
+
+    def interrupt_manifest(source, target):
+        if Path(target).name == "manifest.json":
+            fail()
+        original(source, target)
+
+    with monkeypatch.context() as patch:
+        if point == "save":
+            patch.setattr(Image.Image, "save", fail)
+        else:
+            patch.setattr(artifacts.os, "replace", interrupt_manifest)
+        with pytest.raises(ArtifactWriteError):
+            store.store(1, snapshot, images)
+    current = store.store(2, snapshot, images)
+    store.cleanup(2)
+    assert tuple(store.root.iterdir()) == (current.directory,)
+    assert store.load(2, snapshot, stage_count=3) == current
+
+
 def test_cleanup_preserves_unrecognized_files_and_trees(store, snapshot, images) -> None:
     current = store.store(2, snapshot, images)
     unrelated = [

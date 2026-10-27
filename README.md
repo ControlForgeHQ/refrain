@@ -167,6 +167,42 @@ for index, image in enumerate(images):
 
 Run `python examples/prepare_daily_snapshot.py /tmp/refrain-daily-images` to generate full-resolution inspectable images from synthetic committed snapshot data without display hardware.
 
+## Storing prepared images
+
+`PreparedImageArtifactStore(root)` owns derived artifacts under a caller-chosen absolute directory, separate from authoritative state and user content. The root and its ancestors must not be symbolic links or directory junctions. `store(revision, snapshot, images)` accepts a positive committed `PersistentState.revision`, its `DailySnapshot`, and a nonempty ordered sequence of complete Pillow images. Images must match `snapshot.layout.image_size` and share one supported mode: `1`, `L`, `LA`, `RGB`, or `RGBA`. They are stored losslessly as PNGs without conversion.
+
+Using `state`, `stages`, and `images` from the preparation example:
+
+```python
+from refrain import PreparedImageArtifactStore
+
+root = "/absolute/path/chosen-for-this-installation/prepared-images"
+store = PreparedImageArtifactStore(root)
+try:
+    artifacts = store.store(state.revision, state.snapshot, images)
+finally:
+    for image in images:
+        image.close()
+
+# Later, including after a restart; the caller supplies the expected stage count.
+artifacts = PreparedImageArtifactStore(root).load(
+    state.revision, state.snapshot, stage_count=len(stages)
+)
+if artifacts is None:
+    raise RuntimeError("no prepared artifact directory exists for this revision")
+with artifacts.load_stage(0) as image:
+    image.save("reloaded-stage-0.png")  # Or pass this complete image to a consumer.
+
+# Explicitly coordinated with other artifact users; never runs automatically.
+store.cleanup(current_revision=state.revision)
+```
+
+`load` validates the complete set one image at a time and returns a `PreparedImageArtifactSet` containing metadata and `stage_paths`, not retained decoded images. `load_stage(index)` returns one caller-owned image and rechecks its integrity; close it after use. Advancing reveal progress does not change artifact identity. A matching revision with a different snapshot is rejected.
+
+An absent revision directory returns `None`; an existing but incomplete, damaged, unsupported, or mismatched set raises `ArtifactValidationError`. Filesystem write failures raise `ArtifactWriteError`; its `published` flag distinguishes failure before manifest replacement from publication with uncertain directory durability. Reload after a published failure before deciding what to retry. Cleanup failures raise `ArtifactCleanupError` without invalidating the current set. These exceptions share `ArtifactStoreError`; invalid API arguments raise `ValueError` or `TypeError`. Storage never regenerates images or modifies committed state.
+
+The caller must serialize store operations and coordinate cleanup with all users of returned stage paths. Cleanup preserves the current revision directory even if invalid, skips unrelated entries and link-bearing trees, and removes recognized obsolete revisions and abandoned root-level transactions. See [Prepared image files](docs/ENGINEERING.md#prepared-image-files) for layout, publication, and durability details.
+
 ## Loading content
 
 `load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of validated `ContentEntry` objects; each entry contains its metadata, presentation style, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
