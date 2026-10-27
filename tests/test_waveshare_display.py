@@ -138,7 +138,7 @@ def test_native_initialization_failure_is_not_followed_by_sleep_or_retry(
 
     with pytest.raises(DisplayBackendInitializationError, match="native DEV_ModuleInit failed"):
         backend.update(Image.new("RGB", (1200, 1600)))
-    with pytest.raises(DisplayBackendUpdateError, match="hardware cleanup failure"):
+    with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
         backend.update(Image.new("RGB", (1200, 1600)))
 
     assert driver.calls == ["getbuffer", "Init"]
@@ -221,7 +221,7 @@ def test_cleanup_failure_prevents_reinitialization(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(DisplayBackendUpdateError, match="sleep failed"):
         backend.update(Image.new("RGB", (1200, 1600)))
-    with pytest.raises(DisplayBackendUpdateError, match="after a hardware cleanup failure"):
+    with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
         backend.update(Image.new("RGB", (1200, 1600)))
 
     assert driver.calls == ["getbuffer", "Init", "display", "sleep"]
