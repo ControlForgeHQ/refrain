@@ -624,6 +624,39 @@ def _attribution_color(mode: str) -> tuple[int, ...] | int:
     return (48, 48, 48)
 
 
+def _validate_reveal_stages(
+    stages: Sequence[CompositionVisibility],
+    *,
+    source_available: bool,
+    attribution_available: bool,
+    require_complete: bool = False,
+) -> None:
+    if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
+        raise QuotationRenderError("stages must be a nonempty sequence of CompositionVisibility values")
+
+    previous = CompositionVisibility(quotation=False)
+    for stage in stages:
+        if not isinstance(stage, CompositionVisibility) or any(
+            not isinstance(value, bool) for value in (stage.quotation, stage.source, stage.attribution)
+        ):
+            raise QuotationRenderError("each stage must be a CompositionVisibility value")
+        if not stage.quotation:
+            raise QuotationRenderError("the quotation must be visible in every stage")
+        if (stage.source and not source_available) or (stage.attribution and not attribution_available):
+            raise QuotationRenderError("a stage cannot reveal a field that is absent from the composition")
+        if (previous.source and not stage.source) or (previous.attribution and not stage.attribution):
+            raise QuotationRenderError("reveal stages must be cumulative")
+        if (
+            require_complete
+            and previous.quotation
+            and (previous.source, previous.attribution) == (stage.source, stage.attribution)
+        ):
+            raise QuotationRenderError("each recovery stage must reveal at least one additional field")
+        previous = stage
+    if require_complete and (previous.source, previous.attribution) != (source_available, attribution_available):
+        raise QuotationRenderError("the final recovery stage must reveal every available field")
+
+
 def render_reveal_stages(
     background: Image.Image,
     font: ResolvedFontData,
@@ -646,24 +679,11 @@ def render_reveal_stages(
     _validate_font(font)
     if font.identifier != layout.font_identifier or _font_sha256(font) != layout.font_sha256:
         raise QuotationRenderError("font does not match the resolved font used to create the composition layout")
-    if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
-        raise QuotationRenderError("stages must be a nonempty sequence of CompositionVisibility values")
-
-    previous = CompositionVisibility(quotation=False)
-    for stage in stages:
-        if not isinstance(stage, CompositionVisibility) or any(
-            not isinstance(value, bool) for value in (stage.quotation, stage.source, stage.attribution)
-        ):
-            raise QuotationRenderError("each stage must be a CompositionVisibility value")
-        if not stage.quotation:
-            raise QuotationRenderError("the quotation must be visible in every stage")
-        if (stage.source and (layout.byline is None or layout.byline.source is None)) or (
-            stage.attribution and (layout.byline is None or layout.byline.attribution is None)
-        ):
-            raise QuotationRenderError("a stage cannot reveal a field that is absent from the composition")
-        if (previous.source and not stage.source) or (previous.attribution and not stage.attribution):
-            raise QuotationRenderError("reveal stages must be cumulative")
-        previous = stage
+    _validate_reveal_stages(
+        stages,
+        source_available=layout.byline is not None and layout.byline.source is not None,
+        attribution_available=layout.byline is not None and layout.byline.attribution is not None,
+    )
 
     fill: tuple[int, ...] | int
     fill = (0, 0, 0, 255) if background.mode == "RGBA" else ((0, 0, 0) if background.mode == "RGB" else 0)

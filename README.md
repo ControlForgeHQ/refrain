@@ -199,9 +199,30 @@ store.cleanup(current_revision=state.revision)
 
 `load` validates the complete set one image at a time and returns a `PreparedImageArtifactSet` containing metadata and `stage_paths`, not retained decoded images. `load_stage(index)` returns one caller-owned image and rechecks its integrity; close it after use. Advancing reveal progress does not change artifact identity. A matching revision with a different snapshot is rejected.
 
-An absent revision directory returns `None`; an existing but incomplete, damaged, unsupported, or mismatched set raises `ArtifactValidationError`. Filesystem write failures raise `ArtifactWriteError`; its `published` flag distinguishes failure before manifest replacement from publication with uncertain directory durability. Reload after a published failure before deciding what to retry. Cleanup failures raise `ArtifactCleanupError` without invalidating the current set. These exceptions share `ArtifactStoreError`; invalid API arguments raise `ValueError` or `TypeError`. Storage never regenerates images or modifies committed state.
+An absent revision directory returns `None`; an existing but incomplete, damaged, unsupported, or mismatched set raises `ArtifactValidationError`. Artifact-root access failures raise `ArtifactAccessError`; filesystem write failures raise `ArtifactWriteError`, whose `published` flag distinguishes failure before manifest replacement from publication with uncertain directory durability. Reload after a published failure before deciding what to retry. Cleanup failures raise `ArtifactCleanupError` without invalidating the current set. These exceptions share `ArtifactStoreError`; invalid API arguments raise `ValueError` or `TypeError`. Storage never regenerates images or modifies committed state.
 
 The caller must serialize store operations and coordinate cleanup with all users of returned stage paths. Cleanup preserves the current revision directory even if invalid, skips unrelated entries and link-bearing trees, and removes recognized obsolete revisions and abandoned root-level transactions. See [Prepared image files](docs/ENGINEERING.md#prepared-image-files) for layout, publication, and durability details.
+
+## Recovering prepared images
+
+`recover_prepared_daily_images(state, artifact_store, stages)` reuses a complete valid set for the committed revision and snapshot. `stages` must be the full ordered sequence of cumulative `CompositionVisibility` values, ending with all available fields revealed; it is validated before reuse and supplies the expected stage count. Pass the same sequence used to prepare the stored set: the existing artifact format records its count, not individual visibility definitions. If the set is absent or invalid, recovery prepares and stores every stage from `state.snapshot`. It never loads content or configuration, changes persistent state, or cleans artifact directories.
+
+```python
+from refrain import (
+    CompositionVisibility,
+    PreparedImageArtifactStore,
+    recover_prepared_daily_images,
+)
+
+store = PreparedImageArtifactStore("/absolute/path/chosen-for-this-installation/prepared-images")
+artifacts = recover_prepared_daily_images(state, store, stages)
+
+# The returned set contains validated paths, not retained decoded images.
+with artifacts.load_stage(0) as image:
+    image.save("recovered-stage-0.png")
+```
+
+Recovery closes all generated Pillow images after storage, including when storage fails. Rendering errors are reported without changing the committed selection; `ArtifactAccessError` is not treated as a cache miss, and `ArtifactWriteError.published` remains available to callers. Existing validated artifacts are returned without rendering or rewriting.
 
 ## Loading content
 

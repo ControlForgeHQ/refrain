@@ -500,7 +500,7 @@ No automatic cleanup is coupled to storage or loading. Interrupted writes can le
 
 Cleanup inspects tree contents before removal. It skips unrelated root entries, noncanonical revision/transaction names, trees with unrecognized children, and any symbolic links or junctions, without following them. Removal and directory-synchronization errors raise `ArtifactCleanupError`; they do not invalidate a successfully published current set. Cleanup can partially remove obsolete artifacts before reporting a failure and may be retried. The root is an owned storage directory, not a general-purpose directory for user files.
 
-Callers must serialize artifact operations and coordinate cleanup with every reader still using a returned stage handle or path. The no-follow checks assume no concurrent hostile filesystem mutation; this is not a cross-process locking or adversarial filesystem sandbox. Cleanup never inspects or modifies authoritative state outside the owned root. Recovery orchestration and regeneration remain separate responsibilities.
+Callers must serialize artifact operations and coordinate cleanup with every reader still using a returned stage handle or path. The no-follow checks assume no concurrent hostile filesystem mutation; this is not a cross-process locking or adversarial filesystem sandbox. Cleanup never inspects or modifies authoritative state outside the owned root. `recover_prepared_daily_images` orchestrates reuse and full regeneration from the supplied committed state; only absence or `ArtifactValidationError` triggers regeneration. Artifact-root access and publication errors remain visible, and the operation closes generated images without changing persistent state.
 
 ## Rendering and image preparation
 
