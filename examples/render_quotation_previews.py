@@ -76,7 +76,7 @@ def main() -> None:
 
         for composition_name, (composition, stages) in _COMPOSITIONS.items():
             for style in _STYLES:
-                background = Image.new("RGB", (1600, 1200), "#f8f6f0")
+                background = Image.new("RGB", (1600, 1200), "#FFFFFF")
                 layout = layout_composition(
                     composition,
                     font,

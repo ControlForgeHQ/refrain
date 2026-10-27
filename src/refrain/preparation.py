@@ -16,7 +16,7 @@ from .renderer import (
     render_reveal_stages,
 )
 
-_BACKGROUND_COLOR = "#f8f6f0"
+_BACKGROUND_COLOR = "#FFFFFF"
 _BYLINE_GAP_FACTOR = 1.20
 
 
