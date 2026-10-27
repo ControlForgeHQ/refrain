@@ -47,6 +47,16 @@ def backend_at_available_port() -> tuple[ImageServerDisplayBackend, int]:
     return ImageServerDisplayBackend(port=port), port
 
 
+def wait_for_handler_threads(backend: ImageServerDisplayBackend) -> tuple[threading.Thread, ...]:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        threads = getattr(backend._server, "_threads", ())
+        if isinstance(threads, list) and threads:
+            return tuple(threads)
+        time.sleep(0.01)
+    raise AssertionError("the server did not start a request-handler thread")
+
+
 def test_factory_backend_serves_png_and_preserves_caller_image() -> None:
     port = available_port()
     backend = create_display_backend("image-server", image_server_port=port)
@@ -211,16 +221,120 @@ def test_close_is_repeatable_releases_port_and_rejects_updates() -> None:
     replacement.close()
 
 
-def test_close_does_not_wait_for_an_incomplete_client_request() -> None:
+def test_close_joins_incomplete_request_handler_and_releases_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    import refrain.display.image_server as image_server_module
+
+    monkeypatch.setattr(image_server_module, "_REQUEST_LIFETIME", 0.1)
     backend, port = backend_at_available_port()
     with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
         client.sendall(b"GET /display/current HTTP/1.1\r\n")
-        time.sleep(0.05)
+        handler_threads = wait_for_handler_threads(backend)
 
         started = time.monotonic()
         backend.close()
 
         assert time.monotonic() - started < 1
+        assert all(not thread.is_alive() for thread in handler_threads)
+        client.settimeout(0.2)
+        assert client.recv(1) == b""
+
+
+def test_disconnected_incomplete_client_does_not_leave_handler_running() -> None:
+    backend, port = backend_at_available_port()
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    client.sendall(b"GET /display/current HTTP/1.1\r\n")
+    handler_threads = wait_for_handler_threads(backend)
+
+    client.close()
+    handler_threads[0].join(timeout=1)
+    try:
+        assert not handler_threads[0].is_alive()
+    finally:
+        backend.close()
+
+
+def test_total_request_lifetime_bounds_slow_trickling_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    import refrain.display.image_server as image_server_module
+
+    monkeypatch.setattr(image_server_module, "_REQUEST_TIMEOUT", 1)
+    monkeypatch.setattr(image_server_module, "_REQUEST_LIFETIME", 0.2)
+    backend, port = backend_at_available_port()
+    stop_sending = Event()
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    client.settimeout(0.2)
+
+    def trickle_request() -> None:
+        while not stop_sending.wait(0.02):
+            try:
+                client.sendall(b"x")
+            except OSError:
+                return
+
+    sender = threading.Thread(target=trickle_request)
+    try:
+        client.sendall(b"G")
+        sender.start()
+        handler_threads = wait_for_handler_threads(backend)
+
+        started = time.monotonic()
+        backend.close()
+
+        assert time.monotonic() - started < 1
+        assert all(not thread.is_alive() for thread in handler_threads)
+    finally:
+        stop_sending.set()
+        sender.join(timeout=1)
+        client.close()
+        backend.close()
+    assert not sender.is_alive()
+
+
+def test_close_does_not_deadlock_with_active_request_and_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    import refrain.display.image_server as image_server_module
+
+    monkeypatch.setattr(image_server_module, "_REQUEST_LIFETIME", 0.1)
+    backend, port = backend_at_available_port()
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    client.sendall(b"GET /display/current HTTP/1.1\r\n")
+    handler_threads = wait_for_handler_threads(backend)
+
+    entered_copy = Event()
+    release_copy = Event()
+    update_errors: list[Exception] = []
+    image = Image.new("RGB", (4, 4), "yellow")
+    original_copy = Image.Image.copy
+
+    def blocked_copy(source: Image.Image) -> Image.Image:
+        entered_copy.set()
+        assert release_copy.wait(timeout=2)
+        return original_copy(source)
+
+    monkeypatch.setattr(Image.Image, "copy", blocked_copy)
+
+    def update() -> None:
+        try:
+            backend.update(image)
+        except DisplayBackendUpdateError as error:
+            update_errors.append(error)
+
+    updater = threading.Thread(target=update)
+    updater.start()
+    try:
+        assert entered_copy.wait(timeout=2)
+        started = time.monotonic()
+        backend.close()
+        assert time.monotonic() - started < 1
+        assert all(not thread.is_alive() for thread in handler_threads)
+    finally:
+        release_copy.set()
+        updater.join(timeout=2)
+        client.close()
+        image.close()
+        backend.close()
+
+    assert not updater.is_alive()
+    assert len(update_errors) == 1
+    assert "closed" in str(update_errors[0])
 
 
 def test_occupied_port_is_reported_as_initialization_failure() -> None:

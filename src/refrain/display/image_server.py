@@ -8,7 +8,7 @@ import logging
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
-from threading import Lock, Thread
+from threading import Lock, Thread, Timer
 from typing import ClassVar
 
 from PIL import Image
@@ -22,13 +22,14 @@ from . import (
 _LOGGER = logging.getLogger(__name__)
 _CURRENT_IMAGE_PATH = "/display/current"
 _REQUEST_TIMEOUT = 10
+_REQUEST_LIFETIME = 10
 
 
 class _ImageHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server with bounded handler lifetime and no reverse DNS lookup."""
 
-    daemon_threads = True
-    block_on_close = False
+    daemon_threads = False
+    block_on_close = True
 
     def __init__(
         self,
@@ -54,6 +55,22 @@ class _ImageRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         self.request.settimeout(_REQUEST_TIMEOUT)
         super().setup()
+        self._request_timer = Timer(_REQUEST_LIFETIME, self._expire_request)
+        self._request_timer.daemon = True
+        self._request_timer.start()
+
+    def finish(self) -> None:
+        timer = getattr(self, "_request_timer", None)
+        if timer is not None:
+            timer.cancel()
+            timer.join()
+        super().finish()
+
+    def _expire_request(self) -> None:
+        try:
+            self.request.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     def do_GET(self) -> None:
         if self.path != _CURRENT_IMAGE_PATH:
