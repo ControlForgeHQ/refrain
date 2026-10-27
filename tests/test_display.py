@@ -16,7 +16,6 @@ from refrain.display import (
     DisplayBackendCloseError,
     DisplayBackendError,
     DisplayBackendInitializationError,
-    DisplayBackendUnavailableError,
     DisplayBackendUpdateError,
     create_display_backend,
 )
@@ -128,10 +127,7 @@ def test_factory_constructs_the_explicit_window_backend(monkeypatch: pytest.Monk
     backend.close()
 
 
-def test_factory_reports_reserved_and_unknown_backends() -> None:
-    with pytest.raises(DisplayBackendUnavailableError, match="recognized but not implemented"):
-        create_display_backend("waveshare-13in3-e")
-
+def test_factory_reports_unknown_backends() -> None:
     with pytest.raises(DisplayBackendError, match="unsupported display backend"):
         create_display_backend("unexpected")
 
@@ -218,7 +214,8 @@ def test_core_imports_do_not_load_desktop_gui_modules() -> None:
             (
                 "import sys; import refrain; import refrain.config; import refrain.renderer; "
                 "import refrain.display; "
-                "assert 'tkinter' not in sys.modules; assert 'PIL.ImageTk' not in sys.modules"
+                "assert 'tkinter' not in sys.modules; assert 'PIL.ImageTk' not in sys.modules; "
+                "assert not any(name.startswith('refrain.display.vendor.waveshare') for name in sys.modules)"
             ),
         ],
         cwd=project_root,

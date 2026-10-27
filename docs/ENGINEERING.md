@@ -694,6 +694,8 @@ Do not modify vendor driver behavior without understanding the relevant hardware
 
 When modifications are necessary, keep them reviewable and explain why they are required.
 
+The physical backend requires Raspberry Pi OS, the vendored native library variant matching the host architecture, SPI enabled, and appropriate SPI/GPIO access for the service identity. The package must retain the bundled native libraries. Keep the application process under the minimum practical privileges rather than running it as root.
+
 ### Hardware isolation
 
 Only the Waveshare backend should depend on its vendor driver, SPI, or GPIO facilities.
@@ -909,10 +911,12 @@ Hardware validation should include:
 
 - driver initialization;
 - complete image transfer and refresh;
+- correct landscape orientation and representative color rendering;
 - repeated scheduled updates;
 - controller sleep and subsequent use;
+- retention of the displayed image after sleep;
 - application restart;
-- failure and recovery behavior where practical;
+- clean shutdown and recovery following a failed presentation where practical;
 - correct presentation of representative prepared images.
 
 Report the exact tested hardware, operating-system environment, and relevant limitations.

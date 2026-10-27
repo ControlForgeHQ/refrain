@@ -85,9 +85,11 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Display backend selection
 
-Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; `waveshare-13in3-e` is reserved for the physical panel and is not implemented yet. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
+Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; use `waveshare-13in3-e` on a supported Raspberry Pi with the physical panel connected. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
 
 The desktop backend uses the Python installation's Tk support and Pillow. Linux may require installing the matching Tk package (for example, `python3-tk`) and running in a graphical session. GUI modules are imported only when the window backend is constructed.
+
+The Waveshare backend uses its model-specific vendored driver and bundled native libraries. On Raspberry Pi OS, enable SPI and ensure the Refrain service identity has the SPI and GPIO access required by the driver. Hardware-dependent behavior must be validated on the physical panel; mocked tests do not establish hardware support.
 
 To display two PNG files in the same responsive window and close cleanly, run:
 
