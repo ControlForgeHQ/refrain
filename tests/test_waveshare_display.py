@@ -18,6 +18,14 @@ from refrain.display import (
 _DEFAULT = object()
 
 
+class SimulatedBuffer:
+    def __init__(self, length: int) -> None:
+        self.length = length
+
+    def __len__(self) -> int:
+        return self.length
+
+
 class SimulatedDriver:
     def __init__(
         self,
@@ -27,7 +35,7 @@ class SimulatedDriver:
     ) -> None:
         self.calls: list[str] = []
         self.images: list[Image.Image] = []
-        self.buffer = bytes(960_000) if buffer is None else buffer
+        self.buffer = SimulatedBuffer(960_000) if buffer is None else buffer
         self.outcomes = outcomes or {}
         self.hooks = hooks or {}
 
@@ -100,7 +108,7 @@ def test_invalid_images_are_rejected_before_hardware_operations(monkeypatch: pyt
     assert driver.calls == []
 
 
-@pytest.mark.parametrize("buffer", [bytes(959_999), bytes(960_001), object()])
+@pytest.mark.parametrize("buffer", [SimulatedBuffer(959_999), SimulatedBuffer(960_001), object()])
 def test_invalid_converted_buffers_are_rejected_before_hardware(monkeypatch: pytest.MonkeyPatch, buffer: Any) -> None:
     driver = SimulatedDriver(buffer=buffer)
     install_simulated_driver(monkeypatch, driver)
