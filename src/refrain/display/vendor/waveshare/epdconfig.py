@@ -52,6 +52,7 @@ find_dirs = [
     '/usr/lib',
 ]
 spi = None
+_library_variant = None
 for find_dir in find_dirs:
     val = int(os.popen('getconf LONG_BIT').read())
     val_1 = os.popen("cat /proc/cpuinfo | grep 'Raspberry Pi 5'").read()
@@ -67,9 +68,17 @@ for find_dir in find_dirs:
             so_filename = os.path.join(find_dir, 'DEV_Config_32_w.so')
     if os.path.exists(so_filename):
         spi = CDLL(so_filename)
+        _library_variant = os.path.basename(so_filename).split("_")[-1][0]
         break
 if spi is None:
-    RuntimeError('Cannot find DEV_Config.so')
+    raise RuntimeError('Cannot find DEV_Config.so')
+
+spi.DEV_ModuleInit.restype = ctypes.c_ubyte
+spi.DEV_ModuleExit.restype = None
+if _library_variant == "b":
+    spi.bcm2835_close.restype = ctypes.c_ubyte
+
+_native_state = "inactive"
 
 def digital_write(pin, value):
     spi.DEV_Digital_Write(pin, value)
@@ -88,16 +97,54 @@ def delay_ms(delaytime):
     time.sleep(delaytime / 1000.0)
         
 def module_init():
-    spi.DEV_ModuleInit()
-    spi.DEV_Digital_Write(EPD_PWR_PIN, 1)
-    time.sleep(30 / 1000.0)
-    spi.DEV_Digital_Write(EPD_PWR_PIN, 0)
-    time.sleep(30 / 1000.0)
-    spi.DEV_Digital_Write(EPD_PWR_PIN, 1)
-    time.sleep(30 / 1000.0)
+    global _native_state
+    if _native_state != "inactive":
+        raise RuntimeError(f"native GPIO library is {_native_state}; refusing to initialize it again")
+    try:
+        result = spi.DEV_ModuleInit()
+    except Exception:
+        _native_state = "poisoned"
+        raise
+    if result != 0:
+        _native_state = "poisoned"
+        raise RuntimeError(f"native DEV_ModuleInit failed with status {result}")
+    _native_state = "active"
+    try:
+        spi.DEV_Digital_Write(EPD_PWR_PIN, 1)
+        time.sleep(30 / 1000.0)
+        spi.DEV_Digital_Write(EPD_PWR_PIN, 0)
+        time.sleep(30 / 1000.0)
+        spi.DEV_Digital_Write(EPD_PWR_PIN, 1)
+        time.sleep(30 / 1000.0)
+    except Exception:
+        try:
+            module_exit()
+        except Exception:
+            logging.exception("failed to release native GPIO after module initialization failure")
+        raise
 
 
 def module_exit():
-    spi.DEV_ModuleExit()
+    global _native_state
+    if _native_state == "inactive":
+        return
+    if _native_state != "active":
+        raise RuntimeError(f"native GPIO library is {_native_state}; refusing to access it")
+    try:
+        spi.DEV_ModuleExit()
+        if _library_variant == "b" and spi.bcm2835_close() != 1:
+            raise RuntimeError("native bcm2835_close failed")
+    except Exception:
+        _native_state = "poisoned"
+        raise
+    _native_state = "inactive"
+
+
+def is_initialized():
+    return _native_state == "active"
+
+
+def is_poisoned():
+    return _native_state == "poisoned"
 
   
