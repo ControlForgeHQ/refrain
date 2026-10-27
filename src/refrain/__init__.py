@@ -1,6 +1,7 @@
 """Hardware-independent Refrain components."""
 
 from .artifacts import (
+    ArtifactAccessError,
     ArtifactCleanupError,
     ArtifactStoreError,
     ArtifactValidationError,
@@ -46,6 +47,7 @@ from .persistence import (
     UnsupportedStateVersionError,
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
+from .recovery import recover_prepared_daily_images
 from .renderer import (
     BylineLayout,
     CompositionLayout,
@@ -61,6 +63,7 @@ from .renderer import (
 from .selection import SelectionProposal, select_quotation
 
 __all__ = [
+    "ArtifactAccessError",
     "ArtifactCleanupError",
     "ArtifactStoreError",
     "ArtifactValidationError",
@@ -107,6 +110,7 @@ __all__ = [
     "layout_composition",
     "normalize_quotation",
     "prepare_daily_images",
+    "recover_prepared_daily_images",
     "build_eligible_quotation_pool",
     "render_reveal_stages",
     "select_quotation",

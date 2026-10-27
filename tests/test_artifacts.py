@@ -14,6 +14,7 @@ from PIL import Image
 
 import refrain.artifacts as artifacts
 from refrain import (
+    ArtifactAccessError,
     ArtifactCleanupError,
     ArtifactValidationError,
     ArtifactWriteError,
@@ -426,7 +427,8 @@ def test_links_are_not_accepted_for_loading_or_storage(store, snapshot, images, 
         moved = tmp_path / "moved"
         path.rename(moved)
         symlink_or_skip(path, moved, directory=moved.is_dir())
-    with pytest.raises(ArtifactValidationError, match="link"):
+    error = ArtifactAccessError if location in {"root", "ancestor"} else ArtifactValidationError
+    with pytest.raises(error, match="link"):
         store.load(1, snapshot, stage_count=3)
     if location in {"root", "ancestor", "revision"}:
         with pytest.raises(ArtifactWriteError, match="link"):
