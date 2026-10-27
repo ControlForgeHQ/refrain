@@ -32,7 +32,7 @@ The general-purpose driver collection under `RaspberryPi_JetsonNano/python/lib/w
 
 ## Local Modifications
 
-None at the time of import.
+`epd13in3E.py` uses a package-relative import for `epdconfig` so the model-specific driver can be loaded from Refrain's vendored package. This changes only how the sibling module is resolved; controller and image-conversion behavior remain unchanged.
 
 Any subsequent modifications to the upstream files must be documented and kept distinguishable from Refrain's own display-backend implementation.
 

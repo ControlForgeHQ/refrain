@@ -27,7 +27,7 @@
 # THE SOFTWARE.
 #
 import time
-import epdconfig
+from . import epdconfig
 
 import PIL
 from PIL import Image
@@ -294,5 +294,4 @@ class EPD():
         epdconfig.delay_ms(2000)
         epdconfig.module_exit()
 ### END OF FILE ###
-
 
