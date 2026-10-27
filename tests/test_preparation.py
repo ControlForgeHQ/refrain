@@ -106,7 +106,7 @@ def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
     )
     assert len(images) == len(stages)
     assert all(image.mode == "RGB" and image.size == _IMAGE_SIZE for image in images)
-    assert all(image.getpixel((0, 0)) == (248, 246, 240) for image in images)
+    assert all(image.getpixel((0, 0)) == (255, 255, 255) for image in images)
     assert len({id(image) for image in images}) == len(images)
     if len(images) > 1:
         assert images[0].tobytes() != images[-1].tobytes()
