@@ -635,14 +635,14 @@ Version 0.1 supports the following values:
 | Value | Behavior |
 |---|---|
 | `"centered"` | Each quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space. |
-| `"prose"` | Quotation lines share a common left edge. The complete text block is horizontally centered according to its widest rendered line, and the block is vertically centered within its allocated space. |
+| `"left-aligned"` | Quotation lines share a common left edge. The complete text block remains horizontally centered according to its widest rendered line, rather than anchored to the region's left edge, and vertically centered within its allocated space. The byline is right-aligned within the presentation region. |
 
 For example:
 
 ```yaml
-id: "example-prose"
+id: "example-left-aligned"
 
-presentation_style: "prose"
+presentation_style: "left-aligned"
 
 source: "An Example Book"
 attribution: "An Author"
