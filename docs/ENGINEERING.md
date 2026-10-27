@@ -557,7 +557,7 @@ Presentation styles determine layout geometry. Image drawing uses the resolved g
 
 Keep style-specific layout behavior isolated so additional built-in styles can be introduced without changing content-selection policy, persistence mechanisms, scheduling, or display integration.
 
-The initial implementation needs only the `centered` and `prose` styles.
+The initial implementation needs only the `centered` and `left-aligned` styles.
 
 A small internal dispatch mechanism for selecting built-in layout behavior is sufficient. Do not introduce a public styling plugin interface or generalized layout framework without a demonstrated requirement.
 

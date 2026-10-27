@@ -52,7 +52,7 @@ _COMPOSITIONS = {
         (CompositionVisibility(),),
     ),
 }
-_STYLES = ("centered", "prose")
+_STYLES = ("centered", "left-aligned")
 _FONTS = {
     "libre-baskerville": "LibreBaskerville-Regular.ttf",
     "lora": "Lora-Regular.ttf",
