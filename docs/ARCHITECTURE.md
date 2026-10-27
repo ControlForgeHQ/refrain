@@ -1077,7 +1077,7 @@ A display backend provides two operations:
 
 The application selects one built-in backend through validated runtime configuration. Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
 
-Version 0.1 provides a desktop window backend. The `waveshare-13in3-e` identifier is reserved for the supported Waveshare 13.3-inch e-Paper HAT+ (E) and remains unavailable until its separate implementation.
+Version 0.1 provides a desktop window backend and a Waveshare backend for the supported 13.3-inch e-Paper HAT+ (E).
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
 
@@ -1093,6 +1093,8 @@ The Waveshare backend owns model-specific hardware operations, including:
 - controller sleep or release where supported;
 - hardware error reporting;
 - cleanup.
+
+The Waveshare backend accepts complete RGB 1200 × 1600 portrait and 1600 × 1200 landscape images; images with alpha or palette transparency are unsupported. It converts the complete image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, or refresh mechanisms.
 

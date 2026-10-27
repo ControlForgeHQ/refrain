@@ -27,7 +27,7 @@
 # THE SOFTWARE.
 #
 import time
-import epdconfig
+from . import epdconfig
 
 import PIL
 from PIL import Image
@@ -35,6 +35,7 @@ import io
 
 EPD_WIDTH       = 1200
 EPD_HEIGHT      = 1600
+BUSY_TIMEOUT_SECONDS = 120
 
 class EPD():
     def __init__(self):
@@ -85,7 +86,10 @@ class EPD():
 
     def ReadBusyH(self):
         print("e-Paper busy H")
-        while(epdconfig.digital_read(self.EPD_BUSY_PIN) == 0):      # 0: busy, 1: idle
+        deadline = time.monotonic() + BUSY_TIMEOUT_SECONDS
+        while epdconfig.digital_read(self.EPD_BUSY_PIN) == 0:  # 0: busy, 1: idle
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"e-Paper BUSY signal did not clear within {BUSY_TIMEOUT_SECONDS} seconds")
             epdconfig.delay_ms(5)
         print("e-Paper busy H release")
 
@@ -115,8 +119,8 @@ class EPD():
     def Init(self):
         print("EPD init...")
         epdconfig.module_init()
-        
-        self.Reset() 
+
+        self.Reset()
         self.ReadBusyH()
 
         epdconfig.digital_write(self.EPD_CS_M_PIN, 0)
@@ -294,5 +298,3 @@ class EPD():
         epdconfig.delay_ms(2000)
         epdconfig.module_exit()
 ### END OF FILE ###
-
-

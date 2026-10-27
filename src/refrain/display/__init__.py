@@ -47,9 +47,9 @@ def create_display_backend(backend: str) -> DisplayBackend:
 
         return WindowDisplayBackend()
     if backend == "waveshare-13in3-e":
-        raise DisplayBackendUnavailableError(
-            "display backend 'waveshare-13in3-e' is recognized but not implemented yet"
-        )
+        from .waveshare import WaveshareDisplayBackend
+
+        return WaveshareDisplayBackend()
     raise DisplayBackendError(f"unsupported display backend {backend!r}; choose 'window' or 'waveshare-13in3-e'")
 
 
