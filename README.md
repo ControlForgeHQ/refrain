@@ -85,7 +85,19 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Display backend selection
 
-Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; use `waveshare-13in3-e` on a supported Raspberry Pi with the physical panel connected. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
+Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; use `waveshare-13in3-e` on a supported Raspberry Pi with the physical panel connected; or use `image-server` to serve the current complete image to HTTP clients. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
+
+The image server defaults to loopback-only access at `http://127.0.0.1:8080/display/current`. Configure it explicitly to accept connections from other devices on a trusted local network:
+
+```yaml
+display:
+  backend: "image-server"
+  image-server:
+    host: "0.0.0.0"
+    port: 8080
+```
+
+With `0.0.0.0`, open `http://<refrain-host-lan-ip>:8080/display/current` from another device and allow the port through the host firewall if needed. This backend provides no authentication or encryption; do not expose it to untrusted networks or the public Internet.
 
 The desktop backend uses the Python installation's Tk support and Pillow. Linux may require installing the matching Tk package (for example, `python3-tk`) and running in a graphical session. GUI modules are imported only when the window backend is constructed.
 
@@ -98,6 +110,14 @@ python examples/display_window.py first.png second.png
 ```
 
 The example waits for Enter between updates while the window continues to process GUI events. It does not perform content selection or image preparation.
+
+To test the HTTP backend independently of the application controller, provide two PNG images:
+
+```sh
+python examples/image_server.py first.png second.png
+```
+
+Open the printed URL in a browser to view the first image, then press Enter in the terminal to replace it with the second. Use `--host 0.0.0.0` to make the test server reachable from a trusted LAN; visit the server's LAN IP in the browser. The example defaults to port `8080`; override it with `--port` if that port is occupied.
 
 ## Rendering a literary composition
 
