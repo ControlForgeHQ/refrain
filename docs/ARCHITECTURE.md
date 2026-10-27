@@ -134,7 +134,7 @@ The runtime should avoid unnecessary memory use and background processing, parti
 
 **Renderer:** The hardware-independent component responsible for composing complete presentation images.
 
-**Display Backend:** The component responsible for communicating prepared images to the physical display.
+**Display Backend:** The component responsible for presenting prepared images through a configured output destination, including directly connected display hardware or a network-accessible image service.
 
 **Persistent State:** The committed daily snapshot, selection histories, reveal progress, and scheduling context required for recovery across application restarts.
 
@@ -1064,7 +1064,7 @@ The display scheduler and backend remain independent of the renderer.
 
 Normal scheduled updates select among prepared images rather than invoking image composition.
 
-## Physical display output
+## Display output
 
 ### Backend responsibility
 
@@ -1072,12 +1072,16 @@ Refrain presents complete rendered images through a narrow, hardware-independent
 
 A display backend provides two operations:
 
-- `update(image)` presents a complete Pillow image.
+- `update(image)` presents a complete Pillow image through the configured output destination.
 - `close()` releases resources owned by the backend.
 
 The application selects one built-in backend through validated runtime configuration. Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
 
-Version 0.1 provides a desktop window backend and a Waveshare backend for the supported 13.3-inch e-Paper HAT+ (E).
+Version 0.1 provides three built-in display backends:
+
+- `window`: Presents complete images in a graphical desktop window.
+- `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
+- `image-server`: Makes the current complete image available to network clients through a read-only HTTP service.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
 
@@ -1096,27 +1100,69 @@ The Waveshare backend owns model-specific hardware operations, including:
 
 The Waveshare backend accepts complete RGB 1200 × 1600 portrait and 1600 × 1200 landscape images; images with alpha or palette transparency are unsupported. It converts the complete image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
-The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, or refresh mechanisms.
+The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
+
+The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations.
 
 The backend validates image compatibility with its destination rather than silently resizing or otherwise changing the prepared presentation.
 
-A completed `update()` indicates that the backend's presentation operation completed successfully. Failures and uncertain hardware outcomes must remain distinguishable where the underlying implementation permits.
+A completed `update()` indicates that the backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
+
+Failures and uncertain hardware outcomes must remain distinguishable where the underlying implementation permits.
 
 Display backends must not perform quotation selection, reveal scheduling, image preparation, or persistent-state updates.
 
 Backend implementations are built-in application components. Version 0.1 does not define a general display plugin system.
 
+### Network image service
+
+The `image-server` backend provides a network-accessible representation of the current prepared image without requiring directly connected display hardware.
+
+The backend exposes one read-only HTTP endpoint:
+
+`GET /display/current`
+
+A successful request returns the complete current image in PNG format with the appropriate HTTP content type.
+
+The endpoint must be usable by standard HTTP clients, including ordinary web browsers, without requiring client-specific software or protocols.
+
+The service supports HTTP entity tags (ETags) derived from the served image content. Clients may submit conditional requests using `If-None-Match`; when the current representation matches, the service returns `304 Not Modified` without transferring the image body.
+
+When no image has been accepted, the service returns `503 Service Unavailable`.
+
+The backend retains the current encoded PNG and its associated entity tag in memory. It does not create or manage a separate persistent image store.
+
+Each successful `update(image)` produces a complete replacement representation before making it available to clients. Concurrent requests must observe a consistent, complete image and entity tag, never partially updated content.
+
+The existing prepared-image persistence and recovery mechanisms remain authoritative. After application startup or recovery, the scheduler supplies the appropriate prepared image through the normal backend interface.
+
+The HTTP service operates independently of individual clients. It does not track display devices, maintain client sessions, queue updates, or require acknowledgement that an image has been physically displayed.
+
+Clients determine when to retrieve images. A client may miss intermediate reveal stages and retrieve only the most recently published image.
+
+The backend does not control client polling intervals, power management, physical display refreshes, or client-side image retention.
+
+The service must remain responsive between calls to `update(image)` without requiring the application scheduler to process HTTP requests.
+
+The backend owns its listening resources and concurrent request handling. Initialization must report failures that prevent the service from becoming available. Shutdown must release its listening resources and terminate backend-owned execution without leaving the HTTP service running independently of Refrain.
+
+The configured listening address controls network accessibility. The service is intended for explicitly trusted local-network deployments and must not expose application configuration, content-library files, persistent state, or privileged operations.
+
+The image-server backend is distinct from future local or public web publishing functionality. It provides rendered image data for clients rather than a general-purpose web presentation or content-management interface.
+
 ### Update behavior
 
-The physical display is updated at meaningful presentation changes, including:
+Physical display updates occur at meaningful presentation changes, including:
 
 - the beginning of a new display day;
 - scheduled progressive reveals;
 - recovery when a valid desired image has not been successfully presented.
 
-Refrain does not require continuous refresh or animation.
+Refrain does not require continuous physical refresh or animation.
 
 Display updates must be coordinated so that overlapping operations cannot corrupt communication with the device.
+
+For the image-server backend, an update replaces the currently available image representation. Network clients retrieve that representation independently of the application's scheduling operations.
 
 ### Failure handling
 
@@ -1130,7 +1176,11 @@ The application must distinguish a known successful update from a failed or unce
 
 An uncertain hardware result must not be treated as proof that the desired image was successfully displayed.
 
-The exact retry parameters and hardware lifecycle behavior are engineering decisions informed by real-device testing.
+For the image-server backend, unsuccessful image preparation or replacement must not expose incomplete content or invalidate the previously accepted image.
+
+Individual network-client failures do not constitute display-backend update failures. The backend does not require clients to retrieve or acknowledge published images.
+
+The exact retry parameters and hardware lifecycle behavior are engineering decisions informed by the relevant output destination.
 
 ### Retained display content
 
@@ -1138,7 +1188,11 @@ E-paper retains its visible image without continuous power.
 
 Refrain should preserve useful displayed content across temporary application and hardware failures when possible.
 
-It must not clear the display merely because a recoverable software problem occurred.
+It must not clear a physical display merely because a recoverable software problem occurred.
+
+The image-server backend retains the last successfully accepted image while the backend remains operational. It does not independently persist that representation across application restarts.
+
+Network clients are responsible for retaining their displayed content during temporary network or application unavailability.
 
 ## Application lifecycle
 

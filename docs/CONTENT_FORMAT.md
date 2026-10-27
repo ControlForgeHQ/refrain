@@ -177,6 +177,7 @@ Version 0.1 defines the following built-in backend identifiers:
 |---|---|
 | `"window"` | Displays complete presentation images in a desktop window on a supported graphical Windows or Linux environment. |
 | `"waveshare-13in3-e"` | Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E). |
+| `"image-server"` | Makes the current complete presentation image available to HTTP clients. |
 
 Only implemented backends may be selected at runtime. A backend that cannot be initialized must produce an actionable error rather than silently selecting another backend.
 
@@ -189,6 +190,56 @@ Display backends consume complete rendered images. Backend selection does not ch
 Unsupported backend identifiers are configuration errors.
 
 Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
+
+#### Image-server configuration
+
+The `image-server` backend provides an HTTP service for retrieving the current prepared image.
+
+Its optional settings are defined in the `display.image-server` mapping.
+
+For example:
+
+```yaml
+display:
+  backend: "image-server"
+
+  image-server:
+    host: "0.0.0.0"
+    port: 8080
+```
+
+The following fields are supported:
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `display.image-server.host` | String | No | `"127.0.0.1"` |
+| `display.image-server.port` | Integer | No | `8080` |
+
+The `display.image-server` mapping may be omitted entirely. When present, it must be a mapping containing only supported fields.
+
+`host` specifies the local address on which the HTTP service listens.
+
+It must be a nonempty string identifying a valid local bind address or hostname.
+
+Common values include:
+
+- `"127.0.0.1"`: Listen only on the local IPv4 loopback interface.
+- `"0.0.0.0"`: Listen on all available IPv4 interfaces.
+- A specific local IP address: Listen only on that address.
+
+The default loopback address prevents connections from other network devices. Access from another device requires an appropriate listening address and any necessary operating-system firewall configuration.
+
+Binding to a network-accessible address does not provide authentication or encryption. The image-server service is intended for trusted local networks and must not be exposed directly to untrusted networks or the public Internet.
+
+`port` specifies the TCP listening port. It must be an integer between 1 and 65535, inclusive. Boolean values, strings, floating-point values, zero, and out-of-range integers are invalid.
+
+An unavailable listening address or occupied port is a backend initialization failure, not a configuration fallback condition.
+
+The `display.image-server` settings are validated whenever the mapping is present, regardless of which display backend is selected. They do not affect other backends.
+
+The image-server backend uses the fixed HTTP endpoint `/display/current` and serves PNG images. Neither the endpoint path nor the image format is configurable in Version 0.1.
+
+The backend retains its current image representation in memory and requires no separate image-storage directory or filesystem path.
 
 ### General settings
 
