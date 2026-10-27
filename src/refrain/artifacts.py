@@ -33,6 +33,10 @@ class ArtifactValidationError(ArtifactStoreError):
     """An existing artifact set is incomplete, damaged, or mismatched."""
 
 
+class ArtifactAccessError(ArtifactStoreError):
+    """The artifact root cannot be accessed or is not a usable directory."""
+
+
 class ArtifactWriteError(ArtifactStoreError):
     """A write failed; ``published`` identifies whether the manifest was replaced."""
 
@@ -91,6 +95,14 @@ def _inputs(revision: int, snapshot: DailySnapshot) -> tuple[int, int]:
 
 def _is_link(path: Path) -> bool:
     return path.is_symlink() or path.is_junction()
+
+
+def _exists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def _require_directory(path: Path) -> None:
@@ -173,7 +185,13 @@ class PreparedImageArtifactSet:
                     image.close()
                     raise
                 return image
-        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+        except FileNotFoundError as error:
+            raise ArtifactValidationError(f"invalid prepared stage {path}: {error}") from error
+        except OSError as error:
+            if error.errno is not None:
+                raise ArtifactAccessError(f"cannot access prepared stage {path}: {error}") from error
+            raise ArtifactValidationError(f"invalid prepared stage {path}: {error}") from error
+        except (ValueError, SyntaxError, Image.DecompressionBombError) as error:
             raise ArtifactValidationError(f"invalid prepared stage {path}: {error}") from error
 
 
@@ -191,10 +209,14 @@ class PreparedImageArtifactStore:
 
     def _check_root(self) -> None:
         for path in (*reversed(self.root.parents), self.root):
+            try:
+                status = path.lstat()
+            except FileNotFoundError:
+                continue
             if _is_link(path):
                 raise ValueError(f"artifact root cannot traverse a symbolic link or junction: {path}")
-            if path.exists():
-                _require_directory(path)
+            if not stat.S_ISDIR(status.st_mode):
+                raise ValueError(f"{path} must be a real directory, not a link")
 
     def store(self, revision: int, snapshot: DailySnapshot, images: Sequence[Image.Image]) -> PreparedImageArtifactSet:
         """Publish all explicit stages losslessly; input images remain caller-owned."""
@@ -273,8 +295,13 @@ class PreparedImageArtifactStore:
         directory = self.root / f"revision-{revision}"
         try:
             self._check_root()
-            if not directory.exists() and not _is_link(directory):
-                return None
+            root_exists = _exists(self.root)
+            directory_exists = _exists(directory) if root_exists else False
+        except (OSError, ValueError) as error:
+            raise ArtifactAccessError(f"cannot access prepared-image root {self.root}: {error}") from error
+        if not root_exists or not directory_exists:
+            return None
+        try:
             _require_directory(directory)
             manifest = directory / "manifest.json"
             _require_file(manifest)
@@ -335,7 +362,11 @@ class PreparedImageArtifactStore:
                 with result.load_stage(index):
                     pass
             return result
-        except (OSError, ValueError, TypeError, RecursionError) as error:
+        except FileNotFoundError as error:
+            raise ArtifactValidationError(f"invalid prepared images at {directory}: {error}") from error
+        except OSError as error:
+            raise ArtifactAccessError(f"cannot access prepared images at {directory}: {error}") from error
+        except (ValueError, RecursionError) as error:
             raise ArtifactValidationError(f"invalid prepared images at {directory}: {error}") from error
 
     def cleanup(self, current_revision: int) -> None:
