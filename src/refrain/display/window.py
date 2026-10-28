@@ -132,17 +132,18 @@ class WindowDisplayBackend:
 
         with self._lock:
             if self._closed:
-                raise DisplayBackendUpdateError("cannot update a closed desktop display")
+                raise DisplayBackendUpdateError("cannot update a closed desktop display", recoverable=False)
             if not self._thread.is_alive():
                 raise DisplayBackendUpdateError(
-                    f"the desktop display window is no longer available: {self._worker_error or 'closed'}"
+                    f"the desktop display window is no longer available: {self._worker_error or 'closed'}",
+                    recoverable=False,
                 )
             command = _Command(present)
             self._commands.put(command)
         command.completed.wait()
         if command.error is not None:
             message = f"could not present the image in the desktop window: {command.error}"
-            raise DisplayBackendUpdateError(message) from command.error
+            raise DisplayBackendUpdateError(message, recoverable=not self._closed) from command.error
 
     def close(self) -> None:
         """Close the window and wait for its GUI thread to release resources."""

@@ -154,10 +154,12 @@ def test_poisoned_initialization_releases_resources_and_prevents_reuse(
     monkeypatch.setattr(waveshare_module, "import_module", lambda *_args, **_kwargs: module)
     backend = waveshare_module.WaveshareDisplayBackend()
 
-    with pytest.raises(DisplayBackendInitializationError, match="Linux SPI/GPIO initialization failed"):
+    with pytest.raises(DisplayBackendInitializationError, match="Linux SPI/GPIO initialization failed") as failure:
         backend.update(Image.new("RGB", (1200, 1600)))
-    with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
+    assert not failure.value.recoverable
+    with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure") as failure:
         backend.update(Image.new("RGB", (1200, 1600)))
+    assert not failure.value.recoverable
 
     assert driver.calls == ["getbuffer", "Init", "module_exit"]
 
@@ -191,8 +193,9 @@ def test_poisoned_communication_releases_resources_without_controller_io(
     monkeypatch.setattr(waveshare_module, "import_module", lambda *_args, **_kwargs: module)
     backend = waveshare_module.WaveshareDisplayBackend()
 
-    with pytest.raises(DisplayBackendUpdateError, match="SPI transfer failed"):
+    with pytest.raises(DisplayBackendUpdateError, match="SPI transfer failed") as failure:
         backend.update(Image.new("RGB", (1200, 1600)))
+    assert not failure.value.recoverable
     with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
         backend.update(Image.new("RGB", (1200, 1600)))
     backend.close()
@@ -276,8 +279,9 @@ def test_cleanup_failure_prevents_reinitialization(monkeypatch: pytest.MonkeyPat
     install_simulated_driver(monkeypatch, driver)
     backend = create_display_backend("waveshare-13in3-e")
 
-    with pytest.raises(DisplayBackendUpdateError, match="sleep failed"):
+    with pytest.raises(DisplayBackendUpdateError, match="sleep failed") as failure:
         backend.update(Image.new("RGB", (1200, 1600)))
+    assert not failure.value.recoverable
     with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
         backend.update(Image.new("RGB", (1200, 1600)))
 

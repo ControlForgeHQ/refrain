@@ -203,6 +203,8 @@ def present_prepared_stage(backend: DisplayBackend, artifacts: PreparedImageArti
     try:
         backend.update(image)
     except DisplayBackendError as error:
+        if not error.recoverable:
+            raise ApplicationError(f"display update failed: {error}") from error
         raise _RetryableApplicationError(f"display update failed: {error}") from error
     finally:
         image.close()
@@ -349,6 +351,8 @@ def run_application(
                     try:
                         backend = backend_factory(configuration)
                     except DisplayBackendError as error:
+                        if not error.recoverable:
+                            raise ApplicationError(f"cannot initialize display backend: {error}") from error
                         raise _RetryableApplicationError(f"cannot initialize display backend: {error}") from error
                     continue
                 if presented != (state.revision, stage):

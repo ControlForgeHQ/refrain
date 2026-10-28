@@ -14,9 +14,11 @@ from PIL import Image
 import refrain.application as application
 from refrain import (
     ApplicationError,
+    ArtifactWriteError,
     DailyImagePreparationError,
     NoEligibleQuotationError,
     PersistentStateStore,
+    PreparedImageArtifactStore,
     StateCommitError,
     StateRecoveryError,
     run_application,
@@ -674,6 +676,25 @@ def test_continuous_later_boundary_supersedes_failed_transition(workspace, monke
     assert [record.display_date.day for record in workspace.load().global_history] == [10, 14]
 
 
+def test_continuous_pending_boundary_survives_backward_adjustment_during_retry(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original = PersistentStateStore.commit
+    attempts = []
+
+    def commit(self, proposal, snapshot):
+        attempts.append(snapshot.display_date)
+        if len(attempts) == 2:
+            raise StateCommitError("disk full")
+        return original(self, proposal, snapshot)
+
+    monkeypatch.setattr(PersistentStateStore, "commit", commit)
+    clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: clock.move(at(9, 7))])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (2, 0)]
+    assert attempts == [date(2026, 3, day) for day in (10, 11, 11)]
+    assert [record.display_date.day for record in workspace.load().global_history] == [10, 11]
+
+
 def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(workspace, monkeypatch) -> None:
     ordinary(workspace)
     original = application.recover_prepared_daily_images
@@ -775,6 +796,29 @@ def test_continuous_initialization_retry(workspace, monkeypatch) -> None:
     assert workspace.load().revision == 1
 
 
+@pytest.mark.parametrize("operation", ["initialize", "update"])
+def test_continuous_terminal_display_error_stops_without_retry(workspace, monkeypatch, operation) -> None:
+    ordinary(workspace)
+    clock = RuntimeClock(at(10, 7))
+    display = FakeDisplay()
+
+    def fail_update(image):
+        raise DisplayBackendUpdateError("backend disabled", recoverable=False)
+
+    def initialize(configuration):
+        if operation == "initialize":
+            raise DisplayBackendInitializationError("backend disabled", recoverable=False)
+        return display
+
+    display.update = fail_update
+    with pytest.raises(ApplicationError, match="backend disabled"):
+        run_continuously(workspace, clock, monkeypatch, backend_factory=initialize)
+    assert display.closed == (1 if operation == "update" else 0)
+    assert clock.retry_delays == [] and clock.deadlines == []
+    assert len(workspace.load().global_history) == 1
+    assert len(png_files(workspace.artifacts)) == 3
+
+
 def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, monkeypatch, caplog) -> None:
     ordinary(workspace)
     display = FakeDisplay(fail_update=True)
@@ -849,6 +893,46 @@ def test_continuous_uncertain_publication_with_temporary_reload_failure(workspac
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0)] and clock.retry_delays == [1]
     assert len(workspace.load().global_history) == 1
+
+
+def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original = PreparedImageArtifactStore.store
+    publications = []
+
+    def publish(self, revision, snapshot, images):
+        publications.append(revision)
+        original(self, revision, snapshot, images)
+        raise ArtifactWriteError("directory sync unconfirmed", published=True)
+
+    monkeypatch.setattr(PreparedImageArtifactStore, "store", publish)
+    clock = RuntimeClock(at(10, 7), retries=[lambda: None])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0)] and publications == [1]
+    assert clock.retry_delays == [1]
+    assert len(workspace.load().global_history) == 1
+
+
+def test_continuous_retry_duration_uses_monotonic_time_after_interrupted_wait(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    display = FakeDisplay(fail_update=True)
+    clock = RuntimeClock(at(10, 7))
+    delays = []
+
+    def wait(timeout):
+        delays.append(timeout)
+        if len(delays) == 1:
+            clock.elapsed += 0.25
+            clock.now = at(9, 7)
+        else:
+            clock.elapsed += timeout
+            display.fail_update = False
+        return False
+
+    clock.wait = wait
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
+    assert delays == [1.0, 0.75] and stages == [(1, 0)]
+    assert workspace.load().revision == 1
 
 
 def test_continuous_real_scheduling_wait_is_interrupted_by_shutdown(workspace, monkeypatch) -> None:

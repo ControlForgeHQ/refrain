@@ -23,6 +23,10 @@ class DisplayBackend(Protocol):
 class DisplayBackendError(RuntimeError):
     """Base class for display-backend construction and operation failures."""
 
+    def __init__(self, message: str, *, recoverable: bool = True) -> None:
+        self.recoverable = recoverable
+        super().__init__(message)
+
 
 class DisplayBackendUnavailableError(DisplayBackendError):
     """Raised when a recognized display backend has not been implemented."""

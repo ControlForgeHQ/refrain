@@ -219,7 +219,7 @@ class ImageServerDisplayBackend:
             raise DisplayBackendUpdateError("image must be a Pillow Image.Image instance")
         with self._state_lock:
             if self._closed:
-                raise DisplayBackendUpdateError("cannot update a closed image-server display")
+                raise DisplayBackendUpdateError("cannot update a closed image-server display", recoverable=False)
 
         try:
             image_copy = image.copy()
@@ -235,7 +235,7 @@ class ImageServerDisplayBackend:
 
         with self._state_lock:
             if self._closed:
-                raise DisplayBackendUpdateError("cannot update a closed image-server display")
+                raise DisplayBackendUpdateError("cannot update a closed image-server display", recoverable=False)
             self._representation = image_bytes, entity_tag
 
     def _get_representation(self) -> tuple[bytes, str] | None:

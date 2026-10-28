@@ -104,6 +104,8 @@ The continuous runtime keeps one display backend active across updates. It waits
 
 Press Ctrl+C or send SIGTERM to stop. Shutdown interrupts scheduling and retry waits, releases the backend, and preserves state and prepared images without intentionally clearing retained e-paper content. The `window` and `image-server` backends remain operational throughout execution and close on shutdown; HTTP serving stops at that point. Synchronous preparation or display operations finish before shutdown can release their resources. Physical panel behavior still requires hardware validation.
 
+If a backend reports that its instance cannot safely recover (such as a closed desktop window or disabled Waveshare transport), the application releases it and exits with status 1 rather than retrying an unusable instance. The committed selection remains available for restart.
+
 ### One-shot startup and diagnostics
 
 Add `--once` to run only the startup-and-presentation workflow:

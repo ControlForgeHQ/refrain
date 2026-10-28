@@ -72,10 +72,10 @@ class WaveshareDisplayBackend:
 
         with self._lock:
             if self._closed:
-                raise DisplayBackendUpdateError("cannot update a closed Waveshare display")
+                raise DisplayBackendUpdateError("cannot update a closed Waveshare display", recoverable=False)
             if self._failed:
                 raise DisplayBackendUpdateError(
-                    "cannot update a Waveshare display after an unrecoverable hardware failure"
+                    "cannot update a Waveshare display after an unrecoverable hardware failure", recoverable=False
                 )
             try:
                 driver_image = image.copy()
@@ -145,6 +145,9 @@ class WaveshareDisplayBackend:
                             except Exception:
                                 _LOGGER.exception("failed to return Waveshare controller to sleep after update failure")
                         raise
+            except DisplayBackendError as error:
+                error.recoverable = error.recoverable and not self._failed
+                raise
             finally:
                 try:
                     driver_image.close()
