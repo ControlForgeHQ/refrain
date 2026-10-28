@@ -126,8 +126,10 @@ class DisplayDayBoundaryObserver:
     """Recognize boundaries crossed while this process continuously observes time.
 
     The first observation establishes a baseline only. Clock discontinuities
-    backward reset that baseline without manufacturing a boundary; forward
-    jumps produce at most one observation for the currently appropriate date.
+    backward reset that baseline without creating a boundary; an existing
+    pending boundary remains available while its selection revision is current.
+    Forward jumps produce at most one observation for the currently appropriate
+    date.
     """
 
     def __init__(self, configuration: ApplicationConfiguration) -> None:
@@ -136,6 +138,7 @@ class DisplayDayBoundaryObserver:
         self._previous_wall_utc: datetime | None = None
         self._previous_monotonic: float | None = None
         self._previous_display_date: date | None = None
+        self._pending_boundary: DisplayDayBoundary | None = None
         self._last_boundary_date: date | None = None
 
     def observe(
@@ -173,6 +176,12 @@ class DisplayDayBoundaryObserver:
         backward_adjustment = elapsed_wall < elapsed_monotonic - _CLOCK_ADJUSTMENT_TOLERANCE
         self._record(current_utc, monotonic_time, display_date)
 
+        if self._pending_boundary is not None:
+            if self._pending_boundary.state_revision == state_revision:
+                return self._pending_boundary
+            self._last_boundary_date = self._pending_boundary.display_date
+            self._pending_boundary = None
+
         if backward_adjustment:
             self._last_boundary_date = None
             return None
@@ -181,8 +190,8 @@ class DisplayDayBoundaryObserver:
         if display_date == self._last_boundary_date:
             return None
 
-        self._last_boundary_date = display_date
-        return DisplayDayBoundary(display_date, state_revision)
+        self._pending_boundary = DisplayDayBoundary(display_date, state_revision)
+        return self._pending_boundary
 
     def _record(self, wall_utc: datetime, monotonic: float, display_date: date) -> None:
         self._previous_wall_utc = wall_utc

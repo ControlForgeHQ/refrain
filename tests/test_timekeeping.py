@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from threading import Event
@@ -16,7 +17,10 @@ from refrain import (
     PresentationRegion,
     ResolvedFont,
     RevealSchedule,
+    SchedulingAction,
     SchedulingContext,
+    StateCommitError,
+    evaluate_scheduling,
     next_scheduling_deadline,
     normalize_quotation,
     wait_for_scheduling_event,
@@ -76,7 +80,41 @@ def test_observer_recognizes_one_ordinary_day_start_boundary() -> None:
     boundary = observer.observe(datetime(2026, 10, 26, 6, 0, tzinfo=zone), 160.0, 4)
 
     assert boundary == DisplayDayBoundary(date(2026, 10, 26), 4)
-    assert observer.observe(datetime(2026, 10, 26, 6, 1, tzinfo=zone), 220.0, 4) is None
+    assert observer.observe(datetime(2026, 10, 26, 6, 1, tzinfo=zone), 220.0, 4) == boundary
+    assert observer.observe(datetime(2026, 10, 26, 6, 2, tzinfo=zone), 280.0, 5) is None
+
+
+def test_uncommitted_boundary_is_reused_until_selection_revision_advances() -> None:
+    observer = DisplayDayBoundaryObserver(make_configuration())
+    zone = ZoneInfo("America/New_York")
+    state = make_state(display_date=date(2026, 10, 25))
+    observer.observe(datetime(2026, 10, 26, 5, 59, tzinfo=zone), 100.0, state.revision)
+    boundary = observer.observe(datetime(2026, 10, 26, 6, 0, tzinfo=zone), 160.0, state.revision)
+    assert boundary == DisplayDayBoundary(date(2026, 10, 26), state.revision)
+
+    with pytest.raises(StateCommitError, match="simulated selection failure"):
+        raise StateCommitError("simulated selection failure")
+    failed_commit_state = state
+    assert failed_commit_state.revision == state.revision
+    first_decision = evaluate_scheduling(
+        datetime(2026, 10, 26, 6, 1, tzinfo=zone), make_configuration(), state, boundary
+    )
+    repeated_boundary = observer.observe(datetime(2026, 10, 26, 6, 1, tzinfo=zone), 220.0, failed_commit_state.revision)
+    retry_decision = evaluate_scheduling(
+        datetime(2026, 10, 26, 6, 1, tzinfo=zone), make_configuration(), failed_commit_state, repeated_boundary
+    )
+
+    assert first_decision == retry_decision
+    assert retry_decision.action is SchedulingAction.NEW_SELECTION
+    assert retry_decision.display_date == date(2026, 10, 26)
+    assert repeated_boundary == boundary
+
+    committed_state = replace(state, revision=state.revision + 1)
+    assert observer.observe(datetime(2026, 10, 26, 6, 2, tzinfo=zone), 280.0, committed_state.revision) is None
+    stale_decision = evaluate_scheduling(
+        datetime(2026, 10, 26, 6, 2, tzinfo=zone), make_configuration(), committed_state, boundary
+    )
+    assert stale_decision.action is not SchedulingAction.NEW_SELECTION
 
 
 def test_observer_forward_jump_selects_current_date_without_replaying_skipped_days() -> None:
@@ -87,7 +125,7 @@ def test_observer_forward_jump_selects_current_date_without_replaying_skipped_da
     boundary = observer.observe(datetime(2026, 10, 29, 7, 0, tzinfo=zone), 160.0, 4)
 
     assert boundary == DisplayDayBoundary(date(2026, 10, 29), 4)
-    assert observer.observe(datetime(2026, 10, 29, 7, 1, tzinfo=zone), 220.0, 4) is None
+    assert observer.observe(datetime(2026, 10, 29, 7, 1, tzinfo=zone), 220.0, 4) == boundary
 
 
 def test_observer_backward_adjustment_waits_for_a_later_observed_boundary() -> None:
@@ -145,8 +183,9 @@ def test_observer_does_not_duplicate_a_fall_back_ambiguous_day_start() -> None:
     observer.observe(datetime(2026, 11, 1, 1, 29, fold=0, tzinfo=zone), 100.0, 4)
 
     first_occurrence = observer.observe(datetime(2026, 11, 1, 1, 31, fold=0, tzinfo=zone), 220.0, 4)
-    observer.observe(datetime(2026, 11, 1, 1, 0, fold=1, tzinfo=zone), 1960.0, 4)
-    second_occurrence = observer.observe(datetime(2026, 11, 1, 1, 31, fold=1, tzinfo=zone), 3820.0, 4)
+    assert observer.observe(datetime(2026, 11, 1, 1, 0, fold=1, tzinfo=zone), 1960.0, 4) == first_occurrence
+    assert observer.observe(datetime(2026, 11, 1, 1, 30, fold=1, tzinfo=zone), 3760.0, 5) is None
+    second_occurrence = observer.observe(datetime(2026, 11, 1, 1, 31, fold=1, tzinfo=zone), 3820.0, 5)
 
     assert first_occurrence == DisplayDayBoundary(date(2026, 11, 1), 4)
     assert second_occurrence is None
