@@ -178,6 +178,19 @@ def test_missed_reveal_time_is_due_immediately_and_simultaneous_events_share_dea
     assert simultaneous == datetime(2026, 10, 26, 12, 0, tzinfo=zone)
 
 
+def test_reveal_deadline_uses_snapshot_timezone_and_returns_configured_timezone() -> None:
+    zone = ZoneInfo("America/New_York")
+    state = make_state(
+        timezone_name="UTC",
+        highest_reveal_stage=1,
+        reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
+    )
+
+    deadline = next_scheduling_deadline(datetime(2026, 10, 26, 10, 0, tzinfo=zone), make_configuration(), state)
+
+    assert deadline == datetime(2026, 10, 26, 14, 0, tzinfo=zone)
+
+
 def test_next_deadline_resolves_day_start_across_dst_gap_and_fold() -> None:
     spring_config = make_configuration(day_start="02:30")
     spring_deadline = next_scheduling_deadline(

@@ -30,7 +30,7 @@ def _validate_timekeeping_inputs(current_time: datetime, configuration: Applicat
         if current_time.utcoffset() is None:
             raise SchedulingEvaluationError("current_time must be timezone-aware")
         current_utc = current_time.astimezone(timezone.utc)
-    except (OverflowError, OSError, ValueError) as error:
+    except (OverflowError, OSError, TypeError, ValueError) as error:
         raise SchedulingEvaluationError("current_time cannot be converted to UTC") from error
     _validate_configuration(configuration)
     return current_utc
@@ -119,7 +119,7 @@ def next_scheduling_deadline(
         except (OverflowError, OSError, ValueError) as error:
             raise SchedulingEvaluationError("cannot calculate the next reveal deadline") from error
 
-    return min(deadlines, key=lambda deadline: deadline.astimezone(timezone.utc))
+    return min(deadlines, key=lambda deadline: deadline.astimezone(timezone.utc)).astimezone(configuration.timezone)
 
 
 class DisplayDayBoundaryObserver:
@@ -221,7 +221,7 @@ def wait_for_scheduling_event(
         raise ValueError("max_clock_check_interval must be a finite positive number")
 
     read_wall_clock = wall_clock or (lambda: datetime.now(timezone.utc))
-    deadline_utc = deadline.astimezone(timezone.utc)
+    deadline_utc = _validate_deadline_clock(deadline)
     while True:
         current_time = read_wall_clock()
         current_utc = _validate_deadline_clock(current_time)
@@ -255,6 +255,8 @@ def _validate_deadline_clock(current_time: datetime) -> datetime:
     if not isinstance(current_time, datetime) or current_time.tzinfo is None:
         raise ValueError("wall_clock must return a timezone-aware datetime")
     try:
+        if current_time.utcoffset() is None:
+            raise ValueError("wall_clock must return a timezone-aware datetime")
         return current_time.astimezone(timezone.utc)
-    except (OverflowError, OSError, ValueError) as error:
+    except (OverflowError, OSError, TypeError, ValueError) as error:
         raise ValueError("wall_clock returned a datetime that cannot be converted to UTC") from error
