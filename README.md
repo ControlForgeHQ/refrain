@@ -101,11 +101,7 @@ With `0.0.0.0`, open `http://<refrain-host-lan-ip>:8080/display/current` from an
 
 The desktop backend uses the Python installation's Tk support and Pillow. Linux may require installing the matching Tk package (for example, `python3-tk`) and running in a graphical session. GUI modules are imported only when the window backend is constructed.
 
-The Waveshare backend uses Linux hardware SPI and the GPIO character-device interface. Install its optional dependencies in the Refrain environment with `pip install '.[hardware]'`; these dependencies are not required for hardware-independent development or use of the other backends.
-
-On the validated Raspberry Pi 3 Model B+, enable SPI0 with `dtoverlay=spi0-0cs,no_miso` in `/boot/firmware/config.txt` and reboot. The backend uses `/dev/spidev0.0` in mode 0 at 1 MHz with kernel chip select disabled, and GPIO lines 7 and 8 for the panel's independent master and secondary chip selects. GPIO lines 17, 18, and 24 provide reset, power, and BUSY; GPIO25/DC is held low and is not toggled by the controller protocol. The transport currently requests GPIO lines from `/dev/gpiochip0`, as validated on the Pi 3B+; GPIO chip numbering may differ on other Raspberry Pi models and has not been validated there. Confirm that `/dev/spidev0.0` and `/dev/gpiochip0` exist and inspect their group ownership with `ls -l`. Grant the Refrain service identity access through the corresponding device groups (normally `spi` and `gpio` on Raspberry Pi OS, for example `sudo usermod -aG spi,gpio <service-user>`), then restart its login session or service. Do not run the application as root merely to access the display.
-
-The Linux transport and vendored controller driver are documented in [UPSTREAM.md](src/refrain/display/vendor/waveshare/UPSTREAM.md). Hardware-dependent behavior must be validated on the physical panel; mocked tests do not establish hardware support.
+For the validated Waveshare hardware combination, installation, SPI/GPIO configuration, device permissions, physical smoke testing, troubleshooting, and driver provenance, see the [Waveshare display installation guide](src/refrain/display/vendor/waveshare/README.md). Hardware-dependent behavior must be validated on the physical panel; mocked tests do not establish hardware support.
 
 To display two PNG files in the same responsive window and close cleanly, run:
 

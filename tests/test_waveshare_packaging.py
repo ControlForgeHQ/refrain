@@ -98,5 +98,5 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
 
     assert not any(Path(name).name in _LIBRARIES for name in wheel_names)
     assert not any(Path(name).name in _LIBRARIES for name in sdist_names)
-    assert any(name.endswith("display/vendor/waveshare/UPSTREAM.md") for name in wheel_names)
-    assert any(name.endswith("display/vendor/waveshare/UPSTREAM.md") for name in sdist_names)
+    assert any(name.endswith("display/vendor/waveshare/README.md") for name in wheel_names)
+    assert any(name.endswith("display/vendor/waveshare/README.md") for name in sdist_names)
