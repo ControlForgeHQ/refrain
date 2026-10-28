@@ -178,6 +178,12 @@ class DisplayDayBoundaryObserver:
 
         if self._pending_boundary is not None:
             if self._pending_boundary.state_revision == state_revision:
+                if (
+                    not backward_adjustment
+                    and display_date > previous_display_date
+                    and display_date > self._pending_boundary.display_date
+                ):
+                    self._pending_boundary = DisplayDayBoundary(display_date, state_revision)
                 return self._pending_boundary
             self._last_boundary_date = self._pending_boundary.display_date
             self._pending_boundary = None

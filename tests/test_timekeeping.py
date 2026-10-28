@@ -117,6 +117,36 @@ def test_uncommitted_boundary_is_reused_until_selection_revision_advances() -> N
     assert stale_decision.action is not SchedulingAction.NEW_SELECTION
 
 
+def test_newer_forward_boundary_supersedes_pending_boundary_after_failed_commit() -> None:
+    observer = DisplayDayBoundaryObserver(make_configuration())
+    configuration = make_configuration()
+    zone = ZoneInfo("America/New_York")
+    state = make_state(display_date=date(2026, 10, 26))
+
+    observer.observe(datetime(2026, 10, 27, 5, 59, tzinfo=zone), 100.0, state.revision)
+    october_27 = observer.observe(datetime(2026, 10, 27, 6, 0, tzinfo=zone), 160.0, state.revision)
+    assert october_27 == DisplayDayBoundary(date(2026, 10, 27), state.revision)
+
+    with pytest.raises(StateCommitError, match="simulated selection failure"):
+        raise StateCommitError("simulated selection failure")
+    failed_commit_state = state
+    failed_decision = evaluate_scheduling(
+        datetime(2026, 10, 27, 6, 1, tzinfo=zone), configuration, failed_commit_state, october_27
+    )
+    assert failed_decision.action is SchedulingAction.NEW_SELECTION
+    assert failed_decision.display_date == date(2026, 10, 27)
+
+    october_29 = observer.observe(datetime(2026, 10, 29, 7, 0, tzinfo=zone), 220.0, state.revision)
+    assert october_29 == DisplayDayBoundary(date(2026, 10, 29), state.revision)
+    assert observer.observe(datetime(2026, 10, 29, 7, 1, tzinfo=zone), 280.0, state.revision) == october_29
+    current_decision = evaluate_scheduling(
+        datetime(2026, 10, 29, 7, 1, tzinfo=zone), configuration, failed_commit_state, october_29
+    )
+
+    assert current_decision.action is SchedulingAction.NEW_SELECTION
+    assert current_decision.display_date == date(2026, 10, 29)
+
+
 def test_observer_forward_jump_selects_current_date_without_replaying_skipped_days() -> None:
     observer = DisplayDayBoundaryObserver(make_configuration())
     zone = ZoneInfo("America/New_York")
@@ -137,6 +167,17 @@ def test_observer_backward_adjustment_waits_for_a_later_observed_boundary() -> N
     boundary = observer.observe(datetime(2026, 10, 12, 6, 0, tzinfo=zone), 7301.0, 4)
 
     assert boundary == DisplayDayBoundary(date(2026, 10, 12), 4)
+
+
+def test_backward_adjustment_does_not_replace_a_pending_boundary() -> None:
+    observer = DisplayDayBoundaryObserver(make_configuration())
+    zone = ZoneInfo("America/New_York")
+    observer.observe(datetime(2026, 10, 26, 5, 59, tzinfo=zone), 100.0, 4)
+    boundary = observer.observe(datetime(2026, 10, 26, 6, 0, tzinfo=zone), 160.0, 4)
+
+    backward_observation = observer.observe(datetime(2026, 10, 25, 4, 0, tzinfo=zone), 161.0, 4)
+
+    assert backward_observation == boundary
 
 
 def test_first_observation_after_startup_does_not_infer_a_historical_boundary() -> None:
