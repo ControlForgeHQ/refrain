@@ -39,9 +39,8 @@ class WaveshareDisplayBackend:
             self._epd = driver.EPD()
         except Exception as error:
             raise DisplayBackendInitializationError(
-                "could not load the Waveshare 13.3-inch E driver; install the architecture-compatible "
-                "Waveshare DEV_Config native library beside the vendored driver, in /usr/local/lib, "
-                f"or in /usr/lib: {error}"
+                "could not load the Waveshare 13.3-inch E driver or Linux SPI/GPIO transport; "
+                f"install the 'hardware' optional dependencies on Linux: {error}"
             ) from error
 
     @staticmethod
@@ -111,7 +110,7 @@ class WaveshareDisplayBackend:
                     except Exception:
                         if self._native_is_poisoned():
                             self._failed = True
-                        elif self._native_is_initialized():
+                        if self._native_is_initialized():
                             try:
                                 self._driver_module.epdconfig.module_exit()
                             except Exception:

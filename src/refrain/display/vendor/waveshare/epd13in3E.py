@@ -275,17 +275,15 @@ class EPD():
         Width =int(self.width / 4)
         Width1 =int(self.width / 2)
 
-        epdconfig.digital_write(self.EPD_CS_M_PIN, 0)
-        self.SendCommand(0x10)
-        for i in range(self.height):
-            self.SendData2(image[i * Width1 : i * Width1+Width], Width)
-        self.CS_ALL(1)
-
-        epdconfig.digital_write(self.EPD_CS_S_PIN, 0)
-        self.SendCommand(0x10)
-        for i in range(self.height):
-            self.SendData2(image[i * Width1+Width : i * Width1+Width1], Width)
-        self.CS_ALL(1)
+        for chip_select, offset in ((self.EPD_CS_M_PIN, 0), (self.EPD_CS_S_PIN, Width)):
+            epdconfig.digital_write(chip_select, 0)
+            self.SendCommand(0x10)
+            panel_data = bytearray(self.height * Width)
+            for row in range(self.height):
+                start = row * Width1 + offset
+                panel_data[row * Width : (row + 1) * Width] = image[start : start + Width]
+            self.SendData2(panel_data, len(panel_data))
+            self.CS_ALL(1)
 
         self.TurnOnDisplay()
 
