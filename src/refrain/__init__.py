@@ -60,6 +60,13 @@ from .renderer import (
     layout_composition,
     render_reveal_stages,
 )
+from .scheduling import (
+    DisplayDayBoundary,
+    SchedulingAction,
+    SchedulingDecision,
+    SchedulingEvaluationError,
+    evaluate_scheduling,
+)
 from .selection import SelectionProposal, select_quotation
 
 __all__ = [
@@ -99,6 +106,10 @@ __all__ = [
     "PersistentStateStore",
     "ResolvedFont",
     "SelectionProposal",
+    "DisplayDayBoundary",
+    "SchedulingAction",
+    "SchedulingDecision",
+    "SchedulingEvaluationError",
     "RevealSchedule",
     "RevealOverrides",
     "SchedulingContext",
@@ -114,4 +125,5 @@ __all__ = [
     "build_eligible_quotation_pool",
     "render_reveal_stages",
     "select_quotation",
+    "evaluate_scheduling",
 ]
