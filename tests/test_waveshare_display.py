@@ -93,6 +93,13 @@ def test_factory_constructs_waveshare_backend_and_updates_both_orientations(
     assert driver.calls == ["getbuffer", "Init", "display", "sleep"] * 2
 
 
+def test_backend_construction_does_not_require_linux_hardware_modules() -> None:
+    backend = create_display_backend("waveshare-13in3-e")
+
+    assert isinstance(backend, DisplayBackend)
+    backend.close()
+
+
 def test_invalid_images_are_rejected_before_hardware_operations(monkeypatch: pytest.MonkeyPatch) -> None:
     driver = SimulatedDriver()
     install_simulated_driver(monkeypatch, driver)
@@ -120,38 +127,78 @@ def test_invalid_converted_buffers_are_rejected_before_hardware(monkeypatch: pyt
     assert driver.calls == ["getbuffer"]
 
 
-def test_driver_loading_failure_has_actionable_initialization_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_hardware_dependency_has_actionable_initialization_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_import(*_args: Any, **_kwargs: Any) -> Any:
-        raise OSError("native library unavailable")
+        raise OSError("hardware module unavailable")
 
     monkeypatch.setattr(waveshare_module, "import_module", fail_import)
 
     with pytest.raises(
         DisplayBackendInitializationError,
-        match="architecture-compatible Waveshare DEV_Config native library.*native library unavailable",
+        match="Linux SPI/GPIO transport.*hardware module unavailable",
     ):
         create_display_backend("waveshare-13in3-e")
 
 
-def test_native_initialization_failure_is_not_followed_by_sleep_or_retry(
+def test_poisoned_initialization_releases_resources_and_prevents_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    driver = SimulatedDriver({"Init": [RuntimeError("native DEV_ModuleInit failed with status 1")]})
+    driver = SimulatedDriver({"Init": [RuntimeError("Linux SPI/GPIO initialization failed")]})
     install_simulated_driver(monkeypatch, driver)
     module = ModuleType("epd13in3E")
     module.EPD = lambda: driver  # type: ignore[attr-defined]
     module.epdconfig = ModuleType("epdconfig")  # type: ignore[attr-defined]
     module.epdconfig.is_poisoned = lambda: True  # type: ignore[attr-defined]
-    module.epdconfig.is_initialized = lambda: False  # type: ignore[attr-defined]
+    module.epdconfig.is_initialized = lambda: True  # type: ignore[attr-defined]
+    module.epdconfig.module_exit = lambda: driver._call("module_exit")  # type: ignore[attr-defined]
     monkeypatch.setattr(waveshare_module, "import_module", lambda *_args, **_kwargs: module)
     backend = waveshare_module.WaveshareDisplayBackend()
 
-    with pytest.raises(DisplayBackendInitializationError, match="native DEV_ModuleInit failed"):
+    with pytest.raises(DisplayBackendInitializationError, match="Linux SPI/GPIO initialization failed"):
         backend.update(Image.new("RGB", (1200, 1600)))
     with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
         backend.update(Image.new("RGB", (1200, 1600)))
 
-    assert driver.calls == ["getbuffer", "Init"]
+    assert driver.calls == ["getbuffer", "Init", "module_exit"]
+
+
+def test_poisoned_communication_releases_resources_without_controller_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    poisoned = [False]
+    cleanup_attempts = [0]
+
+    def release_resources() -> None:
+        cleanup_attempts[0] += 1
+        if cleanup_attempts[0] == 1:
+            raise OSError("release failed")
+
+    driver = SimulatedDriver(
+        {"display": [RuntimeError("SPI transfer failed")]},
+        hooks={"display": lambda: poisoned.__setitem__(0, True)},
+    )
+    module = ModuleType("refrain.display.vendor.waveshare.epd13in3E")
+    module.EPD = lambda: driver  # type: ignore[attr-defined]
+    module.epdconfig = ModuleType("epdconfig")  # type: ignore[attr-defined]
+    module.epdconfig.is_poisoned = lambda: poisoned[0]  # type: ignore[attr-defined]
+    module.epdconfig.is_initialized = lambda: True  # type: ignore[attr-defined]
+
+    def module_exit() -> None:
+        driver._call("module_exit")
+        release_resources()
+
+    module.epdconfig.module_exit = module_exit  # type: ignore[attr-defined]
+    monkeypatch.setattr(waveshare_module, "import_module", lambda *_args, **_kwargs: module)
+    backend = waveshare_module.WaveshareDisplayBackend()
+
+    with pytest.raises(DisplayBackendUpdateError, match="SPI transfer failed"):
+        backend.update(Image.new("RGB", (1200, 1600)))
+    with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
+        backend.update(Image.new("RGB", (1200, 1600)))
+    backend.close()
+
+    assert driver.calls == ["getbuffer", "Init", "display", "module_exit", "module_exit"]
+    assert cleanup_attempts == [2]
 
 
 @pytest.mark.parametrize(

@@ -128,7 +128,7 @@ def module_init() -> None:
         line_settings = {
             pin: gpiod.LineSettings(
                 direction=line.Direction.OUTPUT,
-                output_value=value_type.INACTIVE,
+                output_value=value_type.ACTIVE,
             )
             for pin in _OUTPUT_PINS
         }
@@ -179,15 +179,16 @@ def module_exit() -> None:
     if _state == "inactive":
         return
 
+    was_poisoned = _state == "poisoned"
     errors: list[Exception] = []
     _pending.clear()
     if _lines is not None:
         try:
-            _lines.set_value(EPD_CS_M_PIN, _value_type.INACTIVE)
+            _lines.set_value(EPD_CS_M_PIN, _value_type.ACTIVE)
         except Exception as error:
             errors.append(error)
         try:
-            _lines.set_value(EPD_CS_S_PIN, _value_type.INACTIVE)
+            _lines.set_value(EPD_CS_S_PIN, _value_type.ACTIVE)
         except Exception as error:
             errors.append(error)
     if _spi is not None:
@@ -195,19 +196,23 @@ def module_exit() -> None:
             _spi.close()
         except Exception as error:
             errors.append(error)
+        else:
+            _spi = None
     if _lines is not None:
         try:
             _lines.release()
         except Exception as error:
             errors.append(error)
-
-    _lines = None
-    _spi = None
-    _value_type = None
-    if errors:
+        else:
+            _lines = None
+    if _lines is None:
+        _value_type = None
+    if errors or was_poisoned:
         _poison()
+    else:
+        _state = "inactive"
+    if errors:
         raise RuntimeError(f"could not clean up Linux SPI/GPIO resources: {errors[0]}") from errors[0]
-    _state = "inactive"
 
 
 def is_initialized() -> bool:
