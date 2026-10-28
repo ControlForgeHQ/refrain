@@ -1,5 +1,12 @@
 """Hardware-independent Refrain components."""
 
+from .application import (
+    ApplicationError,
+    NoEligibleQuotationError,
+    StartupResult,
+    present_prepared_stage,
+    run_startup,
+)
 from .artifacts import (
     ArtifactAccessError,
     ArtifactCleanupError,
@@ -71,6 +78,11 @@ from .scheduling import (
 from .selection import SelectionProposal, select_quotation
 
 __all__ = [
+    "ApplicationError",
+    "NoEligibleQuotationError",
+    "StartupResult",
+    "present_prepared_stage",
+    "run_startup",
     "ArtifactAccessError",
     "ArtifactCleanupError",
     "ArtifactStoreError",
