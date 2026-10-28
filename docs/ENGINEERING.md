@@ -801,6 +801,8 @@ Do not use fixed-duration sleeps as a substitute for correct calendar-boundary c
 
 The scheduler should ordinarily wait until the next meaningful event rather than polling continuously.
 
+The hardware-independent `DisplayDayBoundaryObserver` receives explicit wall-clock and monotonic observations. `next_scheduling_deadline()` derives reveal deadlines from the committed snapshot and combines them with the configured display-day boundary. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline.
+
 ### Wall-clock changes
 
 Implement the documented forward- and backward-clock behavior without allowing previous reveal stages to become hidden.
@@ -820,6 +822,8 @@ Do not treat a difference between the stored selection date and the current date
 Test boundary recognition across restarts, missed day starts, clock corrections, and large forward jumps.
 
 When available information cannot reliably distinguish a clock discontinuity, use the architecture's conservative recovery policy rather than inventing unobservable clock history.
+
+Boundary observations held by `DisplayDayBoundaryObserver` are process-local. Its first observation after startup establishes a baseline and does not manufacture an event for an unobserved interruption.
 
 ## Logging and diagnostics
 

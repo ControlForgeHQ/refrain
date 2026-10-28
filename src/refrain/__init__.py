@@ -76,6 +76,7 @@ from .scheduling import (
     resolve_reveal_stages,
 )
 from .selection import SelectionProposal, select_quotation
+from .timekeeping import DisplayDayBoundaryObserver, next_scheduling_deadline, wait_for_scheduling_event
 
 __all__ = [
     "ApplicationError",
@@ -120,6 +121,7 @@ __all__ = [
     "ResolvedFont",
     "SelectionProposal",
     "DisplayDayBoundary",
+    "DisplayDayBoundaryObserver",
     "SchedulingAction",
     "SchedulingDecision",
     "SchedulingEvaluationError",
@@ -140,4 +142,6 @@ __all__ = [
     "render_reveal_stages",
     "select_quotation",
     "evaluate_scheduling",
+    "next_scheduling_deadline",
+    "wait_for_scheduling_event",
 ]
