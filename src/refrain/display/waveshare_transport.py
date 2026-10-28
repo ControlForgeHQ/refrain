@@ -142,6 +142,7 @@ def module_init() -> None:
         spi.open(*SPI_DEVICE)
         spi.mode = 0
         spi.bits_per_word = 8
+        spi.lsbfirst = False
         spi.max_speed_hz = SPI_SPEED_HZ
         spi.no_cs = True
     except Exception:

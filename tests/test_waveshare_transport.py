@@ -103,6 +103,7 @@ def test_initialization_configures_spi_gpio_and_releases_owned_resources(
     assert spi.calls == [("open", 0, 0)]
     assert spi.mode == 0
     assert spi.bits_per_word == 8
+    assert spi.lsbfirst is False
     assert spi.max_speed_hz == 1_000_000
     assert spi.no_cs is True
     assert gpiod.settings is not None
