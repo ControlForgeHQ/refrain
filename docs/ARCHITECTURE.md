@@ -414,6 +414,8 @@ When execution resumes after an interruption that spans a forward display-day tr
 
 The implementation must distinguish these conditions using the available persisted scheduling context. Clock discontinuities that cannot be distinguished reliably after an interruption must be handled conservatively rather than silently discarding a valid committed selection.
 
+The current persistent contract records the active selection's display date, timezone, and day-start time, but does not record an observed boundary or clock history. After an interruption, a current timestamp and that context cannot prove whether a transition occurred, how many boundaries were crossed, or whether a clock adjustment caused the date mismatch. Startup evaluation therefore preserves the committed selection unless the runtime supplies a recognized boundary observation. Complete recovery across arbitrary interruptions requires additional boundary observation or persisted scheduling context; this issue does not add a history store or change the persistent format.
+
 ## Content eligibility and selection
 
 ### Eligibility
@@ -810,11 +812,17 @@ Clock adjustments that establish a new display day follow the rules defined in t
 
 ### Scheduling and display
 
-The display scheduler determines the currently required prepared image.
+The hardware-independent scheduling evaluator determines whether an initial or transition-driven selection is required, the display date for that selection, and the required reveal stage for a committed selection. It accepts an explicit timezone-aware current timestamp, application configuration, recovered persistent state, and optionally a boundary observed by the running application.
 
-When the required stage changes, the scheduler submits the corresponding image to the display backend.
+The public interface is `refrain.evaluate_scheduling(current_time, configuration, state, observed_boundary=None)`. It returns an immutable `SchedulingDecision` whose `SchedulingAction` is `INITIAL_SELECTION`, `NEW_SELECTION`, `ADVANCE_REVEAL`, or `NO_ACTION`. Initial and transition-driven selections include `display_date`; decisions for a committed selection include `required_reveal_stage`. Invalid or insufficient inputs raise `SchedulingEvaluationError` rather than producing a guessed transition.
 
-The scheduler must not invoke content selection or rendering merely because a reveal stage becomes due.
+Without a committed selection, the evaluator calculates the initial display date in the configured IANA timezone. With a committed selection, a difference between the current date and the snapshot's display date does not authorize reselection. A `DisplayDayBoundary(display_date, state_revision)` observation identifies the resulting display date and the selection revision active when it was observed; after that revision is replaced, the observation is stale. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
+
+`refrain.resolve_reveal_stages(snapshot)` returns the canonical ordered `CompositionVisibility` sequence for a committed snapshot. The coordinator must pass this same sequence to image preparation and recovery; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
+
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by the snapshot's resolved schedule in its recorded timezone and the persisted highest stage. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
+
+The coordinator presents the corresponding prepared image when a reveal advancement is required. Scheduling evaluation does not determine whether an image was successfully presented.
 
 A failed display update does not invalidate the committed selection or its prepared images.
 

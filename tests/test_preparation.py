@@ -14,6 +14,7 @@ from refrain import (
     ResolvedFont,
     SchedulingContext,
     prepare_daily_images,
+    resolve_reveal_stages,
 )
 
 _IMAGE_SIZE = (320, 240)
@@ -111,6 +112,22 @@ def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
     if len(images) > 1:
         assert images[0].tobytes() != images[-1].tobytes()
     assert snapshot == original_snapshot
+
+
+def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_font: ResolvedFont) -> None:
+    snapshot = make_snapshot(embedded_font, source="A Sample Collection", attribution="An Example Author")
+    stages = resolve_reveal_stages(snapshot)
+
+    images = prepare_daily_images(snapshot, stages)
+
+    assert stages == (
+        CompositionVisibility(),
+        CompositionVisibility(source=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+    assert len(images) == len(stages)
+    for image in images:
+        image.close()
 
 
 def test_preparation_is_deterministic(embedded_font: ResolvedFont) -> None:
