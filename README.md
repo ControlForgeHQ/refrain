@@ -83,6 +83,25 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
+## Running the initial application workflow
+
+`python -m refrain` performs one startup and presentation cycle. All three locations are required and are never inferred from a user's home directory or installation layout:
+
+```sh
+.venv/bin/python -m refrain \
+  --config examples/config.yaml \
+  --state /path/to/refrain/state.json \
+  --artifacts /path/to/refrain/artifacts
+```
+
+- `--config` is the application configuration file; relative content and font paths resolve against its directory.
+- `--state` is the persistent selection-state file. It is created on first use, and its parent directory is created if needed.
+- `--artifacts` is the directory for derived prepared images. It is separate from state and content and may be regenerated from committed state.
+
+With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot, prepares the reveal images, and presents the stage required at the current time. With existing state, it preserves the committed selection, even when the calendar date has changed or the content library is unavailable, reuses valid prepared images (regenerating missing or invalid ones), and presents the currently required stage. A command-line failure exits with status 1 and an explanatory message; a failure after selection commitment never causes reselection.
+
+This workflow is one-shot. It does not wake at display-day boundaries, select a new daily quotation, retry failed display updates, or run unattended. The `waveshare-13in3-e` panel retains its image after the command exits. The `window` and `image-server` backends only exist while the process runs, so the command keeps the display open until you press Ctrl+C and releases it on exit; the `image-server` stops serving at that point.
+
 ## Display backend selection
 
 Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; use `waveshare-13in3-e` on a supported Raspberry Pi with the physical panel connected; or use `image-server` to serve the current complete image to HTTP clients. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
