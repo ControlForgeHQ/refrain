@@ -5,6 +5,7 @@ from .application import (
     NoEligibleQuotationError,
     StartupResult,
     present_prepared_stage,
+    run_application,
     run_startup,
 )
 from .artifacts import (
@@ -83,6 +84,7 @@ __all__ = [
     "NoEligibleQuotationError",
     "StartupResult",
     "present_prepared_stage",
+    "run_application",
     "run_startup",
     "ArtifactAccessError",
     "ArtifactCleanupError",

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from importlib.resources import files
 from pathlib import Path
 from random import Random
+from threading import Event
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,9 +14,12 @@ from PIL import Image
 import refrain.application as application
 from refrain import (
     ApplicationError,
+    DailyImagePreparationError,
     NoEligibleQuotationError,
     PersistentStateStore,
     StateCommitError,
+    StateRecoveryError,
+    run_application,
     run_startup,
 )
 from refrain.__main__ import main
@@ -439,6 +443,7 @@ def test_command_line_runs_startup(workspace: Workspace, monkeypatch, capsys) ->
     display = FakeDisplay()
     monkeypatch.setattr(application, "create_display_backend", lambda *args, **kwargs: display)
     arguments = [
+        "--once",
         "--config",
         str(workspace.config),
         "--state",
@@ -457,3 +462,489 @@ def test_command_line_reports_errors(workspace: Workspace, capsys) -> None:
     code = main(["--config", str(workspace.root / "nope.yaml"), "--state", "s.json", "--artifacts", "a"])
     assert code == 1
     assert "refrain:" in capsys.readouterr().err
+
+
+class RuntimeClock(Event):
+    """Controlled clocks and interruptible waits; no real elapsed time."""
+
+    def __init__(self, now: datetime, events=(), retries=()) -> None:
+        super().__init__()
+        self.now = now
+        self.elapsed = 0.0
+        self.events = iter(events)
+        self.retries = iter(retries)
+        self.deadlines: list[datetime] = []
+        self.retry_delays: list[float] = []
+
+    def move(self, now: datetime) -> None:
+        difference = (now.astimezone(timezone.utc) - self.now.astimezone(timezone.utc)).total_seconds()
+        self.elapsed += max(1.0, difference)
+        self.now = now
+
+    def scheduling_wait(self, deadline, shutdown, **kwargs):
+        assert shutdown is self
+        self.deadlines.append(deadline)
+        event = next(self.events, None)
+        if callable(event):
+            event()
+        elif event is None:
+            self.set()
+        else:
+            self.move(event)
+        return self.is_set()
+
+    def wait(self, timeout=None):
+        assert timeout is not None and 0 < timeout <= 300
+        self.retry_delays.append(timeout)
+        self.elapsed += timeout
+        self.now += timedelta(seconds=timeout)
+        callback = next(self.retries, None)
+        if callback is not None:
+            callback()
+        else:
+            self.set()
+        return self.is_set()
+
+
+def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
+    display = display or FakeDisplay()
+    presentations = []
+    initializations = []
+    original = application.present_prepared_stage
+
+    def present(backend, artifacts, stage):
+        original(backend, artifacts, stage)
+        presentations.append((artifacts.revision, stage))
+
+    def initialize(configuration):
+        initializations.append(configuration.display_backend)
+        return display
+
+    with monkeypatch.context() as patch:
+        patch.setattr(application, "present_prepared_stage", present)
+        run_application(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            shutdown_event=clock,
+            wall_clock=lambda: clock.now,
+            monotonic_clock=lambda: clock.elapsed,
+            scheduling_wait=clock.scheduling_wait,
+            random_source=Random(1),
+            backend_factory=kwargs.pop("backend_factory", initialize),
+            **kwargs,
+        )
+    return presentations, initializations, display
+
+
+def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original = application.recover_prepared_daily_images
+    recovered = []
+
+    def recover(state, *args):
+        recovered.append(state.revision)
+        return original(state, *args)
+
+    monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
+
+    def forbid_content_reload():
+        monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
+        clock.move(at(10, 12))
+
+    clock = RuntimeClock(at(10, 7), [forbid_content_reload, at(10, 18), at(10, 19)])
+    stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (1, 1), (1, 2)]
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+    assert len(png_files(workspace.artifacts)) == 3
+    assert recovered == [1]
+    assert clock.deadlines[:2] == [at(10, 12), at(10, 18)]
+    assert workspace.load().highest_reveal_stage == 2
+    assert len(workspace.load().global_history) == 1
+
+
+@pytest.mark.parametrize(
+    ("extra", "events", "expected"),
+    [
+        ("", [at(10, 19)], [(1, 0), (1, 2)]),
+        ('reveal:\n  source: "10:00"\n  attribution: "10:00"\n', [at(10, 10)], [(1, 0), (1, 1)]),
+        ('reveal:\n  attribution: "09:00"\n', [at(10, 9), at(10, 12)], [(1, 0), (1, 1), (1, 2)]),
+    ],
+)
+def test_continuous_missed_simultaneous_and_out_of_order_reveals(
+    workspace, monkeypatch, extra, events, expected
+) -> None:
+    ordinary(workspace, extra=extra)
+    stages, _, display = run_continuously(workspace, RuntimeClock(at(10, 7), events), monkeypatch)
+    assert stages == expected and display.closed == 1
+    assert workspace.load().highest_reveal_stage == expected[-1][1]
+
+
+def test_continuous_daily_transitions_preserve_histories(workspace, monkeypatch) -> None:
+    workspace.entry("many", 'quotations:\n  - "First."\n  - "Second."\n  - "Third."\n')
+    clock = RuntimeClock(at(10, 7), [at(11, 6), at(11, 6), at(12, 6), at(13, 6)])
+    stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
+    state = workspace.load()
+    history = state.global_history
+    assert stages == [(1, 0), (2, 0), (3, 0), (4, 0)]
+    assert state.revision == len(history) == 4
+    assert [record.display_date for record in history] == [date(2026, 3, day) for day in range(10, 14)]
+    assert len({record.quotation_identity for record in history[:3]}) == 3
+    assert state.repetition_history == {history[-1].quotation_identity}
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+    assert len(png_files(workspace.artifacts)) == 1
+
+
+def test_continuous_restart_is_conservative_and_reuses_committed_snapshot(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    run_continuously(workspace, RuntimeClock(at(10, 7)), monkeypatch)
+    first = workspace.load()
+    artifacts = {path: path.stat().st_mtime_ns for path in png_files(workspace.artifacts)}
+    for path in workspace.content.iterdir():
+        path.unlink()
+    monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
+    stages, initialized, display = run_continuously(workspace, RuntimeClock(at(14, 19)), monkeypatch)
+    state = workspace.load()
+    assert stages == [(1, 2)]
+    assert state.snapshot == first.snapshot and state.global_history == first.global_history
+    assert state.repetition_history == first.repetition_history and state.highest_reveal_stage == 2
+    assert {path: path.stat().st_mtime_ns for path in png_files(workspace.artifacts)} == artifacts
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+
+
+def test_continuous_forward_jump_selects_only_current_date(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.entry("special", 'eligibility:\n  - month: 3\n    day: 15\nquotations:\n  - "Special."\n')
+    clock = RuntimeClock(at(10, 7), [at(15, 19)])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    state = workspace.load()
+    assert stages == [(1, 0), (2, 0)]
+    assert len(state.global_history) == 2 and state.snapshot.display_date == date(2026, 3, 15)
+    assert state.snapshot.quotation_text == "Special."
+
+
+def test_continuous_backward_jump_preserves_reveal_until_new_boundary(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    clock = RuntimeClock(at(15, 19), [at(12, 4), at(12, 5), at(12, 6)])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 2), (2, 0)]
+    state = workspace.load()
+    assert [record.display_date for record in state.global_history] == [date(2026, 3, 15), date(2026, 3, 12)]
+
+
+@pytest.mark.parametrize("published", [False, True])
+def test_continuous_daily_commit_retry_and_uncertain_publication(workspace, monkeypatch, published) -> None:
+    ordinary(workspace)
+    original = PersistentStateStore.commit
+    attempts = []
+
+    def commit(self, proposal, snapshot):
+        attempts.append(proposal.base_revision)
+        if proposal.base_revision == 1 and attempts.count(1) == 1:
+            if published:
+                original(self, proposal, snapshot)
+            raise StateCommitError("interrupted publication", published=published)
+        return original(self, proposal, snapshot)
+
+    monkeypatch.setattr(PersistentStateStore, "commit", commit)
+    clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: None])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (2, 0)]
+    assert attempts == ([0, 1] if published else [0, 1, 1])
+    assert len(workspace.load().global_history) == 2
+    assert clock.retry_delays == ([] if published else [1])
+
+
+def test_continuous_later_boundary_supersedes_failed_transition(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original = PersistentStateStore.commit
+    attempted_dates = []
+
+    def commit(self, proposal, snapshot):
+        attempted_dates.append(snapshot.display_date)
+        if snapshot.display_date == date(2026, 3, 11):
+            raise StateCommitError("disk full")
+        return original(self, proposal, snapshot)
+
+    monkeypatch.setattr(PersistentStateStore, "commit", commit)
+    clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: clock.move(at(14, 7))])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (2, 0)]
+    assert attempted_dates == [date(2026, 3, day) for day in (10, 11, 14)]
+    assert [record.display_date.day for record in workspace.load().global_history] == [10, 14]
+
+
+def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original = application.recover_prepared_daily_images
+    attempts = []
+
+    def recover(state, *args):
+        attempts.append(state.revision)
+        if state.revision == 2 and attempts.count(2) == 1:
+            assert len(workspace.load().global_history) == 2
+            raise DailyImagePreparationError("temporary preparation failure")
+        return original(state, *args)
+
+    monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
+    clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: clock.move(at(11, 19))])
+    stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (2, 2)]
+    assert attempts == [1, 2, 2]
+    assert len(workspace.load().global_history) == 2
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_continuous_recovers_artifacts_damaged_between_reveals(workspace, monkeypatch, damage) -> None:
+    ordinary(workspace)
+
+    def damage_and_advance():
+        for path in png_files(workspace.artifacts):
+            if damage == "missing":
+                path.unlink()
+            else:
+                path.write_bytes(b"damaged")
+        clock.move(at(10, 12))
+
+    clock = RuntimeClock(at(10, 7), [damage_and_advance], retries=[lambda: None])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (1, 1)]
+    assert clock.retry_delays == [1]
+    assert workspace.load().revision == 1 and workspace.load().highest_reveal_stage == 1
+    assert len(png_files(workspace.artifacts)) >= 3
+
+
+def test_continuous_display_retry_without_event_or_reselection(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    display = FakeDisplay(fail_update=True)
+    clock = RuntimeClock(at(10, 7), retries=[lambda: setattr(display, "fail_update", False)])
+    stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
+    assert stages == [(1, 0)] and clock.retry_delays == [1]
+    assert workspace.load().revision == len(workspace.load().global_history) == 1
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+
+
+def test_continuous_failed_display_skips_to_newer_desired_selection(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    display = FakeDisplay(fail_update=True)
+
+    def recover_display():
+        display.fail_update = False
+        clock.move(at(14, 19))
+
+    clock = RuntimeClock(at(10, 7), retries=[recover_display])
+    stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
+    assert stages == [(2, 2)]
+    assert len(workspace.load().global_history) == 2
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+
+
+def test_continuous_reveal_persistence_retry_never_hides_successful_presentation(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original = PersistentStateStore.advance_reveal_progress
+    attempts = []
+
+    def advance(self, revision, stage):
+        attempts.append(stage)
+        if len(attempts) == 1:
+            raise StateCommitError("disk full")
+        return original(self, revision, stage)
+
+    monkeypatch.setattr(PersistentStateStore, "advance_reveal_progress", advance)
+    clock = RuntimeClock(at(10, 19), retries=[lambda: clock.move(at(10, 7))])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 2)] and attempts == [2, 2]
+    assert workspace.load().highest_reveal_stage == 2
+
+
+def test_continuous_initialization_retry(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    display = FakeDisplay()
+    attempts = []
+
+    def factory(configuration):
+        attempts.append(configuration.display_backend)
+        if len(attempts) == 1:
+            raise DisplayBackendInitializationError("temporarily unavailable")
+        return display
+
+    clock = RuntimeClock(at(10, 7), retries=[lambda: None])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch, backend_factory=factory)
+    assert stages == [(1, 0)] and len(attempts) == 2 and display.closed == 1
+    assert workspace.load().revision == 1
+
+
+def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, monkeypatch, caplog) -> None:
+    ordinary(workspace)
+    display = FakeDisplay(fail_update=True)
+    clock = RuntimeClock(at(10, 7), retries=[lambda: None] * 8)
+    with caplog.at_level(logging.WARNING):
+        stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
+    assert stages == [] and display.closed == 1
+    assert clock.retry_delays == [1, 2, 4, 8, 16, 32, 60, 60, 60]
+    assert caplog.text.count("Application operation failed") == 1
+    assert workspace.load().revision == 1 and png_files(workspace.artifacts)
+
+
+def test_continuous_content_failure_preserves_previous_state_for_retry(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    path = workspace.content / "ordinary.yaml"
+    original = path.read_text(encoding="utf-8")
+    previous = []
+
+    def remove_content():
+        previous.append(workspace.load())
+        path.unlink()
+        clock.move(at(11, 6))
+
+    def restore_content():
+        assert workspace.load() == previous[0]
+        path.write_text(original, encoding="utf-8")
+
+    clock = RuntimeClock(at(10, 7), [remove_content], retries=[restore_content])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0), (2, 0)] and clock.retry_delays == [1]
+    assert len(workspace.load().global_history) == 2
+
+
+@pytest.mark.parametrize("failure", ["configuration", "state"])
+def test_continuous_unrecoverable_errors_terminate_without_retry(workspace, monkeypatch, failure) -> None:
+    ordinary(workspace)
+    if failure == "configuration":
+        workspace.config.write_text("invalid: true", encoding="utf-8")
+    else:
+        workspace.state.parent.mkdir()
+        workspace.state.write_text("corrupt", encoding="utf-8")
+    clock = RuntimeClock(at(10, 7))
+    with pytest.raises(ApplicationError, match="configuration|persistent state"):
+        run_continuously(workspace, clock, monkeypatch)
+    assert clock.retry_delays == [] and clock.deadlines == []
+
+
+def test_continuous_uncertain_publication_with_temporary_reload_failure(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    original_commit = PersistentStateStore.commit
+    original_load = PersistentStateStore.load
+    unreadable = False
+
+    def commit(self, *args):
+        nonlocal unreadable
+        original_commit(self, *args)
+        unreadable = True
+        raise StateCommitError("durability unconfirmed", published=True)
+
+    def load(self):
+        if unreadable:
+            raise StateRecoveryError("temporary read failure") from OSError("temporarily unavailable")
+        return original_load(self)
+
+    def recover_storage():
+        nonlocal unreadable
+        unreadable = False
+
+    monkeypatch.setattr(PersistentStateStore, "commit", commit)
+    monkeypatch.setattr(PersistentStateStore, "load", load)
+    clock = RuntimeClock(at(10, 7), retries=[recover_storage])
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 0)] and clock.retry_delays == [1]
+    assert len(workspace.load().global_history) == 1
+
+
+def test_continuous_real_scheduling_wait_is_interrupted_by_shutdown(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    clock = RuntimeClock(at(10, 7))
+    clock.scheduling_wait = application.wait_for_scheduling_event
+    _, _, display = run_continuously(workspace, clock, monkeypatch)
+    assert clock.is_set() and display.closed == 1
+    assert clock.retry_delays == [300]
+
+
+def test_continuous_shutdown_during_update_persists_successful_reveal(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    clock = RuntimeClock(at(10, 19))
+    display = FakeDisplay()
+    original = display.update
+
+    def update(image):
+        original(image)
+        clock.set()
+
+    display.update = update
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
+    assert stages == [(1, 2)] and display.closed == 1
+    assert workspace.load().highest_reveal_stage == 2
+
+
+def test_continuous_slow_preparation_rechecks_latest_stage_before_presenting(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    clock = RuntimeClock(at(10, 7))
+    original = application.recover_prepared_daily_images
+
+    def recover(*args):
+        images = original(*args)
+        clock.move(at(10, 19))
+        return images
+
+    monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+    assert stages == [(1, 2)] and workspace.load().highest_reveal_stage == 2
+
+
+def test_continuous_daily_display_failure_retains_commit_and_prepared_images(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    display = FakeDisplay()
+    prepared = []
+    original = application.recover_prepared_daily_images
+
+    def recover(state, *args):
+        prepared.append(state.revision)
+        return original(state, *args)
+
+    def fail_daily_update():
+        display.fail_update = True
+        clock.move(at(11, 6))
+
+    def restore_display():
+        state = workspace.load()
+        assert state.revision == len(state.global_history) == 2
+        assert len(png_files(workspace.artifacts)) == 3
+        display.fail_update = False
+
+    monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
+    clock = RuntimeClock(at(10, 7), [fail_daily_update], retries=[restore_display])
+    stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
+    assert stages == [(1, 0), (2, 0)] and prepared == [1, 2]
+    assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+    assert len(workspace.load().global_history) == 2
+
+
+def test_command_line_defaults_to_continuous_and_restores_signal_handlers(workspace, monkeypatch) -> None:
+    import signal
+
+    import refrain.__main__ as command_line
+
+    calls = []
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+    def run(config, state, artifacts, *, shutdown_event):
+        calls.append((config, state, artifacts))
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        assert shutdown_event.is_set()
+
+    monkeypatch.setattr(command_line, "run_application", run)
+    assert (
+        main(
+            [
+                "--config",
+                str(workspace.config),
+                "--state",
+                str(workspace.state),
+                "--artifacts",
+                str(workspace.artifacts),
+            ]
+        )
+        == 0
+    )
+    assert calls == [(str(workspace.config), str(workspace.state), str(workspace.artifacts))]
+    assert {sig: signal.getsignal(sig) for sig in handlers} == handlers
