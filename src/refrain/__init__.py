@@ -66,6 +66,7 @@ from .scheduling import (
     SchedulingDecision,
     SchedulingEvaluationError,
     evaluate_scheduling,
+    resolve_reveal_stages,
 )
 from .selection import SelectionProposal, select_quotation
 
@@ -110,6 +111,7 @@ __all__ = [
     "SchedulingAction",
     "SchedulingDecision",
     "SchedulingEvaluationError",
+    "resolve_reveal_stages",
     "RevealSchedule",
     "RevealOverrides",
     "SchedulingContext",

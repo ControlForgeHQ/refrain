@@ -19,7 +19,9 @@ from refrain import (
     SchedulingEvaluationError,
     evaluate_scheduling,
     normalize_quotation,
+    resolve_reveal_stages,
 )
+from refrain.renderer import CompositionVisibility
 
 
 def make_configuration(
@@ -146,6 +148,61 @@ def test_simultaneous_reveals_share_a_stage() -> None:
     )
 
     assert decision.required_reveal_stage == 1
+
+
+def test_resolved_reveal_stages_support_attribution_before_source() -> None:
+    state = make_state(reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "09:00"})
+
+    stages = resolve_reveal_stages(state.snapshot)
+
+    assert stages == (
+        CompositionVisibility(),
+        CompositionVisibility(attribution=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+
+
+def test_resolved_reveal_stages_collapse_simultaneous_reveals() -> None:
+    state = make_state(reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "12:00"})
+
+    assert resolve_reveal_stages(state.snapshot) == (
+        CompositionVisibility(),
+        CompositionVisibility(source=True, attribution=True),
+    )
+
+
+def test_field_scheduled_at_quotation_time_is_visible_in_initial_stage() -> None:
+    state = make_state(reveal_schedule={"quotation": "06:00", "source": "06:00", "attribution": "18:00"})
+
+    assert resolve_reveal_stages(state.snapshot) == (
+        CompositionVisibility(source=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+
+
+@pytest.mark.parametrize(
+    ("current_hour", "expected_stage"),
+    [(6, 0), (9, 1), (12, 2), (19, 2)],
+)
+def test_evaluation_stage_indexes_match_canonical_visibility_sequence(current_hour: int, expected_stage: int) -> None:
+    state = make_state(reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "09:00"})
+    stages = resolve_reveal_stages(state.snapshot)
+
+    decision = evaluate_scheduling(
+        datetime(2026, 10, 26, current_hour, 0, tzinfo=ZoneInfo("America/New_York")),
+        make_configuration(),
+        state,
+    )
+
+    assert decision.required_reveal_stage == expected_stage
+    assert (
+        stages[decision.required_reveal_stage]
+        == (
+            CompositionVisibility(),
+            CompositionVisibility(attribution=True),
+            CompositionVisibility(source=True, attribution=True),
+        )[expected_stage]
+    )
 
 
 def test_nonexistent_dst_reveal_time_becomes_due_after_the_clock_skips_it() -> None:
@@ -302,6 +359,21 @@ def test_invalid_snapshot_schedule_is_rejected_conservatively() -> None:
     state = make_state(reveal_schedule={"quotation": "6 AM"})
 
     with pytest.raises(SchedulingEvaluationError, match="quotation"):
+        evaluate_scheduling(
+            datetime(2026, 10, 26, 7, 0, tzinfo=ZoneInfo("America/New_York")),
+            make_configuration(),
+            state,
+        )
+
+
+def test_persisted_reveal_stage_cannot_exceed_final_snapshot_stage() -> None:
+    state = make_state(
+        metadata={"presentation_style": "centered"},
+        reveal_schedule={"quotation": "06:00"},
+        highest_reveal_stage=1,
+    )
+
+    with pytest.raises(SchedulingEvaluationError, match="exceeds the last available reveal stage"):
         evaluate_scheduling(
             datetime(2026, 10, 26, 7, 0, tzinfo=ZoneInfo("America/New_York")),
             make_configuration(),

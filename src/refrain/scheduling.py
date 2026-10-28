@@ -10,7 +10,8 @@ from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import ApplicationConfiguration
-from .persistence import PersistentState
+from .persistence import DailySnapshot, PersistentState
+from .renderer import CompositionVisibility
 
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 
@@ -76,13 +77,11 @@ def _schedule_time(schedule: Mapping[str, object], field: str) -> time:
     return time.fromisoformat(value)
 
 
-def _required_stage(state: PersistentState, current_time: datetime) -> int:
-    snapshot = state.snapshot
-    try:
-        timezone = ZoneInfo(snapshot.scheduling.timezone)
-    except (TypeError, ValueError, ZoneInfoNotFoundError) as error:
-        raise SchedulingEvaluationError("snapshot scheduling timezone must be a valid IANA timezone") from error
-
+def _resolve_reveal_stages(
+    snapshot: DailySnapshot,
+) -> tuple[tuple[time, ...], tuple[CompositionVisibility, ...]]:
+    if not isinstance(snapshot, DailySnapshot):
+        raise SchedulingEvaluationError("snapshot must be a DailySnapshot")
     schedule = snapshot.reveal_schedule
     metadata = snapshot.presentation_metadata
     if not isinstance(schedule, Mapping) or not isinstance(metadata, Mapping):
@@ -93,7 +92,7 @@ def _required_stage(state: PersistentState, current_time: datetime) -> int:
     if quotation_time != day_start:
         raise SchedulingEvaluationError("snapshot reveal schedule.quotation must match snapshot scheduling.day_start")
 
-    events = {quotation_time}
+    field_times = {"quotation": quotation_time}
     for field in ("source", "attribution"):
         value = metadata.get(field)
         if value is None:
@@ -103,15 +102,44 @@ def _required_stage(state: PersistentState, current_time: datetime) -> int:
         event_time = _schedule_time(schedule, field)
         if event_time < quotation_time:
             raise SchedulingEvaluationError(f"snapshot reveal schedule.{field} must not precede quotation")
-        events.add(event_time)
+        field_times[field] = event_time
 
+    event_times = tuple(sorted(set(field_times.values())))
+    stages = tuple(
+        CompositionVisibility(
+            quotation=True,
+            source="source" in field_times and field_times["source"] <= event_time,
+            attribution="attribution" in field_times and field_times["attribution"] <= event_time,
+        )
+        for event_time in event_times
+    )
+    return event_times, stages
+
+
+def resolve_reveal_stages(snapshot: DailySnapshot) -> tuple[CompositionVisibility, ...]:
+    """Return the complete ordered cumulative reveal stages for a snapshot.
+
+    The returned sequence is canonical for both scheduling evaluation and
+    preparation/recovery. Fields revealed together share a stage, and fields
+    scheduled at the quotation time appear in the initial stage.
+    """
+    return _resolve_reveal_stages(snapshot)[1]
+
+
+def _required_stage(state: PersistentState, current_time: datetime) -> int:
+    snapshot = state.snapshot
+    try:
+        timezone = ZoneInfo(snapshot.scheduling.timezone)
+    except (TypeError, ValueError, ZoneInfoNotFoundError) as error:
+        raise SchedulingEvaluationError("snapshot scheduling timezone must be a valid IANA timezone") from error
+
+    event_times, stages = _resolve_reveal_stages(snapshot)
     try:
         local_time = current_time.astimezone(timezone)
     except (OverflowError, OSError, ValueError) as error:
         raise SchedulingEvaluationError("current_time cannot be converted to the snapshot timezone") from error
-    event_times = sorted(events)
     if local_time.date() > snapshot.display_date:
-        clock_stage = len(event_times) - 1
+        clock_stage = len(stages) - 1
     elif local_time.date() < snapshot.display_date:
         clock_stage = 0
     else:
@@ -127,6 +155,10 @@ def _required_stage(state: PersistentState, current_time: datetime) -> int:
     highest_stage = state.highest_reveal_stage
     if type(highest_stage) is not int or highest_stage < 0:
         raise SchedulingEvaluationError("highest_reveal_stage must be a nonnegative integer")
+    if highest_stage >= len(stages):
+        raise SchedulingEvaluationError(
+            f"highest_reveal_stage {highest_stage} exceeds the last available reveal stage {len(stages) - 1}"
+        )
     return max(clock_stage, highest_stage)
 
 
