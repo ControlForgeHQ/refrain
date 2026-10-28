@@ -110,12 +110,22 @@ def test_initialization_configures_spi_gpio_and_releases_owned_resources(
     assert set(gpiod.settings) == {
         transport.EPD_CS_M_PIN,
         transport.EPD_CS_S_PIN,
+        transport.EPD_DC_PIN,
         transport.EPD_RST_PIN,
         transport.EPD_BUSY_PIN,
         transport.EPD_PWR_PIN,
     }
     assert gpiod.settings[transport.EPD_BUSY_PIN]["direction"] is Direction.INPUT
-    assert gpiod.settings[transport.EPD_CS_M_PIN]["output_value"] is Value.ACTIVE
+    expected_output_values = {
+        transport.EPD_CS_M_PIN: Value.ACTIVE,
+        transport.EPD_CS_S_PIN: Value.ACTIVE,
+        transport.EPD_DC_PIN: Value.INACTIVE,
+        transport.EPD_RST_PIN: Value.ACTIVE,
+        transport.EPD_PWR_PIN: Value.ACTIVE,
+    }
+    assert {
+        pin: settings["output_value"] for pin, settings in gpiod.settings.items() if pin != transport.EPD_BUSY_PIN
+    } == expected_output_values
     lines.values[transport.EPD_BUSY_PIN] = Value.ACTIVE
     assert transport.digital_read(transport.EPD_BUSY_PIN) == 1
     lines.values[transport.EPD_BUSY_PIN] = Value.INACTIVE
@@ -151,6 +161,8 @@ def test_large_image_writes_are_chunked_and_flushed_before_chip_select_release(
     transport.digital_write(transport.EPD_CS_M_PIN, 1)
 
     assert spi.writes == [b"\x10", payload[:4096], payload[4096:8192], payload[8192:]]
+    assert ("set", transport.EPD_DC_PIN, Value.ACTIVE) not in _lines.calls
+    assert ("set", transport.EPD_DC_PIN, Value.INACTIVE) not in _lines.calls
     transport.module_exit()
 
 

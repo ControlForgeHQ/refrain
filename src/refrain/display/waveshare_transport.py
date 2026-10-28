@@ -19,7 +19,7 @@ EPD_RST_PIN = 17
 EPD_BUSY_PIN = 24
 EPD_PWR_PIN = 18
 
-_OUTPUT_PINS = (EPD_CS_M_PIN, EPD_CS_S_PIN, EPD_RST_PIN, EPD_PWR_PIN)
+_OUTPUT_PINS = (EPD_CS_M_PIN, EPD_CS_S_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_PWR_PIN)
 _spi: Any = None
 _lines: Any = None
 _value_type: Any = None
@@ -132,6 +132,10 @@ def module_init() -> None:
             )
             for pin in _OUTPUT_PINS
         }
+        line_settings[EPD_DC_PIN] = gpiod.LineSettings(
+            direction=line.Direction.OUTPUT,
+            output_value=value_type.INACTIVE,
+        )
         line_settings[EPD_BUSY_PIN] = gpiod.LineSettings(direction=line.Direction.INPUT)
         lines = gpiod.request_lines(
             GPIO_CHIP,
