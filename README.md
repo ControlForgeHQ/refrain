@@ -101,7 +101,7 @@ With `0.0.0.0`, open `http://<refrain-host-lan-ip>:8080/display/current` from an
 
 The desktop backend uses the Python installation's Tk support and Pillow. Linux may require installing the matching Tk package (for example, `python3-tk`) and running in a graphical session. GUI modules are imported only when the window backend is constructed.
 
-The Waveshare backend uses its model-specific vendored Python driver and an externally supplied native library. Obtain the matching `DEV_Config_32_b.so`, `DEV_Config_32_w.so`, `DEV_Config_64_b.so`, or `DEV_Config_64_w.so` from [Waveshare's official distribution](src/refrain/display/vendor/waveshare/UPSTREAM.md); Refrain does not bundle these binaries. Install the selected library beside the installed Waveshare driver or in `/usr/local/lib` or `/usr/lib`. The driver chooses the architecture-specific library and `_b`/`_w` variant based on the host. On Raspberry Pi OS, ensure the Refrain service identity has the GPIO access required by the driver. The vendor driver bit-bangs its software-SPI protocol through GPIO; it does not use the conventional `spidev` transfer path. Hardware-dependent behavior must be validated on the physical panel; mocked tests do not establish hardware support.
+For the validated Waveshare hardware combination, installation, SPI/GPIO configuration, device permissions, physical smoke testing, troubleshooting, and driver provenance, see the [Waveshare display installation guide](src/refrain/display/vendor/waveshare/README.md). Hardware-dependent behavior must be validated on the physical panel; mocked tests do not establish hardware support.
 
 To display two PNG files in the same responsive window and close cleanly, run:
 

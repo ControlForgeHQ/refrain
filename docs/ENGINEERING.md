@@ -735,7 +735,7 @@ Do not modify vendor driver behavior without understanding the relevant hardware
 
 When modifications are necessary, keep them reviewable and explain why they are required.
 
-The physical backend requires Raspberry Pi OS, the architecture-compatible Waveshare native library obtained separately by the user, and appropriate GPIO access for the service identity. The vendored driver searches beside its Python module, `/usr/local/lib`, and `/usr/lib`. It implements software SPI by toggling GPIO and does not use the conventional `spidev` transfer path. Keep the application process under the minimum practical privileges rather than running it as root.
+The physical backend uses Linux hardware SPI and GPIO character-device access through its optional `hardware` dependencies. Configure the required SPI overlay, `/dev/spidev0.0`, GPIO lines, and service-identity device permissions as documented in the README. Keep the application process under the minimum practical privileges rather than running it as root. The transport must remain lazy-loaded so non-hardware development and other display backends do not require these dependencies.
 
 ### Hardware isolation
 

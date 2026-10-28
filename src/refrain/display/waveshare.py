@@ -39,9 +39,8 @@ class WaveshareDisplayBackend:
             self._epd = driver.EPD()
         except Exception as error:
             raise DisplayBackendInitializationError(
-                "could not load the Waveshare 13.3-inch E driver; install the architecture-compatible "
-                "Waveshare DEV_Config native library beside the vendored driver, in /usr/local/lib, "
-                f"or in /usr/lib: {error}"
+                "could not load the Waveshare 13.3-inch E driver or Linux SPI/GPIO transport; "
+                f"install the 'hardware' optional dependencies on Linux: {error}"
             ) from error
 
     @staticmethod
@@ -109,16 +108,16 @@ class WaveshareDisplayBackend:
                             DisplayBackendInitializationError,
                         )
                     except Exception:
-                        if self._native_is_poisoned():
+                        if self._transport_is_poisoned():
                             self._failed = True
-                        elif self._native_is_initialized():
+                        if self._transport_is_initialized():
                             try:
                                 self._driver_module.epdconfig.module_exit()
                             except Exception:
                                 self._failed = True
-                                _LOGGER.exception(
-                                    "failed to release native GPIO after Waveshare initialization failure"
-                                )
+                                _LOGGER.exception("failed to release Waveshare resources after initialization failure")
+                            else:
+                                self._initialized = False
                         raise
                     self._initialized = True
                     try:
@@ -129,9 +128,18 @@ class WaveshareDisplayBackend:
                         )
                         self._sleep_controller(DisplayBackendUpdateError)
                     except Exception:
-                        if self._native_is_poisoned():
+                        if self._transport_is_poisoned():
                             self._failed = True
-                        if self._initialized and not self._failed:
+                            if self._transport_is_initialized():
+                                try:
+                                    self._driver_module.epdconfig.module_exit()
+                                except Exception:
+                                    _LOGGER.exception(
+                                        "failed to release Waveshare resources after communication failure"
+                                    )
+                                else:
+                                    self._initialized = False
+                        elif self._initialized and not self._failed:
                             try:
                                 self._sleep_controller(DisplayBackendUpdateError)
                             except Exception:
@@ -143,7 +151,7 @@ class WaveshareDisplayBackend:
                 except Exception:
                     pass
 
-    def _native_is_poisoned(self) -> bool:
+    def _transport_is_poisoned(self) -> bool:
         config = getattr(self._driver_module, "epdconfig", None)
         checker = getattr(config, "is_poisoned", None)
         return checker() if checker is not None else False
@@ -157,16 +165,18 @@ class WaveshareDisplayBackend:
             )
         except Exception:
             self._failed = True
-            if self._native_is_initialized():
+            if self._transport_is_initialized():
                 try:
                     self._driver_module.epdconfig.module_exit()
                 except Exception:
-                    _LOGGER.exception("failed to release native GPIO mappings after controller sleep failure")
+                    _LOGGER.exception("failed to release Waveshare resources after controller sleep failure")
+                else:
+                    self._initialized = False
             raise
         else:
             self._initialized = False
 
-    def _native_is_initialized(self) -> bool:
+    def _transport_is_initialized(self) -> bool:
         config = getattr(self._driver_module, "epdconfig", None)
         checker = getattr(config, "is_initialized", None)
         return checker() if checker is not None else False
@@ -177,7 +187,19 @@ class WaveshareDisplayBackend:
             if self._closed:
                 return
             self._closed = True
-            if self._failed or not self._initialized:
+            if self._failed:
+                if not self._transport_is_initialized():
+                    return
+                with _HARDWARE_LOCK:
+                    try:
+                        self._driver_module.epdconfig.module_exit()
+                    except Exception as error:
+                        raise DisplayBackendCloseError(
+                            f"could not release Waveshare hardware resources: {error}"
+                        ) from error
+                    self._initialized = False
+                return
+            if not self._initialized:
                 return
             with _HARDWARE_LOCK:
                 try:
