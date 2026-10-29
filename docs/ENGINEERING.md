@@ -514,17 +514,23 @@ No general locking or transaction framework is required.
 
 ### Repetition-history cleanup
 
-Before selecting a quotation from a successfully loaded and validated complete content library, derive the set of normalized identities belonging to every quotation in that library.
+Before selecting a quotation, successfully discover and examine the content sources and construct a nonempty effective content library from accepted entries.
+
+Derive the set of normalized quotation identities belonging to every accepted entry in the effective library.
 
 Intersect the persisted repetition history with those identities.
 
 Use the resulting collection for repetition-aware selection.
 
-The cleanup must consider every quotation in the complete library, regardless of current eligibility, specificity, priority, or font availability.
+The cleanup must consider every accepted quotation, regardless of current eligibility, specificity, priority, or font availability.
 
-Do not prune repetition history using a partially loaded, unavailable, or invalid content library.
+Rejected files and entries do not contribute identities to the effective library. Their previously recorded repetition identities may therefore be removed.
 
-Persist the cleaned repetition history as part of the next successful selection commitment.
+Do not prune repetition history when the content directory is missing or inaccessible, source discovery or enumeration fails, or the effective library contains no valid quotations.
+
+Individual invalid content files or entries do not prevent cleanup when the remaining effective library is usable.
+
+Persist the cleaned repetition history only as part of the next successful selection commitment.
 
 A separate startup write, maintenance service, or periodic pruning task is not required.
 
