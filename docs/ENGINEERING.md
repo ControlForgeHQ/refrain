@@ -338,11 +338,23 @@ The hardware-independent application must remain importable on development syste
 
 Use a maintained YAML parser with safe loading behavior.
 
-Do not deserialize arbitrary Python objects from content files.
+Do not deserialize arbitrary Python objects from application configuration or content files.
 
-Validate parsed content against the supported content-format contract before making it available for selection.
+Application configuration and content files have separate validation and recovery policies defined in `docs/CONTENT_FORMAT.md`.
+
+A syntax error in application configuration prevents that document from being interpreted; the application must report an actionable error rather than guess at its contents.
+
+A syntax error in an individual content file excludes that file without invalidating unrelated content files.
+
+Where the supported content format permits independent entry validation, reject individual invalid entries without discarding unrelated valid entries.
+
+Content source discovery must distinguish a complete examination containing rejected entries from missing directories, inaccessible sources, or failed enumeration.
+
+Duplicate entry identifiers must be handled independently of filesystem enumeration order.
 
 Do not depend on YAML mapping order or filesystem enumeration order for selection policy.
+
+Do not implement speculative YAML syntax repair or unsupported multi-entry formats.
 
 ### Configuration
 
@@ -350,17 +362,33 @@ Configuration must be explicit, documented, and validated.
 
 Both application configuration and content entries use YAML, with separate schemas defined in `docs/CONTENT_FORMAT.md`.
 
-Use sensible defaults where the product requirements establish them.
+Construct an effective application configuration from accepted values, documented defaults, and usable registered resources.
 
-Do not silently substitute defaults for invalid user-supplied values when doing so could alter scheduling, selection, or presentation behavior.
+Distinguish fatal validation errors from recoverable warnings and informational default notices.
 
-Application configuration must strictly validate explicitly registered resources, including fonts.
+Apply only defaults established by the public configuration specification. Do not invent fallback values to bypass missing required settings.
 
-An unavailable font preference in an otherwise valid content entry is not an application configuration failure. Report the unavailable preference and apply the documented default-font fallback.
+Unknown application-configuration fields and invalid optional values must be reported and handled according to the configuration contract without unnecessarily preventing operation.
+
+When optional values are omitted, informational default notices should be consolidated where practical rather than generating excessive startup output.
+
+Validate user-registered fonts individually. Exclude invalid or unavailable registrations from the effective registry while preserving usable registrations and bundled fonts.
+
+Construct the effective default font pool from valid configured identifiers without automatically adding unrequested fonts.
+
+An unavailable font preference in an otherwise valid content entry does not invalidate that entry. Report the unavailable preference and apply the documented default-font fallback.
+
+Validate content independently by source file and, where supported, by entry. Preserve accepted entries when other entries fail validation.
+
+A nonempty effective content library may be used for new selections even when individual sources were rejected.
+
+Do not treat missing or inaccessible sources, unsuccessful discovery, or an empty effective content library as successful content removal for repetition-history cleanup.
 
 Resolve effective per-entry configuration, including font selection, before committing a daily snapshot.
 
 After commitment, the selected presentation must not depend on changes to the original content or configuration files.
+
+Do not rewrite user-authored configuration or content files as part of validation.
 
 ### File paths
 
@@ -995,29 +1023,49 @@ Do not require a separate log server, database, or third-party logging framework
 
 Allow systemd and journald to manage ordinary deployed logs.
 
-Avoid implementing application-specific log rotation or persistent log files without a demonstrated need.
+Avoid implementing application-specific log rotation or persistent diagnostic log files without a demonstrated need.
+
+Global selection history is structured application data and must remain separate from ordinary diagnostic logging.
 
 ### Log content
 
 Log meaningful lifecycle and state changes, including:
 
 - application startup and shutdown;
-- configuration and content validation failures;
+- application configuration defaults and recoverable validation problems;
+- excluded content files and entries;
+- fatal configuration or content-library failures;
 - daily selection commitments;
 - recovery of committed selections;
 - image-preparation failures;
 - physical display failures and recovery;
 - significant scheduling or clock-related events.
 
+Use `INFO` for ordinary operational events and documented defaults applied to omitted optional settings.
+
+Use `WARNING` for invalid or unrecognized values that were ignored, replaced by defaults, or excluded without preventing operation.
+
+Use `ERROR` for failures that prevent a required operation from proceeding.
+
+Log warnings with enough context to identify the affected file, field, entry, or resource and explain the action taken.
+
+Consolidate informational default notices where practical.
+
 Do not log every scheduler iteration or repeatedly emit identical errors during unchanged retry conditions.
 
 Log messages must be concise, human-readable, and useful for diagnosing unattended operation.
 
-Do not unnecessarily log entire quotation libraries or large serialized snapshots.
+Do not unnecessarily log entire quotation libraries, large serialized snapshots, or sensitive configuration values.
 
 ### Diagnostic behavior
 
-Errors should provide enough information to identify the failing responsibility and next useful troubleshooting step.
+Diagnostics must distinguish a rejected input value from a failure of the entire configuration or content library.
+
+Recoverable validation problems must remain visible to the operator without preventing unrelated valid settings or entries from being accepted.
+
+Fatal errors must identify the missing or unusable requirement and the next useful troubleshooting step.
+
+Configuration and content diagnostics must preserve their source location where available.
 
 Diagnostic facilities must not mutate persistent state or operate the physical display unless explicitly intended to do so.
 
@@ -1037,7 +1085,19 @@ The ability to import and test core components without Raspberry Pi hardware is 
 
 Automated testing should cover:
 
-- content and configuration validation;
+- application configuration parsing, defaults, warnings, and fatal validation errors;
+- missing optional values with documented defaults;
+- explicitly invalid optional values with and without defaults;
+- unrecognized application-configuration fields;
+- unavailable or invalid registered fonts and effective font-pool construction;
+- content-file parsing failures and independent rejection of invalid entries;
+- partial content-library acceptance with valid entries preserved;
+- duplicate entry identifiers and deterministic conflict handling;
+- missing, inaccessible, and empty content libraries;
+- repetition-history cleanup using accepted content only;
+- preservation of repetition history when content discovery fails or no valid quotations remain;
+- recovery of committed selections independently of current content-library availability;
+- recovery and regeneration when a previously selected custom font becomes unavailable;
 - stable entry and quotation identities;
 - normalized quotation matching;
 - date-specificity precedence;

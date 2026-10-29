@@ -599,14 +599,13 @@ Refrain is not required to detect or resolve unintended duplicate content entrie
 
 The selection process must not allow duplicate occurrences to distort equal-probability selection among distinct quotation messages.
 
-
 ### Selection procedure
 
 For each new daily selection:
 
 1. Determine the applicable display date.
-2. Load and validate the complete content library.
-3. Remove repetition identities no longer present in the validated content library.
+2. Discover and examine the content sources, constructing a nonempty effective library from accepted entries.
+3. Remove repetition identities no longer present in the effective content library.
 4. Identify eligible content entries.
 5. Expand eligible entries into individual quotation candidates.
 6. Determine the highest matching date specificity.
@@ -616,12 +615,14 @@ For each new daily selection:
 10. Retain candidates having the highest priority.
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
-13. Resolve the font using the entry's preference or the configured default pool.
+13. Resolve the font using the entry's preference or the effective default pool.
 14. Prepare the complete daily snapshot.
 15. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
 16. Record the committed selection in global history on a best-effort basis.
 
 Selection is not complete until operational-state commitment succeeds.
+
+An unavailable or empty effective content library cannot produce a new selection and must not trigger repetition-history cleanup.
 
 A failed or interrupted operational-state commitment permits the selection procedure to run again.
 
@@ -632,7 +633,6 @@ The next selection revision is derived from authoritative operational state, nev
 The random results of an uncommitted selection, including font selection, are not authoritative.
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
-
 
 ## Persistent state
 
@@ -1373,14 +1373,17 @@ The implementation may organize these operations differently provided their exte
 At a recognized display-day transition, the application:
 
 1. Determines the new display date.
-2. Loads and validates the complete content library and removes obsolete repetition identities.
-3. Performs eligibility, repetition, priority, and random quotation selection.
-4. Creates the complete daily snapshot.
-5. Atomically commits the snapshot, updated repetition history, next selection revision, and required scheduling context.
-6. Records the committed selection in global history on a best-effort basis.
-7. Generates and persists every required reveal-stage image.
-8. Determines the stage appropriate to the current time.
-9. Presents the corresponding prepared image.
+2. Constructs a nonempty effective content library from successfully examined sources and accepted entries.
+3. Removes obsolete repetition identities based on the effective library.
+4. Performs eligibility, repetition, priority, and random quotation selection.
+5. Creates the complete daily snapshot.
+6. Atomically commits the snapshot, updated repetition history, next selection revision, and required scheduling context.
+7. Records the committed selection in global history on a best-effort basis.
+8. Generates and persists every required reveal-stage image.
+9. Determines the stage appropriate to the current time.
+10. Presents the corresponding prepared image.
+
+A missing, inaccessible, or empty effective content library prevents a new selection without modifying committed operational state.
 
 The selection is complete at operational-state commitment, independently of whether global-history recording, image preparation, or display communication subsequently succeeds.
 
@@ -1500,7 +1503,7 @@ The following must remain true as the project evolves:
 6. Unused quotations take precedence over previously consumed quotations within the highest-specificity eligible pool.
 7. Exhausting a selection pool resets only the repetition identities belonging to that pool.
 8. Repetition-history resets and cleanup do not alter previously recorded global selection history.
-9. Repetition identities absent from a successfully validated complete content library may be removed without affecting committed selections.
+9. Repetition identities absent from a nonempty effective content library may be removed during a new selection, but failed source discovery or an empty effective library must never trigger repetition-history cleanup.
 10. Priority determines preference among otherwise eligible unused quotations.
 11. Equal-priority distinct quotation candidates have equal selection probability.
 12. A daily selection is authoritative only after its complete snapshot, updated repetition history, selection revision, and scheduling context have been committed consistently.
