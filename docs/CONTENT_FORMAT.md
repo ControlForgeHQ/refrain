@@ -10,6 +10,7 @@ Engineering practices, YAML parser selection, storage implementation, and testin
 
 Feature scope and release sequencing belong in `docs/ROADMAP.md`.
 
+
 ## Format principles
 
 Refrain uses YAML for both application configuration and content entries.
@@ -26,7 +27,13 @@ Prefer explicit, readable fields over abbreviated expressions or specialized syn
 
 Do not expose arbitrary Python expressions, executable tags, or application implementation details through YAML.
 
-Unknown fields are validation errors rather than silently ignored extensions.
+Application configuration favors continued operation when invalid or unrecognized settings can be safely ignored or replaced by documented defaults.
+
+Content validation favors preserving usable entries while excluding individual invalid entries or files.
+
+Neither format permits invalid input to silently alter the meaning of accepted values.
+
+Validation and diagnostic requirements for the two formats are defined separately in this document.
 
 ## YAML conventions
 
@@ -399,6 +406,7 @@ Their identifiers are reserved. Application configuration must not redefine or o
 
 Bundled font identifiers form part of the public configuration interface and must remain stable across compatible releases.
 
+
 #### User-registered fonts
 
 The optional `layout.fonts.available` mapping registers additional fonts supplied by an installation.
@@ -419,7 +427,7 @@ When omitted, `layout.fonts.available` defaults to an empty mapping.
 
 Font identifiers must be nonempty strings and are case-sensitive.
 
-User-defined identifiers must not duplicate bundled identifiers. Such collisions are configuration validation errors; user-defined fonts cannot replace or shadow bundled fonts.
+User-defined identifiers must not duplicate bundled identifiers. Such registrations are ignored with a warning; user-defined fonts cannot replace or shadow bundled fonts.
 
 Font paths must be nonempty strings.
 
@@ -427,13 +435,13 @@ Relative font paths are resolved relative to the directory containing `config.ya
 
 Absolute paths are permitted.
 
-Every explicitly registered font must resolve to an existing, readable font file supported by the renderer.
+A user-registered font is included in the effective font registry only when its identifier and path are valid and the referenced file exists, is readable, and can be loaded by the renderer.
 
-An invalid, missing, or unreadable registered font is a configuration error, even if the font is not included in the automatic default pool.
+Invalid, missing, or unreadable font registrations are excluded individually from the effective registry, with warnings identifying the affected identifier and reason.
 
-Registered font validation must not silently discard invalid entries.
+An invalid registration must not prevent otherwise valid font registrations or bundled fonts from being available.
 
-The effective registry contains all bundled fonts and all valid user-registered fonts. Both are available for explicit selection by content entries, whether or not they appear in the default font pool.
+The effective registry contains all usable bundled fonts and all accepted user-registered fonts. Both are available for explicit selection by content entries, whether or not they appear in the default font pool.
 
 ### Default font pool
 
@@ -450,15 +458,25 @@ layout:
       - "my-lora"
 ```
 
-Every identifier must exist in the effective font registry, including bundled fonts and fonts registered through `layout.fonts.available`.
+The configured default pool defines the user's preferred fonts for automatic selection.
 
-Duplicate identifiers are not permitted.
+The effective default pool contains only identifiers from the configured pool that correspond to usable fonts in the effective registry.
+
+Unavailable, unregistered, or otherwise invalid font identifiers are excluded from the effective default pool with warnings.
+
+Duplicate identifiers are ignored after their first occurrence, with a warning.
+
+The effective default pool must contain at least one usable font whenever Refrain needs to perform a new selection.
 
 The default pool is explicitly configured. Refrain must not automatically add bundled or newly registered fonts to the pool.
 
 A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 
-The default pool identifies the fonts eligible for automatic selection when a content entry has no available preferred font.
+The effective default pool identifies the fonts eligible for automatic selection when a content entry has no available preferred font.
+
+An empty or unusable configured default pool cannot be repaired by silently substituting an unrelated bundled font pool.
+
+Bundled fallback during regeneration of an already committed presentation is independent of automatic font selection and is defined in `docs/ARCHITECTURE.md`.
 
 Automatic font selection and its persistence are defined in `docs/ARCHITECTURE.md`.
 
@@ -1002,48 +1020,112 @@ quotations:
 ```
 
 
-
 ## Validation and diagnostics
 
-Application configuration and content files must conform to their respective schemas before being accepted.
+Application configuration and content files must be parsed and validated according to their respective schemas before their values are accepted.
 
-Validation includes:
+Validation distinguishes fatal errors, recoverable problems, and informational use of documented defaults.
 
-- valid YAML syntax and one top-level mapping;
+Diagnostics must identify the affected file and field or entry where applicable, with sufficient information to correct the problem.
+
+### Application configuration
+
+Application configuration is interpreted into an effective configuration containing accepted values, documented defaults, and usable registered resources.
+
+A configuration problem is fatal only when Refrain cannot establish a valid effective value required for the operation.
+
+Apply the following rules:
+
+- A missing optional value with a documented default uses that default and is reported at informational severity.
+- An explicitly supplied invalid optional value with a documented default produces a warning and uses that default.
+- An invalid optional value without a documented default produces a warning and is ignored.
+- An unrecognized configuration field produces a warning and is ignored.
+- A missing or invalid required value without a usable fallback produces an error.
+- An unavailable or invalid user-registered font produces a warning and is excluded from the effective font registry.
+- An unavailable or unregistered default-pool identifier produces a warning and is excluded from the effective default pool.
+
+Fallback values must be defined by this specification. Validation must not invent undocumented defaults.
+
+Recoverable problems must not prevent other valid configuration values from being accepted.
+
+Invalid configuration values must not be silently accepted as valid.
+
+Configuration warnings must identify the field and explain whether it was ignored, excluded, or replaced by a documented default.
+
+Informational notices for omitted optional values may be consolidated to avoid excessive startup output.
+
+The effective configuration must satisfy the requirements of the operation being performed.
+
+A failed configuration load must not overwrite the configuration file or mutate authoritative operational state.
+
+### Content library
+
+Content files must use valid YAML syntax and conform to the content-entry schema.
+
+Content validation includes:
+
+- valid YAML syntax and supported YAML constructs;
+- valid entry identifiers and uniqueness across accepted entries;
 - required fields and supported field names;
 - permitted value types;
-- valid timezone identifiers;
-- valid time strings and reveal-schedule constraints;
-- valid entry identifiers and uniqueness across the content library;
 - nonempty quotation collections and quotation strings;
-- supported eligibility rules and valid calendar values;
 - valid integer priorities;
-- valid normalized quotation-region coordinates;
-- valid font-size bounds;
-- user-registered font identifiers that do not collide with reserved bundled identifiers;
-- nonempty user-registered font identifiers and file paths;
-- existing, readable, supported user-registered font files;
-- a nonempty default font pool;
-- default font identifiers present in the effective font registry;
-- no duplicate identifiers in the default font pool.
+- supported eligibility rules and valid calendar values;
+- valid reveal schedules and presentation settings.
 
-Invalid explicit configuration values must not be silently replaced by defaults.
+Invalid or unrecognized fields make the affected content entry invalid.
 
-Every font explicitly registered in application configuration must be valid, even when no content entry currently references it.
+A YAML file that cannot be parsed is excluded in its entirety, with an actionable warning.
 
-Content-entry font preferences have a different validation rule: an unregistered but otherwise valid font identifier is permitted.
+A syntactically valid file containing independently represented content entries may retain valid entries while excluding invalid entries, where the file format permits them to be validated separately.
 
-An empty or non-string content-entry font value is invalid.
+An invalid entry must not invalidate otherwise valid entries or files.
 
-Diagnostics must identify the affected file and field, with sufficient information to correct the error.
+Conflicting duplicate entry identifiers must not be resolved by arbitrary filesystem enumeration order. All entries participating in a detected identifier conflict are excluded, with diagnostics identifying the conflicting entries.
 
-Warnings for unavailable content-entry font preferences are required by the architecture.
+Content entries whose preferred font identifier is unavailable remain valid when the identifier itself satisfies the field's syntax rules. Font fallback behavior is defined in `docs/ARCHITECTURE.md`.
 
-Unknown fields are validation errors.
+The effective content library consists of accepted, validated entries.
 
-A content library containing invalid entries must not be treated as successfully validated.
+A partial content library is usable when source discovery and loading complete and at least one valid quotation remains.
 
-Recovery from invalid or unavailable source content is defined in `docs/ARCHITECTURE.md`.
+Individual invalid files or entries do not prevent the effective library from being accepted.
+
+A missing or inaccessible content directory, failed source discovery, a directory containing no content files, or a library with no valid quotations is a library-level failure.
+
+A library-level failure must not be interpreted as an intentionally empty library for repetition-history cleanup.
+
+Content validation must not silently reinterpret malformed entries or invent missing quotations.
+
+### Diagnostic severity
+
+Use the following severity meanings:
+
+- `INFO`: A documented default was applied because an optional value was omitted.
+- `WARNING`: A recoverable configuration problem or rejected content item was encountered; usable configuration or content remains available.
+- `ERROR`: A required effective configuration or content-library condition cannot be satisfied.
+
+Warnings must be actionable and must not repeatedly flood normal application logs.
+
+Logging implementation and process-output behavior are defined in `docs/ENGINEERING.md`.
+
+### Recovery and repetition history
+
+A usable effective content library may contain rejected files or entries.
+
+When Refrain makes a new selection, repetition-history cleanup uses the quotations belonging to the accepted effective library.
+
+Quotations belonging exclusively to rejected entries may therefore lose their repetition status. If those entries are later corrected and accepted, their quotations may re-enter selection as unused.
+
+This behavior is intentional.
+
+Repetition-history cleanup must not occur when library discovery fails or the effective content library contains no valid quotations.
+
+Cleanup is committed only as part of a successful new selection.
+
+An already committed presentation remains independent of subsequent changes or failures in its original content library.
+
+Runtime selection, recovery, and scheduling behavior are defined in `docs/ARCHITECTURE.md`.
 
 ## Compatibility and extension
 
@@ -1053,7 +1135,9 @@ New fields must be introduced deliberately and documented here.
 
 Existing field meanings must not change silently.
 
-Unsupported or unknown fields are errors.
+Unknown application-configuration fields are ignored with warnings. They must not be interpreted as arbitrary extensions or executable instructions.
+
+Unknown content-entry fields invalidate the affected entry without invalidating unrelated entries or files.
 
 Version-specific migration support may be introduced when a real compatibility requirement emerges.
 
