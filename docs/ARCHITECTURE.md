@@ -322,26 +322,30 @@ Each entry may contain an arbitrary number of quotations.
 
 Directory organization is an authoring convenience and must not determine an entry's identity or selection behavior.
 
-The initial runtime loads and validates the content library during startup.
+The runtime loads content when a new daily selection is required.
 
-Automatic filesystem watching, interactive editing, and runtime content reloading are not required.
+Automatic filesystem watching, interactive editing, and immediate reloading in response to file changes are not required.
 
-A restart is required to load changes to the content library.
+Changes to source content affect subsequent selections, not an already committed selection.
 
 Once a daily selection has been committed, its presentation must not depend on continued access to the corresponding YAML entry.
 
-Changes to the source entry affect subsequent selections, not the already committed selection.
+A usable content library may contain rejected files or entries. Refrain must preserve valid content rather than require every discovered source to pass validation.
 
 ### Content validation
 
 Content must be validated before it becomes available for selection.
 
+Invalid content files and entries are excluded from the effective content library without invalidating unrelated valid content.
+
 Validation must identify errors such as:
 
+- malformed or unsupported YAML;
 - missing required fields;
 - empty quotation collections;
 - empty or invalid quotation text;
 - duplicate entry identifiers;
+- unknown fields;
 - invalid field values;
 - invalid priority values;
 - unsupported eligibility expressions;
@@ -349,13 +353,27 @@ Validation must identify errors such as:
 
 Diagnostics must identify the affected entry or source file where possible.
 
+A malformed YAML file is excluded in its entirety.
+
+Invalid entries are excluded individually where their source representation permits independent validation.
+
+Conflicting duplicate entry identifiers must not be resolved according to filesystem enumeration order.
+
+The effective content library contains only accepted, validated entries.
+
+A partially accepted library is usable when source discovery has completed successfully and at least one valid quotation remains.
+
+Missing or inaccessible content directories, failed source discovery, and libraries containing no valid quotations cannot support a new selection.
+
+These library-level failures must not trigger repetition-history cleanup.
+
 Invalid content must not produce undefined selection or rendering behavior.
 
 A malformed entry must not silently change the meaning of another entry.
 
 Validation must not impose an arbitrary project-specific numerical limit on priority or the number of quotations in an entry.
 
-The runtime must distinguish invalid content-library entries from failures involving an already committed daily snapshot.
+Detailed content validation rules and diagnostic severity are defined in `docs/CONTENT_FORMAT.md`.
 
 ## Display-day model
 
@@ -505,7 +523,6 @@ Selection is performed among quotations, not among content entries.
 
 The number of content entries must not independently influence selection probability.
 
-
 ### Selection pools and repetition
 
 Refrain maintains one global repetition-history collection containing normalized quotation identities.
@@ -514,11 +531,15 @@ The collection records quotations consumed by committed selections during their 
 
 Repetition history is persistent but selectively resettable.
 
-For each new selection, Refrain uses the successfully loaded and validated complete content library to remove repetition identities that no longer correspond to any quotation in that library.
+For each new selection, the application constructs a nonempty effective content library from successfully discovered sources and accepted entries.
 
-This cleanup considers all quotations in the content library, regardless of current date eligibility, specificity, priority, or font availability.
+Repetition identities no longer corresponding to any quotation in that effective library are removed from the proposed repetition history.
 
-An unavailable, incomplete, or invalid content library must not cause repetition-history cleanup.
+This cleanup considers all accepted quotations, regardless of current date eligibility, specificity, priority, or font availability.
+
+Rejected entries do not contribute identities to the effective library. Their previously recorded repetition identities may therefore be removed, even if the source entries are subsequently corrected.
+
+Missing or inaccessible content directories, failed source discovery, and an empty effective content library must not cause repetition-history cleanup.
 
 For each new selection, the application identifies the highest-specificity eligible quotation pool.
 
@@ -536,8 +557,6 @@ The applicable pool is determined dynamically from currently eligible quotations
 
 Changes to content-library membership therefore affect subsequent selections without invalidating existing committed selections.
 
-Removing a quotation from the content library may cause its repetition identity to be discarded. If that quotation is subsequently restored, its previous repetition status need not be recovered.
-
 When a quotation participates in multiple eligibility contexts, resetting one pool may make that quotation eligible again in another context.
 
 This is an accepted consequence of using one resettable repetition-history collection.
@@ -546,6 +565,7 @@ Repetition-history cleanup and pool resets do not modify previously recorded glo
 
 Repetition history is authoritative operational state and must not be reconstructed from global history.
 
+Cleanup of obsolete identities is persisted only as part of a successful new selection commitment.
 
 ### Selection priority
 
@@ -699,13 +719,15 @@ Unlike global history, repetition history may have identities removed when the c
 
 A reset removes only the identities corresponding to quotations in that pool.
 
-When Refrain successfully loads and validates the complete content library for a new selection, it may also remove repetition identities no longer present in that library.
+For a new selection, Refrain also removes identities no longer represented in the nonempty effective content library.
 
-This cleanup considers all quotations in the validated library, independently of current date eligibility, specificity, priority, or font availability.
+The effective library may exclude rejected content files or entries. Quotations belonging exclusively to those rejected sources may lose their repetition status.
 
-An incomplete, unavailable, or invalid content library must not cause repetition-history pruning.
+Repetition-history pruning must not occur when the content directory is missing or inaccessible, source discovery fails, or no valid quotations remain.
 
-Repetition-history cleanup may be incorporated into the next selection commitment. It does not require a separate maintenance operation or periodic background service.
+Cleanup considers every accepted quotation independently of current date eligibility, specificity, or priority.
+
+Repetition-history cleanup is incorporated into the next successful selection commitment. It does not require a separate maintenance operation or periodic background service.
 
 Repetition history must not be reconstructed from global history after each restart, since doing so would reverse intentional pool resets and introduce a dependency on historical-log retention.
 
@@ -1047,24 +1069,25 @@ Future styles may control line positioning, spacing, and the arrangement of sour
 
 The initial release does not require additional styles, arbitrary layout scripting, externally supplied style implementations, or a general-purpose styling framework.
 
-
 ### Font selection
 
-Refrain maintains an effective font registry containing bundled application fonts and fonts explicitly registered in application configuration.
+Refrain maintains an effective font registry containing usable bundled application fonts and accepted user-registered fonts.
 
-Application configuration defines a nonempty default font pool using stable identifiers from the effective registry.
+Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool.
 
-Bundled font identifiers are reserved and cannot be overridden by application configuration. Every explicitly registered user font must be valid and loadable. An invalid user-registered font is an application configuration error.
+Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Bundled font identifiers remain reserved and cannot be overridden.
 
 A content entry may specify a preferred font, inherited by every quotation in that entry.
 
 When the preferred font is present in the effective registry, Refrain uses it for the selected quotation.
 
-When a content entry requests an unregistered font, Refrain retains the otherwise valid entry, logs an appropriate warning, and selects a font from the configured default pool.
+When a content entry requests a font absent from the effective registry, Refrain retains the otherwise valid entry, logs an appropriate warning, and selects a font from the effective default pool.
 
-Content entries that omit a font preference also use the default pool.
+Content entries that omit a font preference also use the effective default pool.
 
-Each font in the default pool has equal selection probability.
+Each font in the effective default pool has equal selection probability.
+
+The effective default pool must be nonempty when a new selection requires automatic font selection. Refrain must not silently populate it with unrelated bundled fonts.
 
 Font selection is independent for each daily selection. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
@@ -1072,13 +1095,15 @@ The selected font identifier is resolved after quotation selection and before da
 
 The selected font identifier is recorded in the committed snapshot and global selection history. Font contents and font-content hashes are not persisted in operational state.
 
-Image preparation resolves the selected identifier using the available font registry.
+Image preparation resolves the selected identifier using available font resources.
 
 If the selected font is no longer available or usable during regeneration, Refrain uses an available bundled fallback font. Fallback selection is deterministic for a given set of available bundled fonts and is consistent across all stages prepared together.
 
 If no usable bundled fallback exists, preparation fails with an actionable diagnostic.
 
 Existing valid prepared images are not invalidated solely because installed font resources have changed.
+
+Font registration, default-pool validation, and configuration fallback rules are defined in `docs/CONTENT_FORMAT.md`.
 
 ### Stable progressive layout
 
@@ -1320,22 +1345,28 @@ Network clients are responsible for retaining their displayed content during tem
 
 Normal startup performs the following logical operations:
 
-1. Load and validate configuration.
-2. Recover persistent application state.
-3. Load and validate the content library as required for future selections.
-4. Recover the current committed daily snapshot, if one exists.
-5. Evaluate whether the recovered selection remains active under the display-day transition rules.
-6. Perform and commit a new selection if required.
-7. Verify that all required reveal-stage images are available and valid.
-8. Prepare or recover any missing presentation artifacts.
-9. Determine the currently required reveal stage, respecting previously reached progression.
-10. Initialize the display backend and present the required prepared image when necessary.
-11. Continue operating until shutdown.
+1. Load application configuration, accepting documented defaults and recoverable configuration problems while reporting diagnostics.
+2. Recover persistent operational state, if available.
+3. Evaluate whether an existing committed selection remains active under the display-day transition rules.
+4. Load and validate content sources when a new selection is required, constructing an effective library from accepted entries.
+5. Perform and commit a new selection when required and when a usable effective content library is available.
+6. Verify that all required reveal-stage images are available and valid for the committed selection.
+7. Prepare or recover any missing presentation artifacts using available font resources.
+8. Determine the currently required reveal stage, respecting previously reached progression.
+9. Initialize the display backend and present the required prepared image when necessary.
+10. Continue operating until shutdown.
 
-Recovery of a valid committed selection must not depend on successful reloading of its original content entry.
+Recoverable configuration problems and individual invalid content files or entries must not prevent otherwise valid operation.
+
+A valid committed selection does not require its original content entry or a currently usable content library to remain available.
+
+If no committed selection exists and a usable effective content library cannot be constructed, startup cannot establish a daily presentation and must report an actionable error.
+
+If a new selection is required during continuous operation but the content library is unavailable or unusable, Refrain must not clear repetition history, commit an empty selection, or replace the previously committed presentation.
+
+The application must preserve existing committed state and prepared images where practical.
 
 The implementation may organize these operations differently provided their externally observable behavior is preserved.
-
 
 ### New daily selection
 
