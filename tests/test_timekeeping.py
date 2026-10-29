@@ -15,7 +15,6 @@ from refrain import (
     DisplayDayBoundaryObserver,
     PersistentState,
     PresentationRegion,
-    ResolvedFont,
     RevealSchedule,
     SchedulingAction,
     SchedulingContext,
@@ -57,7 +56,7 @@ def make_state(
     snapshot = DailySnapshot(
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
-        font=ResolvedFont(identifier="test-font", data=b"font bytes"),
+        font_identifier="test-font",
         presentation_metadata={"presentation_style": "centered", "source": "Source", "attribution": "Author"},
         reveal_schedule=reveal_schedule or {"quotation": day_start, "source": "12:00", "attribution": "18:00"},
         layout={},
@@ -66,7 +65,6 @@ def make_state(
     return PersistentState(
         revision=4,
         snapshot=snapshot,
-        global_history=(),
         repetition_history=frozenset(),
         highest_reveal_stage=highest_reveal_stage,
     )

@@ -45,6 +45,8 @@ from .eligibility import (
 from .persistence import (
     DailySnapshot,
     GlobalHistoryRecord,
+    GlobalHistoryStore,
+    GlobalHistoryWriteError,
     PersistentState,
     PersistentStateError,
     PersistentStateStore,
@@ -106,6 +108,8 @@ __all__ = [
     "EligibleQuotationPool",
     "FontResource",
     "GlobalHistoryRecord",
+    "GlobalHistoryStore",
+    "GlobalHistoryWriteError",
     "PresentationRegion",
     "Quotation",
     "CompositionLayout",

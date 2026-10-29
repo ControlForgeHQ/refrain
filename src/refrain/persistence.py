@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 import hmac
 import json
@@ -13,7 +11,7 @@ import re
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -21,7 +19,9 @@ from typing import Any
 from .content import normalize_quotation
 from .selection import SelectionProposal
 
-_FORMAT_VERSION = 2
+_FORMAT_VERSION = 3
+_DEFAULT_HISTORY_SEGMENT_SIZE = 1_048_576
+_DEFAULT_HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -44,6 +44,10 @@ class StateCommitError(PersistentStateError):
     def __init__(self, message: str, *, published: bool = False) -> None:
         self.published = published
         super().__init__(message)
+
+
+class GlobalHistoryWriteError(PersistentStateError):
+    """Raised when a best-effort global-history operation fails."""
 
 
 def _freeze_json(value: object, field: str) -> object:
@@ -86,7 +90,7 @@ def _valid_identity(value: object, field: str) -> str:
 
 @dataclass(frozen=True)
 class ResolvedFont:
-    """A selected font's stable identifier and exact bytes for later recovery."""
+    """Font bytes resolved from a stable identifier for image preparation."""
 
     identifier: str
     data: bytes
@@ -124,7 +128,7 @@ class DailySnapshot:
 
     quotation_text: str
     quotation_identity: str
-    font: ResolvedFont
+    font_identifier: str
     presentation_metadata: Mapping[str, Any]
     reveal_schedule: Mapping[str, Any]
     layout: Mapping[str, Any]
@@ -135,8 +139,7 @@ class DailySnapshot:
         _valid_identity(self.quotation_identity, "quotation_identity")
         if normalize_quotation(self.quotation_text) != self.quotation_identity:
             raise ValueError("quotation_identity must match the normalized quotation_text")
-        if not isinstance(self.font, ResolvedFont):
-            raise TypeError("font must be a ResolvedFont")
+        _nonempty_string(self.font_identifier, "font_identifier")
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")
         for field in ("presentation_metadata", "reveal_schedule", "layout"):
@@ -155,8 +158,9 @@ class DailySnapshot:
 class GlobalHistoryRecord:
     """One chronologically ordered committed selection."""
 
-    sequence: int
+    revision: int
     display_date: date
+    selection_timestamp: datetime
     quotation_text: str
     quotation_identity: str
     font_identifier: str
@@ -164,13 +168,98 @@ class GlobalHistoryRecord:
 
 @dataclass(frozen=True)
 class PersistentState:
-    """An immutable snapshot, its reveal progress, and both selection histories."""
+    """An immutable snapshot, its reveal progress, and repetition history."""
 
     revision: int
     snapshot: DailySnapshot
-    global_history: tuple[GlobalHistoryRecord, ...]
     repetition_history: frozenset[str]
     highest_reveal_stage: int
+
+
+class GlobalHistoryStore:
+    """Append committed selection events to a separately retained JSONL log."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        max_segment_size: int = _DEFAULT_HISTORY_SEGMENT_SIZE,
+        max_segments: int = _DEFAULT_HISTORY_MAX_SEGMENTS,
+    ) -> None:
+        self.path = Path(path)
+        if not self.path.is_absolute():
+            raise ValueError("global-history path must be absolute")
+        if type(max_segment_size) is not int or max_segment_size <= 0:
+            raise ValueError("max_segment_size must be a positive integer")
+        if type(max_segments) is not int or max_segments <= 0:
+            raise ValueError("max_segments must be a positive integer")
+        self.max_segment_size = max_segment_size
+        self.max_segments = max_segments
+
+    def record(self, state: PersistentState, *, timestamp: datetime | None = None) -> GlobalHistoryRecord:
+        """Append one event for a committed state, independently of state publication."""
+        if not isinstance(state, PersistentState):
+            raise TypeError("state must be a PersistentState")
+        event_time = datetime.now(timezone.utc) if timestamp is None else timestamp
+        if not isinstance(event_time, datetime) or event_time.utcoffset() is None:
+            raise ValueError("timestamp must be a timezone-aware datetime")
+        event_time = event_time.astimezone(timezone.utc)
+        record = GlobalHistoryRecord(
+            revision=state.revision,
+            display_date=state.snapshot.display_date,
+            selection_timestamp=event_time,
+            quotation_text=state.snapshot.quotation_text,
+            quotation_identity=state.snapshot.quotation_identity,
+            font_identifier=state.snapshot.font_identifier,
+        )
+        contents = _encode_history_record(record)
+        if len(contents) > self.max_segment_size:
+            raise GlobalHistoryWriteError(
+                f"global-history record for revision {record.revision} is larger than the "
+                f"{self.max_segment_size}-byte segment limit"
+            )
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            _truncate_incomplete_history_tail(self.path)
+            self._discard_excess_segments()
+            active_size = self.path.stat().st_size if self.path.exists() else 0
+            if active_size + len(contents) > self.max_segment_size:
+                self._rotate()
+            with self.path.open("ab") as history_file:
+                written = history_file.write(contents)
+                if written != len(contents):
+                    raise OSError(f"short write: wrote {written} of {len(contents)} bytes")
+                history_file.flush()
+                os.fsync(history_file.fileno())
+        except OSError as error:
+            raise GlobalHistoryWriteError(f"cannot record global history at {self.path}: {error}") from error
+        return record
+
+    def _rotate(self) -> None:
+        try:
+            if self.max_segments == 1:
+                self.path.unlink(missing_ok=True)
+                return
+            oldest = self._segment_path(self.max_segments - 1)
+            oldest.unlink(missing_ok=True)
+            for index in range(self.max_segments - 2, 0, -1):
+                source = self._segment_path(index)
+                if source.exists():
+                    os.replace(source, self._segment_path(index + 1))
+            if self.path.exists():
+                os.replace(self.path, self._segment_path(1))
+        except OSError as error:
+            raise GlobalHistoryWriteError(f"cannot rotate global history at {self.path}: {error}") from error
+
+    def _discard_excess_segments(self) -> None:
+        pattern = re.compile(rf"{re.escape(self.path.stem)}\.(\d+){re.escape(self.path.suffix)}\Z")
+        for segment in self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}"):
+            match = pattern.fullmatch(segment.name)
+            if match is not None and int(match.group(1)) >= self.max_segments:
+                segment.unlink()
+
+    def _segment_path(self, index: int) -> Path:
+        return self.path.with_name(f"{self.path.stem}.{index}{self.path.suffix}")
 
 
 class PersistentStateStore:
@@ -199,7 +288,7 @@ class PersistentStateStore:
             return _decode_document(document)
         except UnsupportedStateVersionError:
             raise
-        except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError, binascii.Error) as error:
+        except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
             raise StateRecoveryError(f"invalid persistent state at {self.path}: {error}") from error
 
     def commit(
@@ -214,7 +303,7 @@ class PersistentStateStore:
         The proposal's ``base_revision`` must identify the state generation
         used to produce it. Repeating the exact same commitment is idempotent.
         A new selection starts at ``initial_reveal_stage``; a retry preserves
-        any subsequent reveal progress.
+        any subsequent reveal progress. Global history is recorded separately.
         The proposal and its history are read only; neither is mutated.
         """
         _validate_reveal_stage(initial_reveal_stage)
@@ -254,18 +343,9 @@ class PersistentStateStore:
                 f"but current state is revision {current_revision}"
             )
 
-        global_history = () if previous is None else previous.global_history
-        record = GlobalHistoryRecord(
-            sequence=len(global_history) + 1,
-            display_date=snapshot.display_date,
-            quotation_text=snapshot.quotation_text,
-            quotation_identity=snapshot.quotation_identity,
-            font_identifier=snapshot.font.identifier,
-        )
         state = PersistentState(
-            revision=record.sequence,
+            revision=current_revision + 1,
             snapshot=snapshot,
-            global_history=(*global_history, record),
             repetition_history=repetition_history,
             highest_reveal_stage=initial_reveal_stage,
         )
@@ -384,22 +464,6 @@ def _parse_date(value: object, field: str) -> date:
     return parsed
 
 
-def _decode_font(value: object) -> ResolvedFont:
-    data = _require_mapping(value, "snapshot.font", {"identifier", "sha256", "data"})
-    identifier = _nonempty_string(data["identifier"], "snapshot.font.identifier")
-    digest = data["sha256"]
-    encoded = data["data"]
-    if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
-        raise ValueError("snapshot.font.sha256 must be a lowercase SHA-256 digest")
-    if not isinstance(encoded, str):
-        raise ValueError("snapshot.font.data must be base64 text")
-    font_bytes = base64.b64decode(encoded, validate=True)
-    font = ResolvedFont(identifier=identifier, data=font_bytes)
-    if font.sha256 != digest:
-        raise ValueError("snapshot.font data checksum does not match sha256")
-    return font
-
-
 def _decode_snapshot(value: object) -> DailySnapshot:
     data = _require_mapping(
         value,
@@ -407,7 +471,7 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         {
             "quotation_text",
             "quotation_identity",
-            "font",
+            "font_identifier",
             "presentation_metadata",
             "reveal_schedule",
             "layout",
@@ -427,32 +491,11 @@ def _decode_snapshot(value: object) -> DailySnapshot:
     return DailySnapshot(
         quotation_text=data["quotation_text"],
         quotation_identity=data["quotation_identity"],
-        font=_decode_font(data["font"]),
+        font_identifier=_nonempty_string(data["font_identifier"], "snapshot.font_identifier"),
         presentation_metadata=data["presentation_metadata"],
         reveal_schedule=data["reveal_schedule"],
         layout=data["layout"],
         scheduling=scheduling,
-    )
-
-
-def _decode_record(value: object, expected_sequence: int) -> GlobalHistoryRecord:
-    data = _require_mapping(
-        value,
-        f"global_history[{expected_sequence - 1}]",
-        {"sequence", "display_date", "quotation_text", "quotation_identity", "font_identifier"},
-    )
-    if type(data["sequence"]) is not int or data["sequence"] != expected_sequence:
-        raise ValueError(f"global_history[{expected_sequence - 1}].sequence is not chronological")
-    text = _nonempty_string(data["quotation_text"], "global-history quotation_text")
-    identity = _valid_identity(data["quotation_identity"], "global-history quotation_identity")
-    if normalize_quotation(text) != identity:
-        raise ValueError(f"global_history[{expected_sequence - 1}] identity does not match its quotation text")
-    return GlobalHistoryRecord(
-        sequence=expected_sequence,
-        display_date=_parse_date(data["display_date"], f"global_history[{expected_sequence - 1}].display_date"),
-        quotation_text=text,
-        quotation_identity=identity,
-        font_identifier=_nonempty_string(data["font_identifier"], "global-history font_identifier"),
     )
 
 
@@ -463,7 +506,8 @@ def _decode_document(value: object) -> PersistentState:
         raise StateRecoveryError("persistent-state format_version must be an integer")
     if version != _FORMAT_VERSION:
         raise UnsupportedStateVersionError(
-            f"unsupported persistent-state format version {version}; this version supports {_FORMAT_VERSION}"
+            f"unsupported persistent-state format version {version}; version 3 is required. "
+            "Archive or remove this development state file before starting Refrain; it was not modified."
         )
     payload = document["state"]
     digest = document["sha256"]
@@ -475,26 +519,19 @@ def _decode_document(value: object) -> PersistentState:
     if not hmac.compare_digest(digest, expected_digest):
         raise ValueError("state document checksum does not match its contents")
 
-    data = _require_mapping(
-        payload, "state", {"revision", "snapshot", "global_history", "repetition_history", "highest_reveal_stage"}
-    )
-    history_data = data["global_history"]
+    data = _require_mapping(payload, "state", {"revision", "snapshot", "repetition_history", "highest_reveal_stage"})
     repetition_data = data["repetition_history"]
-    if not isinstance(history_data, list) or not history_data:
-        raise ValueError("state.global_history must be a nonempty array")
     if not isinstance(repetition_data, list) or not all(isinstance(item, str) for item in repetition_data):
         raise ValueError("state.repetition_history must be an array of normalized identities")
     if repetition_data != sorted(set(repetition_data)):
         raise ValueError("state.repetition_history must contain unique, sorted identities")
 
-    history = tuple(_decode_record(item, index) for index, item in enumerate(history_data, start=1))
-    if type(data["revision"]) is not int or data["revision"] != len(history):
-        raise ValueError("state.revision must match the global-history length")
+    if type(data["revision"]) is not int or data["revision"] <= 0:
+        raise ValueError("state.revision must be a positive integer")
     snapshot = _decode_snapshot(data["snapshot"])
     state = PersistentState(
         revision=data["revision"],
         snapshot=snapshot,
-        global_history=history,
         repetition_history=frozenset(_valid_identity(item, "repetition-history identity") for item in repetition_data),
         highest_reveal_stage=data["highest_reveal_stage"],
     )
@@ -503,23 +540,11 @@ def _decode_document(value: object) -> PersistentState:
 
 
 def _validate_state(state: PersistentState) -> None:
+    if type(state.revision) is not int or state.revision <= 0:
+        raise ValueError("revision must be a positive integer")
     _validate_reveal_stage(state.highest_reveal_stage)
-    if not state.global_history:
-        raise ValueError("global history must contain the current committed selection")
-    if state.revision != len(state.global_history):
-        raise ValueError("revision must match the global-history length")
     if state.snapshot.quotation_identity not in state.repetition_history:
         raise ValueError("repetition history must contain the current quotation identity")
-    last = state.global_history[-1]
-    expected = (
-        state.snapshot.display_date,
-        state.snapshot.quotation_text,
-        state.snapshot.quotation_identity,
-        state.snapshot.font.identifier,
-    )
-    actual = (last.display_date, last.quotation_text, last.quotation_identity, last.font_identifier)
-    if actual != expected:
-        raise ValueError("current snapshot does not match the latest global-history record")
 
 
 def _state_payload(state: PersistentState) -> dict[str, object]:
@@ -530,11 +555,7 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
         "snapshot": {
             "quotation_text": snapshot.quotation_text,
             "quotation_identity": snapshot.quotation_identity,
-            "font": {
-                "identifier": snapshot.font.identifier,
-                "sha256": snapshot.font.sha256,
-                "data": base64.b64encode(snapshot.font.data).decode("ascii"),
-            },
+            "font_identifier": snapshot.font_identifier,
             "presentation_metadata": _thaw_json(snapshot.presentation_metadata),
             "reveal_schedule": _thaw_json(snapshot.reveal_schedule),
             "layout": _thaw_json(snapshot.layout),
@@ -544,18 +565,46 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
                 "day_start": snapshot.scheduling.day_start,
             },
         },
-        "global_history": [
-            {
-                "sequence": record.sequence,
-                "display_date": record.display_date.isoformat(),
-                "quotation_text": record.quotation_text,
-                "quotation_identity": record.quotation_identity,
-                "font_identifier": record.font_identifier,
-            }
-            for record in state.global_history
-        ],
         "repetition_history": sorted(state.repetition_history),
     }
+
+
+def _encode_history_record(record: GlobalHistoryRecord) -> bytes:
+    payload = {
+        "revision": record.revision,
+        "display_date": record.display_date.isoformat(),
+        "selection_timestamp": record.selection_timestamp.isoformat().replace("+00:00", "Z"),
+        "quotation_text": record.quotation_text,
+        "quotation_identity": record.quotation_identity,
+        "font_identifier": record.font_identifier,
+    }
+    return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def _truncate_incomplete_history_tail(path: Path) -> None:
+    if not path.exists():
+        return
+    with path.open("r+b") as history_file:
+        end = history_file.seek(0, os.SEEK_END)
+        if end == 0:
+            return
+        history_file.seek(-1, os.SEEK_END)
+        if history_file.read(1) == b"\n":
+            return
+        position = end
+        while position:
+            size = min(8192, position)
+            position -= size
+            history_file.seek(position)
+            chunk = history_file.read(size)
+            newline = chunk.rfind(b"\n")
+            if newline >= 0:
+                history_file.truncate(position + newline + 1)
+                break
+        else:
+            history_file.truncate(0)
+        history_file.flush()
+        os.fsync(history_file.fileno())
 
 
 def _canonical_json(value: object) -> bytes:

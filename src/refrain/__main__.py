@@ -31,12 +31,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", required=True, help="application configuration YAML file")
     parser.add_argument("--state", required=True, help="persistent state file (created if absent)")
     parser.add_argument("--artifacts", required=True, help="directory for prepared image artifacts")
+    parser.add_argument("--history", help="JSONL global-history file (default: global-history.jsonl beside state)")
+    parser.add_argument(
+        "--history-segment-size",
+        type=int,
+        default=1_048_576,
+        help="maximum global-history segment size in bytes (default: 1048576)",
+    )
+    parser.add_argument(
+        "--history-max-segments",
+        type=int,
+        default=20,
+        help="maximum retained global-history segments including the active segment (default: 20)",
+    )
     parser.add_argument("--once", action="store_true", help="run one startup/presentation cycle without scheduling")
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
         if arguments.once:
-            result = run_startup(arguments.config, arguments.state, arguments.artifacts, keep_open=_hold_open)
+            result = run_startup(
+                arguments.config,
+                arguments.state,
+                arguments.artifacts,
+                history_path=arguments.history,
+                history_segment_size=arguments.history_segment_size,
+                history_max_segments=arguments.history_max_segments,
+                keep_open=_hold_open,
+            )
         else:
             shutdown = Event()
             previous_handlers = {}
@@ -45,7 +66,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     previous_handlers[termination_signal] = signal.signal(
                         termination_signal, lambda signum, frame: shutdown.set()
                     )
-                run_application(arguments.config, arguments.state, arguments.artifacts, shutdown_event=shutdown)
+                run_application(
+                    arguments.config,
+                    arguments.state,
+                    arguments.artifacts,
+                    shutdown_event=shutdown,
+                    history_path=arguments.history,
+                    history_segment_size=arguments.history_segment_size,
+                    history_max_segments=arguments.history_max_segments,
+                )
             finally:
                 for termination_signal, handler in previous_handlers.items():
                     signal.signal(termination_signal, handler)

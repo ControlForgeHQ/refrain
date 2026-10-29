@@ -91,14 +91,18 @@ Bundled fonts are package resources, not paths relative to the current directory
 .venv/bin/python -m refrain \
   --config examples/config.yaml \
   --state /path/to/refrain/state.json \
-  --artifacts /path/to/refrain/artifacts
+  --artifacts /path/to/refrain/artifacts \
+  --history /path/to/refrain/global-history.jsonl
 ```
 
 - `--config` is the application configuration file; relative content and font paths resolve against its directory.
 - `--state` is the persistent selection-state file. It is created on first use, and its parent directory is created if needed.
 - `--artifacts` is the directory for derived prepared images. It is separate from state and content and may be regenerated from committed state.
+- `--history` is the separate JSONL selection-history file; by default it is `global-history.jsonl` beside the state file. `--history-segment-size` and `--history-max-segments` configure bounded retention (defaults: 1 MiB per segment and 20 segments, including the active segment).
 
-With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot and histories, prepares the reveal images, and presents the stage required at the current time. With existing state, it recovers the committed selection without needing its original content library and reuses valid prepared images (regenerating missing or invalid ones). Missed reveals advance directly to the latest required stage; backward clock adjustments never hide information already revealed.
+With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot and repetition history, records the selection independently in global history, prepares the reveal images, and presents the stage required at the current time. History recording is best-effort and does not block presentation. With existing state, it recovers the committed selection without needing its original content library and reuses valid prepared images (regenerating missing or invalid ones). Missed reveals advance directly to the latest required stage; backward clock adjustments never hide information already revealed.
+
+Operational state uses format version 3 and contains the current snapshot, revision, repetition history, scheduling context, and reveal progress. Global selection history is a separate append-only JSONL log with size-based rotation and bounded retention; it is not read during startup or recovery and never determines the next revision. Development state formats 1 and 2 are unsupported and are not migrated or replaced automatically. Archive or remove an old development state file before starting Refrain; the compatibility error leaves it unchanged.
 
 The continuous runtime keeps one display backend active across updates. It waits interruptibly for scheduling events, periodically checking for wall-clock adjustments, and retries recoverable content, storage, preparation, and display failures with monotonic delays increasing from 1 to at most 60 seconds. A failed presentation never causes reselection. Invalid application configuration or corrupted authoritative state terminates with status 1 rather than retrying indefinitely. Configuration is loaded once; content is reloaded only when a new selection is needed. After recovering the active image set, the coordinator removes obsolete revision artifacts using the store's coordinated cleanup; the active revision is retained.
 
@@ -220,14 +224,15 @@ The complete byline reads `— An Example Author, A Book of Examples`; if either
 
 ## Preparing images from a daily snapshot
 
-`prepare_daily_images(snapshot, stages)` produces complete RGB Pillow images from a committed `DailySnapshot` and an explicit sequence of cumulative `CompositionVisibility` stages. It uses only the snapshot's literary fields, presentation metadata, layout values, and embedded font bytes; missing or invalid required presentation data and content that cannot fit raise `DailyImagePreparationError`. It does not load current configuration or content, or modify persistent state. See the [committed daily presentation data contract](docs/ARCHITECTURE.md#committed-daily-presentation-data).
+`prepare_daily_images(snapshot, stages, font_registry)` produces complete RGB Pillow images from a committed `DailySnapshot`, its selected font identifier, the effective font registry, and an explicit sequence of cumulative `CompositionVisibility` stages. It resolves the font from that registry, using a deterministic bundled fallback if necessary; every stage in the operation uses the same resolved font. Missing or invalid required presentation data, the absence of a usable font, and content that cannot fit raise `DailyImagePreparationError`. Preparation does not load content or modify persistent state. See the [committed daily presentation data contract](docs/ARCHITECTURE.md#committed-daily-presentation-data).
 
 ```python
-from refrain import CompositionVisibility, PersistentStateStore, prepare_daily_images
+from refrain import CompositionVisibility, PersistentStateStore, load_application_config, prepare_daily_images
 
 state = PersistentStateStore("/absolute/path/chosen-for-this-installation/state.json").load()
 if state is None:
     raise RuntimeError("there is no committed daily snapshot")
+config = load_application_config("config.yaml")
 
 metadata = state.snapshot.presentation_metadata
 source_revealed = False
@@ -237,7 +242,7 @@ if metadata.get("source") is not None:
     stages.append(CompositionVisibility(source=True))
 if metadata.get("attribution") is not None:
     stages.append(CompositionVisibility(source=source_revealed, attribution=True))
-images = prepare_daily_images(state.snapshot, tuple(stages))
+images = prepare_daily_images(state.snapshot, tuple(stages), config.fonts)
 for index, image in enumerate(images):
     image.save(f"daily-stage-{index}.png")
 ```
@@ -282,17 +287,19 @@ The caller must serialize store operations and coordinate cleanup with all users
 
 ## Recovering prepared images
 
-`recover_prepared_daily_images(state, artifact_store, stages)` reuses a complete valid set for the committed revision and snapshot. `stages` must be the full ordered sequence of cumulative `CompositionVisibility` values, ending with all available fields revealed; it is validated before reuse and supplies the expected stage count. Pass the same sequence used to prepare the stored set: the existing artifact format records its count, not individual visibility definitions. If the set is absent or invalid, recovery prepares and stores every stage from `state.snapshot`. It never loads content or configuration, changes persistent state, or cleans artifact directories.
+`recover_prepared_daily_images(state, artifact_store, stages, font_registry)` reuses a complete valid set for the committed revision and snapshot. `stages` must be the full ordered sequence of cumulative `CompositionVisibility` values, ending with all available fields revealed; it is validated before reuse and supplies the expected stage count. Pass the same sequence used to prepare the stored set: the existing artifact format records its count, not individual visibility definitions. If the set is absent or invalid, recovery prepares and stores every stage from `state.snapshot`, resolving its font identifier from the supplied registry. It does not load content or alter persistent state or clean artifact directories.
 
 ```python
 from refrain import (
     CompositionVisibility,
     PreparedImageArtifactStore,
+    load_application_config,
     recover_prepared_daily_images,
 )
 
+config = load_application_config("config.yaml")
 store = PreparedImageArtifactStore("/absolute/path/chosen-for-this-installation/prepared-images")
-artifacts = recover_prepared_daily_images(state, store, stages)
+artifacts = recover_prepared_daily_images(state, store, stages, config.fonts)
 
 # The returned set contains validated paths, not retained decoded images.
 with artifacts.load_stage(0) as image:
@@ -354,7 +361,7 @@ if proposal.selected_candidate is not None:
 
 ## Persisting and recovering a selection
 
-`PersistentStateStore` distinguishes an uninitialized location (`load()` returns `None`) from invalid existing state (a `StateRecoveryError`). A commit requires the caller's provisional selection and a complete `DailySnapshot` containing already-resolved presentation, scheduling, layout, and font information. Choose an absolute state-file path appropriate to the installation.
+`PersistentStateStore` distinguishes an uninitialized location (`load()` returns `None`) from invalid existing state (a `StateRecoveryError`). It supports operational state format 3; formats 1 and 2 are unsupported and remain untouched when reported. A commit requires the caller's provisional selection and a complete `DailySnapshot` containing resolved presentation, scheduling, layout, and a font identifier. Font bytes and content digests are not embedded in state. Choose an absolute state-file path appropriate to the installation.
 
 The example assumes the caller has already recognized a display-day transition. Compare state revisions, not display dates, when deciding whether a proposal is stale; clock adjustments can legitimately lead to a later commit for a previously used date.
 
@@ -365,8 +372,9 @@ from random import Random
 
 from refrain import (
     DailySnapshot,
+    GlobalHistoryStore,
+    GlobalHistoryWriteError,
     PersistentStateStore,
-    ResolvedFont,
     SchedulingContext,
     build_eligible_quotation_pool,
     load_content_library,
@@ -381,9 +389,11 @@ store = PersistentStateStore(state_path)
 previous = store.load()
 
 if selection_boundary_recognized:
-    repetition_history = () if previous is None else previous.repetition_history
-    base_revision = 0 if previous is None else previous.revision
     entries = load_content_library("examples/content")
+    library_identities = {quotation.identity for entry in entries for quotation in entry.quotations}
+    repetition_history = set() if previous is None else set(previous.repetition_history)
+    repetition_history.intersection_update(library_identities)
+    base_revision = 0 if previous is None else previous.revision
     pool = build_eligible_quotation_pool(entries, display_date)
     proposal = select_quotation(
         pool,
@@ -394,14 +404,11 @@ if selection_boundary_recognized:
     candidate = proposal.selected_candidate
 
     if candidate is not None:
-        # Assume the application's policy resolved this candidate to "lora".
-        font_resource = config.fonts["lora"]
-        with font_resource.path.open("rb") as font_file:
-            font = ResolvedFont(font_resource.identifier, font_file.read())
+        # Assume the application's selection policy resolved this candidate to "lora".
         snapshot = DailySnapshot(
             quotation_text=candidate.text,
             quotation_identity=candidate.identity,
-            font=font,
+            font_identifier="lora",
             presentation_metadata={
                 "source": candidate.entry.source,
                 "attribution": candidate.entry.attribution,
@@ -429,7 +436,12 @@ if selection_boundary_recognized:
                 config.day_start.strftime("%H:%M"),
             ),
         )
-        store.commit(proposal, snapshot)
+        committed = store.commit(proposal, snapshot)
+        history = GlobalHistoryStore("/absolute/path/chosen-for-this-installation/global-history.jsonl")
+        try:
+            history.record(committed)
+        except GlobalHistoryWriteError as error:
+            print(f"Committed selection was not recorded in global history: {error}")
 
 recovered = PersistentStateStore(state_path).load()
 ```
@@ -451,7 +463,7 @@ if current is not None:
     assert recovered.highest_reveal_stage >= 1
 ```
 
-Stages must be nonnegative integers (not booleans). Same or earlier-stage requests do not rewrite state. An obsolete revision raises `StateCommitError`, even for an earlier-stage request. A new `commit` starts at `initial_reveal_stage=0` unless the caller supplies another initial stage; retrying a committed selection preserves subsequent progress. Neither advancement nor its retries change the selection revision or either history.
+Stages must be nonnegative integers (not booleans). Same or earlier-stage requests do not rewrite state. An obsolete revision raises `StateCommitError`, even for an earlier-stage request. A new `commit` starts at `initial_reveal_stage=0` unless the caller supplies another initial stage; retrying a committed selection preserves subsequent progress. Reveal advancement and retries preserve the selection revision and repetition history.
 
 Serialize all writes to the same state path. If a write raises `StateCommitError`, inspect its `published` attribute and reload the authoritative state before retrying; a published update may have taken effect even when durability confirmation failed.
 

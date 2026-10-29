@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
-from importlib.resources import files
 from pathlib import Path
 from random import Random
 from threading import Event
@@ -16,6 +17,7 @@ from refrain import (
     ApplicationError,
     ArtifactWriteError,
     DailyImagePreparationError,
+    GlobalHistoryWriteError,
     NoEligibleQuotationError,
     PersistentStateStore,
     PreparedImageArtifactStore,
@@ -32,8 +34,6 @@ from refrain.display import (
 )
 
 _ZONE = ZoneInfo("America/Toronto")
-_LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes()
-
 _CONFIG = """\
 general:
   timezone: "America/Toronto"
@@ -83,6 +83,8 @@ class Workspace:
         self.config = root / "config.yaml"
         self.content = root / "content"
         self.state = root / "state" / "state.json"
+        self.history = self.state.with_name("global-history.jsonl")
+        self.history = self.state.with_name("global-history.jsonl")
         self.artifacts = root / "artifacts"
         self.config.write_text(_CONFIG, encoding="utf-8")
         self.content.mkdir()
@@ -105,6 +107,11 @@ class Workspace:
 
     def load(self):
         return PersistentStateStore(self.state).load()
+
+    def history_records(self):
+        if not self.history.exists():
+            return []
+        return [json.loads(line) for line in self.history.read_text(encoding="utf-8").splitlines()]
 
 
 @pytest.fixture
@@ -129,7 +136,7 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert state is not None and state.revision == 1 and state.highest_reveal_stage == 0
     snapshot = state.snapshot
     assert snapshot.quotation_text == "An ordinary quotation."
-    assert snapshot.font.identifier == "lora" and snapshot.font.data == _LORA
+    assert snapshot.font_identifier == "lora"
     assert snapshot.display_date == date(2026, 3, 10)
     assert snapshot.presentation_metadata == {
         "presentation_style": "centered",
@@ -139,9 +146,86 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert snapshot.layout["image_size"] == (1600, 1200) or list(snapshot.layout["image_size"]) == [1600, 1200]
     assert state.repetition_history == {snapshot.quotation_identity}
-    assert len(state.global_history) == 1
+    assert len(workspace.history_records()) == 1
     assert display.sizes == [(1600, 1200)] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 3
+
+
+def test_history_write_failure_does_not_interrupt_startup_presentation(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    ordinary(workspace)
+    monkeypatch.setattr(
+        application.GlobalHistoryStore,
+        "record",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(GlobalHistoryWriteError("disk unavailable")),
+    )
+
+    result, display = workspace.run(at(10, 7))
+
+    assert result.state.revision == 1
+    assert display.sizes == [(1600, 1200)]
+    assert len(png_files(workspace.artifacts)) == 3
+    assert "was not recorded in global history" in caplog.text
+
+
+def test_history_paths_cannot_overwrite_operational_state(workspace: Workspace) -> None:
+    with pytest.raises(ValueError, match="must not overlap the operational state"):
+        application._create_history_store(workspace.state, workspace.state, 1_048_576, 20)
+    with pytest.raises(ValueError, match="must not overlap the operational state"):
+        application._create_history_store(
+            workspace.state.with_name("global-history.jsonl"),
+            None,
+            1_048_576,
+            20,
+        )
+    with pytest.raises(ValueError, match="must not overlap the operational state"):
+        application._create_history_store(
+            workspace.state.with_name("global-history.1.jsonl"),
+            workspace.state.with_name("global-history.jsonl"),
+            1_048_576,
+            20,
+        )
+
+
+def test_selection_prunes_only_identities_absent_from_complete_library(workspace: Workspace) -> None:
+    ordinary(workspace, "Current quotation.")
+    workspace.run(at(10, 8))
+    state = workspace.load()
+    workspace.entry(
+        "ineligible-a",
+        'eligibility:\n  - month: 4\nquotations:\n  - "Temporarily ineligible."\n',
+    )
+    workspace.entry(
+        "ineligible-b",
+        'eligibility:\n  - month: 5\nquotations:\n  - "Temporarily ineligible."\n',
+    )
+    state = replace(
+        state,
+        repetition_history=frozenset(
+            {state.snapshot.quotation_identity, "Temporarily ineligible.", "Removed from library."}
+        ),
+    )
+    configuration = application.load_application_config(workspace.config)
+
+    proposal, snapshot = application._select_snapshot(configuration, date(2026, 3, 11), Random(1), state)
+
+    assert "Removed from library." not in proposal.proposed_repetition_history
+    assert "Temporarily ineligible." in proposal.proposed_repetition_history
+    assert len(proposal.proposed_repetition_history) == 2
+    assert state.repetition_history == {
+        state.snapshot.quotation_identity,
+        "Temporarily ineligible.",
+        "Removed from library.",
+    }
+    committed = PersistentStateStore(workspace.state).commit(proposal, snapshot)
+    assert committed.repetition_history == proposal.proposed_repetition_history
+
+    for path in workspace.content.iterdir():
+        path.unlink()
+    ordinary(workspace, "Removed from library.")
+    restored, _ = application._select_snapshot(configuration, date(2026, 3, 12), Random(1), committed)
+    assert restored.selected_candidate.text == "Removed from library."
 
 
 def test_startup_before_day_start_uses_previous_display_date(workspace: Workspace) -> None:
@@ -169,16 +253,14 @@ def test_multiple_quotations_select_one_and_record_history(workspace: Workspace)
 def test_entry_font_preference_is_resolved(workspace: Workspace) -> None:
     ordinary(workspace, extra='font: "source-sans-3"\n')
     workspace.run(at(10, 8))
-    font = workspace.load().snapshot.font
-    assert font.identifier == "source-sans-3"
-    assert font.data != _LORA
+    assert workspace.load().snapshot.font_identifier == "source-sans-3"
 
 
 def test_unavailable_font_falls_back_to_default_pool(workspace: Workspace, caplog) -> None:
     ordinary(workspace, extra='font: "missing-font"\n')
     with caplog.at_level(logging.WARNING):
         workspace.run(at(10, 8))
-    assert workspace.load().snapshot.font.identifier == "lora"
+    assert workspace.load().snapshot.font_identifier == "lora"
     assert "missing-font" in caplog.text
 
 
@@ -244,10 +326,9 @@ def test_calendar_mismatch_and_missing_content_do_not_reselect(workspace: Worksp
     workspace.content.rmdir()
     result, display = workspace.run(at(14, 9))
     state = workspace.load()
-    assert (state.revision, state.snapshot, state.global_history, state.repetition_history) == (
+    assert (state.revision, state.snapshot, state.repetition_history) == (
         first.revision,
         first.snapshot,
-        first.global_history,
         first.repetition_history,
     )
     assert result.presented_stage == 2
@@ -389,7 +470,7 @@ def test_uncertain_commit_publication_is_resolved_by_reloading(workspace: Worksp
 
     monkeypatch.setattr(PersistentStateStore, "commit", commit)
     result, _ = workspace.run(at(10, 8))
-    assert result.state.revision == 1 and len(workspace.load().global_history) == 1
+    assert result.state.revision == 1 and len(workspace.history_records()) == 1
 
 
 def test_unpublished_commit_failure_is_reported(workspace: Workspace, monkeypatch) -> None:
@@ -562,7 +643,7 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert recovered == [1]
     assert clock.deadlines[:2] == [at(10, 12), at(10, 18)]
     assert workspace.load().highest_reveal_stage == 2
-    assert len(workspace.load().global_history) == 1
+    assert len(workspace.history_records()) == 1
 
 
 @pytest.mark.parametrize(
@@ -587,12 +668,12 @@ def test_continuous_daily_transitions_preserve_histories(workspace, monkeypatch)
     clock = RuntimeClock(at(10, 7), [at(11, 6), at(11, 6), at(12, 6), at(13, 6)])
     stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
     state = workspace.load()
-    history = state.global_history
+    history = workspace.history_records()
     assert stages == [(1, 0), (2, 0), (3, 0), (4, 0)]
     assert state.revision == len(history) == 4
-    assert [record.display_date for record in history] == [date(2026, 3, day) for day in range(10, 14)]
-    assert len({record.quotation_identity for record in history[:3]}) == 3
-    assert state.repetition_history == {history[-1].quotation_identity}
+    assert [record["display_date"] for record in history] == [f"2026-03-{day:02}" for day in range(10, 14)]
+    assert len({record["quotation_identity"] for record in history[:3]}) == 3
+    assert state.repetition_history == {history[-1]["quotation_identity"]}
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 1
 
@@ -608,7 +689,8 @@ def test_continuous_restart_is_conservative_and_reuses_committed_snapshot(worksp
     stages, initialized, display = run_continuously(workspace, RuntimeClock(at(14, 19)), monkeypatch)
     state = workspace.load()
     assert stages == [(1, 2)]
-    assert state.snapshot == first.snapshot and state.global_history == first.global_history
+    assert state.snapshot == first.snapshot
+    assert len(workspace.history_records()) == 1
     assert state.repetition_history == first.repetition_history and state.highest_reveal_stage == 2
     assert {path: path.stat().st_mtime_ns for path in png_files(workspace.artifacts)} == artifacts
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
@@ -621,7 +703,7 @@ def test_continuous_forward_jump_selects_only_current_date(workspace, monkeypatc
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     state = workspace.load()
     assert stages == [(1, 0), (2, 0)]
-    assert len(state.global_history) == 2 and state.snapshot.display_date == date(2026, 3, 15)
+    assert len(workspace.history_records()) == 2 and state.snapshot.display_date == date(2026, 3, 15)
     assert state.snapshot.quotation_text == "Special."
 
 
@@ -630,8 +712,7 @@ def test_continuous_backward_jump_preserves_reveal_until_new_boundary(workspace,
     clock = RuntimeClock(at(15, 19), [at(12, 4), at(12, 5), at(12, 6)])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 2), (2, 0)]
-    state = workspace.load()
-    assert [record.display_date for record in state.global_history] == [date(2026, 3, 15), date(2026, 3, 12)]
+    assert [record["display_date"] for record in workspace.history_records()] == ["2026-03-15", "2026-03-12"]
 
 
 @pytest.mark.parametrize("published", [False, True])
@@ -653,7 +734,7 @@ def test_continuous_daily_commit_retry_and_uncertain_publication(workspace, monk
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 0)]
     assert attempts == ([0, 1] if published else [0, 1, 1])
-    assert len(workspace.load().global_history) == 2
+    assert len(workspace.history_records()) == 2
     assert clock.retry_delays == ([] if published else [1])
 
 
@@ -673,7 +754,7 @@ def test_continuous_later_boundary_supersedes_failed_transition(workspace, monke
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 0)]
     assert attempted_dates == [date(2026, 3, day) for day in (10, 11, 14)]
-    assert [record.display_date.day for record in workspace.load().global_history] == [10, 14]
+    assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "14"]
 
 
 def test_continuous_pending_boundary_survives_backward_adjustment_during_retry(workspace, monkeypatch) -> None:
@@ -692,7 +773,7 @@ def test_continuous_pending_boundary_survives_backward_adjustment_during_retry(w
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 0)]
     assert attempts == [date(2026, 3, day) for day in (10, 11, 11)]
-    assert [record.display_date.day for record in workspace.load().global_history] == [10, 11]
+    assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "11"]
 
 
 def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(workspace, monkeypatch) -> None:
@@ -703,7 +784,7 @@ def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(wor
     def recover(state, *args):
         attempts.append(state.revision)
         if state.revision == 2 and attempts.count(2) == 1:
-            assert len(workspace.load().global_history) == 2
+            assert len(workspace.history_records()) == 2
             raise DailyImagePreparationError("temporary preparation failure")
         return original(state, *args)
 
@@ -712,7 +793,7 @@ def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(wor
     stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 2)]
     assert attempts == [1, 2, 2]
-    assert len(workspace.load().global_history) == 2
+    assert len(workspace.history_records()) == 2
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
 
 
@@ -742,7 +823,7 @@ def test_continuous_display_retry_without_event_or_reselection(workspace, monkey
     clock = RuntimeClock(at(10, 7), retries=[lambda: setattr(display, "fail_update", False)])
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 0)] and clock.retry_delays == [1]
-    assert workspace.load().revision == len(workspace.load().global_history) == 1
+    assert workspace.load().revision == len(workspace.history_records()) == 1
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
 
 
@@ -757,7 +838,7 @@ def test_continuous_failed_display_skips_to_newer_desired_selection(workspace, m
     clock = RuntimeClock(at(10, 7), retries=[recover_display])
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(2, 2)]
-    assert len(workspace.load().global_history) == 2
+    assert len(workspace.history_records()) == 2
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
 
 
@@ -815,7 +896,7 @@ def test_continuous_terminal_display_error_stops_without_retry(workspace, monkey
         run_continuously(workspace, clock, monkeypatch, backend_factory=initialize)
     assert display.closed == (1 if operation == "update" else 0)
     assert clock.retry_delays == [] and clock.deadlines == []
-    assert len(workspace.load().global_history) == 1
+    assert len(workspace.history_records()) == 1
     assert len(png_files(workspace.artifacts)) == 3
 
 
@@ -849,7 +930,7 @@ def test_continuous_content_failure_preserves_previous_state_for_retry(workspace
     clock = RuntimeClock(at(10, 7), [remove_content], retries=[restore_content])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 0)] and clock.retry_delays == [1]
-    assert len(workspace.load().global_history) == 2
+    assert len(workspace.history_records()) == 2
 
 
 @pytest.mark.parametrize("failure", ["configuration", "state"])
@@ -892,7 +973,7 @@ def test_continuous_uncertain_publication_with_temporary_reload_failure(workspac
     clock = RuntimeClock(at(10, 7), retries=[recover_storage])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0)] and clock.retry_delays == [1]
-    assert len(workspace.load().global_history) == 1
+    assert len(workspace.history_records()) == 1
 
 
 def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(workspace, monkeypatch) -> None:
@@ -910,7 +991,7 @@ def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0)] and publications == [1]
     assert clock.retry_delays == [1]
-    assert len(workspace.load().global_history) == 1
+    assert len(workspace.history_records()) == 1
 
 
 def test_continuous_retry_duration_uses_monotonic_time_after_interrupted_wait(workspace, monkeypatch) -> None:
@@ -991,7 +1072,7 @@ def test_continuous_daily_display_failure_retains_commit_and_prepared_images(wor
 
     def restore_display():
         state = workspace.load()
-        assert state.revision == len(state.global_history) == 2
+        assert state.revision == len(workspace.history_records()) == 2
         assert len(png_files(workspace.artifacts)) == 3
         display.fail_update = False
 
@@ -1000,7 +1081,7 @@ def test_continuous_daily_display_failure_retains_commit_and_prepared_images(wor
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 0), (2, 0)] and prepared == [1, 2]
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
-    assert len(workspace.load().global_history) == 2
+    assert len(workspace.history_records()) == 2
 
 
 def test_command_line_defaults_to_continuous_and_restores_signal_handlers(workspace, monkeypatch) -> None:
@@ -1011,7 +1092,7 @@ def test_command_line_defaults_to_continuous_and_restores_signal_handlers(worksp
     calls = []
     handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
 
-    def run(config, state, artifacts, *, shutdown_event):
+    def run(config, state, artifacts, *, shutdown_event, **kwargs):
         calls.append((config, state, artifacts))
         signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
         assert shutdown_event.is_set()

@@ -25,7 +25,6 @@ from refrain import (
     PreparedImageArtifactStore,
     Quotation,
     QuotationCandidate,
-    ResolvedFont,
     SchedulingContext,
     SelectionProposal,
 )
@@ -36,7 +35,7 @@ def snapshot() -> DailySnapshot:
     return DailySnapshot(
         quotation_text="A thought worth keeping.",
         quotation_identity="A thought worth keeping.",
-        font=ResolvedFont("test", b"self-contained font bytes"),
+        font_identifier="test",
         presentation_metadata={"source": "Collection", "attribution": "Author", "presentation_style": "centered"},
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout={"image_size": (32, 24), "nested": {"values": [1, True, None]}},
@@ -107,8 +106,7 @@ def test_revisions_have_distinct_locations(store, snapshot, images) -> None:
     "changes",
     [
         {"quotation_text": "Another thought.", "quotation_identity": "Another thought."},
-        {"font": ResolvedFont("test", b"different font bytes")},
-        {"font": ResolvedFont("another-identifier", b"self-contained font bytes")},
+        {"font_identifier": "another-identifier"},
         {"presentation_metadata": {"source": "Changed"}},
         {"reveal_schedule": {"quotation": "07:00"}},
         {"layout": {"image_size": (32, 24), "other": 1}},

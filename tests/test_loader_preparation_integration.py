@@ -9,7 +9,6 @@ import yaml
 from refrain import (
     CompositionVisibility,
     DailySnapshot,
-    ResolvedFont,
     SchedulingContext,
     build_eligible_quotation_pool,
     load_application_config,
@@ -63,12 +62,10 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
     entry = candidate.entry
 
     font_resource = config.fonts["lora"]
-    with font_resource.path.open("rb") as font_file:
-        font = ResolvedFont(font_resource.identifier, font_file.read())
     snapshot = DailySnapshot(
         quotation_text=candidate.text,
         quotation_identity=candidate.identity,
-        font=font,
+        font_identifier=font_resource.identifier,
         presentation_metadata={
             "source": entry.source,
             "attribution": entry.attribution,
@@ -105,7 +102,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
         CompositionVisibility(source=True),
         CompositionVisibility(source=True, attribution=True),
     )
-    images = prepare_daily_images(snapshot, stages)
+    images = prepare_daily_images(snapshot, stages, config.fonts)
 
     assert not config_path.exists()
     assert not content_path.exists()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,10 +14,11 @@ from refrain import (
     ContentEntry,
     DailySnapshot,
     EligibilityRule,
+    GlobalHistoryStore,
+    GlobalHistoryWriteError,
     PersistentStateStore,
     Quotation,
     QuotationCandidate,
-    ResolvedFont,
     SchedulingContext,
     SelectionProposal,
     StateCommitError,
@@ -64,7 +65,7 @@ def make_snapshot(
     return DailySnapshot(
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
-        font=ResolvedFont(identifier="test-font", data=b"resolved font contents"),
+        font_identifier="test-font",
         presentation_metadata={
             "source": "Resolved source",
             "attribution": "Resolved author",
@@ -109,9 +110,8 @@ def test_uninitialized_location_and_initial_commit_recover_in_new_instance(tmp_p
     assert recovered == committed
     assert recovered.snapshot.quotation_text == "First quotation."
     assert recovered.snapshot.quotation_identity == "First quotation."
-    assert recovered.snapshot.font.data == b"resolved font contents"
-    assert recovered.global_history[0].sequence == 1
-    assert recovered.global_history[0].font_identifier == "test-font"
+    assert recovered.snapshot.font_identifier == "test-font"
+    assert recovered.revision == 1
     assert recovered.repetition_history == {"First quotation."}
     assert recovered.highest_reveal_stage == 0
 
@@ -127,10 +127,8 @@ def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path
     second = store.commit(proposal, make_snapshot("Second quotation.", date(2026, 10, 27)), initial_reveal_stage=1)
 
     assert second.revision == 2
-    assert [record.quotation_text for record in second.global_history] == ["First quotation.", "Second quotation."]
     assert second.repetition_history == {"First quotation.", "Second quotation.", "Unrelated identity."}
     assert second.highest_reveal_stage == 1
-    assert first.global_history == (first.global_history[0],)
     assert PersistentStateStore(store.path).load() == second
 
     reset = make_proposal(
@@ -140,7 +138,7 @@ def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path
     )
     third = store.commit(reset, make_snapshot("First quotation.", date(2026, 10, 28)))
     assert third.repetition_history == {"First quotation.", "Unrelated identity."}
-    assert [record.sequence for record in third.global_history] == [1, 2, 3]
+    assert third.revision == 3
 
 
 def test_exact_retry_is_idempotent_and_repeated_display_date_is_allowed(tmp_path: Path) -> None:
@@ -152,7 +150,7 @@ def test_exact_retry_is_idempotent_and_repeated_display_date_is_allowed(tmp_path
     retry = store.commit(proposal, snapshot)
 
     assert retry == first
-    assert len(retry.global_history) == 1
+    assert retry.revision == 1
 
     repeated_date_proposal = make_proposal(
         "Replacement.",
@@ -161,12 +159,7 @@ def test_exact_retry_is_idempotent_and_repeated_display_date_is_allowed(tmp_path
     )
     repeated_date = store.commit(repeated_date_proposal, make_snapshot("Replacement."))
     assert repeated_date.revision == 2
-    assert [record.display_date for record in repeated_date.global_history] == [
-        date(2026, 10, 26),
-        date(2026, 10, 26),
-    ]
-    assert repeated_date.global_history[0].sequence == 1
-    assert repeated_date.global_history[1].sequence == 2
+    assert repeated_date.snapshot.display_date == date(2026, 10, 26)
     assert store.commit(repeated_date_proposal, make_snapshot("Replacement.")) == repeated_date
 
 
@@ -244,7 +237,7 @@ def test_failure_after_atomic_replace_reports_published_state_and_recovers_it(
     assert error.value.published
     recovered = PersistentStateStore(store.path).load()
     assert recovered.snapshot.quotation_text == "Next."
-    assert [record.quotation_text for record in recovered.global_history] == ["Previous.", "Next."]
+    assert recovered.revision == 2
     assert previous.snapshot.quotation_text == "Previous."
 
     synced: list[Path] = []
@@ -273,7 +266,7 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
     snapshot = DailySnapshot(
         quotation_text=candidate.text,
         quotation_identity=candidate.identity,
-        font=ResolvedFont(identifier="stable-font", data=b"font bytes captured at commitment"),
+        font_identifier="stable-font",
         presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
         reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
         layout={"text_size": 42},
@@ -286,7 +279,7 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
     recovered = PersistentStateStore(state_path).load()
 
     assert recovered.snapshot == snapshot
-    assert recovered.snapshot.font.data == b"font bytes captured at commitment"
+    assert recovered.snapshot.font_identifier == "stable-font"
     assert recovered.snapshot.presentation_metadata == {"source": "Old source", "attribution": "Old author"}
 
 
@@ -307,7 +300,7 @@ def test_unsupported_version_is_reported_explicitly(tmp_path: Path) -> None:
         PersistentStateStore(state_path).load()
 
 
-def test_missing_fields_and_inconsistent_history_are_rejected(tmp_path: Path) -> None:
+def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
@@ -320,26 +313,31 @@ def test_missing_fields_and_inconsistent_history_are_rejected(tmp_path: Path) ->
     state_path.unlink()
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    document["state"]["global_history"][0]["quotation_text"] = "Different."
-    document["state"]["global_history"][0]["quotation_identity"] = "Different."
+    document["state"]["snapshot"]["quotation_identity"] = "Different."
     _write_document(state_path, document)
-    with pytest.raises(StateRecoveryError, match="does not match the latest global-history record"):
+    with pytest.raises(StateRecoveryError, match="normalized quotation_text"):
         PersistentStateStore(state_path).load()
 
 
-def test_integrity_checksum_and_font_digest_are_validated(tmp_path: Path) -> None:
+def test_state_v3_excludes_global_history_and_font_contents(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    document["state"]["snapshot"]["font"]["data"] = "dGFtcGVyZWQ="
-    _write_document(state_path, document)
+    assert document["format_version"] == 3
+    assert "global_history" not in document["state"]
+    assert document["state"]["snapshot"]["font_identifier"] == "test-font"
+    assert "font" not in document["state"]["snapshot"]
+    assert "sha256" in document and "sha256" not in document["state"]["snapshot"]
 
-    with pytest.raises(StateRecoveryError, match="font data checksum"):
-        PersistentStateStore(state_path).load()
 
-    state_path.write_text('{"format_version": 2, "state": {}, "sha256": "bad"}', encoding="utf-8")
-    with pytest.raises(StateRecoveryError, match="checksum"):
+@pytest.mark.parametrize("version", [1, 2])
+def test_unsupported_development_versions_are_not_modified(tmp_path: Path, version: int) -> None:
+    state_path = tmp_path / "state.json"
+    original = json.dumps({"format_version": version, "state": {}, "sha256": "bad"}).encode()
+    state_path.write_bytes(original)
+    with pytest.raises(UnsupportedStateVersionError, match="version 3 is required"):
         PersistentStateStore(state_path).load()
+    assert state_path.read_bytes() == original
 
 
 def test_store_requires_an_absolute_configured_path() -> None:
@@ -358,7 +356,6 @@ def test_reveal_progress_advances_without_changing_selection(tmp_path: Path, sta
         assert advanced.highest_reveal_stage == stage
         assert advanced.snapshot == original.snapshot
         assert advanced.revision == original.revision
-        assert advanced.global_history == original.global_history
         assert advanced.repetition_history == original.repetition_history
         assert PersistentStateStore(store.path).load() == advanced
         payload = json.loads(store.path.read_bytes())["state"]
@@ -399,7 +396,6 @@ def test_reveal_progress_restart_and_new_selection_integration(tmp_path: Path) -
     assert recovered.highest_reveal_stage == 2
     assert recovered.snapshot == first.snapshot
     assert recovered.revision == first.revision
-    assert recovered.global_history == first.global_history
     assert recovered.repetition_history == first.repetition_history
 
     second = commit(restarted, "Second.", date(2026, 10, 27))
@@ -457,6 +453,125 @@ def test_invalid_reveal_generation_is_rejected(tmp_path: Path, revision: object)
     assert store.path.read_bytes() == contents
 
 
+def test_global_history_records_committed_selection_as_unicode_jsonl(tmp_path: Path) -> None:
+    state = commit(PersistentStateStore(tmp_path / "state.json"), "Étoile, 雪.")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    timestamp = datetime(2026, 10, 29, 13, 30, tzinfo=timezone.utc)
+
+    record = history.record(state, timestamp=timestamp)
+
+    assert record.revision == state.revision == 1
+    assert record.selection_timestamp == timestamp
+    assert history.path.read_text(encoding="utf-8") == (
+        '{"revision":1,"display_date":"2026-10-26","selection_timestamp":"2026-10-29T13:30:00Z",'
+        '"quotation_text":"Étoile, 雪.","quotation_identity":"Étoile, 雪.","font_identifier":"test-font"}\n'
+    )
+
+
+def test_global_history_rotates_only_between_records_and_enforces_retention(tmp_path: Path) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    history_path = tmp_path / "global-history.jsonl"
+    first = commit(state_store, "First.")
+    seed_path = tmp_path / "seed.jsonl"
+    first_line = GlobalHistoryStore(seed_path).record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    first_bytes = seed_path.read_bytes()
+    history = GlobalHistoryStore(history_path, max_segment_size=len(first_bytes), max_segments=2)
+    history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    assert history_path.stat().st_size == history.max_segment_size
+    second = commit(state_store, "Next.", date(2026, 10, 27))
+    second_record = history.record(second, timestamp=datetime(2026, 10, 27, tzinfo=timezone.utc))
+    second_bytes = history_path.read_bytes()
+
+    assert history_path.with_name("global-history.1.jsonl").read_bytes() == first_bytes
+    assert second_bytes.endswith(b"\n")
+    assert json.loads(second_bytes) == {
+        "revision": 2,
+        "display_date": "2026-10-27",
+        "selection_timestamp": "2026-10-27T00:00:00Z",
+        "quotation_text": "Next.",
+        "quotation_identity": "Next.",
+        "font_identifier": "test-font",
+    }
+
+    third = commit(state_store, "Last.", date(2026, 10, 28))
+    history.record(third, timestamp=datetime(2026, 10, 28, tzinfo=timezone.utc))
+    assert history_path.with_name("global-history.1.jsonl").read_bytes() == second_bytes
+    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 3
+    assert not history_path.with_name("global-history.2.jsonl").exists()
+    assert first_line.revision == 1 and second_record.revision == 2
+
+
+def test_single_segment_history_discards_rotated_records(tmp_path: Path) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    history_path = tmp_path / "global-history.jsonl"
+    history = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=1)
+    first = commit(state_store, "First.")
+    history.record(first)
+    second = commit(state_store, "Next.", date(2026, 10, 27))
+
+    history.record(second)
+
+    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 2
+    assert not history_path.with_name("global-history.1.jsonl").exists()
+
+
+def test_reduced_retention_is_enforced_on_next_append(tmp_path: Path) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    history_path = tmp_path / "global-history.jsonl"
+    history = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=3)
+    for text, day in (("First.", 26), ("Next.", 27), ("Last.", 28)):
+        state = commit(state_store, text, date(2026, 10, day))
+        history.record(state, timestamp=datetime(2026, 10, day, tzinfo=timezone.utc))
+    assert history_path.with_name("global-history.1.jsonl").exists()
+    assert history_path.with_name("global-history.2.jsonl").exists()
+
+    reduced = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=1)
+    fourth = commit(state_store, "Final.", date(2026, 10, 29))
+    reduced.record(fourth, timestamp=datetime(2026, 10, 29, tzinfo=timezone.utc))
+
+    assert not history_path.with_name("global-history.1.jsonl").exists()
+    assert not history_path.with_name("global-history.2.jsonl").exists()
+    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 4
+
+
+def test_history_rejects_oversized_records_without_touching_state(tmp_path: Path) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    state = commit(state_store, "A quotation too large for this history limit.")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl", max_segment_size=8)
+
+    with pytest.raises(GlobalHistoryWriteError, match="larger than the 8-byte segment limit"):
+        history.record(state)
+
+    assert state_store.load() == state
+    assert not history.path.exists()
+
+
+def test_incomplete_history_tail_is_discarded_and_history_is_not_needed_for_recovery(tmp_path: Path) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    first = commit(state_store, "First.")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    history.path.write_bytes(b'{"interrupted":')
+    second = commit(state_store, "Second.", date(2026, 10, 27))
+
+    history.record(second, timestamp=datetime(2026, 10, 27, tzinfo=timezone.utc))
+    assert json.loads(history.path.read_text(encoding="utf-8"))["revision"] == 2
+    history.path.unlink()
+    assert PersistentStateStore(state_store.path).load() == second
+    assert first.revision == 1
+
+
+def test_history_fsync_failure_does_not_change_committed_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    state = commit(state_store, "Committed.")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    monkeypatch.setattr(persistence.os, "fsync", lambda _: (_ for _ in ()).throw(OSError("flush failed")))
+
+    with pytest.raises(GlobalHistoryWriteError, match="flush failed"):
+        history.record(state)
+
+    assert state_store.load() == state
+
+
 @pytest.mark.parametrize("failure_point", ["flush", "replace", "directory_sync"])
 def test_interrupted_reveal_advancement_recovers_complete_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
@@ -503,7 +618,7 @@ def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) ->
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Committed.")
     document = json.loads(store.path.read_bytes())
-    assert document["format_version"] == 2
+    assert document["format_version"] == 3
     document["format_version"] = 1
     document["state"]["snapshot"]["highest_reveal_stage"] = document["state"].pop("highest_reveal_stage")
     _write_document(store.path, document)
