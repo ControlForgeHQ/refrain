@@ -238,6 +238,36 @@ def test_absolute_user_font_path_is_preserved(tmp_path: Path) -> None:
     assert config.fonts["extra"].path == user_font
 
 
+def test_mixed_user_font_registrations_keep_only_usable_fonts(tmp_path: Path, caplog) -> None:
+    source_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
+    valid_font = tmp_path / "valid.ttf"
+    valid_font.write_bytes(source_font.read_bytes())
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                layout={
+                    "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+                    "fonts": {
+                        "default": ["valid-user-font", "missing-user-font"],
+                        "available": {
+                            "valid-user-font": str(valid_font),
+                            "missing-user-font": str(tmp_path / "missing.ttf"),
+                        },
+                    },
+                    "text": {"min_font_size": 28, "max_font_size": 100},
+                }
+            ),
+        )
+    )
+
+    assert "valid-user-font" in config.fonts
+    assert "missing-user-font" not in config.fonts
+    assert config.default_fonts == ("valid-user-font",)
+    assert "missing-user-font" in caplog.text
+    assert "excluded" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("region", "expected_field"),
     [

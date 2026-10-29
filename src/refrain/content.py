@@ -116,7 +116,10 @@ def _log_diagnostic_once(message: str, level: int) -> None:
 
 
 def _log_diagnostic(diagnostic: ContentDiagnostic, level: int) -> None:
-    _log_diagnostic_once(str(diagnostic), level)
+    message = str(diagnostic)
+    if level == logging.WARNING and "excluded" not in diagnostic.message:
+        message += "; this entry is excluded"
+    _log_diagnostic_once(message, level)
 
 
 def _validate_calendar_rule(

@@ -431,6 +431,7 @@ def test_invalid_entries_are_excluded_while_valid_entries_are_retained(tmp_path:
     assert [entry.id for entry in entries] == ["valid-entry"]
     assert f"{nested_invalid_file}: id:" in caplog.text
     assert f"{other_invalid_file}: quotations[0]:" in caplog.text
+    assert "this entry is excluded" in caplog.text
 
 
 def test_malformed_yaml_file_does_not_prevent_valid_content(tmp_path: Path, caplog) -> None:

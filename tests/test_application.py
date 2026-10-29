@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from importlib.resources import files
 from pathlib import Path
 from random import Random
 from threading import Event
@@ -188,7 +189,7 @@ def test_history_paths_cannot_overwrite_operational_state(workspace: Workspace) 
         )
 
 
-def test_selection_prunes_only_identities_absent_from_complete_library(workspace: Workspace) -> None:
+def test_selection_prunes_only_identities_absent_from_effective_library(workspace: Workspace) -> None:
     ordinary(workspace, "Current quotation.")
     workspace.run(at(10, 8))
     state = workspace.load()
@@ -200,10 +201,16 @@ def test_selection_prunes_only_identities_absent_from_complete_library(workspace
         "ineligible-b",
         'eligibility:\n  - month: 5\nquotations:\n  - "Temporarily ineligible."\n',
     )
+    workspace.entry("rejected", 'unknown: true\nquotations:\n  - "Rejected quotation."\n')
     state = replace(
         state,
         repetition_history=frozenset(
-            {state.snapshot.quotation_identity, "Temporarily ineligible.", "Removed from library."}
+            {
+                state.snapshot.quotation_identity,
+                "Temporarily ineligible.",
+                "Removed from library.",
+                "Rejected quotation.",
+            }
         ),
     )
     configuration = application.load_application_config(workspace.config)
@@ -211,12 +218,14 @@ def test_selection_prunes_only_identities_absent_from_complete_library(workspace
     proposal, snapshot = application._select_snapshot(configuration, date(2026, 3, 11), Random(1), state)
 
     assert "Removed from library." not in proposal.proposed_repetition_history
+    assert "Rejected quotation." not in proposal.proposed_repetition_history
     assert "Temporarily ineligible." in proposal.proposed_repetition_history
     assert len(proposal.proposed_repetition_history) == 2
     assert state.repetition_history == {
         state.snapshot.quotation_identity,
         "Temporarily ineligible.",
         "Removed from library.",
+        "Rejected quotation.",
     }
     committed = PersistentStateStore(workspace.state).commit(proposal, snapshot)
     assert committed.repetition_history == proposal.proposed_repetition_history
@@ -254,6 +263,51 @@ def test_entry_font_preference_is_resolved(workspace: Workspace) -> None:
     ordinary(workspace, extra='font: "source-sans-3"\n')
     workspace.run(at(10, 8))
     assert workspace.load().snapshot.font_identifier == "source-sans-3"
+
+
+def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspace) -> None:
+    config = workspace.config.read_text(encoding="utf-8").replace(
+        'default: ["lora"]',
+        'default: ["missing-font"]\n    available:\n      missing-font: "missing.ttf"',
+    )
+    workspace.config.write_text(config, encoding="utf-8")
+    ordinary(workspace)
+
+    with pytest.raises(ApplicationError, match="no usable font remains"):
+        workspace.run(at(10, 8))
+    assert workspace.load() is None
+
+
+def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bundled_fallback(
+    workspace: Workspace, caplog
+) -> None:
+    custom_font = workspace.root / "custom.ttf"
+    bundled_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
+    custom_font.write_bytes(bundled_font.read_bytes())
+    config = workspace.config.read_text(encoding="utf-8").replace(
+        'default: ["lora"]',
+        'default: ["custom-font"]\n    available:\n      custom-font: "custom.ttf"',
+    )
+    workspace.config.write_text(config, encoding="utf-8")
+    ordinary(workspace, extra='font: "custom-font"\n')
+    first, _ = workspace.run(at(10, 8))
+    committed_bytes = workspace.state.read_bytes()
+    assert first.state.snapshot.font_identifier == "custom-font"
+
+    custom_font.unlink()
+    with caplog.at_level(logging.WARNING):
+        recovered, _ = workspace.run(at(10, 9))
+    assert not recovered.selected_initial_quotation
+    assert "custom-font" in caplog.text
+    assert workspace.state.read_bytes() == committed_bytes
+
+    png_files(workspace.artifacts)[0].write_bytes(b"damaged image")
+    with caplog.at_level(logging.WARNING):
+        regenerated, _ = workspace.run(at(10, 9))
+    assert not regenerated.selected_initial_quotation
+    assert "bundled fallback" in caplog.text
+    assert workspace.load() == first.state
+    assert workspace.state.read_bytes() == committed_bytes
 
 
 def test_unavailable_font_falls_back_to_default_pool(workspace: Workspace, caplog) -> None:
@@ -921,20 +975,57 @@ def test_continuous_content_failure_preserves_previous_state_for_retry(workspace
     path = workspace.content / "ordinary.yaml"
     original = path.read_text(encoding="utf-8")
     previous = []
+    previous_artifacts = []
 
     def remove_content():
         previous.append(workspace.load())
+        previous_artifacts.append(tuple(item.read_bytes() for item in png_files(workspace.artifacts)))
         path.unlink()
         clock.move(at(11, 6))
 
     def restore_content():
         assert workspace.load() == previous[0]
+        assert tuple(item.read_bytes() for item in png_files(workspace.artifacts)) == previous_artifacts[0]
         path.write_text(original, encoding="utf-8")
 
     clock = RuntimeClock(at(10, 7), [remove_content], retries=[restore_content])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 0)] and clock.retry_delays == [1]
     assert len(workspace.history_records()) == 2
+
+
+def test_partial_library_selects_at_daily_boundary_and_logs_rejection_once(workspace, monkeypatch, caplog) -> None:
+    workspace.entry("many", 'quotations:\n  - "First."\n  - "Second."\n')
+    rejected = workspace.content / "invalid.yaml"
+    rejected.write_text("id: invalid id\nquotations: [Rejected.]\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        stages, _, _ = run_continuously(
+            workspace,
+            RuntimeClock(at(10, 7), [at(11, 6), at(12, 6)]),
+            monkeypatch,
+        )
+
+    assert stages == [(1, 0), (2, 0), (3, 0)]
+    assert workspace.load().revision == len(workspace.history_records()) == 3
+    assert caplog.text.count(str(rejected)) == 1
+
+
+def test_continuous_retry_does_not_repeat_unchanged_content_warnings(workspace, monkeypatch, caplog) -> None:
+    workspace.entry("seasonal", 'eligibility:\n  - month: 7\nquotations:\n  - "Summer."\n')
+    rejected = workspace.content / "invalid.yaml"
+    rejected.write_text("id: invalid id\nquotations: [Rejected.]\n", encoding="utf-8")
+
+    def add_eligible_content():
+        ordinary(workspace, "Recovered quotation.")
+
+    clock = RuntimeClock(at(10, 7), retries=[add_eligible_content])
+    with caplog.at_level(logging.WARNING):
+        stages, _, _ = run_continuously(workspace, clock, monkeypatch)
+
+    assert stages == [(1, 0)]
+    assert clock.retry_delays == [1]
+    assert caplog.text.count(str(rejected)) == 1
 
 
 @pytest.mark.parametrize("failure", ["configuration", "state"])
