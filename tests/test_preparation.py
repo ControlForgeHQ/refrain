@@ -234,18 +234,29 @@ def test_missing_font_fails_clearly_without_bundled_fallback() -> None:
         prepare_daily_images(snapshot, (CompositionVisibility(),), {})
 
 
-def test_unusable_selected_font_uses_deterministic_bundled_fallback(tmp_path, caplog) -> None:
+def test_unusable_selected_font_uses_deterministic_bundled_fallback(tmp_path, caplog, monkeypatch) -> None:
     broken_path = tmp_path / "broken.ttf"
     broken_path.write_bytes(b"not a font")
     snapshot = make_snapshot("broken")
     registry = {
         "broken": FontResource("broken", broken_path, bundled=False),
-        **_FONT_REGISTRY,
+        "a-fallback": FontResource("a-fallback", _LORA, bundled=True),
+        "z-fallback": FontResource("z-fallback", _LORA, bundled=True),
     }
+    original_layout = preparation.layout_composition
+    layouts = []
+
+    def capture_layout(*args, **kwargs):
+        layout = original_layout(*args, **kwargs)
+        layouts.append(layout)
+        return layout
+
+    monkeypatch.setattr(preparation, "layout_composition", capture_layout)
 
     images = prepare_daily_images(snapshot, (CompositionVisibility(),), registry)
 
     assert images[0].size == _IMAGE_SIZE
+    assert layouts[0].font_identifier == "a-fallback"
     assert "broken" in caplog.text
 
 

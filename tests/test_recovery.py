@@ -119,7 +119,27 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
     assert result == expected
     assert manifest_path.read_bytes() == manifest_before
     assert tuple(path.read_bytes() for path in result.stage_paths) == image_bytes_before
+    assert state_path.read_bytes() == state_bytes_before
     assert PersistentStateStore(state_path).load() == state
+
+
+def test_valid_artifacts_are_reused_after_font_resource_changes(
+    committed_state, artifact_store, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, state_path = committed_state
+    state_bytes_before = state_path.read_bytes()
+    font_path = tmp_path / "registered.ttf"
+    first_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
+    changed_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
+    font_path.write_bytes(first_font.read_bytes())
+    registry = {"committed-font": FontResource("committed-font", font_path, bundled=False)}
+
+    original = recover_prepared_daily_images(state, artifact_store, _STAGES, registry)
+    font_path.write_bytes(changed_font.read_bytes())
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args: pytest.fail("unexpected regeneration"))
+    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, registry)
+
+    assert recovered == original
     assert state_path.read_bytes() == state_bytes_before
 
 

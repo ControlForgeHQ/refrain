@@ -169,6 +169,25 @@ def test_history_write_failure_does_not_interrupt_startup_presentation(
     assert "was not recorded in global history" in caplog.text
 
 
+def test_history_paths_cannot_overwrite_operational_state(workspace: Workspace) -> None:
+    with pytest.raises(ValueError, match="must not overlap the operational state"):
+        application._create_history_store(workspace.state, workspace.state, 1_048_576, 20)
+    with pytest.raises(ValueError, match="must not overlap the operational state"):
+        application._create_history_store(
+            workspace.state.with_name("global-history.jsonl"),
+            None,
+            1_048_576,
+            20,
+        )
+    with pytest.raises(ValueError, match="must not overlap the operational state"):
+        application._create_history_store(
+            workspace.state.with_name("global-history.1.jsonl"),
+            workspace.state.with_name("global-history.jsonl"),
+            1_048_576,
+            20,
+        )
+
+
 def test_selection_prunes_only_identities_absent_from_complete_library(workspace: Workspace) -> None:
     ordinary(workspace, "Current quotation.")
     workspace.run(at(10, 8))

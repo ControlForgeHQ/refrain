@@ -221,6 +221,7 @@ class GlobalHistoryStore:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             _truncate_incomplete_history_tail(self.path)
+            self._discard_excess_segments()
             active_size = self.path.stat().st_size if self.path.exists() else 0
             if active_size + len(contents) > self.max_segment_size:
                 self._rotate()
@@ -249,6 +250,13 @@ class GlobalHistoryStore:
                 os.replace(self.path, self._segment_path(1))
         except OSError as error:
             raise GlobalHistoryWriteError(f"cannot rotate global history at {self.path}: {error}") from error
+
+    def _discard_excess_segments(self) -> None:
+        pattern = re.compile(rf"{re.escape(self.path.stem)}\.(\d+){re.escape(self.path.suffix)}\Z")
+        for segment in self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}"):
+            match = pattern.fullmatch(segment.name)
+            if match is not None and int(match.group(1)) >= self.max_segments:
+                segment.unlink()
 
     def _segment_path(self, index: int) -> Path:
         return self.path.with_name(f"{self.path.stem}.{index}{self.path.suffix}")

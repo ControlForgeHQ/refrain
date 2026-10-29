@@ -515,6 +515,25 @@ def test_single_segment_history_discards_rotated_records(tmp_path: Path) -> None
     assert not history_path.with_name("global-history.1.jsonl").exists()
 
 
+def test_reduced_retention_is_enforced_on_next_append(tmp_path: Path) -> None:
+    state_store = PersistentStateStore(tmp_path / "state.json")
+    history_path = tmp_path / "global-history.jsonl"
+    history = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=3)
+    for text, day in (("First.", 26), ("Next.", 27), ("Last.", 28)):
+        state = commit(state_store, text, date(2026, 10, day))
+        history.record(state, timestamp=datetime(2026, 10, day, tzinfo=timezone.utc))
+    assert history_path.with_name("global-history.1.jsonl").exists()
+    assert history_path.with_name("global-history.2.jsonl").exists()
+
+    reduced = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=1)
+    fourth = commit(state_store, "Final.", date(2026, 10, 29))
+    reduced.record(fourth, timestamp=datetime(2026, 10, 29, tzinfo=timezone.utc))
+
+    assert not history_path.with_name("global-history.1.jsonl").exists()
+    assert not history_path.with_name("global-history.2.jsonl").exists()
+    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 4
+
+
 def test_history_rejects_oversized_records_without_touching_state(tmp_path: Path) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
     state = commit(state_store, "A quotation too large for this history limit.")

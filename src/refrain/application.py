@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -238,6 +239,13 @@ def _create_history_store(
     history_max_segments: int,
 ) -> GlobalHistoryStore:
     path = state_path.with_name("global-history.jsonl") if history_path is None else Path(history_path).absolute()
+    state_file = state_path.resolve()
+    resolved_history_path = path.resolve()
+    segments = re.compile(rf"{re.escape(path.stem)}\.\d+{re.escape(path.suffix)}\Z")
+    if resolved_history_path == state_file or (
+        path.parent.resolve() == state_path.parent.resolve() and segments.fullmatch(state_path.name)
+    ):
+        raise ValueError("global-history path and its rotated segments must not overlap the operational state file")
     return GlobalHistoryStore(path, max_segment_size=history_segment_size, max_segments=history_max_segments)
 
 
