@@ -88,13 +88,14 @@ def test_recognizes_reserved_waveshare_backend(tmp_path: Path) -> None:
     assert config.display_backend == "waveshare-13in3-e"
 
 
-def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Path) -> None:
-    default_config = load_application_config(
-        write_config(
-            tmp_path / "default.yaml",
-            configuration_data(display={"backend": "image-server"}),
+def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Path, caplog) -> None:
+    with caplog.at_level("INFO"):
+        default_config = load_application_config(
+            write_config(
+                tmp_path / "default.yaml",
+                configuration_data(display={"backend": "image-server"}),
+            )
         )
-    )
     configured = load_application_config(
         write_config(
             tmp_path / "configured.yaml",
@@ -107,6 +108,8 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
         )
     )
 
+    assert "display.image-server.host" in caplog.text
+    assert "display.image-server.port" in caplog.text
     assert default_config.display_backend == "image-server"
     assert default_config.image_server_host == "127.0.0.1"
     assert default_config.image_server_port == 8080
@@ -128,15 +131,19 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
         ({"port": 65536}, "display.image-server.port"),
     ],
 )
-def test_invalid_image_server_settings_are_rejected(tmp_path: Path, image_server: object, expected_field: str) -> None:
-    fields = diagnostic_fields(
+def test_invalid_image_server_settings_are_recoverable(
+    tmp_path: Path, image_server: object, expected_field: str, caplog
+) -> None:
+    config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
             configuration_data(display={"backend": "window", "image-server": image_server}),
         )
     )
 
-    assert expected_field in fields
+    assert expected_field in caplog.text
+    assert config.image_server_host == "127.0.0.1"
+    assert config.image_server_port == 8080
 
 
 @pytest.mark.parametrize(
@@ -273,23 +280,21 @@ def test_presentation_region_accepts_full_normalized_image(tmp_path: Path) -> No
     assert config.presentation_region.height == 1
 
 
-def test_unsupported_layout_field_is_rejected_as_unknown(tmp_path: Path) -> None:
+def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog) -> None:
     data = configuration_data(
         layout={
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
     )
 
-    config_path = write_config(tmp_path / "config.yaml", data)
-    with pytest.raises(ApplicationConfigurationError) as error:
-        load_application_config(config_path)
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    diagnostic = next(
-        diagnostic for diagnostic in error.value.diagnostics if diagnostic.field == "layout.quotation_region"
-    )
-    assert diagnostic.message == "is not a supported configuration field"
+    assert config.presentation_region.x == 0.1
+    assert "layout.quotation_region" in caplog.text
+    assert "ignored" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -300,11 +305,6 @@ def test_unsupported_layout_field_is_rejected_as_unknown(tmp_path: Path) -> None
         (configuration_data(general={"timezone": "Not/A_Zone"}), "general.timezone"),
         (configuration_data(general={"timezone": "localtime"}), "general.timezone"),
         (configuration_data(general={"timezone": "EST"}), "general.timezone"),
-        (configuration_data(general={"timezone": "UTC", "day_start": "6:00"}), "general.day_start"),
-        (configuration_data(reveal={"quotation": "07:00"}), "reveal.quotation"),
-        (configuration_data(reveal={"source": "05:59"}), "reveal.source"),
-        (configuration_data(unexpected=True), "unexpected"),
-        (configuration_data(general={"timezone": "UTC", "unknown": 1}), "general.unknown"),
         (
             configuration_data(
                 layout={
@@ -345,32 +345,66 @@ def test_unsupported_layout_field_is_rejected_as_unknown(tmp_path: Path) -> None
             ),
             "layout.fonts.default",
         ),
-        (
-            configuration_data(
-                layout={
-                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
-                    "fonts": {"default": ["lora", "lora"]},
-                    "text": {"min_font_size": 1, "max_font_size": 2},
-                }
-            ),
-            "layout.fonts.default[1]",
-        ),
-        (
-            configuration_data(
-                layout={
-                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
-                    "fonts": {"default": ["missing"]},
-                    "text": {"min_font_size": 1, "max_font_size": 2},
-                }
-            ),
-            "layout.fonts.default[0]",
-        ),
     ],
 )
-def test_invalid_fields_are_reported(tmp_path: Path, data: dict[str, object], expected_field: str) -> None:
+def test_invalid_required_fields_are_fatal(tmp_path: Path, data: dict[str, object], expected_field: str) -> None:
     fields = diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
     assert expected_field in fields
+
+
+def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_path: Path, caplog) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(
+            general={"timezone": "UTC", "day_start": "6:00", "unknown": True},
+            reveal={"quotation": "07:00", "source": "invalid"},
+            unexpected=True,
+        ),
+    )
+
+    with caplog.at_level("INFO"):
+        config = load_application_config(config_path)
+
+    assert config.day_start == time(6)
+    assert config.reveal.quotation == time(6)
+    assert config.reveal.source == time(12)
+    assert "using documented defaults" in caplog.text
+    assert "general.day_start" in caplog.text
+    assert "reveal.quotation" in caplog.text
+    assert "reveal.source" in caplog.text
+    assert "general.unknown" in caplog.text
+    assert "unexpected" in caplog.text
+    assert "using" in caplog.text and "ignored" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("default_fonts", "expected"),
+    [
+        (["lora", "lora"], ("lora",)),
+        (["lora", "unavailable"], ("lora",)),
+        (["unavailable"], ()),
+    ],
+)
+def test_default_font_pool_filters_unavailable_and_duplicates(
+    tmp_path: Path, default_fonts: list[str], expected: tuple[str, ...], caplog
+) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                layout={
+                    "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+                    "fonts": {"default": default_fonts},
+                    "text": {"min_font_size": 28, "max_font_size": 100},
+                }
+            ),
+        )
+    )
+
+    assert config.default_fonts == expected
+    if len(default_fonts) != len(expected):
+        assert "ignored" in caplog.text or "excluded" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -410,7 +444,7 @@ def test_unreadable_config_is_rejected(tmp_path: Path, monkeypatch: pytest.Monke
     assert "$" in diagnostic_fields(config_path)
 
 
-def test_user_font_collisions_missing_files_and_unsupported_files_are_rejected(tmp_path: Path) -> None:
+def test_user_font_collisions_missing_files_and_unsupported_files_are_excluded(tmp_path: Path, caplog) -> None:
     for identifier, font_path in (
         ("lora", "missing.ttf"),
         ("not-a-font", "missing.ttf"),
@@ -426,12 +460,14 @@ def test_user_font_collisions_missing_files_and_unsupported_files_are_rejected(t
             }
         )
 
-        fields = diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+        config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-        assert "layout.fonts.available." + identifier in fields
+        assert "layout.fonts.available." + identifier in caplog.text
+        assert config.fonts["lora"].bundled
+        assert (identifier in config.fonts) == (identifier == "lora")
 
 
-def test_unreadable_user_font_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unreadable_user_font_is_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
     user_font = tmp_path / "font.ttf"
     user_font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
     data = configuration_data(
@@ -451,4 +487,6 @@ def test_unreadable_user_font_is_rejected(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(Path, "open", deny_font_read)
 
-    assert "layout.fonts.available.extra" in diagnostic_fields(config_path)
+    config = load_application_config(config_path)
+    assert "layout.fonts.available.extra" in caplog.text
+    assert "extra" not in config.fonts

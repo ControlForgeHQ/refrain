@@ -369,15 +369,19 @@ def test_no_eligible_content_commits_nothing(workspace: Workspace) -> None:
     assert workspace.load() is None and not workspace.artifacts.exists()
 
 
-def test_invalid_configuration_and_content_report_errors(workspace: Workspace) -> None:
+def test_invalid_content_is_excluded_and_invalid_configuration_remains_fatal(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
     (workspace.content / "bad.yaml").write_text("id: 5\n", encoding="utf-8")
-    with pytest.raises(ApplicationError, match="content library"):
-        workspace.run(at(10, 8))
+    with caplog.at_level(logging.WARNING):
+        result, _ = workspace.run(at(10, 8))
+    assert result.selected_initial_quotation
+    assert "bad.yaml" in caplog.text
+    assert workspace.load().revision == 1
+
     workspace.config.write_text("display: {backend: nope}\n", encoding="utf-8")
     with pytest.raises(ApplicationError, match="configuration"):
         workspace.run(at(10, 8))
-    assert workspace.load() is None
+    assert workspace.load().revision == 1
 
 
 def test_invalid_state_is_reported(workspace: Workspace) -> None:

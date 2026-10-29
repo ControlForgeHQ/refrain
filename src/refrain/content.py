@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Union
 
@@ -30,6 +32,7 @@ _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _PRESENTATION_STYLES = {"centered", "left-aligned"}
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,15 @@ def normalize_quotation(text: str) -> str:
 
 def _diagnose(diagnostics: list[ContentDiagnostic], file: Path, field: str, message: str) -> None:
     diagnostics.append(ContentDiagnostic(file=file, field=field, message=message))
+
+
+@lru_cache(maxsize=2048)
+def _log_diagnostic_once(message: str, level: int) -> None:
+    _LOGGER.log(level, "%s", message)
+
+
+def _log_diagnostic(diagnostic: ContentDiagnostic, level: int) -> None:
+    _log_diagnostic_once(str(diagnostic), level)
 
 
 def _validate_calendar_rule(
@@ -289,27 +301,27 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
 def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEntry, ...]:
     """Load and validate every ``.yaml`` or ``.yml`` entry in a directory tree.
 
-    Validation is all-or-nothing: if any file or entry is invalid, a
-    ``ContentLibraryError`` contains the file- and field-specific diagnostics.
+    Invalid files and entries are excluded independently. A ``ContentLibraryError``
+    is raised when discovery fails or no valid quotation remains.
     """
     directory = Path(content_directory)
     try:
         is_directory = directory.is_dir()
     except OSError as error:
         diagnostic = ContentDiagnostic(directory, "$", f"cannot access content directory: {error}")
+        _log_diagnostic(diagnostic, logging.ERROR)
         raise ContentLibraryError((diagnostic,)) from error
     if not is_directory:
         diagnostic = ContentDiagnostic(directory, "$", "content directory does not exist or is not a directory")
+        _log_diagnostic(diagnostic, logging.ERROR)
         raise ContentLibraryError((diagnostic,))
 
-    diagnostics: list[ContentDiagnostic] = []
-    entries: list[ContentEntry] = []
-    identifiers: dict[str, Path] = {}
+    discovery_diagnostics: list[ContentDiagnostic] = []
     files: list[Path] = []
 
     def report_walk_error(error: OSError) -> None:
         affected_path = Path(error.filename) if error.filename else directory
-        _diagnose(diagnostics, affected_path, "$", f"cannot enumerate content directory: {error}")
+        _diagnose(discovery_diagnostics, affected_path, "$", f"cannot enumerate content directory: {error}")
 
     try:
         for root, _, filenames in os.walk(directory, onerror=report_walk_error):
@@ -318,30 +330,73 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
             )
     except OSError as error:
         report_walk_error(error)
+    if discovery_diagnostics:
+        for diagnostic in discovery_diagnostics:
+            _log_diagnostic(diagnostic, logging.ERROR)
+        raise ContentLibraryError(tuple(discovery_diagnostics))
 
+    if not files:
+        diagnostic = ContentDiagnostic(
+            directory,
+            "$",
+            "no YAML content files were found; add at least one valid content entry",
+        )
+        _log_diagnostic(diagnostic, logging.ERROR)
+        raise ContentLibraryError((diagnostic,))
+
+    rejected_diagnostics: list[ContentDiagnostic] = []
+    entries: list[ContentEntry] = []
     for file in sorted(files):
+        file_diagnostics: list[ContentDiagnostic] = []
         try:
             contents = file.read_text(encoding="utf-8")
             data = load_yaml(contents)
         except (OSError, UnicodeError) as error:
-            _diagnose(diagnostics, file, "$", f"cannot read UTF-8 YAML file: {error}")
+            _diagnose(file_diagnostics, file, "$", f"cannot read UTF-8 YAML file: {error}; this file is excluded")
+            rejected_diagnostics.extend(file_diagnostics)
             continue
         except yaml.YAMLError as error:
             location = yaml_error_location(error)
             detail = f"{location}: {error}" if location else str(error)
-            _diagnose(diagnostics, file, "$", f"invalid or unsupported YAML: {detail}")
+            _diagnose(file_diagnostics, file, "$", f"invalid or unsupported YAML: {detail}; this file is excluded")
+            rejected_diagnostics.extend(file_diagnostics)
             continue
 
-        entry = _validate_entry(data, file, diagnostics)
+        entry = _validate_entry(data, file, file_diagnostics)
         if entry is None:
+            rejected_diagnostics.extend(file_diagnostics)
             continue
-        first_file = identifiers.get(entry.id)
-        if first_file is not None:
-            _diagnose(diagnostics, file, "id", f"duplicate identifier {entry.id!r}; first declared in {first_file}")
-        else:
-            identifiers[entry.id] = file
         entries.append(entry)
 
-    if diagnostics:
-        raise ContentLibraryError(tuple(diagnostics))
-    return tuple(entries)
+    by_identifier: dict[str, list[ContentEntry]] = {}
+    for entry in entries:
+        by_identifier.setdefault(entry.id, []).append(entry)
+
+    accepted_entries: list[ContentEntry] = []
+    for identifier, matching_entries in sorted(by_identifier.items()):
+        if len(matching_entries) == 1:
+            accepted_entries.extend(matching_entries)
+            continue
+        conflicting_files = sorted(entry.file for entry in matching_entries if entry.file is not None)
+        for entry in matching_entries:
+            assert entry.file is not None
+            peers = ", ".join(str(path) for path in conflicting_files if path != entry.file)
+            _diagnose(
+                rejected_diagnostics,
+                entry.file,
+                "id",
+                f"conflicting duplicate identifier {identifier!r}; this entry is excluded with {peers}",
+            )
+
+    for diagnostic in rejected_diagnostics:
+        _log_diagnostic(diagnostic, logging.WARNING)
+
+    if not accepted_entries:
+        diagnostic = ContentDiagnostic(
+            directory,
+            "$",
+            "content library contains no valid quotations; correct or add a valid content entry",
+        )
+        _log_diagnostic(diagnostic, logging.ERROR)
+        raise ContentLibraryError((*rejected_diagnostics, diagnostic))
+    return tuple(sorted(accepted_entries, key=lambda entry: entry.file or Path()))

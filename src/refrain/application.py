@@ -82,6 +82,11 @@ def _resolve_font(configuration: ApplicationConfiguration, preferred: str | None
         _LOGGER.warning("Requested font %r is not available; using a font from the default pool", identifier)
         identifier = None
     if identifier is None:
+        if not configuration.default_fonts:
+            raise ApplicationError(
+                "no usable font remains in layout.fonts.default; register a usable configured font "
+                "or select a valid registered font in the content entry"
+            )
         identifier = chooser.choice(configuration.default_fonts)
     return identifier
 
