@@ -375,81 +375,220 @@ Avoid assumptions tied to a particular username, home directory, mount point, or
 
 Resolve relative paths consistently and document their interpretation.
 
+
 ## Persistent storage
 
 ### Storage approach
 
-Use ordinary local filesystem storage for Refrain's initial persistent state.
+Use ordinary local filesystem storage for Refrain's initial persistent data.
 
 A database service is not required.
 
 The storage representation should remain simple, inspectable, and suitable for recovery after unexpected termination.
 
-The architectural commitment and recovery requirements determine the storage design.
+Authoritative operational state, global selection history, and prepared images have separate storage responsibilities.
 
-Do not select a persistence format solely because it is convenient to serialize individual objects.
+Operational state must not depend on reading global-history records or prepared-image files to determine the current selection revision.
+
+The architectural commitment and recovery requirements determine the storage design.
 
 ### Atomic selection commitment
 
-A daily selection becomes authoritative only when its snapshot, global-history update, repetition-history update, and required scheduling context have been committed consistently.
+A daily selection becomes authoritative when its complete snapshot, updated repetition history, next selection revision, and required scheduling context have been committed consistently.
 
-The implementation must provide one logical commit point for this state.
+These operational-state values have one logical commit point.
 
-Independent file writes without an appropriate transaction or recovery mechanism do not satisfy this requirement.
+Global-history recording is independent of that commit and must not be included in its transaction.
 
-A suitable approach is to construct a complete next-state generation and publish it through one atomic filesystem operation.
+Construct a complete next operational state and publish it using atomic filesystem replacement.
 
-When atomic replacement is used, temporary and final artifacts must reside on a filesystem that supports the required replacement semantics.
+Temporary and final state files must reside on a filesystem supporting the required replacement semantics.
 
-Where durability across sudden power loss is required, the implementation must also account for flushing file data and relevant directory metadata.
+Flush file contents before replacement and synchronize relevant directory metadata where supported.
 
-Do not equate a successful file close or rename with guaranteed power-loss durability without considering the filesystem and operating-system semantics.
+A failure before publication leaves the previous operational state authoritative. A failure after publication may require reloading state to establish whether the new selection was committed.
+
+Do not require a global-history append to succeed before recognizing a committed selection.
 
 ### Recovery
 
-Persistent state must be validated when loaded.
+Persistent operational state must be validated when loaded.
 
-Incomplete or invalid state must not be silently treated as a valid committed selection.
+Incomplete, invalid, checksum-invalid, or unsupported state must not be silently accepted.
 
-Recovery must not duplicate committed history entries.
+An interrupted state publication must not produce a partially committed selection or inconsistent repetition history.
 
 A failure after selection commitment must preserve the committed quotation.
 
-Missing prepared images must be regenerated from the snapshot without changing selection history.
+Missing or invalid prepared images must be regenerated from the committed snapshot using available presentation resources, without changing selection or repetition history.
 
-Recovery behavior must be covered by automated tests using controlled failures at meaningful transaction boundaries.
+Global-history failures must not prevent operational recovery.
+
+Global history is not used to reconstruct operational state, determine the next revision, or restore repetition history.
+
+Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries.
 
 ### Persistent state versioning
 
-Persistent state must carry sufficient format information to distinguish compatible and incompatible representations.
+Persistent operational state uses an explicitly versioned representation.
 
-Changes to persisted state structures require explicit compatibility consideration.
+Version 3 is the initial supported format for the revised persistence model.
 
-Do not silently interpret incompatible state using an unrelated schema.
+Versions 1 and 2 are unsupported. They must produce a clear compatibility error without modifying the existing file.
 
-Migration facilities should be added when a real format change requires them, rather than implementing speculative migration infrastructure in advance.
+No migration implementation is required for these pre-release development formats.
 
-### Version 0.1 state file
+Existing development state may be explicitly archived or deleted before starting the revised application.
 
-The implementation stores the complete committed selection state in one UTF-8 JSON file. Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload. Format version 2 includes `revision`, the current self-contained `snapshot`, an ordered `global_history` array, sorted `repetition_history` identities, and `highest_reveal_stage`. The snapshot embeds the selected font bytes as base64 together with its stable identifier and content digest; resolved presentation metadata, reveal schedule, layout, and scheduling context are stored with it. Reveal progress is stored outside the immutable snapshot and belongs to the selection identified by the payload's revision.
+Future format changes must consider compatibility deliberately. Migration facilities should be introduced only when a supported release or demonstrated requirement makes them necessary.
 
-Format version 1 stored reveal progress inside the snapshot. This pre-release format is explicitly unsupported by the version 2 reader: it raises `UnsupportedStateVersionError` without rewriting the file. There is no automatic migration or reset. Preserve an older file for inspection rather than treating it as an uninitialized installation.
+### Version 0.1 operational state file
 
-The configured state-file path must be absolute. A missing state file represents an uninitialized installation; malformed, incomplete, checksum-invalid, inconsistent, or unsupported state raises a recovery error and is never replaced automatically.
+The authoritative operational state is stored in one UTF-8 JSON file.
 
-Each `SelectionProposal` carries the base state revision supplied to `select_quotation`. The caller must obtain the revision and repetition history from the same recovered state, then pass that revision when producing the proposal. Commit accepts only the currently stored revision, except for an exact retry of that commit when the current revision is exactly one generation newer. Revisions are chronological commit generations; display dates may repeat or move backward after clock adjustments and are not history keys.
+Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload.
 
-The store assumes one writer at a time. Revision checks reject stale proposals and reveal-progress updates but are not a cross-process compare-and-swap; callers must serialize all writes from multiple threads or processes that share a state path. No general locking or transaction framework is provided.
+Format version 3 contains:
 
-Selection commitment and reveal advancement use the same complete-state publication mechanism. It writes a unique temporary file in the state file's directory, flushes and synchronizes its contents, then publishes it with `os.replace`. On POSIX, the implementation synchronizes parent-directory metadata when it creates the state directory and synchronizes the containing directory after replacement. The temporary and final files therefore share a filesystem, and the rename is the single publication point: a failure before replacement leaves the prior file authoritative; after replacement, the complete new state is authoritative. Temporary files are not recovery candidates.
+- `revision`: the positive, monotonically increasing committed selection revision;
+- `snapshot`: the current committed daily snapshot;
+- `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
+- `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The file synchronization and atomic replacement use Python's standard filesystem facilities. POSIX directory synchronization strengthens persistence of the replacement across sudden power loss. The standard-library implementation does not synchronize directory metadata on Windows, so power-loss durability of the directory entry is weaker there; filesystem and storage-device guarantees still apply on every platform. If directory synchronization fails after replacement, the commit reports that publication occurred; callers must reload state before deciding whether to retry.
+The snapshot contains the selected quotation, normalized identity, selected font identifier, presentation metadata, reveal schedule, layout, and scheduling context.
 
-`PersistentStateStore.commit(proposal, snapshot, initial_reveal_stage=0)` initializes each new selection's progress independently of its predecessor. An idempotent selection retry returns the current state, preserving any subsequent progress rather than reapplying the initial stage.
+The snapshot does not contain font-file bytes or font-content digests.
 
-`PersistentStateStore.advance_reveal_progress(expected_revision, stage)` reloads the authoritative state and requires a positive integer revision matching the current committed selection. Missing state and stale revisions raise `StateCommitError` without publishing anything. The stage and initial stage must be nonnegative integers; booleans and other types raise `ValueError`. Stages are ordinal progress values supplied by the caller; storage does not interpret schedules or derive stages from the clock.
+Global selection history is not included in the operational-state document.
 
-Advancement replaces only `PersistentState.highest_reveal_stage`. It preserves the complete snapshot, both histories, and the chronological selection revision. Requests for the current or an earlier stage return the unchanged state without rewriting the file. These no-op requests still synchronize directory metadata on POSIX, so an idempotent retry can confirm durability after an earlier published update. Publication and durability failures use the same `StateCommitError.published` reporting as selection commitment; reload with `load()` to recover the authoritative state before retrying.
+The configured state-file path must be absolute.
+
+A missing state file represents an uninitialized installation. Malformed, incomplete, inconsistent, checksum-invalid, or unsupported state raises a recovery error and is never replaced automatically.
+
+### Selection revisions and commitment
+
+Each `SelectionProposal` carries the base state revision supplied to `select_quotation`.
+
+The caller obtains the base revision and repetition history from the same recovered operational state.
+
+A successful new selection uses `current_revision + 1`. The initial selection uses revision 1.
+
+Revisions are assigned from operational state, never from the number or contents of global-history records.
+
+Display dates may repeat or move backward after clock adjustments and are not revision keys.
+
+Commit accepts a proposal only when its base revision matches the current operational revision, except for an exact idempotent retry of an already published selection.
+
+An idempotent retry preserves any subsequent reveal progression and does not commit another selection.
+
+The store assumes one writer at a time. Revision checks reject stale proposals and reveal-progress updates but are not a cross-process compare-and-swap. Callers must serialize concurrent writes sharing the same state path.
+
+No general locking or transaction framework is required.
+
+### Repetition-history cleanup
+
+Before selecting a quotation from a successfully loaded and validated complete content library, derive the set of normalized identities belonging to every quotation in that library.
+
+Intersect the persisted repetition history with those identities.
+
+Use the resulting collection for repetition-aware selection.
+
+The cleanup must consider every quotation in the complete library, regardless of current eligibility, specificity, priority, or font availability.
+
+Do not prune repetition history using a partially loaded, unavailable, or invalid content library.
+
+Persist the cleaned repetition history as part of the next successful selection commitment.
+
+A separate startup write, maintenance service, or periodic pruning task is not required.
+
+### Operational-state publication
+
+Selection commitment and reveal advancement use the same complete-state publication mechanism.
+
+Write a unique temporary file in the state file's directory, flush and synchronize its contents, then publish it with `os.replace`.
+
+On POSIX, synchronize applicable parent-directory metadata after replacement.
+
+Temporary files are not recovery candidates.
+
+The temporary and final files share a filesystem, and replacement is the single operational-state publication point.
+
+The standard-library implementation does not synchronize directory metadata on Windows, so directory-entry durability across sudden power loss is weaker there.
+
+If directory synchronization fails after replacement, the operation reports that publication occurred. Callers must reload authoritative state before deciding whether to retry.
+
+`PersistentStateStore.commit(proposal, snapshot, initial_reveal_stage=0)` initializes reveal progress for a new selection independently of its predecessor.
+
+`PersistentStateStore.advance_reveal_progress(expected_revision, stage)` requires the current committed revision and accepts nonnegative integer stage ordinals.
+
+Missing state and stale revisions raise a state-commit error without publishing a change.
+
+Reveal advancement replaces only `highest_reveal_stage`. It preserves the complete snapshot, repetition history, and selection revision.
+
+Requests for the current or an earlier stage do not advance progress or rewrite the state document.
+
+Publication failures retain the existing reporting distinction between failure before replacement and failure after publication.
+
+### Global-history storage
+
+Global selection history is maintained separately from authoritative operational state.
+
+Use append-only UTF-8 JSON Lines (JSONL), containing one complete JSON object per recorded selection event.
+
+Each record includes:
+
+- the committed selection revision;
+- the logical display date;
+- the UTC timestamp of the selection event;
+- the selected quotation's original text;
+- its normalized repetition identity;
+- the selected font identifier.
+
+Records must not contain embedded font files or rendered images.
+
+Use compact JSON serialization, with each record terminated by a newline.
+
+The application must not read global history to determine current selection state, repetition eligibility, scheduling, or the next revision.
+
+Global-history recording occurs only for committed selection events, not reveal updates or display refreshes.
+
+### Global-history retention and rotation
+
+Use size-based rotation for global-history files.
+
+The default maximum segment size is 1 MiB (1,048,576 bytes).
+
+The default total retention allowance is 20 MiB, represented by one active segment and up to 19 rotated segments.
+
+The active segment contains the newest records. Rotated segments retain older records in chronological order, with the oldest retained segment removed when necessary to maintain the configured segment count.
+
+Rotation occurs between complete records, never within a JSONL record.
+
+Before appending a record that would exceed the active segment's size limit, rotate the active segment.
+
+A single record exceeding the configured segment limit cannot be recorded in that segment and must produce a diagnostic without affecting the committed selection.
+
+Segment size and retention count must be configurable without introducing a dependency on an external logging or database service.
+
+Rotation must not modify authoritative operational state or reset selection revisions.
+
+### Global-history failure handling
+
+Global-history recording is best-effort.
+
+Failure to open, append, flush, rotate, or retain a history segment must produce a diagnostic but must not invalidate a committed selection or prevent ordinary display operation.
+
+An interrupted append may leave an incomplete trailing record. History-reading tools must distinguish such records from complete valid events without affecting application recovery.
+
+The history format does not promise transactional consistency with operational state.
+
+A missing historical record after an interruption is acceptable.
+
+Normal operation should avoid recording the same committed selection repeatedly during ordinary retries or restarts, but no cross-file exactly-once transaction is required.
+
+Global-history storage assumes one writer at a time. Concurrent writers sharing the same history directory require external coordination.
+
+History rotation and retention apply only to global-history files. They do not delete the current prepared images or any future calendar presentation archive.
 
 ### Prepared image files
 
@@ -486,7 +625,15 @@ The internal layout is:
 
 The suffix is a random filesystem transaction name, not a second snapshot or artifact-set identity. A revision directory has one authoritative manifest pointing to one immutable image directory. This indirection permits atomic replacement of an existing complete set using standard file replacement on both POSIX and Windows, without attempting to replace a nonempty directory. Every stage is an independently readable, complete lossless PNG. Supported modes are `1`, `L`, `LA`, `RGB`, and `RGBA`; dimensions must match the committed snapshot's `layout.image_size`, and every stage must have the same mode. No image conversion or resizing occurs.
 
-The version 1 UTF-8 JSON manifest contains an `artifacts` object and its canonical JSON SHA-256 checksum. Metadata records `format_version`, `revision`, `snapshot_sha256`, the relative `image_directory`, `image_size`, `mode`, and an ordered `stages` array containing exact filenames and PNG-file SHA-256 digests. The snapshot fingerprint covers quotation text and identity, font identifier and exact font-content digest, all presentation metadata, reveal schedule, layout, and complete scheduling context. It excludes reveal progress and selection histories. A revision reused after state replacement therefore does not suffice to establish snapshot association. Checksums detect accidental damage; they do not authenticate files against a malicious writer.
+
+The version 1 UTF-8 JSON manifest contains an `artifacts` object and its canonical JSON SHA-256 checksum. Metadata records `format_version`, `revision`, `snapshot_sha256`, the relative `image_directory`, `image_size`, `mode`, and an ordered `stages` array containing exact filenames and PNG-file SHA-256 digests.
+
+The snapshot fingerprint covers quotation text and identity, the selected font identifier, presentation metadata, reveal schedule, layout, and complete scheduling context. It excludes reveal progress, repetition history, and global history.
+
+The fingerprint does not include font-file contents or font-content hashes. Changes to installed font resources do not independently invalidate existing prepared images.
+
+A revision reused after state replacement does not suffice to establish snapshot association. Checksums detect accidental damage; they do not authenticate files against a malicious writer.
+
 
 Loading rejects missing metadata, unsupported or inconsistent manifest fields, checksum failures, snapshot mismatches, unexpected stage sequences/counts or extra payload entries, incorrect dimensions/modes, non-PNG or multi-frame images, unreadable files, and PNG verification/decoding failures. Manifest-derived paths must match fixed owned names, not arbitrary paths. Files and directories must be real regular files/directories rather than symbolic links or junctions, including ancestors of the artifact root. Validation checks and closes each decoded stage before proceeding to the next; the returned handle retains only metadata and paths. Individual stage loading revalidates the file rather than trusting earlier validation.
 
@@ -524,23 +671,33 @@ Font-selection and fallback behavior are defined in `docs/ARCHITECTURE.md`.
 
 Validate registered font files when loading application configuration.
 
-Validation must establish that each file exists, is readable, and can be loaded by the renderer.
+Validation must establish that each registered file exists, is readable, and can be loaded by the renderer.
 
 Report unavailable content-entry font preferences during content-library loading rather than repeatedly during daily selection or scheduling.
 
 Use a controlled random source for deterministic testing of automatic font selection.
 
-Resolve the selected font before committing the daily snapshot.
+Resolve the selected font identifier before committing the daily snapshot.
 
-Pass the resolved font to the renderer through the committed presentation configuration.
+Store the selected font identifier in the snapshot, not the font bytes, filesystem path, or content digest.
 
-Do not independently select or substitute fonts during rendering, image regeneration, or scheduled display updates.
+During image preparation, resolve that identifier against the effective font registry.
 
-Preserve sufficient information to identify and validate the committed font during recovery.
+If the selected font is available and loadable, use it.
 
-A font registry identifier or filesystem path alone does not guarantee that the underlying font file remains unchanged after configuration updates.
+If the selected font is unavailable or unusable during regeneration, choose an available bundled fallback using a deterministic order.
 
-If the committed font is unavailable during recovery, retain valid prepared images and report the problem rather than silently changing the presentation.
+Resolve the effective font once for each complete image-preparation operation and use that font for every reveal stage prepared together.
+
+Do not independently select fonts for individual reveal stages.
+
+Do not alter the committed snapshot or stored font identifier when regeneration uses a fallback.
+
+Existing valid prepared images remain reusable even when the selected font file has changed or become unavailable.
+
+If no usable bundled fallback exists, report an actionable preparation error.
+
+Font substitution during regeneration may change the rendered appearance, including line wrapping or typography. It must not change the committed quotation, metadata, reveal schedule, or layout configuration.
 
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
