@@ -38,6 +38,7 @@ The first release should be useful in normal household operation without dependi
 - Validate the content library and provide actionable diagnostics.
 - Support local content authoring without a content-management application.
 
+
 ### Daily content selection
 
 - Select one eligible quotation per logical display day.
@@ -45,12 +46,17 @@ The first release should be useful in normal household operation without dependi
 - Support ordinary and date-specific eligibility with absolute specificity precedence.
 - Apply repetition avoidance before priority-based selection.
 - Select randomly among equally eligible, highest-priority quotations.
-- Maintain a permanent chronological history of committed quotations.
+- Maintain a chronological history of committed quotation selections with configurable bounded retention.
 - Maintain separate, resettable repetition history that prevents quotation reuse until the applicable selection pool is exhausted.
 - Reset only the affected repetition pool without discarding unrelated repetition history.
+- Remove obsolete repetition identities when selecting from a successfully validated content library.
 - Preserve selections and reveal progression through application restarts and clock adjustments.
-- Commit a complete, self-contained daily presentation snapshot independently of the content library.
-- Ensure that a committed selection and its corresponding history updates remain consistent across failures.
+- Commit a durable daily presentation snapshot independently of the original content entry.
+- Preserve the selected font identifier without requiring font-file contents to be embedded in persistent state.
+- Recover missing prepared images using available font resources, including a bundled fallback when necessary.
+- Ensure that committed operational state remains consistent across failures, independently of global-history recording.
+- Maintain monotonically increasing selection revisions independently of historical-log retention.
+
 
 ### Progressive reveals
 
