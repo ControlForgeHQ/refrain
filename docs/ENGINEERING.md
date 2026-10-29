@@ -775,6 +775,8 @@ Avoid overlapping display operations.
 
 Classify failures sufficiently to support meaningful diagnostics and bounded recovery.
 
+`DisplayBackendError.recoverable` defaults to true. Backends mark errors nonrecoverable when the active instance cannot safely accept another update (for example, a closed window or disabled hardware transport). The continuous coordinator retries recoverable errors on the active backend but terminates and releases it on a nonrecoverable error; it never implements hardware-specific reinitialization.
+
 Distinguish failures occurring before presentation, failures during presentation, and uncertain outcomes when the underlying implementation permits.
 
 Use bounded retry behavior rather than unrestricted rapid retry loops.

@@ -243,8 +243,9 @@ def test_close_is_repeatable_releases_port_and_rejects_updates() -> None:
 
     with pytest.raises(OSError):
         request(port)
-    with pytest.raises(DisplayBackendUpdateError, match="closed"):
+    with pytest.raises(DisplayBackendUpdateError, match="closed") as failure:
         backend.update(Image.new("RGB", (1, 1)))
+    assert not failure.value.recoverable
 
     replacement = ImageServerDisplayBackend(port=port)
     replacement.close()

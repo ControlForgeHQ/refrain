@@ -83,9 +83,9 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
-## Running the initial application workflow
+## Running Refrain
 
-`python -m refrain` performs one startup and presentation cycle. All three locations are required and are never inferred from a user's home directory or installation layout:
+`python -m refrain` runs continuously, automatically presenting progressive reveals and selecting new quotations at observed display-day boundaries. All three locations are required and are never inferred from a user's home directory or installation layout:
 
 ```sh
 .venv/bin/python -m refrain \
@@ -98,9 +98,31 @@ Bundled fonts are package resources, not paths relative to the current directory
 - `--state` is the persistent selection-state file. It is created on first use, and its parent directory is created if needed.
 - `--artifacts` is the directory for derived prepared images. It is separate from state and content and may be regenerated from committed state.
 
-With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot, prepares the reveal images, and presents the stage required at the current time. With existing state, it preserves the committed selection, even when the calendar date has changed or the content library is unavailable, reuses valid prepared images (regenerating missing or invalid ones), and presents the currently required stage. A command-line failure exits with status 1 and an explanatory message; a failure after selection commitment never causes reselection.
+With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot and histories, prepares the reveal images, and presents the stage required at the current time. With existing state, it recovers the committed selection without needing its original content library and reuses valid prepared images (regenerating missing or invalid ones). Missed reveals advance directly to the latest required stage; backward clock adjustments never hide information already revealed.
 
-This workflow is one-shot. It does not wake at display-day boundaries, select a new daily quotation, retry failed display updates, or run unattended. The `waveshare-13in3-e` panel retains its image after the command exits. The `window` and `image-server` backends only exist while the process runs, so the command keeps the display open until you press Ctrl+C and releases it on exit; the `image-server` stops serving at that point.
+The continuous runtime keeps one display backend active across updates. It waits interruptibly for scheduling events, periodically checking for wall-clock adjustments, and retries recoverable content, storage, preparation, and display failures with monotonic delays increasing from 1 to at most 60 seconds. A failed presentation never causes reselection. Invalid application configuration or corrupted authoritative state terminates with status 1 rather than retrying indefinitely. Configuration is loaded once; content is reloaded only when a new selection is needed. After recovering the active image set, the coordinator removes obsolete revision artifacts using the store's coordinated cleanup; the active revision is retained.
+
+Press Ctrl+C or send SIGTERM to stop. Shutdown interrupts scheduling and retry waits, releases the backend, and preserves state and prepared images without intentionally clearing retained e-paper content. The `window` and `image-server` backends remain operational throughout execution and close on shutdown; HTTP serving stops at that point. Synchronous preparation or display operations finish before shutdown can release their resources. Physical panel behavior still requires hardware validation.
+
+If a backend reports that its instance cannot safely recover (such as a closed desktop window or disabled Waveshare transport), the application releases it and exits with status 1 rather than retrying an unusable instance. The committed selection remains available for restart.
+
+### One-shot startup and diagnostics
+
+Add `--once` to run only the startup-and-presentation workflow:
+
+```sh
+.venv/bin/python -m refrain \
+  --config examples/config.yaml \
+  --state /path/to/refrain/state.json \
+  --artifacts /path/to/refrain/artifacts \
+  --once
+```
+
+One-shot execution does not schedule future updates or retry failures. For `window` and `image-server`, it holds the initial presentation open until Ctrl+C; the Waveshare panel retains its image after the command exits. The Python API also preserves `run_startup(...)` for one-shot use and exposes `run_application(..., shutdown_event=event)` for continuous operation with an explicit `threading.Event`.
+
+### Recovery limitation
+
+Boundary observations exist only during the current process lifetime. After an interruption spanning a display-day transition, the stored scheduling context and an isolated startup timestamp cannot reliably distinguish a missed transition from a clock correction. Recovery therefore conservatively retains the committed selection, presenting its latest required reveal stage, until a subsequent boundary is actually observed. During continuous execution, a forward jump across several display days selects only for the currently appropriate date; a backward correction preserves the current selection until a newly observed boundary. See [boundary recognition](docs/ARCHITECTURE.md#boundary-recognition).
 
 ## Display backend selection
 

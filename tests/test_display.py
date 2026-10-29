@@ -172,8 +172,9 @@ def test_updates_after_close_are_rejected(monkeypatch: pytest.MonkeyPatch) -> No
     backend = WindowDisplayBackend()
     backend.close()
 
-    with pytest.raises(DisplayBackendUpdateError, match="closed desktop display"):
+    with pytest.raises(DisplayBackendUpdateError, match="closed desktop display") as failure:
         backend.update(Image.new("RGB", (1, 1)))
+    assert not failure.value.recoverable
 
 
 def test_window_manager_close_is_clean_and_updates_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,8 +185,9 @@ def test_window_manager_close_is_clean_and_updates_are_rejected(monkeypatch: pyt
     backend.close()
 
     assert roots[0].destroyed
-    with pytest.raises(DisplayBackendUpdateError, match="closed desktop display"):
+    with pytest.raises(DisplayBackendUpdateError, match="closed desktop display") as failure:
         backend.update(Image.new("RGB", (1, 1)))
+    assert not failure.value.recoverable
 
 
 def test_gui_initialization_failure_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
