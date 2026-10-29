@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date, time
 from pathlib import Path
 
@@ -444,6 +445,32 @@ def test_malformed_yaml_file_does_not_prevent_valid_content(tmp_path: Path, capl
     assert [entry.id for entry in entries] == ["valid-entry"]
     assert str(malformed) in caplog.text
     assert "this file is excluded" in caplog.text
+
+
+def test_unchanged_content_warning_is_repeated_after_file_changes_and_is_rejected_again(tmp_path: Path, caplog) -> None:
+    write_entry(tmp_path / "valid.yaml", entry_data(id="valid-entry"))
+    broken = tmp_path / "broken.yaml"
+    broken_contents = yaml.safe_dump(entry_data(unknown=True), sort_keys=False)
+    broken.write_text(broken_contents, encoding="utf-8")
+    initial_mtime = broken.stat().st_mtime_ns
+
+    load_content_library(tmp_path)
+    first_warning_count = caplog.text.count(str(broken))
+    assert first_warning_count == 1
+
+    caplog.clear()
+    write_entry(broken, entry_data(id="corrected-entry"))
+    load_content_library(tmp_path)
+    assert str(broken) not in caplog.text
+
+    caplog.clear()
+    broken.write_text(broken_contents, encoding="utf-8")
+    broken_stat = broken.stat()
+    broken_mtime = max(broken_stat.st_mtime_ns, initial_mtime + 1_000_000_000)
+    os.utime(broken, ns=(broken_stat.st_atime_ns, broken_mtime))
+    load_content_library(tmp_path)
+
+    assert caplog.text.count(str(broken)) == 1
 
 
 @pytest.mark.parametrize("reverse", [False, True])

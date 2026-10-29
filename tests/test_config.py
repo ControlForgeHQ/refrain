@@ -268,6 +268,25 @@ def test_mixed_user_font_registrations_keep_only_usable_fonts(tmp_path: Path, ca
     assert "excluded" in caplog.text
 
 
+def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, caplog) -> None:
+    config_data = configuration_data(
+        general={"timezone": "UTC", 1: "ignored", "unknown": "ignored"},
+        layout={
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "fonts": {"default": ["lora"], "available": {1: "ignored.ttf"}},
+            "text": {"min_font_size": 28, "max_font_size": 100},
+        },
+    )
+    config = load_application_config(write_config(tmp_path / "config.yaml", config_data))
+
+    assert config.timezone.key == "UTC"
+    assert config.default_fonts == ("lora",)
+    assert 1 not in config.fonts
+    assert "general[1]" in caplog.text
+    assert "layout.fonts.available[1]" in caplog.text
+    assert "ignored" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("region", "expected_field"),
     [

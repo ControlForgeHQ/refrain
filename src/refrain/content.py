@@ -111,7 +111,7 @@ def _diagnose(diagnostics: list[ContentDiagnostic], file: Path, field: str, mess
 
 
 @lru_cache(maxsize=2048)
-def _log_diagnostic_once(message: str, level: int) -> None:
+def _log_diagnostic_once(message: str, level: int, file_state: tuple[int, int] | None) -> None:
     _LOGGER.log(level, "%s", message)
 
 
@@ -119,7 +119,12 @@ def _log_diagnostic(diagnostic: ContentDiagnostic, level: int) -> None:
     message = str(diagnostic)
     if level == logging.WARNING and "excluded" not in diagnostic.message:
         message += "; this entry is excluded"
-    _log_diagnostic_once(message, level)
+    try:
+        stat = diagnostic.file.stat()
+        file_state = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        file_state = None
+    _log_diagnostic_once(message, level, file_state)
 
 
 def _validate_calendar_rule(

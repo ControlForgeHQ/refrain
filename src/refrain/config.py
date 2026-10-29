@@ -121,9 +121,15 @@ class ApplicationConfiguration:
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
-    for key in sorted(value.keys() - allowed):
+    unknown_keys = value.keys() - allowed
+    for key in sorted(unknown_keys, key=lambda item: (type(item).__name__, repr(item))):
+        key_field = (
+            f"{field}.{key}"
+            if isinstance(key, str) and field
+            else (key if isinstance(key, str) else f"{field}[{key!r}]")
+        )
         report(
-            f"{field}.{key}" if field else key,
+            key_field,
             "is not a supported configuration field; it is ignored",
             logging.WARNING,
         )
@@ -199,7 +205,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     try:
         contents = file.read_text(encoding="utf-8")
-        data = load_yaml(contents)
+        data = load_yaml(contents, allow_non_string_keys=True)
     except (OSError, UnicodeError) as error:
         report("$", f"cannot read UTF-8 YAML file: {error}", logging.ERROR)
         finish_diagnostics()
@@ -412,9 +418,13 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             font_registry[identifier] = FontResource(identifier=identifier, path=resource, bundled=True)
 
     for identifier, path_value in available_data.items():
-        field = f"layout.fonts.available.{identifier}"
-        if not identifier:
-            report("layout.fonts.available", "font identifiers must be nonempty strings; this registration is ignored")
+        field = (
+            f"layout.fonts.available.{identifier}"
+            if isinstance(identifier, str)
+            else f"layout.fonts.available[{identifier!r}]"
+        )
+        if not isinstance(identifier, str) or not identifier:
+            report(field, "font identifiers must be nonempty strings; this registration is ignored")
             continue
         if identifier in _BUNDLED_FONT_FILES:
             report(field, f"identifier {identifier!r} is reserved for a bundled font; this registration is ignored")
