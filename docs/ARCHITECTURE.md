@@ -579,112 +579,130 @@ The random results of an uncommitted selection, including font selection, are no
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
 
+
 ## Persistent state
 
 ### Required persistence
 
-Refrain maintains sufficient durable state to preserve:
+Refrain maintains sufficient durable operational state to preserve:
 
-- the current committed daily selection;
+- the current committed daily selection and its monotonically increasing revision;
 - the display date associated with that selection;
 - the selected quotation's original text;
-- the complete resolved presentation metadata;
+- the resolved presentation metadata and font identifier;
 - the reveal schedule applicable to the selection;
 - relevant layout configuration;
-- permanent global selection history;
-- resettable repetition history;
+- active repetition history;
 - the highest reveal stage reached for the current selection;
 - scheduling context required to recover correctly after clock adjustments.
 
-The current daily snapshot must be self-contained.
+Refrain separately maintains a chronological global history of selection events.
+
+Operational state is authoritative for selection, scheduling, reveal progression, and recovery. Global history is historical information and is not required for normal operation.
 
 After commitment, the active presentation must not require access to the original YAML content entry.
 
 ### Daily snapshot
 
-The daily snapshot contains a complete copy of the selected quotation and all information needed to prepare every reveal stage.
+The daily snapshot contains a complete copy of the selected quotation and the committed presentation settings needed to prepare every reveal stage.
 
 It includes only the selected quotation from its containing content entry, not the entry's other quotations.
 
-The snapshot contains the selected quotation, available source and attribution, resolved font, effective presentation style, reveal schedule, and presentation configuration required for rendering.
+The snapshot contains the selected quotation, available source and attribution, selected font identifier, effective presentation style, reveal schedule, and presentation configuration required for rendering.
 
 Font selection occurs before the daily snapshot is committed.
 
 An entry's explicit font preference is used when the font is available in the configured registry. Otherwise, the presentation uses a font selected from the configured default pool according to the content-format specification.
 
-The resolved font and presentation style remain fixed throughout the committed display day.
+The selected font identifier and presentation settings remain fixed throughout the committed display day.
 
-The snapshot must contain resolved values rather than references to mutable content-library entries or configuration that may subsequently change.
+The snapshot contains resolved presentation values rather than references to mutable content-library entries or configuration that may subsequently change.
+
+The snapshot does not contain font file contents or font file hashes.
 
 The snapshot is immutable after commitment.
 
-The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. A regenerated presentation must retain the same content, effective style, font, and presentation configuration.
+The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. Regeneration preserves the selected content, reveal schedule, and committed presentation settings. Font resources are resolved at preparation time and may differ from those originally used if an installed font has changed or become unavailable.
 
-Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or resolved presentation configuration.
+Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or committed presentation configuration.
 
 ### Global history
 
-Global history is a chronological record of committed quotation selections.
+Global history is a chronological record of committed quotation selection events, independent of authoritative operational state.
 
-Each selection records:
+Each record identifies the selection revision and logical display date and preserves:
 
 - the selected quotation text;
 - its normalized repetition identity;
-- the font actually selected for its presentation.
+- the selected font identifier;
+- the time at which the selection was made.
+
+Selection revisions increase monotonically and are maintained in operational state. They are not derived from global-history records.
+
+Global history records selection events rather than unique display dates. Multiple selections associated with the same logical display date remain distinct records, including selections resulting from clock adjustments.
 
 Global history is independent of the containing entry's identifier, source, attribution, priority, and eligibility rules for repetition purposes.
 
-The selected font is historical presentation metadata. It does not participate in quotation identity or repetition tracking.
+The selected font identifier is historical presentation metadata. It does not participate in quotation identity or repetition tracking.
 
-Global history is append-only during normal operation.
+Global history is append-only during normal recording. Recorded events are not modified or removed when repetition pools are exhausted.
 
-Its records are not removed or rewritten when repetition pools are exhausted.
+Global history has configurable bounded retention. Older records may be discarded according to the configured retention policy without affecting operational state or future selection revisions.
 
-Global history provides a permanent record of Refrain's selection decisions, including the typography used for each committed presentation.
+Global-history recording is best-effort. Failure to record an event must be reported but must not invalidate an otherwise committed selection, prevent image preparation, or stop ordinary presentation.
 
-A quotation and its selected font are recorded when the daily selection is committed, not when the display backend confirms a physical refresh.
+An interruption may result in a missing or incomplete historical record. Global-history completeness is not a prerequisite for application recovery.
+
+Global history is not consulted to determine quotation eligibility, repetition, scheduling, or the next selection revision.
 
 ### Repetition history
 
 Repetition history contains normalized identities of quotations consumed within active selection cycles.
 
-It is persistent across application restarts.
+It is maintained in authoritative operational state and persists across application restarts.
 
 Unlike global history, repetition history may have identities removed when the currently eligible highest-specificity pool becomes exhausted.
 
 A reset removes only the identities corresponding to quotations in that pool.
 
-Repetition history must not be independently reconstructed from the entire permanent global history after each restart, since doing so would reverse intentional pool resets.
+When Refrain successfully loads and validates the complete content library for a new selection, it may also remove repetition identities no longer present in that library.
+
+This cleanup considers all quotations in the validated library, independently of current date eligibility, specificity, priority, or font availability.
+
+An incomplete, unavailable, or invalid content library must not cause repetition-history pruning.
+
+Repetition-history cleanup may be incorporated into the next selection commitment. It does not require a separate maintenance operation or periodic background service.
+
+Repetition history must not be reconstructed from global history after each restart, since doing so would reverse intentional pool resets and introduce a dependency on historical-log retention.
 
 ### Selection commitment
 
-Selection commitment is the durable recording of:
+Selection commitment establishes a new authoritative operational-state revision containing:
 
 - the complete daily snapshot;
-- the corresponding append to global history;
 - the updated repetition history;
-- the identity and scheduling context of the committed selection.
+- the identity and scheduling context of the committed selection;
+- initial reveal progression.
 
-These changes form one logical transaction.
+These values form one consistent operational-state update.
 
-A selection is authoritative only when the complete transaction has succeeded.
+A new selection revision is derived from the preceding operational-state revision, independently of global history.
 
-An interrupted transaction must recover to a consistent state in which either:
+An interrupted operational-state update must recover to either the preceding valid selection or the newly committed selection.
 
-- the previous committed state remains authoritative; or
-- the new snapshot and all corresponding history updates are authoritative.
+A partially written or invalid snapshot must not be treated as a completed selection.
 
-A partially committed snapshot must not be treated as a completed daily selection.
+Once an operational selection has been committed, failure to prepare images, update the display, or append global history must not cause the same selection to be committed again.
 
-History must not record a selection without its corresponding committed snapshot.
+Global-history recording follows successful selection commitment but is not part of the authoritative operational-state transaction.
 
-The persistence mechanism must provide adequate protection against incomplete writes and interrupted replacement.
+The persistence mechanism must provide reasonable protection against incomplete writes and interrupted replacement.
 
-The exact storage format and transaction implementation belong to engineering.
+The exact storage formats, rotation mechanics, and persistence operations belong to engineering.
 
 ### Prepared images
 
-After selection commitment, Refrain generates every required reveal-stage image from the committed snapshot.
+After selection commitment, Refrain generates every required reveal-stage image from the committed snapshot and available font resources.
 
 Prepared images are persisted on disk.
 
@@ -694,40 +712,71 @@ Prepared images must remain associated with the snapshot from which they were ge
 
 A complete, valid set of prepared images should be reused after application restart.
 
-Missing, damaged, or incomplete prepared images must be regenerated from the committed snapshot.
+Missing, damaged, or incomplete prepared images must be regenerated using the committed snapshot and the currently available font resources.
 
-Regeneration must not trigger a new daily selection or alter selection history.
+If the snapshot's selected font identifier is unavailable or unusable, regeneration may use a supported bundled fallback font.
+
+The same resolved font must be used for every stage prepared together. Font fallback must not introduce different typography between stages of the same prepared presentation.
+
+Regeneration must not trigger a new daily selection or alter repetition or global history.
 
 The runtime must not require all prepared images to remain decoded in memory.
 
 ### Recovery and missing content
 
-On startup, Refrain first attempts to recover the committed selection.
+On startup, Refrain first attempts to recover the committed operational selection.
 
 The content library does not override a valid committed snapshot.
 
 If the original YAML entry has been removed, renamed, or modified, the current selection remains unchanged.
 
-Missing or invalid original content does not prevent recovery when the committed snapshot is valid.
+Missing or invalid original content does not prevent recovery when the committed snapshot is valid and its presentation resources can be resolved.
 
-If selection commitment was interrupted, Refrain must recover the last consistent state and repeat selection when necessary.
+If selection commitment was interrupted, Refrain must recover the last valid operational state and repeat selection when necessary.
 
 If rendering or image persistence was interrupted after commitment, Refrain resumes or repeats preparation using the same committed snapshot.
 
-If the snapshot itself is unavailable or invalid, the application must report the failure and must not silently substitute another entry.
+Image regeneration may use a bundled fallback font if the selected font is no longer available. Exact pixel reproduction is not required when font resources have changed.
+
+If no usable font resource can be resolved, the application must report the preparation failure rather than silently substitute an arbitrary system font.
+
+If the committed snapshot itself is unavailable or invalid, the application must report the failure and must not silently substitute another quotation.
+
+Missing, damaged, or inaccessible global history must not prevent operational recovery.
 
 The existing physical e-paper image should be preserved when recovery cannot safely complete.
 
+### Calendar presentation archive
+
+A future calendar presentation archive may preserve the fully revealed presentation image and associated metadata for previously selected display dates.
+
+Calendar history and global history serve different purposes.
+
+Global history records every committed selection event in chronological order, including multiple selections for the same logical display date.
+
+Calendar history provides at most one current archived presentation for each logical display date. When a later committed selection uses a previously recorded display date, that selection supersedes the earlier calendar presentation for that date.
+
+A calendar presentation is associated with the revision that produced it.
+
+The calendar archive is independent of active selection, repetition history, and global-history retention.
+
+Its records need not contain embedded font resources or complete rendering snapshots when the final prepared image and relevant presentation metadata are retained.
+
+Calendar archive publication, retrieval, storage, and retention are deferred until the corresponding interface capability is implemented.
+
 ### Persisted and derived state
 
-Persistent state owns:
+Authoritative operational state owns:
 
-- committed selection decisions;
-- global selection history;
+- the current committed selection and its monotonically increasing revision;
 - active repetition history;
-- immutable daily content snapshots;
+- the immutable daily content snapshot;
 - monotonic reveal progress;
 - scheduling context needed for recovery.
+
+Global history owns chronological historical selection records but does not determine operational behavior.
+
+Prepared images are derived from the current snapshot and available presentation resources.
 
 The appropriate reveal stage is initially determined by the committed schedule and current time.
 
@@ -740,7 +789,9 @@ The currently required stage is therefore the later of:
 
 Reveal progression must survive application restarts.
 
-Prepared images remain reproducible from the committed snapshot and do not replace it as the source of truth.
+Prepared images remain recoverable from the committed snapshot and available font resources, but pixel-identical reproduction is not guaranteed after changes to installed fonts.
+
+The future calendar archive is a separate historical presentation resource and is not authoritative for the active display.
 
 ## Progressive reveal
 
@@ -962,6 +1013,7 @@ Future styles may control line positioning, spacing, and the arrangement of sour
 
 The initial release does not require additional styles, arbitrary layout scripting, externally supplied style implementations, or a general-purpose styling framework.
 
+
 ### Font selection
 
 Refrain maintains an effective font registry containing bundled application fonts and fonts explicitly registered in application configuration.
@@ -982,9 +1034,17 @@ Each font in the default pool has equal selection probability.
 
 Font selection is independent for each daily selection. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
-The selected font is resolved after quotation selection and before daily snapshot commitment.
+The selected font identifier is resolved after quotation selection and before daily snapshot commitment.
 
-The actual selected font is included in the committed snapshot and permanent global selection history.
+The selected font identifier is recorded in the committed snapshot and global selection history. Font contents and font-content hashes are not persisted in operational state.
+
+Image preparation resolves the selected identifier using the available font registry.
+
+If the selected font is no longer available or usable during regeneration, Refrain uses an available bundled fallback font. Fallback selection is deterministic for a given set of available bundled fonts and is consistent across all stages prepared together.
+
+If no usable bundled fallback exists, preparation fails with an actionable diagnostic.
+
+Existing valid prepared images are not invalidated solely because installed font resources have changed.
 
 ### Stable progressive layout
 
@@ -1022,9 +1082,10 @@ All reveal stages use the same resolved composition layout.
 
 Content that cannot be rendered legibly within the supported presentation region must be handled explicitly rather than silently clipped, truncated, or omitted.
 
+
 ### Committed daily presentation data
 
-A daily snapshot must contain every value needed to reproduce its presentation without consulting current application configuration or the content library.
+A daily snapshot must contain the selected quotation, its presentation metadata, effective reveal schedule, selected font identifier, and resolved layout values needed to prepare the presentation without consulting the original content library or current presentation configuration.
 
 `presentation_metadata` contains optional nonempty `source` and `attribution` strings, plus the required built-in `presentation_style` (`centered` or `left-aligned`). An absent optional field is represented by a missing key or `null`.
 
@@ -1034,9 +1095,16 @@ A daily snapshot must contain every value needed to reproduce its presentation w
 - `presentation_region`: a normalized rectangle with `x`, `y`, `width`, and `height`;
 - `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
 
-The snapshot's existing resolved font contains the exact font bytes used during preparation. Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
+The snapshot stores the selected font identifier, not the font's binary contents or a digest of those contents.
 
-Missing or invalid required presentation data, an unusable embedded font, or a composition that does not fit is a preparation error. Preparation does not change the committed snapshot or persistent selection state.
+Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
+
+Font resources are resolved through the available registry during preparation. If the selected identifier cannot be used, regeneration may use a deterministic bundled fallback while preserving the committed quotation, metadata, reveal schedule, and layout configuration.
+
+Missing or invalid required presentation data, failure to resolve any usable font, or a composition that does not fit is a preparation error.
+
+Preparation does not change the committed snapshot or persistent selection state.
+
 
 ### Complete stage preparation
 
@@ -1058,15 +1126,21 @@ Normal reveal transitions select an existing prepared image. They do not invoke 
 
 The preparation process must not expose incomplete images as valid presentation artifacts.
 
+
 ### Rendering recovery
 
 The committed daily snapshot is the authority for regenerating prepared images.
 
-Missing or invalid prepared images may be regenerated without access to the content library.
+Missing or invalid prepared images may be regenerated without access to the original content library.
 
-Recovery must not change the selected quotation or its reveal schedule.
+Regeneration resolves the selected font identifier through the available font registry and may use a bundled fallback if the originally selected font is unavailable or unusable.
+
+Recovery must not change the selected quotation, presentation metadata, reveal schedule, or committed layout configuration.
+
+Exact pixel reproduction is not required when installed font resources have changed. Existing valid prepared images remain reusable independently of those changes.
 
 If image generation fails, the application must report the error and preserve the existing display image where practical.
+
 
 ### Rendered-image comparison
 
