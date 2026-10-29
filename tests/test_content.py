@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date, time
 from pathlib import Path
 
@@ -105,17 +106,16 @@ def test_entry_identity_does_not_depend_on_file_path(tmp_path: Path) -> None:
     assert first.id == second.id == "stable-entry"
 
 
-def test_duplicate_identifiers_are_rejected_across_files(tmp_path: Path) -> None:
-    write_entry(tmp_path / "first.yaml", entry_data())
+def test_duplicate_identifiers_exclude_all_conflicting_entries(tmp_path: Path) -> None:
+    first = write_entry(tmp_path / "first.yaml", entry_data())
     second = write_entry(tmp_path / "nested" / "second.yaml", entry_data())
 
     diagnostics = diagnostics_for(tmp_path)
 
-    assert len(diagnostics) == 1
-    assert str(second) in diagnostics[0]
-    assert "id" in diagnostics[0]
-    assert "duplicate identifier 'example-entry'" in diagnostics[0]
-    assert "first.yaml" in diagnostics[0]
+    duplicate_diagnostics = [diagnostic for diagnostic in diagnostics if "conflicting duplicate" in diagnostic]
+    assert len(duplicate_diagnostics) == 2
+    assert any(str(first) in diagnostic and str(second) in diagnostic for diagnostic in duplicate_diagnostics)
+    assert all("id" in diagnostic and "excluded" in diagnostic for diagnostic in duplicate_diagnostics)
 
 
 @pytest.mark.parametrize(
@@ -136,7 +136,7 @@ def test_required_identifier_and_unknown_fields_are_validated(
     diagnostics = diagnostics_for(tmp_path)
 
     assert any(f": {field}:" in diagnostic for diagnostic in diagnostics)
-    assert all("entry.yaml" in diagnostic for diagnostic in diagnostics)
+    assert any("entry.yaml" in diagnostic for diagnostic in diagnostics)
 
 
 @pytest.mark.parametrize(
@@ -308,8 +308,8 @@ def test_malformed_or_unsupported_yaml_is_rejected(tmp_path: Path, contents: str
 
     diagnostics = diagnostics_for(tmp_path)
 
-    assert len(diagnostics) == 1
-    assert "entry.yaml: $" in diagnostics[0]
+    assert any("entry.yaml: $" in diagnostic for diagnostic in diagnostics)
+    assert any("no valid quotations" in diagnostic for diagnostic in diagnostics)
 
 
 @pytest.mark.parametrize(
@@ -329,10 +329,9 @@ def test_yaml_scalar_constructor_failures_are_reported_and_other_files_validated
 
     diagnostics = diagnostics_for(tmp_path)
 
-    assert len(diagnostics) == 2
-    assert "a-invalid.yaml: $" in diagnostics[0]
-    assert "invalid YAML scalar" in diagnostics[0]
-    assert "z-invalid.yaml: id:" in diagnostics[1]
+    assert len(diagnostics) == 3
+    assert any("a-invalid.yaml: $" in diagnostic and "invalid YAML scalar" in diagnostic for diagnostic in diagnostics)
+    assert any("z-invalid.yaml: id:" in diagnostic for diagnostic in diagnostics)
 
 
 def test_yaml_syntax_diagnostic_includes_line_and_column(tmp_path: Path) -> None:
@@ -340,9 +339,7 @@ def test_yaml_syntax_diagnostic_includes_line_and_column(tmp_path: Path) -> None
 
     diagnostics = diagnostics_for(tmp_path)
 
-    assert len(diagnostics) == 1
-    assert "entry.yaml: $" in diagnostics[0]
-    assert "line 4, column 1" in diagnostics[0]
+    assert any("entry.yaml: $" in diagnostic and "line 4, column 1" in diagnostic for diagnostic in diagnostics)
 
 
 def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -359,9 +356,7 @@ def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest
 
     diagnostics = diagnostics_for(tmp_path)
 
-    assert len(diagnostics) == 1
-    assert "entry.yaml: $" in diagnostics[0]
-    assert "access denied" in diagnostics[0]
+    assert any("entry.yaml: $" in diagnostic and "access denied" in diagnostic for diagnostic in diagnostics)
 
 
 def test_inaccessible_directory_during_traversal_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -422,23 +417,82 @@ def test_non_utf8_content_file_is_reported(tmp_path: Path) -> None:
 
     diagnostics = diagnostics_for(tmp_path)
 
-    assert len(diagnostics) == 1
-    assert "entry.yaml: $" in diagnostics[0]
-    assert "UTF-8" in diagnostics[0]
+    assert any("entry.yaml: $" in diagnostic and "UTF-8" in diagnostic for diagnostic in diagnostics)
 
 
-def test_invalid_entries_anywhere_reject_the_entire_library(tmp_path: Path) -> None:
+def test_invalid_entries_are_excluded_while_valid_entries_are_retained(tmp_path: Path, caplog) -> None:
     write_entry(tmp_path / "valid.yaml", entry_data(id="valid-entry"))
     nested_invalid_file = tmp_path / "nested" / "invalid.yaml"
     other_invalid_file = tmp_path / "other.yaml"
     write_entry(nested_invalid_file, entry_data(id="invalid id"))
     write_entry(other_invalid_file, entry_data(id="also-invalid", quotations=[""]))
 
-    diagnostics = diagnostics_for(tmp_path)
+    entries = load_content_library(tmp_path)
 
-    assert len(diagnostics) == 2
-    assert any(f"{nested_invalid_file}: id:" in diagnostic for diagnostic in diagnostics)
-    assert any(f"{other_invalid_file}: quotations[0]:" in diagnostic for diagnostic in diagnostics)
+    assert [entry.id for entry in entries] == ["valid-entry"]
+    assert f"{nested_invalid_file}: id:" in caplog.text
+    assert f"{other_invalid_file}: quotations[0]:" in caplog.text
+    assert "this entry is excluded" in caplog.text
+
+
+def test_malformed_yaml_file_does_not_prevent_valid_content(tmp_path: Path, caplog) -> None:
+    write_entry(tmp_path / "valid.yaml", entry_data(id="valid-entry"))
+    malformed = tmp_path / "broken.yaml"
+    malformed.write_text("id: [", encoding="utf-8")
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["valid-entry"]
+    assert str(malformed) in caplog.text
+    assert "this file is excluded" in caplog.text
+
+
+def test_unchanged_content_warning_is_repeated_after_file_changes_and_is_rejected_again(tmp_path: Path, caplog) -> None:
+    write_entry(tmp_path / "valid.yaml", entry_data(id="valid-entry"))
+    broken = tmp_path / "broken.yaml"
+    broken_contents = yaml.safe_dump(entry_data(unknown=True), sort_keys=False)
+    broken.write_text(broken_contents, encoding="utf-8")
+    initial_mtime = broken.stat().st_mtime_ns
+
+    load_content_library(tmp_path)
+    first_warning_count = caplog.text.count(str(broken))
+    assert first_warning_count == 1
+
+    caplog.clear()
+    write_entry(broken, entry_data(id="corrected-entry"))
+    load_content_library(tmp_path)
+    assert str(broken) not in caplog.text
+
+    caplog.clear()
+    broken.write_text(broken_contents, encoding="utf-8")
+    broken_stat = broken.stat()
+    broken_mtime = max(broken_stat.st_mtime_ns, initial_mtime + 1_000_000_000)
+    os.utime(broken, ns=(broken_stat.st_atime_ns, broken_mtime))
+    load_content_library(tmp_path)
+
+    assert caplog.text.count(str(broken)) == 1
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_identifier_exclusion_is_independent_of_enumeration_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reverse: bool
+) -> None:
+    first = write_entry(tmp_path / "first.yaml", entry_data(id="duplicate"))
+    second = write_entry(tmp_path / "second.yaml", entry_data(id="duplicate"))
+    unique = write_entry(tmp_path / "unique.yaml", entry_data(id="unique"))
+    original_walk = content_module.os.walk
+
+    def reordered_walk(root: Path, onerror=None):
+        for directory, directories, filenames in original_walk(root, onerror=onerror):
+            yield directory, directories, list(reversed(filenames)) if reverse else filenames
+
+    monkeypatch.setattr(content_module.os, "walk", reordered_walk)
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["unique"]
+    assert entries[0].file == unique
+    assert first != second
 
 
 def test_invalid_content_directory_is_reported(tmp_path: Path) -> None:

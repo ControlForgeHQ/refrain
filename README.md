@@ -67,7 +67,7 @@ Hardware-independent validation does not replace physical display validation whe
 
 ## Loading application configuration
 
-`load_application_config` reads and validates `config.yaml`, returning resolved paths, the effective font registry, and the settings required by downstream components. Relative content and user-font paths are based on the configuration file's directory. See [`examples/config.yaml`](examples/config.yaml) for a bundled-font example and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative configuration specification.
+`load_application_config` reads and validates `config.yaml`, returning resolved paths, the effective font registry, and the settings required by downstream components. Missing optional settings use documented defaults; invalid optional settings and unknown fields are reported through Python logging and do not discard unrelated valid settings. Required values without usable fallbacks remain fatal. Relative content and user-font paths are based on the configuration file's directory. See [`examples/config.yaml`](examples/config.yaml) for a bundled-font example and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative configuration specification.
 
 ```python
 from refrain import ApplicationConfigurationError, load_application_config
@@ -310,7 +310,7 @@ Recovery closes all generated Pillow images after storage, including when storag
 
 ## Loading content
 
-`load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of validated `ContentEntry` objects; each entry contains its metadata, presentation style, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
+`load_content_library` reads `.yaml` and `.yml` files recursively from a supplied directory. It returns a tuple of accepted `ContentEntry` objects; each entry contains its metadata, presentation style, eligibility rules, reveal overrides, and separate `Quotation` candidates. Each quotation retains its original `text` and has a normalized `identity` for repetition tracking.
 
 Validation is performed by `load_content_library`; directly constructing `ContentEntry`, `Quotation`, or other model dataclasses does not validate their fields.
 
@@ -324,7 +324,7 @@ except ContentLibraryError as error:
         print(diagnostic)
 ```
 
-The loader rejects the entire library if any entry is invalid. Each diagnostic identifies its file and field. It validates intrinsic content rules only: eligibility is not evaluated for a date, reveal times are not resolved against application configuration, and font preferences are not checked against a font registry.
+Malformed files, invalid entries, and all entries participating in a duplicate-identifier conflict are excluded with actionable warnings; unrelated accepted entries remain available. A `ContentLibraryError` indicates failed source discovery or a directory with no accepted quotations. Rejected-content warnings are emitted through Python logging. The loader validates intrinsic content rules only: eligibility is not evaluated for a date, reveal times are not resolved against application configuration, and font preferences are not checked against a font registry.
 
 See [`examples/content/sample.yaml`](examples/content/sample.yaml) for an example entry and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative YAML specification.
 

@@ -8,11 +8,13 @@ from yaml.nodes import MappingNode
 
 
 class _StrictSafeLoader(yaml.SafeLoader):
+    allow_non_string_keys = False
+
     def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[str, object]:
         if not isinstance(node, MappingNode):
             return super().construct_mapping(node, deep=deep)
 
-        keys: set[str] = set()
+        keys: set[object] = set()
         for key_node, _ in node.value:
             if key_node.tag == "tag:yaml.org,2002:merge":
                 raise yaml.constructor.ConstructorError(
@@ -22,7 +24,7 @@ class _StrictSafeLoader(yaml.SafeLoader):
                     key_node.start_mark,
                 )
             key = self.construct_object(key_node, deep=deep)
-            if not isinstance(key, str):
+            if not self.allow_non_string_keys and not isinstance(key, str):
                 raise yaml.constructor.ConstructorError(
                     "while constructing a mapping",
                     node.start_mark,
@@ -40,12 +42,13 @@ class _StrictSafeLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-def load_yaml(contents: str) -> object:
+def load_yaml(contents: str, *, allow_non_string_keys: bool = False) -> object:
     """Parse one YAML document, rejecting aliases, anchors, and duplicate keys."""
     for event in yaml.parse(contents, Loader=yaml.SafeLoader):
         if isinstance(event, AliasEvent) or getattr(event, "anchor", None) is not None:
             raise yaml.YAMLError("anchors and aliases are not supported")
     loader = _StrictSafeLoader(contents)
+    loader.allow_non_string_keys = allow_non_string_keys
     try:
         return loader.get_single_data()
     except (KeyError, ValueError) as error:
