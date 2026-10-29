@@ -96,6 +96,7 @@ Support for additional display hardware is not an initial product requirement, a
 
 The runtime should avoid unnecessary memory use and background processing, particularly to preserve compatibility with resource-constrained Raspberry Pi models.
 
+
 ## Terminology
 
 **Content Entry:** A uniquely identified collection of one or more quotations and shared configuration metadata.
@@ -116,15 +117,17 @@ The runtime should avoid unnecessary memory use and background processing, parti
 
 **Priority:** An optional signed integer associated with a content entry and inherited by its quotations. Higher values indicate greater selection preference. The default is zero.
 
-**Global History:** A permanent chronological record of committed quotation selections.
+**Selection Revision:** A monotonically increasing identifier assigned to each committed daily selection and maintained in authoritative operational state.
 
-**Repetition History:** A persistent but selectively resettable collection of quotation identities used to prevent repetition until an eligible selection pool is exhausted.
+**Global History:** A chronological, retention-bounded record of committed quotation selection events, maintained independently of authoritative operational state.
+
+**Repetition History:** A persistent but selectively resettable collection of quotation identities used to prevent repetition until an eligible selection pool is exhausted. Identities no longer present in the validated content library may also be removed.
 
 **Daily Selection:** The individual quotation assigned to the current display day.
 
-**Daily Snapshot:** A persistent, self-contained copy of the selected quotation and all resolved information required to prepare its presentation independently of the content library.
+**Daily Snapshot:** A persistent copy of the selected quotation and committed presentation settings sufficient to prepare its presentation independently of the original content entry. Font resources are resolved separately.
 
-**Selection Commitment:** The successful durable recording of a daily snapshot and its corresponding global-history and repetition-history updates.
+**Selection Commitment:** The successful durable recording of a daily snapshot, updated repetition history, selection revision, and associated operational context as one consistent authoritative state.
 
 **Reveal Stage:** A cumulative set of content fields eligible for presentation at a particular point in the configured reveal schedule.
 
@@ -136,7 +139,9 @@ The runtime should avoid unnecessary memory use and background processing, parti
 
 **Display Backend:** The component responsible for presenting prepared images through a configured output destination, including directly connected display hardware or a network-accessible image service.
 
-**Persistent State:** The committed daily snapshot, selection histories, reveal progress, and scheduling context required for recovery across application restarts.
+**Persistent State:** The authoritative operational state containing the committed daily snapshot, selection revision, active repetition history, reveal progress, and scheduling context required for recovery across application restarts.
+
+
 
 ## High-level system structure
 
@@ -165,10 +170,12 @@ Specificity, repetition, and priority
 Quotation selection
     |
     v
-Daily snapshot + history updates
+Daily snapshot + updated repetition history
     |
     v
-Atomic selection commitment
+Atomic operational-state commitment
+    |
+    +----> Best-effort global-history recording
     |
     v
 Presentation preparation
@@ -188,7 +195,7 @@ Physical e-paper display
 
 The application controller coordinates these responsibilities within one process.
 
-The flow describes responsibility and ownership, not a required class hierarchy or directory structure.
+The flow describes responsibility and ownership, not a required class hierarchy, directory structure, or strict ordering between independent post-commit operations.
 
 ### Selection and commitment
 
@@ -196,9 +203,16 @@ Selection identifies the individual quotation to be displayed during the next pr
 
 The selected quotation inherits the eligibility, priority, reveal configuration, and presentation metadata of its containing content entry.
 
-The selection does not become authoritative until its complete daily snapshot and the corresponding history updates have been durably committed.
+A new selection becomes authoritative only when its complete daily snapshot, updated repetition history, selection revision, and required scheduling context have been durably committed as one consistent operational state.
 
-An interrupted or unsuccessful commitment leaves the new selection incomplete.
+An interrupted or unsuccessful operational-state commitment leaves the proposed selection incomplete.
+
+Once commitment succeeds, the selection remains authoritative independently of subsequent image preparation, display updates, or global-history recording.
+
+Each committed selection is eligible for recording in global history. Global-history recording is best-effort and does not participate in the authoritative operational-state transaction.
+
+Failure to record global history must not cause a committed quotation to be selected or committed again.
+
 
 ### Preparation
 
@@ -491,6 +505,7 @@ Selection is performed among quotations, not among content entries.
 
 The number of content entries must not independently influence selection probability.
 
+
 ### Selection pools and repetition
 
 Refrain maintains one global repetition-history collection containing normalized quotation identities.
@@ -499,7 +514,13 @@ The collection records quotations consumed by committed selections during their 
 
 Repetition history is persistent but selectively resettable.
 
-For each new selection, the application first identifies the highest-specificity eligible quotation pool.
+For each new selection, Refrain uses the successfully loaded and validated complete content library to remove repetition identities that no longer correspond to any quotation in that library.
+
+This cleanup considers all quotations in the content library, regardless of current date eligibility, specificity, priority, or font availability.
+
+An unavailable, incomplete, or invalid content library must not cause repetition-history cleanup.
+
+For each new selection, the application identifies the highest-specificity eligible quotation pool.
 
 Within that pool, quotations already present in repetition history are excluded while unused candidates remain.
 
@@ -515,11 +536,16 @@ The applicable pool is determined dynamically from currently eligible quotations
 
 Changes to content-library membership therefore affect subsequent selections without invalidating existing committed selections.
 
+Removing a quotation from the content library may cause its repetition identity to be discarded. If that quotation is subsequently restored, its previous repetition status need not be recovered.
+
 When a quotation participates in multiple eligibility contexts, resetting one pool may make that quotation eligible again in another context.
 
 This is an accepted consequence of using one resettable repetition-history collection.
 
-The permanent global history is not modified when repetition history is reset.
+Repetition-history cleanup and pool resets do not modify previously recorded global-history events.
+
+Repetition history is authoritative operational state and must not be reconstructed from global history.
+
 
 ### Selection priority
 
@@ -553,27 +579,35 @@ Refrain is not required to detect or resolve unintended duplicate content entrie
 
 The selection process must not allow duplicate occurrences to distort equal-probability selection among distinct quotation messages.
 
+
 ### Selection procedure
 
 For each new daily selection:
 
 1. Determine the applicable display date.
-2. Identify eligible content entries.
-3. Expand eligible entries into individual quotation candidates.
-4. Determine the highest matching date specificity.
-5. Retain candidates matching that specificity.
-6. Exclude quotation identities present in repetition history.
-7. If no unused quotations remain, remove the identities of the winning pool from repetition history and reevaluate that pool.
-8. Retain candidates having the highest priority.
-9. Randomly select one remaining distinct quotation identity.
-10. Resolve the selected occurrence and its inherited metadata.
-11. Resolve the font using the entry's preference or the configured default pool.
-12. Prepare the complete daily snapshot.
-13. Atomically commit the snapshot and corresponding history updates.
+2. Load and validate the complete content library.
+3. Remove repetition identities no longer present in the validated content library.
+4. Identify eligible content entries.
+5. Expand eligible entries into individual quotation candidates.
+6. Determine the highest matching date specificity.
+7. Retain candidates matching that specificity.
+8. Exclude quotation identities present in the cleaned repetition history.
+9. If no unused quotations remain, remove the identities of the winning pool from repetition history and reevaluate that pool.
+10. Retain candidates having the highest priority.
+11. Randomly select one remaining distinct quotation identity.
+12. Resolve the selected occurrence and its inherited metadata.
+13. Resolve the font using the entry's preference or the configured default pool.
+14. Prepare the complete daily snapshot.
+15. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
+16. Record the committed selection in global history on a best-effort basis.
 
-Selection is not complete until commitment succeeds.
+Selection is not complete until operational-state commitment succeeds.
 
-A failed or interrupted commitment permits the selection procedure to run again.
+A failed or interrupted operational-state commitment permits the selection procedure to run again.
+
+Failure to record global history after commitment does not invalidate the committed selection or permit another selection for the same committed event.
+
+The next selection revision is derived from authoritative operational state, never from global-history contents.
 
 The random results of an uncommitted selection, including font selection, are not authoritative.
 
@@ -1419,6 +1453,7 @@ The initial architecture does not require:
 
 These capabilities may be reconsidered when a concrete use case justifies them.
 
+
 ## Architectural invariants
 
 The following must remain true as the project evolves:
@@ -1430,22 +1465,25 @@ The following must remain true as the project evolves:
 5. Date specificity takes absolute precedence over priority and repetition status.
 6. Unused quotations take precedence over previously consumed quotations within the highest-specificity eligible pool.
 7. Exhausting a selection pool resets only the repetition identities belonging to that pool.
-8. Global selection history is never cleared by repetition-pool resets.
-9. Priority determines preference among otherwise eligible unused quotations.
-10. Equal-priority distinct quotation candidates have equal selection probability.
-11. A daily selection is authoritative only after its complete snapshot and corresponding history updates have been durably committed.
-12. An interrupted selection commitment must not leave inconsistent histories.
-13. A committed daily snapshot is self-contained and independent of subsequent content-library changes.
-14. Every required reveal-stage image is prepared from the committed daily snapshot.
-15. Prepared images are persisted and reused rather than regenerated at every scheduled reveal.
-16. Missing prepared images can be recovered without selecting new content.
-17. A restart does not independently invalidate the committed daily selection or reset its reveal progression.
-18. Reveal progression never moves backward within a committed selection.
-19. A backward clock adjustment does not independently invalidate the active selection.
-20. Forward clock adjustments advance selection and reveal state to the currently appropriate presentation when required.
-21. Hardware failures do not invalidate committed selections or their history.
-22. Ordinary operation does not require internet access or external services.
-23. Public presentation does not grant privileged local control.
-24. Future integrations must not become prerequisites for displaying ordinary quotations.
+8. Repetition-history resets and cleanup do not alter previously recorded global selection history.
+9. Repetition identities absent from a successfully validated complete content library may be removed without affecting committed selections.
+10. Priority determines preference among otherwise eligible unused quotations.
+11. Equal-priority distinct quotation candidates have equal selection probability.
+12. A daily selection is authoritative only after its complete snapshot, updated repetition history, selection revision, and scheduling context have been committed consistently.
+13. An interrupted operational-state commitment must not leave a partially committed selection or inconsistent repetition history.
+14. Selection revisions increase monotonically and are maintained independently of global history.
+15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
+16. A committed daily snapshot preserves its selected content and presentation settings independently of subsequent content-library changes, while font resources may be resolved again during image regeneration.
+17. Every required reveal-stage image is prepared from the committed daily snapshot and available presentation resources.
+18. Prepared images are persisted and reused rather than regenerated at every scheduled reveal.
+19. Missing prepared images can be recovered without selecting new content.
+20. A restart does not independently invalidate the committed daily selection or reset its reveal progression.
+21. Reveal progression never moves backward within a committed selection.
+22. A backward clock adjustment does not independently invalidate the active selection.
+23. Forward clock adjustments advance selection and reveal state to the currently appropriate presentation when required.
+24. Hardware failures do not invalidate committed selections.
+25. Ordinary operation does not require internet access or external services.
+26. Public presentation does not grant privileged local control.
+27. Future integrations must not become prerequisites for displaying ordinary quotations.
 
 Architectural changes must be evaluated against these invariants before implementation work is accepted.
