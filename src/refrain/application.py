@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,15 +14,16 @@ from threading import Event
 from PIL import Image
 
 from .artifacts import ArtifactStoreError, PreparedImageArtifactSet, PreparedImageArtifactStore
-from .config import ApplicationConfiguration, ApplicationConfigurationError, load_application_config
+from .config import ApplicationConfiguration, ApplicationConfigurationError, FontResource, load_application_config
 from .content import ContentLibraryError, load_content_library
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .eligibility import build_eligible_quotation_pool
 from .persistence import (
     DailySnapshot,
+    GlobalHistoryStore,
+    GlobalHistoryWriteError,
     PersistentState,
     PersistentStateStore,
-    ResolvedFont,
     SchedulingContext,
     StateCommitError,
     StateRecoveryError,
@@ -74,21 +75,14 @@ def _default_backend_factory(configuration: ApplicationConfiguration) -> Display
     )
 
 
-def _resolve_font(
-    configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random
-) -> ResolvedFont:
+def _resolve_font(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
     identifier = preferred
     if identifier is not None and identifier not in configuration.fonts:
         _LOGGER.warning("Requested font %r is not available; using a font from the default pool", identifier)
         identifier = None
     if identifier is None:
         identifier = chooser.choice(configuration.default_fonts)
-    resource = configuration.fonts[identifier]
-    try:
-        with resource.path.open("rb") as font_file:
-            return ResolvedFont(identifier, font_file.read())
-    except (OSError, ValueError) as error:
-        raise _RetryableApplicationError(f"cannot read font {identifier!r}: {error}") from error
+    return identifier
 
 
 def _select_snapshot(
@@ -103,9 +97,11 @@ def _select_snapshot(
         raise _RetryableApplicationError(f"content library is invalid: {error}") from error
 
     pool = build_eligible_quotation_pool(entries, display_date)
+    history = set() if state is None else set(state.repetition_history)
+    history.intersection_update(quotation.identity for entry in entries for quotation in entry.quotations)
     proposal = select_quotation(
         pool,
-        () if state is None else state.repetition_history,
+        history,
         chooser,
         base_revision=0 if state is None else state.revision,
     )
@@ -128,7 +124,7 @@ def _select_snapshot(
         snapshot = DailySnapshot(
             quotation_text=candidate.text,
             quotation_identity=candidate.identity,
-            font=_resolve_font(configuration, entry.font, chooser),
+            font_identifier=_resolve_font(configuration, entry.font, chooser),
             presentation_metadata=metadata,
             reveal_schedule={
                 "quotation": configuration.reveal.quotation.strftime("%H:%M"),
@@ -217,13 +213,39 @@ def _load_configuration(config_file: str | Path) -> ApplicationConfiguration:
         raise ApplicationError(f"application configuration is invalid: {error}") from error
 
 
-def _recover_images(state: PersistentState, artifact_store: PreparedImageArtifactStore) -> PreparedImageArtifactSet:
+def _recover_images(
+    state: PersistentState,
+    artifact_store: PreparedImageArtifactStore,
+    font_registry: Mapping[str, FontResource],
+) -> PreparedImageArtifactSet:
     try:
-        return recover_prepared_daily_images(state, artifact_store, resolve_reveal_stages(state.snapshot))
+        return recover_prepared_daily_images(
+            state,
+            artifact_store,
+            resolve_reveal_stages(state.snapshot),
+            font_registry,
+        )
     except DailyImagePreparationError as error:
         raise _RetryableApplicationError(f"cannot prepare daily images: {error}") from error
     except ArtifactStoreError as error:
         raise _RetryableApplicationError(f"cannot access prepared image artifacts: {error}") from error
+
+
+def _create_history_store(
+    state_path: Path,
+    history_path: str | Path | None,
+    history_segment_size: int,
+    history_max_segments: int,
+) -> GlobalHistoryStore:
+    path = state_path.with_name("global-history.jsonl") if history_path is None else Path(history_path).absolute()
+    return GlobalHistoryStore(path, max_segment_size=history_segment_size, max_segments=history_max_segments)
+
+
+def _record_selection_history(history_store: GlobalHistoryStore, state: PersistentState) -> None:
+    try:
+        history_store.record(state)
+    except GlobalHistoryWriteError as error:
+        _LOGGER.warning("Committed selection %s was not recorded in global history: %s", state.revision, error)
 
 
 def run_startup(
@@ -233,6 +255,9 @@ def run_startup(
     *,
     now: datetime | None = None,
     random_source: random.Random | None = None,
+    history_path: str | Path | None = None,
+    history_segment_size: int = 1_048_576,
+    history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     keep_open: Callable[[str], None] | None = None,
 ) -> StartupResult:
@@ -244,6 +269,7 @@ def run_startup(
     """
     configuration = _load_configuration(config_file)
     store = PersistentStateStore(Path(state_path).absolute())
+    history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
     current_time = datetime.now(timezone.utc) if now is None else now
 
@@ -257,6 +283,7 @@ def run_startup(
                 configuration, decision.display_date, random_source or random.Random()
             )
             state = _commit_selection(store, proposal, snapshot)
+            _record_selection_history(history_store, state)
             decision = evaluate_scheduling(current_time, configuration, state)
         elif decision.action is SchedulingAction.NEW_SELECTION:
             raise ApplicationError("a new daily selection is not supported by one-shot startup")
@@ -265,7 +292,7 @@ def run_startup(
     except SchedulingEvaluationError as error:
         raise ApplicationError(f"scheduling evaluation failed: {error}") from error
 
-    artifacts = _recover_images(state, artifact_store)
+    artifacts = _recover_images(state, artifact_store, configuration.fonts)
 
     try:
         backend = backend_factory(configuration)
@@ -296,6 +323,9 @@ def run_application(
     *,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
+    history_path: str | Path | None = None,
+    history_segment_size: int = 1_048_576,
+    history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     monotonic_clock: Callable[[], float] = time.monotonic,
@@ -309,6 +339,7 @@ def run_application(
     """
     configuration = _load_configuration(config_file)
     store = PersistentStateStore(Path(state_path).absolute())
+    history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
     observer = DisplayDayBoundaryObserver(configuration)
     shutdown = shutdown_event if shutdown_event is not None else Event()
@@ -317,6 +348,7 @@ def run_application(
     artifacts: PreparedImageArtifactSet | None = None
     artifact_revision: int | None = None
     presented: tuple[int, int] | None = None
+    pending_history: tuple[int, DailySnapshot, frozenset[str]] | None = None
     last_failure: str | None = None
     retry_delay = 1.0
     _LOGGER.info("Starting continuous presentation")
@@ -325,13 +357,29 @@ def run_application(
             try:
                 # Reload before observing time, including after uncertain publication.
                 state = _reload(store)
+                if pending_history is not None and state is not None:
+                    revision, snapshot, repetition_history = pending_history
+                    if (
+                        state.revision == revision
+                        and state.snapshot == snapshot
+                        and state.repetition_history == repetition_history
+                    ):
+                        _record_selection_history(history_store, state)
+                        pending_history = None
                 now = wall_clock()
                 boundary = observer.observe(now, monotonic_clock(), None if state is None else state.revision)
                 decision = evaluate_scheduling(now, configuration, state, boundary)
                 if decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
                     assert decision.display_date is not None
                     proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
+                    pending_history = (
+                        proposal.base_revision + 1,
+                        snapshot,
+                        proposal.proposed_repetition_history,
+                    )
                     state = _commit_selection(store, proposal, snapshot)
+                    _record_selection_history(history_store, state)
+                    pending_history = None
                     _LOGGER.info("Committed selection %s for %s", state.revision, state.snapshot.display_date)
                     # Reobserve after potentially slow I/O; never present obsolete intermediate stages.
                     continue
@@ -340,7 +388,7 @@ def run_application(
                 if presented is not None and presented[0] == state.revision:
                     stage = max(stage, presented[1])
                 if artifacts is None or artifact_revision != state.revision:
-                    artifacts = _recover_images(state, artifact_store)
+                    artifacts = _recover_images(state, artifact_store, configuration.fonts)
                     artifact_revision = state.revision
                     try:
                         artifact_store.cleanup(state.revision)

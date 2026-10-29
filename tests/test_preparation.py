@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import date
 from importlib.resources import files
 
@@ -11,7 +10,7 @@ from refrain import (
     CompositionVisibility,
     DailyImagePreparationError,
     DailySnapshot,
-    ResolvedFont,
+    FontResource,
     SchedulingContext,
     prepare_daily_images,
     resolve_reveal_stages,
@@ -24,17 +23,17 @@ _LAYOUT = {
     "min_font_size": 12,
     "max_font_size": 32,
 }
+_LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
+_FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
 
 
 @pytest.fixture
-def embedded_font() -> ResolvedFont:
-    resource = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-    with resource.open("rb") as font_file:
-        return ResolvedFont("unavailable-current-font", font_file.read())
+def embedded_font() -> str:
+    return "lora"
 
 
 def make_snapshot(
-    font: ResolvedFont,
+    font_identifier: str,
     *,
     source: str | None = "A Sample Collection",
     attribution: str | None = "An Example Author",
@@ -51,7 +50,7 @@ def make_snapshot(
     return DailySnapshot(
         quotation_text="A small thought, carefully kept.",
         quotation_identity="A small thought, carefully kept.",
-        font=font,
+        font_identifier=font_identifier,
         presentation_metadata=metadata,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout=_LAYOUT if layout is None else layout,
@@ -77,7 +76,7 @@ def make_snapshot(
     ],
 )
 def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
-    embedded_font: ResolvedFont,
+    embedded_font: str,
     monkeypatch: pytest.MonkeyPatch,
     source: str | None,
     attribution: str | None,
@@ -95,12 +94,11 @@ def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
 
     monkeypatch.setattr(preparation, "layout_composition", capture_layout)
 
-    images = prepare_daily_images(snapshot, stages)
+    images = prepare_daily_images(snapshot, stages, _FONT_REGISTRY)
 
     assert len(resolved_layouts) == 1
     layout = resolved_layouts[0]
-    assert layout.font_identifier == embedded_font.identifier
-    assert layout.font_sha256 == hashlib.sha256(embedded_font.data).hexdigest()
+    assert layout.font_identifier == embedded_font
     assert (layout.quotation.text, layout.byline is not None) == (
         snapshot.quotation_text,
         source is not None or attribution is not None,
@@ -114,11 +112,11 @@ def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
     assert snapshot == original_snapshot
 
 
-def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_font: ResolvedFont) -> None:
+def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font, source="A Sample Collection", attribution="An Example Author")
     stages = resolve_reveal_stages(snapshot)
 
-    images = prepare_daily_images(snapshot, stages)
+    images = prepare_daily_images(snapshot, stages, _FONT_REGISTRY)
 
     assert stages == (
         CompositionVisibility(),
@@ -130,7 +128,7 @@ def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_
         image.close()
 
 
-def test_preparation_is_deterministic(embedded_font: ResolvedFont) -> None:
+def test_preparation_is_deterministic(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font)
     stages = (
         CompositionVisibility(),
@@ -138,13 +136,13 @@ def test_preparation_is_deterministic(embedded_font: ResolvedFont) -> None:
         CompositionVisibility(source=True, attribution=True),
     )
 
-    first = prepare_daily_images(snapshot, stages)
-    second = prepare_daily_images(snapshot, stages)
+    first = prepare_daily_images(snapshot, stages, _FONT_REGISTRY)
+    second = prepare_daily_images(snapshot, stages, _FONT_REGISTRY)
 
     assert tuple(image.tobytes() for image in first) == tuple(image.tobytes() for image in second)
 
 
-def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_uses_committed_presentation_style(embedded_font: str, monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = make_snapshot(embedded_font, style="left-aligned")
     original_layout = preparation.layout_composition
     resolved_layouts = []
@@ -156,7 +154,7 @@ def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypa
 
     monkeypatch.setattr(preparation, "layout_composition", capture_layout)
 
-    prepare_daily_images(snapshot, (CompositionVisibility(),))
+    prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY)
 
     assert resolved_layouts[0].style == "left-aligned"
 
@@ -184,7 +182,7 @@ def test_uses_committed_presentation_style(embedded_font: ResolvedFont, monkeypa
     ],
 )
 def test_invalid_snapshot_presentation_data_is_actionable(
-    embedded_font: ResolvedFont,
+    embedded_font: str,
     metadata: dict[str, object],
     layout: dict[str, object],
     message: str,
@@ -192,15 +190,15 @@ def test_invalid_snapshot_presentation_data_is_actionable(
     snapshot = make_snapshot(embedded_font, metadata=metadata, layout=layout)
 
     with pytest.raises(DailyImagePreparationError, match=message):
-        prepare_daily_images(snapshot, (CompositionVisibility(),))
+        prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY)
 
 
-def test_invalid_stage_sequence_is_rejected(embedded_font: ResolvedFont) -> None:
+def test_invalid_stage_sequence_is_rejected(embedded_font: str) -> None:
     with pytest.raises(DailyImagePreparationError, match="nonempty sequence"):
-        prepare_daily_images(make_snapshot(embedded_font), ())
+        prepare_daily_images(make_snapshot(embedded_font), (), _FONT_REGISTRY)
 
 
-def test_non_cumulative_or_absent_field_reveal_fails_without_mutation(embedded_font: ResolvedFont) -> None:
+def test_non_cumulative_or_absent_field_reveal_fails_without_mutation(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font, source=None, attribution=None)
     original_snapshot = snapshot
 
@@ -208,12 +206,13 @@ def test_non_cumulative_or_absent_field_reveal_fails_without_mutation(embedded_f
         prepare_daily_images(
             snapshot,
             (CompositionVisibility(), CompositionVisibility(source=True)),
+            _FONT_REGISTRY,
         )
 
     assert snapshot == original_snapshot
 
 
-def test_reveal_stages_must_remain_cumulative(embedded_font: ResolvedFont) -> None:
+def test_reveal_stages_must_remain_cumulative(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font)
 
     with pytest.raises(DailyImagePreparationError, match="reveal stages must be cumulative"):
@@ -224,17 +223,33 @@ def test_reveal_stages_must_remain_cumulative(embedded_font: ResolvedFont) -> No
                 CompositionVisibility(source=True),
                 CompositionVisibility(),
             ),
+            _FONT_REGISTRY,
         )
 
 
-def test_unloadable_embedded_font_fails_clearly() -> None:
-    snapshot = make_snapshot(ResolvedFont("invalid-embedded-font", b"not a font"))
+def test_missing_font_fails_clearly_without_bundled_fallback() -> None:
+    snapshot = make_snapshot("missing-font")
 
-    with pytest.raises(DailyImagePreparationError, match="cannot be loaded by Pillow"):
-        prepare_daily_images(snapshot, (CompositionVisibility(),))
+    with pytest.raises(DailyImagePreparationError, match="no usable bundled fallback"):
+        prepare_daily_images(snapshot, (CompositionVisibility(),), {})
 
 
-def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: ResolvedFont) -> None:
+def test_unusable_selected_font_uses_deterministic_bundled_fallback(tmp_path, caplog) -> None:
+    broken_path = tmp_path / "broken.ttf"
+    broken_path.write_bytes(b"not a font")
+    snapshot = make_snapshot("broken")
+    registry = {
+        "broken": FontResource("broken", broken_path, bundled=False),
+        **_FONT_REGISTRY,
+    }
+
+    images = prepare_daily_images(snapshot, (CompositionVisibility(),), registry)
+
+    assert images[0].size == _IMAGE_SIZE
+    assert "broken" in caplog.text
+
+
+def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: str) -> None:
     layout = {
         "image_size": (100, 100),
         "presentation_region": {"x": 0.49, "y": 0.49, "width": 0.02, "height": 0.02},
@@ -245,11 +260,11 @@ def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: Resol
     original_snapshot = snapshot
 
     with pytest.raises(DailyImagePreparationError, match="does not fit"):
-        prepare_daily_images(snapshot, (CompositionVisibility(),))
+        prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY)
 
     assert snapshot == original_snapshot
 
 
 def test_non_snapshot_input_fails_clearly() -> None:
     with pytest.raises(DailyImagePreparationError, match="DailySnapshot"):
-        prepare_daily_images(None, (CompositionVisibility(),))  # type: ignore[arg-type]
+        prepare_daily_images(None, (CompositionVisibility(),), _FONT_REGISTRY)  # type: ignore[arg-type]

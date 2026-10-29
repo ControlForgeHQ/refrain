@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import logging
 from collections.abc import Mapping, Sequence
 
-from PIL import Image
+from PIL import Image, ImageFont
 
-from .config import PresentationRegion
-from .persistence import DailySnapshot
+from .config import FontResource, PresentationRegion
+from .persistence import DailySnapshot, ResolvedFont
 from .renderer import (
     CompositionVisibility,
     LiteraryComposition,
@@ -18,6 +20,7 @@ from .renderer import (
 
 _BACKGROUND_COLOR = "#FFFFFF"
 _BYLINE_GAP_FACTOR = 1.20
+_LOGGER = logging.getLogger(__name__)
 
 
 class DailyImagePreparationError(ValueError):
@@ -88,25 +91,67 @@ def _generate_daily_background(image_size: tuple[int, int]) -> Image.Image:
     return Image.new("RGB", image_size, _BACKGROUND_COLOR)
 
 
+def _read_font(resource: FontResource) -> ResolvedFont:
+    with resource.path.open("rb") as font_file:
+        font = ResolvedFont(resource.identifier, font_file.read())
+    ImageFont.truetype(io.BytesIO(font.data), size=12)
+    return font
+
+
+def _resolve_font(snapshot: DailySnapshot, registry: Mapping[str, FontResource]) -> ResolvedFont:
+    selected = registry.get(snapshot.font_identifier)
+    if selected is not None:
+        try:
+            return _read_font(selected)
+        except (OSError, ValueError) as error:
+            _LOGGER.warning(
+                "Committed font %r is unavailable or unusable; using a bundled fallback: %s",
+                snapshot.font_identifier,
+                error,
+            )
+    else:
+        _LOGGER.warning(
+            "Committed font %r is unavailable; using a bundled fallback",
+            snapshot.font_identifier,
+        )
+
+    for identifier, resource in sorted(registry.items()):
+        if not resource.bundled:
+            continue
+        try:
+            return _read_font(resource)
+        except (OSError, ValueError) as error:
+            _LOGGER.warning("Bundled fallback font %r is unusable: %s", identifier, error)
+    raise DailyImagePreparationError(
+        f"cannot prepare daily snapshot: committed font {snapshot.font_identifier!r} is unavailable or unusable "
+        "and no usable bundled fallback font is registered"
+    )
+
+
 def prepare_daily_images(
     snapshot: DailySnapshot,
     stages: Sequence[CompositionVisibility],
+    font_registry: Mapping[str, FontResource],
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
-    All presentation values and font bytes come from ``snapshot``. Stages are
-    validated by the shared renderer and are never inferred from the clock.
+    Presentation values come from ``snapshot``; its font identifier is resolved
+    through the effective registry. Stages are validated by the shared renderer
+    and are never inferred from the clock.
     """
     if not isinstance(snapshot, DailySnapshot):
         raise DailyImagePreparationError("snapshot must be a DailySnapshot")
     if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
+    if not isinstance(font_registry, Mapping):
+        raise DailyImagePreparationError("font_registry must be a mapping of font identifiers to font resources")
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
+    font = _resolve_font(snapshot, font_registry)
     try:
         layout = layout_composition(
             composition,
-            snapshot.font,
+            font,
             region,
             image_size,
             min_font_size,
@@ -117,7 +162,7 @@ def prepare_daily_images(
         background = _generate_daily_background(image_size)
         return render_reveal_stages(
             background,
-            snapshot.font,
+            font,
             layout,
             tuple(stages),
             concealment="pixel-distortion",

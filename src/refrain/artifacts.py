@@ -65,7 +65,7 @@ def _snapshot_digest(snapshot: DailySnapshot) -> str:
     payload = {
         "quotation_text": snapshot.quotation_text,
         "quotation_identity": snapshot.quotation_identity,
-        "font": {"identifier": snapshot.font.identifier, "sha256": snapshot.font.sha256},
+        "font_identifier": snapshot.font_identifier,
         "presentation_metadata": _json_value(snapshot.presentation_metadata),
         "reveal_schedule": _json_value(snapshot.reveal_schedule),
         "layout": _json_value(snapshot.layout),

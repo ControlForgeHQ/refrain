@@ -10,7 +10,7 @@ from pathlib import Path
 from refrain import (
     CompositionVisibility,
     DailySnapshot,
-    ResolvedFont,
+    FontResource,
     SchedulingContext,
     prepare_daily_images,
 )
@@ -24,16 +24,20 @@ _STAGES = (
     CompositionVisibility(source=True),
     CompositionVisibility(source=True, attribution=True),
 )
+_FONT_REGISTRY = {
+    "lora": FontResource(
+        "lora",
+        files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf"),
+        bundled=True,
+    )
+}
 
 
 def _example_snapshot() -> DailySnapshot:
-    font_resource = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-    with font_resource.open("rb") as font_file:
-        font = ResolvedFont("lora", font_file.read())
     return DailySnapshot(
         quotation_text=_QUOTATION,
         quotation_identity=_QUOTATION,
-        font=font,
+        font_identifier="lora",
         presentation_metadata={
             "source": "Notes on Patient Looking",
             "attribution": "An Example Author",
@@ -56,7 +60,7 @@ def main() -> None:
     output_directory = parser.parse_args().output_directory
     output_directory.mkdir(parents=True, exist_ok=True)
 
-    images = prepare_daily_images(_example_snapshot(), _STAGES)
+    images = prepare_daily_images(_example_snapshot(), _STAGES, _FONT_REGISTRY)
     for index, image in enumerate(images):
         path = output_directory / f"daily-reveal-stage-{index}.png"
         image.save(path)
