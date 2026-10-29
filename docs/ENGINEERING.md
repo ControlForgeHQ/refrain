@@ -54,6 +54,7 @@ Do not introduce hardware dependencies into code that is intended to run without
 
 If an implementation appears to require a material architectural change, the change must be reviewed before the implementation establishes new behavior.
 
+
 ### Make state ownership explicit
 
 Mutable application state must have an identifiable owner.
@@ -62,10 +63,8 @@ Distinguish between:
 
 - validated source content;
 - uncommitted selection candidates;
-- committed daily snapshots;
-- permanent selection history;
-- active repetition history;
-- persisted reveal progress;
+- authoritative operational state, including committed daily snapshots, selection revisions, active repetition history, and reveal progress;
+- independently retained global selection history;
 - prepared presentation artifacts;
 - backend-owned presentation state.
 
@@ -1096,8 +1095,12 @@ Test font configuration and selection behavior, including:
 - explicit content-entry font preferences;
 - unregistered content-entry fonts and their warnings;
 - randomized selection from the default pool;
-- persistence of the resolved font in committed state and global history;
-- recovery without independently reselecting a font.
+- persistence of the selected font identifier in committed state and global history, without embedded font bytes or digests;
+- image regeneration using the originally selected font when available;
+- deterministic bundled fallback when the committed font identifier is unavailable or unusable;
+- consistent font use across every reveal stage prepared together;
+- reuse of valid prepared images independently of subsequent font-file changes;
+- actionable failure when no usable font resource can be resolved.
 
 Use deterministic random sources where required.
 

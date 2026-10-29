@@ -1336,19 +1336,22 @@ Recovery of a valid committed selection must not depend on successful reloading 
 
 The implementation may organize these operations differently provided their externally observable behavior is preserved.
 
+
 ### New daily selection
 
 At a recognized display-day transition, the application:
 
 1. Determines the new display date.
-2. Performs eligibility, repetition, priority, and random quotation selection.
-3. Creates the complete daily snapshot.
-4. Atomically commits the snapshot, global-history append, and repetition-history update.
-5. Generates and persists every required reveal-stage image.
-6. Determines the stage appropriate to the current time.
-7. Presents the corresponding prepared image.
+2. Loads and validates the complete content library and removes obsolete repetition identities.
+3. Performs eligibility, repetition, priority, and random quotation selection.
+4. Creates the complete daily snapshot.
+5. Atomically commits the snapshot, updated repetition history, next selection revision, and required scheduling context.
+6. Records the committed selection in global history on a best-effort basis.
+7. Generates and persists every required reveal-stage image.
+8. Determines the stage appropriate to the current time.
+9. Presents the corresponding prepared image.
 
-The selection is complete at commitment, independently of whether image preparation or display communication subsequently succeeds.
+The selection is complete at operational-state commitment, independently of whether global-history recording, image preparation, or display communication subsequently succeeds.
 
 A failure after commitment must not trigger reselection.
 
