@@ -72,7 +72,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
             "presentation_style": entry.presentation_style,
         },
         reveal_schedule={
-            "quotation": config.reveal.quotation.strftime("%H:%M"),
+            "quotation": config.day_start.strftime("%H:%M"),
             "source": config.reveal.source.strftime("%H:%M"),
             "attribution": config.reveal.attribution.strftime("%H:%M"),
         },

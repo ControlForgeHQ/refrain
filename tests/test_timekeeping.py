@@ -36,7 +36,7 @@ def make_configuration(
         timezone=ZoneInfo(timezone_name),
         day_start=time.fromisoformat(day_start),
         content_directory=Path("/content"),
-        reveal=RevealSchedule(time.fromisoformat(day_start), time(12), time(18)),
+        reveal=RevealSchedule(time(12), time(18)),
         presentation_region=PresentationRegion(0, 0, 1, 1),
         fonts={},
         default_fonts=(),

@@ -48,7 +48,6 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert [backend.type for backend in config.display_backends] == ["window"]
     assert config.day_start == time(6)
     assert config.content_directory == tmp_path / "content"
-    assert config.reveal.quotation == time(6)
     assert config.reveal.source == time(12)
     assert config.reveal.attribution == time(18)
     assert config.presentation_region.x == 0.1
@@ -208,7 +207,6 @@ def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Pa
 
     assert config.content_directory == absolute_content
     assert config.day_start == time(6)
-    assert config.reveal.quotation == time(6)
     assert config.reveal.source == time(8)
     assert config.reveal.attribution == time(18)
     assert config.default_fonts == ("lora",)
@@ -223,7 +221,6 @@ def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> Non
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.day_start == time(23, 59)
-    assert config.reveal.quotation == time(23, 59)
     assert config.reveal.source == time(23, 59)
     assert config.reveal.attribution == time(23, 59)
 
@@ -436,7 +433,7 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
         tmp_path / "config.yaml",
         configuration_data(
             general={"timezone": "UTC", "day_start": "6:00", "unknown": True},
-            reveal={"quotation": "07:00", "source": "invalid"},
+            reveal={"quotation": "00:00", "source": "invalid"},
             unexpected=True,
         ),
     )
@@ -445,11 +442,11 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
         config = load_application_config(config_path)
 
     assert config.day_start == time(6)
-    assert config.reveal.quotation == time(6)
     assert config.reveal.source == time(12)
     assert "using documented defaults" in caplog.text
     assert "general.day_start" in caplog.text
     assert "reveal.quotation" in caplog.text
+    assert "is not a supported configuration field; it is ignored" in caplog.text
     assert "reveal.source" in caplog.text
     assert "general.unknown" in caplog.text
     assert "unexpected" in caplog.text

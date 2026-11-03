@@ -426,7 +426,7 @@ if selection_boundary_recognized:
                 "presentation_style": candidate.entry.presentation_style,
             },
             reveal_schedule={
-                "quotation": config.reveal.quotation.strftime("%H:%M"),
+                "quotation": config.day_start.strftime("%H:%M"),
                 "source": config.reveal.source.strftime("%H:%M"),
                 "attribution": config.reveal.attribution.strftime("%H:%M"),
             },

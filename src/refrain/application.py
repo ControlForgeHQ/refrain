@@ -140,7 +140,7 @@ def _select_snapshot(
             font_identifier=_resolve_font(configuration, entry.font, chooser),
             presentation_metadata=metadata,
             reveal_schedule={
-                "quotation": configuration.reveal.quotation.strftime("%H:%M"),
+                "quotation": configuration.day_start.strftime("%H:%M"),
                 "source": (reveal.source or configuration.reveal.source).strftime("%H:%M"),
                 "attribution": (reveal.attribution or configuration.reveal.attribution).strftime("%H:%M"),
             },

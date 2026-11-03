@@ -86,7 +86,6 @@ class FontResource:
 class RevealSchedule:
     """Validated global reveal times in the configured local timezone."""
 
-    quotation: time
     source: time
     attribution: time
 
@@ -324,22 +323,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         content_directory = file.parent / content_directory
 
     reveal_data = _mapping(data.get("reveal", {}), "reveal", report)
-    _known_fields(reveal_data, {"quotation", "source", "attribution"}, "reveal", report)
-    quotation_default = day_start
-    if "quotation" not in reveal_data:
-        use_default("reveal.quotation", f"display-day start ({quotation_default:%H:%M})")
-    quotation_fallback = f"the documented display-day start default {day_start:%H:%M}"
-    quotation_time = _parse_time(
-        reveal_data.get("quotation", quotation_default.strftime("%H:%M")),
-        "reveal.quotation",
-        report,
-        fallback=quotation_fallback,
-    )
-    if quotation_time is None:
-        quotation_time = day_start
-    elif quotation_time != day_start:
-        report("reveal.quotation", f"must coincide with general.day_start; using {quotation_fallback}")
-        quotation_time = day_start
+    _known_fields(reveal_data, {"source", "attribution"}, "reveal", report)
 
     reveal_times: dict[str, time] = {}
     for field, default in (("source", "12:00"), ("attribution", "18:00")):
@@ -368,7 +352,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                     logging.ERROR,
                 )
         reveal_times[field] = parsed
-    reveal = RevealSchedule(quotation_time, reveal_times["source"], reveal_times["attribution"])
+    reveal = RevealSchedule(reveal_times["source"], reveal_times["attribution"])
 
     layout = _mapping(data.get("layout", {}), "layout", report)
     _known_fields(layout, {"presentation_region", "fonts", "text"}, "layout", report)
