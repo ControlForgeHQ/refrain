@@ -840,15 +840,53 @@ Do not introduce dynamic plugin discovery, entry-point registration, generalized
 
 ### Backend selection
 
-Select the configured backend at application startup.
+Construct the configured display backends at application startup.
 
 Use explicit mappings or conditional construction for supported built-in implementations. Import backend-specific dependencies only when the corresponding implementation is selected.
 
-A recognized but unimplemented backend must fail with an actionable diagnostic.
+The configuration must contain at least one backend and must not contain duplicate backend types.
 
-Do not silently fall back to another backend if construction or initialization fails.
+A recognized but unimplemented backend must produce an actionable diagnostic.
+
+Do not silently substitute another backend when construction or initialization fails.
 
 Keep configuration validation separate from actual hardware availability checks.
+
+Backend construction and initialization failures must be isolated so that an unavailable destination does not prevent other configured destinations from operating.
+
+### Multi-backend coordination
+
+Use independent execution for each configured backend so that slow or blocked updates do not delay publication to other destinations.
+
+A dedicated worker per backend is the preferred initial implementation. Use ordinary Python threading facilities rather than introducing a separate asynchronous framework or process-management service.
+
+Keep each backend's existing synchronous `update()` interface.
+
+Serialize updates and lifecycle operations for each individual backend. Never invoke overlapping updates on the same backend instance.
+
+Maintain at most one pending desired presentation per backend. When a newer presentation becomes required, replace the pending request rather than accumulating obsolete stages.
+
+Do not interrupt an active hardware transfer unless its backend explicitly supports safe interruption.
+
+The coordinator must remain responsive to scheduling events while backend workers are active.
+
+Track the latest required presentation independently from each backend's most recent successful update.
+
+Persist advancement of the globally required reveal stage through the existing operational-state mechanism without waiting for all backend updates to complete. Backend workers must not independently advance authoritative reveal progress. A failed or uncertain backend update affects only that backend's publication status and recovery requirements.
+
+A backend update is successful only when its own `update()` operation completes successfully. Success on another backend must not satisfy its pending update.
+
+Identify each requested presentation using an opaque identity associated with the prepared image. The coordinator may derive this identity from the committed selection revision and resolved reveal stage, but backend implementations must not depend on those values or inspect persistent operational state.
+
+Associate each outstanding backend update with the identity of the presentation it was asked to publish. Record successful publication only for that identity, so completion of an older update cannot incorrectly satisfy a newer pending request.
+
+Avoid unnecessary image duplication. Backend workers must receive images whose lifetime remains valid throughout their update operation.
+
+Coordinate artifact cleanup with outstanding image readers and backend operations. Do not remove prepared images while an active or pending update still requires them.
+
+Do not persist backend-specific presentation acknowledgements. Startup recovery may republish the currently required image to every available backend.
+
+Keep worker state and synchronization limited to what is necessary for independent publication, shutdown, and recovery.
 
 ### Desktop window backend
 
@@ -957,27 +995,62 @@ Avoid unnecessary physical refreshes.
 
 A successful prepared-image update should not be repeated merely because the scheduler reevaluates its state.
 
-When the desired stage advances during an active update, the application should ultimately present the latest required stage rather than replaying obsolete intermediate stages.
+When the desired stage advances during an active update, the backend should ultimately present the latest required stage rather than replaying obsolete intermediate stages.
 
 Avoid overlapping display operations.
+
+Backend processing order must not delay publication to another destination.
 
 ### Display failures
 
 Classify failures sufficiently to support meaningful diagnostics and bounded recovery.
 
-`DisplayBackendError.recoverable` defaults to true. Backends mark errors nonrecoverable when the active instance cannot safely accept another update (for example, a closed window or disabled hardware transport). The continuous coordinator retries recoverable errors on the active backend but terminates and releases it on a nonrecoverable error; it never implements hardware-specific reinitialization.
+`DisplayBackendError.recoverable` defaults to true. Backends mark errors nonrecoverable when the active instance cannot safely accept another update, such as a closed window or disabled hardware transport.
 
-Distinguish failures occurring before presentation, failures during presentation, and uncertain outcomes when the underlying implementation permits.
+Retry recoverable errors on the affected backend without blocking other workers or the application scheduler.
 
-Use bounded retry behavior rather than unrestricted rapid retry loops.
+An unrecoverable backend error must release or disable the affected instance safely. Other functional backends must continue operating.
+
+Initialization failures should be reported independently. Do not assume that an instance which failed construction can be retried using the normal update interface.
+
+Where recovery requires constructing a replacement backend instance, coordinate cleanup and reinitialization without overlapping operations on the same destination.
+
+Use bounded retry delays rather than unrestricted rapid retries.
 
 Retries must not indefinitely block recognition of newer scheduled presentation requirements.
+
+If every configured backend becomes unavailable, report the loss of all presentation destinations. Continue bounded recovery when possible; otherwise allow the application to fail so that external service supervision can respond.
+
+Distinguish failures occurring before presentation, failures during presentation, and uncertain outcomes when the underlying implementation permits.
 
 Preserve the retained e-paper image when possible.
 
 Do not report successful hardware presentation when the result is unknown.
 
 Hardware validation must distinguish between driver-call success and visibly correct panel output.
+
+### Multi-backend validation
+
+Include hardware-independent tests covering:
+
+- Multiple configured backends receiving the same prepared image.
+- Duplicate backend rejection.
+- Independent initialization and failure reporting.
+- One backend continuing while another is blocked or slow.
+- No overlapping updates to an individual backend.
+- Replacement of pending stages with the latest required presentation.
+- Independent successful-publication tracking.
+- Failed and uncertain updates not being treated as successful.
+- Recovery from individual backend failures without reselection.
+- Startup recovery and republication to available backends.
+- Artifact lifetimes while updates remain active.
+- Graceful shutdown while one or more backends are busy.
+
+Use injected or simulated backends to test slow and failed updates deterministically.
+
+Validate the existing window and image-server backends together on a supported graphical development environment.
+
+Verify physical Waveshare operation with another enabled backend on the target Raspberry Pi before declaring multi-backend presentation validated.
 
 ## Scheduling and timekeeping
 

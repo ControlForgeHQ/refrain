@@ -141,7 +141,11 @@ reveal:
   attribution: "18:00"
 
 display:
-  backend: "window"
+  backends:
+    - type: "window"
+    - type: "image-server"
+      host: "127.0.0.1"
+      port: 8080
 
 layout:
   presentation_region:
@@ -164,7 +168,7 @@ layout:
     max_font_size: 100
 ```
 
-The example illustrates the initial configuration structure, including a selected display backend, a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
+The example illustrates the initial configuration structure, including simultaneous desktop window and image-server backends, a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
 
 Refrain automatically registers its bundled fonts. They can be referenced by their stable identifiers without declaring filesystem paths in application configuration.
 
@@ -174,9 +178,13 @@ The default font pool controls which registered fonts are eligible for automatic
 
 User-supplied font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the resources and presentation layout provided by an installation.
 
-### Display backend
+### Display backends
 
-The required `display.backend` field selects the implementation used to present complete rendered images.
+The required `display.backends` field selects one or more implementations used to present complete rendered images.
+
+The field must contain a nonempty sequence of backend mappings.
+
+Each backend mapping requires a `type` field identifying one supported built-in backend.
 
 Version 0.1 defines the following built-in backend identifiers:
 
@@ -186,43 +194,54 @@ Version 0.1 defines the following built-in backend identifiers:
 | `"waveshare-13in3-e"` | Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E). |
 | `"image-server"` | Makes the current complete presentation image available to HTTP clients. |
 
-Only implemented backends may be selected at runtime. A backend that cannot be initialized must produce an actionable error rather than silently selecting another backend.
+Each backend type may appear at most once in `display.backends`.
 
-The field is required and has no implicit default. Development example configurations may select `"window"`; installations using the physical e-paper panel must explicitly select `"waveshare-13in3-e"`.
+The sequence must contain at least one valid, uniquely identified backend. Duplicate backend types are configuration errors.
+
+Backend declaration order has no semantic meaning and does not establish execution priority.
+
+Only implemented backends may be selected at runtime. Unsupported backend identifiers do not become available merely because they appear in configuration.
+
+An unavailable backend must produce an actionable diagnostic rather than silently selecting another type. Runtime failures of an individual backend do not invalidate other configured destinations.
+
+The `display.backends` field has no implicit default. Development example configurations may select `"window"`; installations using the physical e-paper panel must explicitly include `"waveshare-13in3-e"`.
+
+The former singular `display.backend` field is not supported. No compatibility alias or automatic conversion is provided.
 
 Backend selection is independent of content selection, reveal scheduling, and image preparation.
 
-Display backends consume complete rendered images. Backend selection does not change the configured presentation region, typography, or committed snapshot.
-
-Unsupported backend identifiers are configuration errors.
+All configured backends consume the same complete prepared images. Backend selection does not change the configured presentation region, typography, committed snapshot, or reveal schedule.
 
 Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
 
-#### Image-server configuration
+#### Backend-specific fields
 
-The `image-server` backend provides an HTTP service for retrieving the current prepared image.
+Each backend mapping contains its required `type` field and any supported settings for that backend.
 
-Its optional settings are defined in the `display.image-server` mapping.
+The `window` and `waveshare-13in3-e` backends require no additional configuration fields in Version 0.1.
+
+The `image-server` backend supports optional `host` and `port` fields.
 
 For example:
 
 ```yaml
 display:
-  backend: "image-server"
+  backends:
+    - type: "waveshare-13in3-e"
 
-  image-server:
-    host: "0.0.0.0"
-    port: 8080
+    - type: "image-server"
+      host: "0.0.0.0"
+      port: 8080
 ```
 
-The following fields are supported:
+The following fields are supported for the `image-server` backend:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `display.image-server.host` | String | No | `"127.0.0.1"` |
-| `display.image-server.port` | Integer | No | `8080` |
+| `host` | String | No | `"127.0.0.1"` |
+| `port` | Integer | No | `8080` |
 
-The `display.image-server` mapping may be omitted entirely. When present, it must be a mapping containing only supported fields.
+These fields belong directly to the `image-server` backend mapping, not to a separate application-level configuration section.
 
 `host` specifies the local address on which the HTTP service listens.
 
@@ -242,7 +261,9 @@ Binding to a network-accessible address does not provide authentication or encry
 
 An unavailable listening address or occupied port is a backend initialization failure, not a configuration fallback condition.
 
-The `display.image-server` settings are validated whenever the mapping is present, regardless of which display backend is selected. They do not affect other backends.
+Invalid optional image-server settings are handled according to the application's documented configuration-validation rules.
+
+Unsupported fields within a backend mapping are reported as unrecognized configuration fields.
 
 The image-server backend uses the fixed HTTP endpoint `/display/current` and serves PNG images. Neither the endpoint path nor the image format is configurable in Version 0.1.
 

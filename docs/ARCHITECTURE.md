@@ -1213,20 +1213,24 @@ Normal scheduled updates select among prepared images rather than invoking image
 
 ### Backend responsibility
 
-Refrain presents complete rendered images through a narrow, hardware-independent display backend interface.
+Refrain presents complete rendered images through narrow, hardware-independent display backend interfaces.
 
 A display backend provides two operations:
 
 - `update(image)` presents a complete Pillow image through the configured output destination.
 - `close()` releases resources owned by the backend.
 
-The application selects one built-in backend through validated runtime configuration. Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
+Refrain selects one or more built-in display backends through validated runtime configuration. Each backend type may be configured at most once.
+
+Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
 
 Version 0.1 provides three built-in display backends:
 
 - `window`: Presents complete images in a graphical desktop window.
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
 - `image-server`: Makes the current complete image available to network clients through a read-only HTTP service.
+
+All configured backends receive the same prepared presentation image. Backend selection does not introduce independent content selection, reveal scheduling, rendering, layout, or resolution.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
 
@@ -1249,15 +1253,47 @@ The image-server backend owns an HTTP service that exposes the most recently acc
 
 The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations.
 
-The backend validates image compatibility with its destination rather than silently resizing or otherwise changing the prepared presentation.
+Each backend validates image compatibility with its destination rather than silently resizing or otherwise changing the prepared presentation.
 
-A completed `update()` indicates that the backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
+A completed `update()` indicates that the individual backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
 
 Failures and uncertain hardware outcomes must remain distinguishable where the underlying implementation permits.
 
 Display backends must not perform quotation selection, reveal scheduling, image preparation, or persistent-state updates.
 
 Backend implementations are built-in application components. Version 0.1 does not define a general display plugin system.
+
+### Multi-backend publication
+
+Refrain coordinates publication of the current prepared presentation independently to every configured display backend.
+
+A single committed daily snapshot and set of prepared reveal-stage images remain authoritative for all destinations.
+
+Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent the application from recognizing subsequent scheduling events.
+
+An active update to one backend must not overlap another update to the same backend. Updates to different backends may proceed concurrently.
+
+The persisted highest reveal stage represents the application's globally reached reveal progression. It does not certify successful presentation by any particular backend.
+
+Reveal progression advances monotonically when a later stage becomes required and is durably recorded independently of backend publication outcomes.
+
+The application coordinator maintains independent successful-publication status for each backend during the application lifetime.
+
+The application must distinguish the currently required prepared presentation from the presentation last successfully published to each backend. A successful update to one destination does not establish successful publication to another.
+
+Publication tracking is owned by the application coordinator, not by individual display backends. Backends receive complete images and do not interpret selection revisions, reveal stages, or persistent operational state.
+
+Backend-specific publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available backend.
+
+If a new presentation becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
+
+An active hardware update need not be interrupted when a newer presentation becomes available.
+
+Publication does not require simultaneous completion or acknowledgement from every destination.
+
+The order of backend declarations does not establish publication priority.
+
+Multi-backend publication must preserve bounded memory use and must not require one complete image copy or an unbounded update queue for every pending presentation.
 
 ### Network image service
 
@@ -1297,27 +1333,39 @@ The image-server backend is distinct from future local or public web publishing 
 
 ### Update behavior
 
-Physical display updates occur at meaningful presentation changes, including:
+Display updates occur at meaningful presentation changes, including:
 
 - the beginning of a new display day;
 - scheduled progressive reveals;
-- recovery when a valid desired image has not been successfully presented.
+- recovery when a backend has not successfully presented the required image.
 
 Refrain does not require continuous physical refresh or animation.
 
-Display updates must be coordinated so that overlapping operations cannot corrupt communication with the device.
+Presentation requests are distributed independently to configured backends.
+
+Backend updates must be coordinated so that overlapping operations cannot corrupt communication with an individual destination.
+
+A backend that has already successfully presented the required image should not repeat an expensive update merely because the scheduler reevaluates its state.
 
 For the image-server backend, an update replaces the currently available image representation. Network clients retrieve that representation independently of the application's scheduling operations.
 
 ### Failure handling
 
-A display-update failure must be reported with sufficient diagnostic context.
+Display backend failures are isolated by destination.
+
+Failure to initialize, update, or recover one backend must be reported without preventing otherwise functional backends from presenting the current image.
 
 Transient failures may be retried using a bounded recovery policy.
 
-Retries must not indefinitely block scheduling or prevent the application from recognizing a newer desired presentation.
+Retries must not indefinitely block scheduling, other destinations, or recognition of newer presentation requirements.
 
-The application must distinguish a known successful update from a failed or uncertain update where the hardware API permits.
+A backend instance that can no longer accept updates must be released or disabled safely. Failure of that instance does not require termination of the entire application while another destination remains operational.
+
+An unavailable backend must not be silently replaced with a different backend type.
+
+When no configured destination is operational, Refrain must report the condition clearly and continue bounded recovery where recovery remains possible. An unrecoverable failure of every configured destination may terminate the application so that external service supervision can respond.
+
+The application must distinguish a known successful update from a failed or uncertain update where the backend permits.
 
 An uncertain hardware result must not be treated as proof that the desired image was successfully displayed.
 
@@ -1325,7 +1373,9 @@ For the image-server backend, unsuccessful image preparation or replacement must
 
 Individual network-client failures do not constitute display-backend update failures. The backend does not require clients to retrieve or acknowledge published images.
 
-The exact retry parameters and hardware lifecycle behavior are engineering decisions informed by the relevant output destination.
+The exact retry parameters and backend lifecycle mechanisms are engineering decisions informed by the relevant output destination.
+
+Backend recovery must not modify committed selection history or cause quotation reselection.
 
 ### Retained display content
 
@@ -1333,7 +1383,7 @@ E-paper retains its visible image without continuous power.
 
 Refrain should preserve useful displayed content across temporary application and hardware failures when possible.
 
-It must not clear a physical display merely because a recoverable software problem occurred.
+It must not clear a physical display merely because a recoverable software problem occurred or another backend failed.
 
 The image-server backend retains the last successfully accepted image while the backend remains operational. It does not independently persist that representation across application restarts.
 
@@ -1353,7 +1403,7 @@ Normal startup performs the following logical operations:
 6. Verify that all required reveal-stage images are available and valid for the committed selection.
 7. Prepare or recover any missing presentation artifacts using available font resources.
 8. Determine the currently required reveal stage, respecting previously reached progression.
-9. Initialize the display backend and present the required prepared image when necessary.
+9. Initialize configured display backends and independently publish the required prepared image to available destinations.
 10. Continue operating until shutdown.
 
 Recoverable configuration problems and individual invalid content files or entries must not prevent otherwise valid operation.
@@ -1365,6 +1415,8 @@ If no committed selection exists and a usable effective content library cannot b
 If a new selection is required during continuous operation but the content library is unavailable or unusable, Refrain must not clear repetition history, commit an empty selection, or replace the previously committed presentation.
 
 The application must preserve existing committed state and prepared images where practical.
+
+Failure to initialize an individual display backend must not prevent other configured destinations from becoming operational.
 
 The implementation may organize these operations differently provided their externally observable behavior is preserved.
 
@@ -1381,13 +1433,15 @@ At a recognized display-day transition, the application:
 7. Records the committed selection in global history on a best-effort basis.
 8. Generates and persists every required reveal-stage image.
 9. Determines the stage appropriate to the current time.
-10. Presents the corresponding prepared image.
+10. Independently requests presentation of the corresponding prepared image through each configured backend.
 
 A missing, inaccessible, or empty effective content library prevents a new selection without modifying committed operational state.
 
 The selection is complete at operational-state commitment, independently of whether global-history recording, image preparation, or display communication subsequently succeeds.
 
 A failure after commitment must not trigger reselection.
+
+Presentation completion is tracked independently for each backend and does not change the committed selection.
 
 ### Normal operation
 
@@ -1411,21 +1465,27 @@ An interruption after commitment preserves the committed selection.
 
 Missing or incomplete prepared images are regenerated from the committed snapshot.
 
-Display failures are retried according to the display backend's recovery policy.
+Individual display backend failures are handled through independent recovery policies without delaying other available destinations.
+
+After restart, each available backend is supplied with the currently required prepared image without relying on persisted backend-specific presentation progress.
 
 Recovery must not introduce additional history entries or silently substitute content.
 
 ### Shutdown
 
-Normal shutdown must safely release owned software and hardware resources.
+Normal shutdown must stop new presentation requests and safely release resources owned by every configured display backend.
 
-Shutdown must not intentionally erase the retained e-paper image.
+Backend shutdown must account for active update operations without permitting unsafe overlapping hardware access.
+
+Failure to close one backend must not prevent cleanup attempts for other backends.
+
+Shutdown must not intentionally erase retained e-paper images.
 
 Committed selection state and prepared presentation images remain available for subsequent startup recovery.
 
 ### Failure isolation
 
-Recoverable hardware failures must not invalidate content selection or persistent history.
+Display backend failures must remain isolated from other destinations and must not invalidate content selection or persistent history.
 
 Rendering failures must not cause reselection after a daily snapshot has been committed.
 
