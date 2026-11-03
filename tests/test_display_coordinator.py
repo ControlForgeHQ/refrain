@@ -177,3 +177,71 @@ def test_recoverable_update_failure_retries_without_reinitializing() -> None:
     finally:
         coordinator.close()
     assert backend.closed
+
+
+@pytest.mark.parametrize("operation", ["initialization", "update"])
+def test_unexpected_backend_exception_is_terminal(operation: str) -> None:
+    configuration = (DisplayBackendConfiguration("window"),)
+    attempts = []
+    backend_closed = Event()
+
+    class UnexpectedBackend:
+        def update(self, image):
+            attempts.append("update")
+            raise RuntimeError("programming error")
+
+        def close(self):
+            backend_closed.set()
+
+    def factory(_configuration):
+        attempts.append("initialize")
+        if operation == "initialization":
+            raise RuntimeError("programming error")
+        return UnexpectedBackend()
+
+    coordinator = DisplayPublicationCoordinator(configuration, factory)
+    coordinator.publish((10, 0), image(5))
+    try:
+        assert wait_until(lambda: coordinator.all_unavailable)
+        expected_attempts = ["initialize"] if operation == "initialization" else ["initialize", "update"]
+        assert attempts == expected_attempts
+    finally:
+        coordinator.close()
+    assert backend_closed.is_set() is (operation == "update")
+
+
+def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, caplog) -> None:
+    monkeypatch.setattr("refrain.display.coordinator._SHUTDOWN_TIMEOUT", 0.02)
+    entered, release = Event(), Event()
+    backend_closed = Event()
+    retained_images = []
+
+    class BlockingBackend:
+        def update(self, image):
+            retained_images.append(image)
+            entered.set()
+            assert release.wait(2)
+            assert image.getpixel((0, 0)) == (12, 0, 0)
+
+        def close(self):
+            backend_closed.set()
+
+    backend = BlockingBackend()
+    coordinator = DisplayPublicationCoordinator(
+        (DisplayBackendConfiguration("window"),),
+        lambda _configuration: backend,
+    )
+    coordinator.publish((11, 0), image(12))
+    assert entered.wait(1)
+
+    started = time.monotonic()
+    with caplog.at_level("ERROR"):
+        coordinator.close()
+
+    assert time.monotonic() - started < 0.5
+    assert "did not stop within" in caplog.text
+    assert not backend_closed.is_set()
+    assert retained_images[0].getpixel((0, 0)) == (12, 0, 0)
+
+    release.set()
+    assert backend_closed.wait(1)

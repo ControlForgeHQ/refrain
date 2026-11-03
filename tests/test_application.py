@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import socket
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from importlib.resources import files
+from io import BytesIO
 from pathlib import Path
 from random import Random
 from threading import Event
+from time import monotonic, sleep
+from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -28,11 +33,14 @@ from refrain import (
     run_startup,
 )
 from refrain.__main__ import main
+from refrain.config import DisplayBackendConfiguration
 from refrain.display import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
     DisplayBackendUpdateError,
+    create_display_backend,
 )
+from refrain.display.coordinator import DisplayPublicationCoordinator
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
@@ -747,6 +755,148 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert len(workspace.history_records()) == 1
 
 
+def test_continuous_http_publication_progresses_while_another_backend_is_busy(workspace) -> None:
+    ordinary(workspace)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace(
+            '    - type: "waveshare-13in3-e"',
+            f'    - type: "window"\n    - type: "image-server"\n' f'      host: "127.0.0.1"\n      port: {port}',
+        ),
+        encoding="utf-8",
+    )
+    clock = RuntimeClock(at(10, 7))
+    slow_started, release_slow, slow_updated, slow_closed = Event(), Event(), Event(), Event()
+    slow_updates = []
+
+    class SlowBackend:
+        def update(self, image):
+            slow_updates.append(image.copy())
+            if len(slow_updates) == 1:
+                slow_started.set()
+                assert release_slow.wait(5)
+            elif len(slow_updates) == 2:
+                slow_updated.set()
+
+        def close(self):
+            slow_closed.set()
+
+    def backend_factory(configuration):
+        if configuration.type == "window":
+            return SlowBackend()
+        return create_display_backend(
+            configuration.type,
+            image_server_host=configuration.host,
+            image_server_port=configuration.port,
+        )
+
+    def read_until(expected: bytes) -> None:
+        deadline = monotonic() + 4
+        while monotonic() < deadline:
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/display/current", timeout=0.25) as response:
+                    if response.status == 200 and response.read() == expected:
+                        return
+            except OSError:
+                pass
+            sleep(0.02)
+        pytest.fail("image-server did not publish the expected prepared stage")
+
+    wait_count = 0
+
+    def scheduling_wait(_deadline, _shutdown, **_kwargs):
+        nonlocal wait_count
+        wait_count += 1
+        assert slow_started.wait(2)
+        stage = wait_count - 1
+        expected = next(workspace.artifacts.rglob(f"stage-{stage}.png")).read_bytes()
+        read_until(expected)
+        if wait_count == 1:
+            clock.move(at(10, 12))
+            return False
+        assert not release_slow.is_set()
+        release_slow.set()
+        assert slow_updated.wait(2)
+        clock.set()
+        return True
+
+    try:
+        run_application(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            shutdown_event=clock,
+            random_source=Random(1),
+            backend_factory=backend_factory,
+            wall_clock=lambda: clock.now,
+            monotonic_clock=lambda: clock.elapsed,
+            scheduling_wait=scheduling_wait,
+        )
+    finally:
+        release_slow.set()
+
+    assert wait_count == 2
+    assert workspace.load().highest_reveal_stage == 1
+    assert len(slow_updates) == 2 and slow_closed.is_set()
+    assert all(update.size == (1600, 1200) for update in slow_updates)
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="requires a graphical display")
+def test_window_and_image_server_publish_independently() -> None:
+    pytest.importorskip("tkinter", reason="requires Tk support")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    configurations = (
+        DisplayBackendConfiguration("window"),
+        DisplayBackendConfiguration("image-server", host="127.0.0.1", port=port),
+    )
+    window = create_display_backend("window")
+    window_update = window.update
+    update_started, release_update = Event(), Event()
+
+    def blocked_window_update(image):
+        update_started.set()
+        assert release_update.wait(5)
+        window_update(image)
+
+    window.update = blocked_window_update
+
+    def backend_factory(configuration):
+        if configuration.type == "window":
+            return window
+        return create_display_backend(
+            configuration.type,
+            image_server_host=configuration.host,
+            image_server_port=configuration.port,
+        )
+
+    coordinator = DisplayPublicationCoordinator(configurations, backend_factory)
+    expected = Image.new("RGB", (16, 12), (31, 47, 59))
+    identity = (1, 0)
+    try:
+        coordinator.publish(identity, expected.copy())
+        assert update_started.wait(2)
+        deadline = monotonic() + 4
+        while monotonic() < deadline:
+            if coordinator.acknowledgements["image-server"] == identity:
+                with urlopen(f"http://127.0.0.1:{port}/display/current", timeout=1) as response:
+                    published = Image.open(BytesIO(response.read()))
+                    assert published.size == expected.size
+                    assert published.getpixel((0, 0)) == expected.getpixel((0, 0))
+                break
+            sleep(0.02)
+        else:
+            pytest.fail("image-server did not publish while the window update was blocked")
+        release_update.set()
+        assert coordinator.wait_for_publication(identity, timeout=2)
+    finally:
+        release_update.set()
+        coordinator.close()
+
+
 @pytest.mark.parametrize(
     ("extra", "events", "expected"),
     [
@@ -1013,10 +1163,29 @@ def test_continuous_terminal_display_error_stops_without_retry(workspace, monkey
 
 def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, monkeypatch, caplog) -> None:
     ordinary(workspace)
-    display = FakeDisplay(fail_update=True)
+    update_failed = Event()
+
+    class FailingDisplay(FakeDisplay):
+        def update(self, image):
+            update_failed.set()
+            super().update(image)
+
+    display = FailingDisplay(fail_update=True)
     clock = RuntimeClock(at(10, 7), retries=[lambda: None] * 8)
+
+    def shutdown_after_failure(_deadline, shutdown, **_kwargs):
+        assert update_failed.wait(1)
+        shutdown.set()
+        return True
+
     with caplog.at_level(logging.WARNING):
-        stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
+        stages, _, _ = run_continuously(
+            workspace,
+            clock,
+            monkeypatch,
+            display,
+            scheduling_wait=shutdown_after_failure,
+        )
     assert stages == [(1, 0)] and display.closed == 1
     assert clock.retry_delays == []
     assert caplog.text.count("Display backend waveshare-13in3-e update failed") == 1

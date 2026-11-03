@@ -1477,6 +1477,8 @@ Normal shutdown must stop new presentation requests and safely release resources
 
 Backend shutdown must account for active update operations without permitting unsafe overlapping hardware access.
 
+Shutdown waits for active synchronous updates only for a bounded period. It must not interrupt a backend operation or invoke that backend's cleanup concurrently with an active update. If an update remains blocked at the deadline, its worker retains the active image and attempts cleanup if the operation later returns; process termination may ultimately end a still-blocked worker.
+
 Failure to close one backend must not prevent cleanup attempts for other backends.
 
 Shutdown must not intentionally erase retained e-paper images.

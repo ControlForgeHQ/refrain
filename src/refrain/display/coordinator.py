@@ -15,6 +15,7 @@ from . import DisplayBackend, DisplayBackendError, create_display_backend
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
+_SHUTDOWN_TIMEOUT = 60.0
 
 
 @dataclass
@@ -56,7 +57,7 @@ class DisplayPublicationCoordinator:
                 target=self._run_backend,
                 args=(state,),
                 name=f"refrain-display-{state.configuration.type}",
-                daemon=False,
+                daemon=True,
             )
             for state in self._states.values()
         ]
@@ -120,12 +121,24 @@ class DisplayPublicationCoordinator:
             return any(state.successful_identity == identity for state in self._states.values())
 
     def close(self) -> None:
-        """Stop accepting requests, finish active updates, and join every backend worker."""
+        """Stop requests and wait a bounded time without interrupting active backend calls."""
         with self._condition:
             self._stopping = True
             self._condition.notify_all()
+        deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
         for thread in self._threads:
-            thread.join()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+        for state, thread in zip(self._states.values(), self._threads, strict=True):
+            if thread.is_alive():
+                _LOGGER.error(
+                    "Display backend %s did not stop within %.0f seconds; "
+                    "its active update will not be interrupted or closed concurrently",
+                    state.configuration.type,
+                    _SHUTDOWN_TIMEOUT,
+                )
         with self._condition:
             self._release(self._desired)
             self._desired = None
@@ -163,13 +176,16 @@ class DisplayPublicationCoordinator:
                     try:
                         backend = self._factory(state.configuration)
                     except Exception as error:
-                        recoverable = not isinstance(error, DisplayBackendError) or error.recoverable
+                        recoverable = isinstance(error, DisplayBackendError) and error.recoverable
                         with self._condition:
                             state.error = str(error)
                             state.terminal = not recoverable or not self._retry
                             self._signal_all_unavailable()
                             self._condition.notify_all()
-                        _LOGGER.warning("Display backend %s initialization failed: %s", name, error)
+                        if isinstance(error, DisplayBackendError):
+                            _LOGGER.warning("Display backend %s initialization failed: %s", name, error)
+                        else:
+                            _LOGGER.exception("Unexpected display backend %s initialization failure", name)
                         if state.terminal:
                             return
                         if not self._wait_before_retry(retry_delay):
@@ -196,13 +212,16 @@ class DisplayPublicationCoordinator:
                 try:
                     backend.update(presentation.image)
                 except Exception as error:
-                    recoverable = not isinstance(error, DisplayBackendError) or error.recoverable
+                    recoverable = isinstance(error, DisplayBackendError) and error.recoverable
                     with self._condition:
                         state.error = str(error)
                         state.terminal = not recoverable or not self._retry
                         self._signal_all_unavailable()
                         self._condition.notify_all()
-                    _LOGGER.warning("Display backend %s update failed: %s", name, error)
+                    if isinstance(error, DisplayBackendError):
+                        _LOGGER.warning("Display backend %s update failed: %s", name, error)
+                    else:
+                        _LOGGER.exception("Unexpected display backend %s update failure", name)
                     if state.terminal:
                         return
                     if not self._wait_before_retry(retry_delay):
