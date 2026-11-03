@@ -85,7 +85,7 @@ Bundled fonts are package resources, not paths relative to the current directory
 
 ## Running Refrain
 
-`python -m refrain` runs continuously, automatically presenting progressive reveals and selecting new quotations at observed display-day boundaries. All three locations are required and are never inferred from a user's home directory or installation layout:
+`python -m refrain` runs continuously, showing the startup information view for 60 seconds by default before presenting the current daily quotation. Set `information_view.duration` to `0` to disable it, or to an integer from `1` through `300` to choose another duration. The interval starts after the first display backend successfully publishes the view. Refrain then presents the latest required daily reveal and continues selecting quotations at observed display-day boundaries. All three locations are required and are never inferred from a user's home directory or installation layout:
 
 ```sh
 .venv/bin/python -m refrain \
@@ -122,7 +122,7 @@ Add `--once` to run only the startup-and-presentation workflow:
   --once
 ```
 
-One-shot execution does not schedule future updates or retry failures. For `window` and `image-server`, it holds the initial presentation open until Ctrl+C; the Waveshare panel retains its image after the command exits. The Python API also preserves `run_startup(...)` for one-shot use and exposes `run_application(..., shutdown_event=event)` for continuous operation with an explicit `threading.Event`.
+One-shot execution does not schedule future updates or retry failures. When enabled, it presents the startup information view for its configured duration before the current daily image. For `window` and `image-server`, it holds the daily presentation open until Ctrl+C; the Waveshare panel retains its image after the command exits. The Python API also preserves `run_startup(...)` for one-shot use and exposes `run_application(..., shutdown_event=event)` for continuous operation with an explicit `threading.Event`.
 
 ### Recovery limitation
 

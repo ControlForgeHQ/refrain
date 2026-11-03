@@ -9,6 +9,9 @@ reveal:
   source: "12:00"
   attribution: "18:00"
 
+information_view:
+  duration: 60
+
 display:
   backends:
     - type: "window"

@@ -41,6 +41,7 @@ from refrain.display import (
     create_display_backend,
 )
 from refrain.display.coordinator import DisplayPublicationCoordinator
+from refrain.information_view import InformationViewPreparationError
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
@@ -55,6 +56,8 @@ reveal:
 display:
   backends:
     - type: "waveshare-13in3-e"
+information_view:
+  duration: 0
 layout:
   presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.55}
   fonts:
@@ -159,6 +162,18 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert len(workspace.history_records()) == 1
     assert display.sizes == [(1600, 1200)] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 3
+
+
+def test_one_shot_startup_presents_information_before_daily_image(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
+
+    result, display = workspace.run(at(10, 7))
+
+    assert result.state.revision == 1
+    assert display.sizes == [(1600, 1200), (1600, 1200)]
+    assert display.images[0].tobytes() != display.images[1].tobytes()
+    assert len(workspace.history_records()) == 1
 
 
 def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Workspace, caplog) -> None:
@@ -745,6 +760,254 @@ def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
             **kwargs,
         )
     return presentations, initializations, display
+
+
+def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: bool):
+    instances = []
+
+    class RecordingCoordinator:
+        def __init__(self, *_args, **_kwargs):
+            self.desired_identity = None
+            self.requested = []
+            self.acknowledged = set()
+            self.closed = False
+            self.all_unavailable = False
+            instances.append(self)
+
+        def publish(self, identity, image):
+            self.requested.append(identity)
+            self.desired_identity = identity
+            image.close()
+            if acknowledge_information_view and identity == application._INFORMATION_VIEW_IDENTITY:
+                self.acknowledged.add(identity)
+
+        def has_successful_publication(self, identity):
+            return identity in self.acknowledged
+
+        def first_successful_publication_time(self, identity):
+            return 0.0 if identity in self.acknowledged else None
+
+        def clear_desired(self):
+            self.desired_identity = None
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", RecordingCoordinator)
+    return instances
+
+
+def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(
+    workspace: Workspace, monkeypatch
+) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 2"))
+    coordinators = install_recording_coordinator(monkeypatch, acknowledge_information_view=True)
+    clock = RuntimeClock(at(10, 7))
+    waits = 0
+
+    def scheduling_wait(_deadline, _shutdown, **_kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            clock.now -= timedelta(hours=1)
+            clock.elapsed += 0.5
+        elif waits == 2:
+            clock.now += timedelta(hours=2)
+            clock.elapsed += 1.4
+        elif waits == 3:
+            clock.elapsed += 0.1
+        else:
+            clock.set()
+        return clock.is_set()
+
+    run_application(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        shutdown_event=clock,
+        random_source=Random(1),
+        wall_clock=lambda: clock.now,
+        monotonic_clock=lambda: clock.elapsed,
+        scheduling_wait=scheduling_wait,
+    )
+
+    assert coordinators[0].requested == [(0, -1), (1, 0)]
+    assert clock.elapsed == 2
+    assert workspace.load().revision == 1
+    assert len(workspace.history_records()) == 1
+
+
+def test_bounded_information_attempt_transitions_to_current_day_and_reveal(workspace: Workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
+    coordinators = install_recording_coordinator(monkeypatch, acknowledge_information_view=False)
+    clock = RuntimeClock(at(10, 7))
+    waits = 0
+
+    def scheduling_wait(_deadline, _shutdown, **_kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            clock.elapsed += 60
+            clock.now = at(11, 19)
+        else:
+            clock.set()
+        return clock.is_set()
+
+    run_application(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        shutdown_event=clock,
+        random_source=Random(1),
+        wall_clock=lambda: clock.now,
+        monotonic_clock=lambda: clock.elapsed,
+        scheduling_wait=scheduling_wait,
+    )
+
+    state = workspace.load()
+    assert coordinators[0].requested == [(0, -1), (2, 2)]
+    assert state.revision == 2 and state.highest_reveal_stage == 2
+    assert state.snapshot.display_date == date(2026, 3, 11)
+    assert len(workspace.history_records()) == 2
+
+
+def test_information_view_timer_starts_on_first_backend_ack_and_transitions_latest_daily_image(
+    workspace: Workspace,
+) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8")
+        .replace("duration: 0", "duration: 2")
+        .replace(
+            '    - type: "waveshare-13in3-e"',
+            '    - type: "window"\n    - type: "image-server"',
+        ),
+        encoding="utf-8",
+    )
+    clock = RuntimeClock(at(10, 7))
+    allow_fast_update, slow_started, release_slow, slow_daily = Event(), Event(), Event(), Event()
+
+    class FastDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            if not self.images:
+                assert allow_fast_update.wait(5)
+            super().update(image)
+
+    fast = FastDisplay()
+
+    class SlowDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            if not self.images:
+                slow_started.set()
+                assert release_slow.wait(5)
+            super().update(image)
+            if len(self.images) == 2:
+                slow_daily.set()
+
+    slow = SlowDisplay()
+    displays = {"window": fast, "image-server": slow}
+    wait_count = 0
+
+    def scheduling_wait(_deadline, wake_event, **_kwargs):
+        nonlocal wait_count
+        wait_count += 1
+        if wait_count == 1:
+            assert slow_started.wait(2)
+            allow_fast_update.set()
+            assert wake_event.wait(2)
+            return False
+        if wait_count == 2:
+            assert wake_event is clock
+            clock.elapsed += 2
+            clock.now = at(11, 19)
+            return False
+        release_slow.set()
+        assert slow_daily.wait(2)
+        clock.set()
+        return True
+
+    try:
+        run_application(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            shutdown_event=clock,
+            random_source=Random(1),
+            backend_factory=lambda configuration: displays[configuration.type],
+            wall_clock=lambda: clock.now,
+            monotonic_clock=lambda: clock.elapsed,
+            scheduling_wait=scheduling_wait,
+        )
+    finally:
+        release_slow.set()
+
+    assert len(fast.images) == len(slow.images) == 2
+    assert fast.images[0].tobytes() == slow.images[0].tobytes()
+    assert fast.images[1].tobytes() == slow.images[1].tobytes()
+    assert fast.images[0].tobytes() != fast.images[1].tobytes()
+    assert workspace.load().revision == 2
+    assert workspace.load().highest_reveal_stage == 2
+    assert workspace.load().snapshot.display_date == date(2026, 3, 11)
+    assert len(workspace.history_records()) == 2
+
+
+def test_information_view_preparation_failure_falls_back_to_daily_presentation(
+    workspace: Workspace, monkeypatch
+) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
+    monkeypatch.setattr(
+        application,
+        "prepare_information_view",
+        lambda _configuration: (_ for _ in ()).throw(InformationViewPreparationError("render failed")),
+    )
+    clock = RuntimeClock(at(10, 7))
+
+    stages, _, display = run_continuously(workspace, clock, monkeypatch)
+
+    assert stages == [(1, 0)]
+    assert display.sizes == [(1600, 1200)]
+    assert workspace.load().revision == 1
+    assert len(workspace.history_records()) == 1
+
+
+def test_shutdown_during_information_publication_releases_backend_safely(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 300"))
+    clock = RuntimeClock(at(10, 7))
+    started, release = Event(), Event()
+
+    class BlockingDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            started.set()
+            assert release.wait(5)
+            super().update(image)
+
+    display = BlockingDisplay()
+
+    def scheduling_wait(_deadline, _shutdown, **_kwargs):
+        assert started.wait(2)
+        release.set()
+        clock.set()
+        return True
+
+    run_application(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        shutdown_event=clock,
+        random_source=Random(1),
+        backend_factory=lambda _configuration: display,
+        wall_clock=lambda: clock.now,
+        monotonic_clock=lambda: clock.elapsed,
+        scheduling_wait=scheduling_wait,
+    )
+
+    assert len(display.images) == 1 and display.closed == 1
+    assert workspace.load().revision == 1
+    assert len(workspace.history_records()) == 1
 
 
 def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypatch) -> None:

@@ -57,6 +57,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.default_fonts == ("lora",)
     assert config.min_font_size == 28
     assert config.max_font_size == 100
+    assert config.information_view_duration == 60
     assert set(config.fonts) == {"libre-baskerville", "lora", "source-sans-3"}
     assert all(font.bundled for font in config.fonts.values())
     assert all(font.path.is_file() for font in config.fonts.values())
@@ -77,6 +78,45 @@ def test_representative_configuration_example_loads() -> None:
 
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
     assert config.default_fonts == ("libre-baskerville", "lora", "source-sans-3")
+    assert config.information_view_duration == 60
+
+
+@pytest.mark.parametrize("duration", [0, 1, 60, 300])
+def test_information_view_duration_accepts_inclusive_integer_range(tmp_path: Path, duration: int) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(information_view={"duration": duration}),
+        )
+    )
+
+    assert config.information_view_duration == duration
+
+
+@pytest.mark.parametrize("duration", [True, False, "60", 1.5, -1, 301])
+def test_invalid_information_view_duration_warns_and_uses_default(tmp_path: Path, duration: object, caplog) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(information_view={"duration": duration}),
+        )
+    )
+
+    assert config.information_view_duration == 60
+    assert "information_view.duration" in caplog.text
+    assert "using the documented default 60" in caplog.text
+
+
+def test_information_view_duration_defaults_when_mapping_or_field_is_omitted(tmp_path: Path) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
+    explicit_empty = load_application_config(
+        write_config(
+            tmp_path / "explicit-empty.yaml",
+            configuration_data(information_view={}),
+        )
+    )
+
+    assert config.information_view_duration == explicit_empty.information_view_duration == 60
 
 
 def test_recognizes_reserved_waveshare_backend(tmp_path: Path) -> None:
