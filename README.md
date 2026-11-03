@@ -104,11 +104,11 @@ With no committed state, the command selects a quotation for the current display
 
 Operational state uses format version 3 and contains the current snapshot, revision, repetition history, scheduling context, and reveal progress. Global selection history is a separate append-only JSONL log with size-based rotation and bounded retention; it is not read during startup or recovery and never determines the next revision. Development state formats 1 and 2 are unsupported and are not migrated or replaced automatically. Archive or remove an old development state file before starting Refrain; the compatibility error leaves it unchanged.
 
-The continuous runtime keeps one display backend active across updates. It waits interruptibly for scheduling events, periodically checking for wall-clock adjustments, and retries recoverable content, storage, preparation, and display failures with monotonic delays increasing from 1 to at most 60 seconds. A failed presentation never causes reselection. Invalid application configuration or corrupted authoritative state terminates with status 1 rather than retrying indefinitely. Configuration is loaded once; content is reloaded only when a new selection is needed. After recovering the active image set, the coordinator removes obsolete revision artifacts using the store's coordinated cleanup; the active revision is retained.
+The continuous runtime gives each configured backend its own worker, so a slow destination cannot block another backend or the scheduling loop. Updates remain synchronous within each worker, are never overlapped for one backend, and coalesce to the latest required image. Recoverable content, storage, and preparation failures retry with monotonic delays increasing from 1 to at most 60 seconds; recoverable display failures retry independently on that backend. A failed presentation never causes reselection, and the globally reached reveal stage is persisted independently of backend success. Invalid application configuration, corrupted authoritative state, or loss of every display destination terminates with status 1 rather than retrying indefinitely. Configuration is loaded once; content is reloaded only when a new selection is needed. After recovering the active image set, the coordinator removes obsolete revision artifacts while retaining the active revision and images used by outstanding backend updates.
 
-Press Ctrl+C or send SIGTERM to stop. Shutdown interrupts scheduling and retry waits, releases the backend, and preserves state and prepared images without intentionally clearing retained e-paper content. The `window` and `image-server` backends remain operational throughout execution and close on shutdown; HTTP serving stops at that point. Synchronous preparation or display operations finish before shutdown can release their resources. Physical panel behavior still requires hardware validation.
+Press Ctrl+C or send SIGTERM to stop. Shutdown interrupts scheduling and backend retry waits and waits up to 60 seconds total for workers to finish active updates. It does not interrupt an active update or close its backend concurrently; if an update remains blocked, the application logs the timeout and returns while the daemon worker retains its image and attempts cleanup if the operation later returns. Other backends are still closed without intentionally clearing retained e-paper content. Physical panel behavior still requires hardware validation.
 
-If a backend reports that its instance cannot safely recover (such as a closed desktop window or disabled Waveshare transport), the application releases it and exits with status 1 rather than retrying an unusable instance. The committed selection remains available for restart.
+If a backend reports that its instance cannot safely recover (such as a closed desktop window or disabled Waveshare transport), the application releases and disables only that destination. Other configured destinations continue; if all become unavailable, the application exits with status 1. The committed selection remains available for restart.
 
 ### One-shot startup and diagnostics
 
@@ -130,16 +130,27 @@ Boundary observations exist only during the current process lifetime. After an i
 
 ## Display backend selection
 
-Every application configuration must explicitly set `display.backend`. Use `window` for development on a graphical Windows or Linux desktop; use `waveshare-13in3-e` on a supported Raspberry Pi with the physical panel connected; or use `image-server` to serve the current complete image to HTTP clients. See [Display backend](docs/CONTENT_FORMAT.md#display-backend) for the configuration contract.
+Every application configuration must explicitly set a nonempty `display.backends` sequence. Each built-in type may appear at most once; declaration order does not establish priority. Use `window` for development on a graphical Windows or Linux desktop, `waveshare-13in3-e` on a supported Raspberry Pi with the physical panel connected, and/or `image-server` to serve the current complete image to HTTP clients. For the physical panel and HTTP serving together:
+
+```yaml
+display:
+  backends:
+    - type: "waveshare-13in3-e"
+    - type: "image-server"
+      host: "127.0.0.1"
+      port: 8080
+```
+
+See [Display backends](docs/CONTENT_FORMAT.md#display-backends) for the configuration contract.
 
 The image server defaults to loopback-only access at `http://127.0.0.1:8080/display/current`. Configure it explicitly to accept connections from other devices on a trusted local network:
 
 ```yaml
 display:
-  backend: "image-server"
-  image-server:
-    host: "0.0.0.0"
-    port: 8080
+  backends:
+    - type: "image-server"
+      host: "0.0.0.0"
+      port: 8080
 ```
 
 With `0.0.0.0`, open `http://<refrain-host-lan-ip>:8080/display/current` from another device and allow the port through the host firewall if needed. This backend provides no authentication or encryption; do not expose it to untrusted networks or the public Internet.

@@ -868,6 +868,8 @@ Maintain at most one pending desired presentation per backend. When a newer pres
 
 Do not interrupt an active hardware transfer unless its backend explicitly supports safe interruption.
 
+Bound shutdown waiting to 60 seconds total across workers. If a synchronous update is still blocked at the deadline, report it and return without calling `close()` concurrently with that update. Keep the worker daemonized and retain its active image until the update returns or the process exits; the worker then attempts backend cleanup if it returns.
+
 The coordinator must remain responsive to scheduling events while backend workers are active.
 
 Track the latest required presentation independently from each backend's most recent successful update.
@@ -1008,6 +1010,8 @@ Classify failures sufficiently to support meaningful diagnostics and bounded rec
 `DisplayBackendError.recoverable` defaults to true. Backends mark errors nonrecoverable when the active instance cannot safely accept another update, such as a closed window or disabled hardware transport.
 
 Retry recoverable errors on the affected backend without blocking other workers or the application scheduler.
+
+Only `DisplayBackendError` instances explicitly marked recoverable are retried. Unexpected exceptions during construction or update are logged as programming/backend failures and terminally disable that destination.
 
 An unrecoverable backend error must release or disable the affected instance safely. Other functional backends must continue operating.
 

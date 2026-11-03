@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import socket
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from importlib.resources import files
+from io import BytesIO
 from pathlib import Path
 from random import Random
 from threading import Event
+from time import monotonic, sleep
+from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -28,11 +33,14 @@ from refrain import (
     run_startup,
 )
 from refrain.__main__ import main
+from refrain.config import DisplayBackendConfiguration
 from refrain.display import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
     DisplayBackendUpdateError,
+    create_display_backend,
 )
+from refrain.display.coordinator import DisplayPublicationCoordinator
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
@@ -45,7 +53,8 @@ reveal:
   source: "12:00"
   attribution: "18:00"
 display:
-  backend: "waveshare-13in3-e"
+  backends:
+    - type: "waveshare-13in3-e"
 layout:
   presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.55}
   fonts:
@@ -150,6 +159,34 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert len(workspace.history_records()) == 1
     assert display.sizes == [(1600, 1200)] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 3
+
+
+def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace(
+            '    - type: "waveshare-13in3-e"',
+            '    - type: "window"\n    - type: "image-server"',
+        ),
+        encoding="utf-8",
+    )
+    displays = {"window": FakeDisplay(), "image-server": FakeDisplay()}
+
+    def factory(configuration):
+        return displays[configuration.type]
+
+    result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 7),
+        random_source=Random(1),
+        backend_factory=factory,
+    )
+
+    assert result.state.revision == 1
+    assert all(display.sizes == [(1600, 1200)] and display.closed == 1 for display in displays.values())
+    assert displays["window"].images[0].tobytes() == displays["image-server"].images[0].tobytes()
 
 
 def test_history_write_failure_does_not_interrupt_startup_presentation(
@@ -466,7 +503,7 @@ def test_display_initialization_failure_preserves_state(workspace: Workspace) ->
     def factory(configuration):
         raise DisplayBackendInitializationError("no display")
 
-    with pytest.raises(ApplicationError, match="initialize"):
+    with pytest.raises(ApplicationError, match="all configured display destinations"):
         run_startup(workspace.config, workspace.state, workspace.artifacts, now=at(10, 8), backend_factory=factory)
     state = workspace.load()
     assert state.revision == 1 and state.highest_reveal_stage == 0
@@ -474,23 +511,23 @@ def test_display_initialization_failure_preserves_state(workspace: Workspace) ->
     assert not result.selected_initial_quotation and workspace.load() == state
 
 
-def test_display_update_failure_closes_backend_and_preserves_state(workspace: Workspace) -> None:
+def test_display_update_failure_closes_backend_and_persists_required_reveal(workspace: Workspace) -> None:
     ordinary(workspace)
     display = FakeDisplay(fail_update=True)
-    with pytest.raises(ApplicationError, match="display update"):
+    with pytest.raises(ApplicationError, match="all configured display destinations"):
         workspace.run(at(10, 19), display)
     assert display.closed == 1
     state = workspace.load()
-    assert state.revision == 1 and state.highest_reveal_stage == 0
+    assert state.revision == 1 and state.highest_reveal_stage == 2
     result, _ = workspace.run(at(10, 19))
     assert result.presented_stage == 2 and workspace.load().revision == 1
 
 
-def test_display_close_failure_is_reported_without_reselection(workspace: Workspace) -> None:
+def test_display_close_failure_is_reported_without_reselection(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
-    with pytest.raises(ApplicationError, match="cleanup"):
-        workspace.run(at(10, 8), FakeDisplay(fail_close=True))
+    workspace.run(at(10, 8), FakeDisplay(fail_close=True))
     assert workspace.load().revision == 1
+    assert "cleanup failed" in caplog.text
 
 
 def test_loaded_images_are_closed(workspace: Workspace, monkeypatch) -> None:
@@ -568,15 +605,22 @@ def test_failed_reveal_progress_update_is_reported(workspace: Workspace, monkeyp
     display = FakeDisplay()
     with pytest.raises(ApplicationError, match="reveal progress"):
         workspace.run(at(10, 19), display)
-    assert display.closed == 1 and workspace.load().highest_reveal_stage == 0
+    assert display.closed == 0 and workspace.load().highest_reveal_stage == 0
 
 
 def test_keep_open_runs_before_backend_is_closed(workspace: Workspace) -> None:
     ordinary(workspace)
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace(
+            'type: "waveshare-13in3-e"',
+            'type: "window"',
+        ),
+        encoding="utf-8",
+    )
     display = FakeDisplay()
     seen: list[tuple[str, int]] = []
     workspace.run(at(10, 8), display, keep_open=lambda backend: seen.append((backend, display.closed)))
-    assert seen == [("waveshare-13in3-e", 0)] and display.closed == 1
+    assert seen == [("window", 0)] and display.closed == 1
 
 
 def test_command_line_runs_startup(workspace: Workspace, monkeypatch, capsys) -> None:
@@ -651,18 +695,25 @@ def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
     display = display or FakeDisplay()
     presentations = []
     initializations = []
-    original = application.present_prepared_stage
+    coordinators = []
 
-    def present(backend, artifacts, stage):
-        original(backend, artifacts, stage)
-        presentations.append((artifacts.revision, stage))
+    class TrackingCoordinator(application.DisplayPublicationCoordinator):
+        def __init__(self, *args, **coordinator_kwargs):
+            super().__init__(*args, **coordinator_kwargs)
+            self.requested = []
+            coordinators.append(self)
+
+        def publish(self, identity, image):
+            self.requested.append(identity)
+            presentations.append(identity)
+            super().publish(identity, image)
 
     def initialize(configuration):
-        initializations.append(configuration.display_backend)
+        initializations.append(configuration.type)
         return display
 
     with monkeypatch.context() as patch:
-        patch.setattr(application, "present_prepared_stage", present)
+        patch.setattr(application, "DisplayPublicationCoordinator", TrackingCoordinator)
         run_application(
             workspace.config,
             workspace.state,
@@ -670,7 +721,7 @@ def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
             shutdown_event=clock,
             wall_clock=lambda: clock.now,
             monotonic_clock=lambda: clock.elapsed,
-            scheduling_wait=clock.scheduling_wait,
+            scheduling_wait=kwargs.pop("scheduling_wait", clock.scheduling_wait),
             random_source=Random(1),
             backend_factory=kwargs.pop("backend_factory", initialize),
             **kwargs,
@@ -702,6 +753,148 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert clock.deadlines[:2] == [at(10, 12), at(10, 18)]
     assert workspace.load().highest_reveal_stage == 2
     assert len(workspace.history_records()) == 1
+
+
+def test_continuous_http_publication_progresses_while_another_backend_is_busy(workspace) -> None:
+    ordinary(workspace)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace(
+            '    - type: "waveshare-13in3-e"',
+            f'    - type: "window"\n    - type: "image-server"\n' f'      host: "127.0.0.1"\n      port: {port}',
+        ),
+        encoding="utf-8",
+    )
+    clock = RuntimeClock(at(10, 7))
+    slow_started, release_slow, slow_updated, slow_closed = Event(), Event(), Event(), Event()
+    slow_updates = []
+
+    class SlowBackend:
+        def update(self, image):
+            slow_updates.append(image.copy())
+            if len(slow_updates) == 1:
+                slow_started.set()
+                assert release_slow.wait(5)
+            elif len(slow_updates) == 2:
+                slow_updated.set()
+
+        def close(self):
+            slow_closed.set()
+
+    def backend_factory(configuration):
+        if configuration.type == "window":
+            return SlowBackend()
+        return create_display_backend(
+            configuration.type,
+            image_server_host=configuration.host,
+            image_server_port=configuration.port,
+        )
+
+    def read_until(expected: bytes) -> None:
+        deadline = monotonic() + 4
+        while monotonic() < deadline:
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/display/current", timeout=0.25) as response:
+                    if response.status == 200 and response.read() == expected:
+                        return
+            except OSError:
+                pass
+            sleep(0.02)
+        pytest.fail("image-server did not publish the expected prepared stage")
+
+    wait_count = 0
+
+    def scheduling_wait(_deadline, _shutdown, **_kwargs):
+        nonlocal wait_count
+        wait_count += 1
+        assert slow_started.wait(2)
+        stage = wait_count - 1
+        expected = next(workspace.artifacts.rglob(f"stage-{stage}.png")).read_bytes()
+        read_until(expected)
+        if wait_count == 1:
+            clock.move(at(10, 12))
+            return False
+        assert not release_slow.is_set()
+        release_slow.set()
+        assert slow_updated.wait(2)
+        clock.set()
+        return True
+
+    try:
+        run_application(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            shutdown_event=clock,
+            random_source=Random(1),
+            backend_factory=backend_factory,
+            wall_clock=lambda: clock.now,
+            monotonic_clock=lambda: clock.elapsed,
+            scheduling_wait=scheduling_wait,
+        )
+    finally:
+        release_slow.set()
+
+    assert wait_count == 2
+    assert workspace.load().highest_reveal_stage == 1
+    assert len(slow_updates) == 2 and slow_closed.is_set()
+    assert all(update.size == (1600, 1200) for update in slow_updates)
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="requires a graphical display")
+def test_window_and_image_server_publish_independently() -> None:
+    pytest.importorskip("tkinter", reason="requires Tk support")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    configurations = (
+        DisplayBackendConfiguration("window"),
+        DisplayBackendConfiguration("image-server", host="127.0.0.1", port=port),
+    )
+    window = create_display_backend("window")
+    window_update = window.update
+    update_started, release_update = Event(), Event()
+
+    def blocked_window_update(image):
+        update_started.set()
+        assert release_update.wait(5)
+        window_update(image)
+
+    window.update = blocked_window_update
+
+    def backend_factory(configuration):
+        if configuration.type == "window":
+            return window
+        return create_display_backend(
+            configuration.type,
+            image_server_host=configuration.host,
+            image_server_port=configuration.port,
+        )
+
+    coordinator = DisplayPublicationCoordinator(configurations, backend_factory)
+    expected = Image.new("RGB", (16, 12), (31, 47, 59))
+    identity = (1, 0)
+    try:
+        coordinator.publish(identity, expected.copy())
+        assert update_started.wait(2)
+        deadline = monotonic() + 4
+        while monotonic() < deadline:
+            if coordinator.acknowledgements["image-server"] == identity:
+                with urlopen(f"http://127.0.0.1:{port}/display/current", timeout=1) as response:
+                    published = Image.open(BytesIO(response.read()))
+                    assert published.size == expected.size
+                    assert published.getpixel((0, 0)) == expected.getpixel((0, 0))
+                break
+            sleep(0.02)
+        else:
+            pytest.fail("image-server did not publish while the window update was blocked")
+        release_update.set()
+        assert coordinator.wait_for_publication(identity, timeout=2)
+    finally:
+        release_update.set()
+        coordinator.close()
 
 
 @pytest.mark.parametrize(
@@ -880,7 +1073,7 @@ def test_continuous_display_retry_without_event_or_reselection(workspace, monkey
     display = FakeDisplay(fail_update=True)
     clock = RuntimeClock(at(10, 7), retries=[lambda: setattr(display, "fail_update", False)])
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
-    assert stages == [(1, 0)] and clock.retry_delays == [1]
+    assert stages == [(1, 0)] and clock.retry_delays == []
     assert workspace.load().revision == len(workspace.history_records()) == 1
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
 
@@ -889,13 +1082,9 @@ def test_continuous_failed_display_skips_to_newer_desired_selection(workspace, m
     ordinary(workspace)
     display = FakeDisplay(fail_update=True)
 
-    def recover_display():
-        display.fail_update = False
-        clock.move(at(14, 19))
-
-    clock = RuntimeClock(at(10, 7), retries=[recover_display])
+    clock = RuntimeClock(at(10, 7), [at(14, 19)])
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
-    assert stages == [(2, 2)]
+    assert stages == [(1, 0), (2, 2)]
     assert len(workspace.history_records()) == 2
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
 
@@ -924,14 +1113,14 @@ def test_continuous_initialization_retry(workspace, monkeypatch) -> None:
     attempts = []
 
     def factory(configuration):
-        attempts.append(configuration.display_backend)
+        attempts.append(configuration.type)
         if len(attempts) == 1:
             raise DisplayBackendInitializationError("temporarily unavailable")
         return display
 
     clock = RuntimeClock(at(10, 7), retries=[lambda: None])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, backend_factory=factory)
-    assert stages == [(1, 0)] and len(attempts) == 2 and display.closed == 1
+    assert stages == [(1, 0)] and len(attempts) == 1 and display.closed == 0
     assert workspace.load().revision == 1
 
 
@@ -940,18 +1129,32 @@ def test_continuous_terminal_display_error_stops_without_retry(workspace, monkey
     ordinary(workspace)
     clock = RuntimeClock(at(10, 7))
     display = FakeDisplay()
+    update_failed = Event()
 
     def fail_update(image):
+        update_failed.set()
         raise DisplayBackendUpdateError("backend disabled", recoverable=False)
 
     def initialize(configuration):
         if operation == "initialize":
+            update_failed.set()
             raise DisplayBackendInitializationError("backend disabled", recoverable=False)
         return display
 
     display.update = fail_update
-    with pytest.raises(ApplicationError, match="backend disabled"):
-        run_continuously(workspace, clock, monkeypatch, backend_factory=initialize)
+
+    def wait_for_terminal_failure(deadline, shutdown, **kwargs):
+        assert update_failed.wait(1)
+        return False
+
+    with pytest.raises(ApplicationError, match="all configured display destinations"):
+        run_continuously(
+            workspace,
+            clock,
+            monkeypatch,
+            backend_factory=initialize,
+            scheduling_wait=wait_for_terminal_failure,
+        )
     assert display.closed == (1 if operation == "update" else 0)
     assert clock.retry_delays == [] and clock.deadlines == []
     assert len(workspace.history_records()) == 1
@@ -960,13 +1163,32 @@ def test_continuous_terminal_display_error_stops_without_retry(workspace, monkey
 
 def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, monkeypatch, caplog) -> None:
     ordinary(workspace)
-    display = FakeDisplay(fail_update=True)
+    update_failed = Event()
+
+    class FailingDisplay(FakeDisplay):
+        def update(self, image):
+            update_failed.set()
+            super().update(image)
+
+    display = FailingDisplay(fail_update=True)
     clock = RuntimeClock(at(10, 7), retries=[lambda: None] * 8)
+
+    def shutdown_after_failure(_deadline, shutdown, **_kwargs):
+        assert update_failed.wait(1)
+        shutdown.set()
+        return True
+
     with caplog.at_level(logging.WARNING):
-        stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
-    assert stages == [] and display.closed == 1
-    assert clock.retry_delays == [1, 2, 4, 8, 16, 32, 60, 60, 60]
-    assert caplog.text.count("Application operation failed") == 1
+        stages, _, _ = run_continuously(
+            workspace,
+            clock,
+            monkeypatch,
+            display,
+            scheduling_wait=shutdown_after_failure,
+        )
+    assert stages == [(1, 0)] and display.closed == 1
+    assert clock.retry_delays == []
+    assert caplog.text.count("Display backend waveshare-13in3-e update failed") == 1
     assert workspace.load().revision == 1 and png_files(workspace.artifacts)
 
 
@@ -1089,7 +1311,7 @@ def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(
     assert len(workspace.history_records()) == 1
 
 
-def test_continuous_retry_duration_uses_monotonic_time_after_interrupted_wait(workspace, monkeypatch) -> None:
+def test_backend_retry_does_not_block_scheduler_or_shutdown(workspace, monkeypatch) -> None:
     ordinary(workspace)
     display = FakeDisplay(fail_update=True)
     clock = RuntimeClock(at(10, 7))
@@ -1107,7 +1329,7 @@ def test_continuous_retry_duration_uses_monotonic_time_after_interrupted_wait(wo
 
     clock.wait = wait
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
-    assert delays == [1.0, 0.75] and stages == [(1, 0)]
+    assert delays == [] and stages == [(1, 0)]
     assert workspace.load().revision == 1
 
 
