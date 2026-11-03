@@ -11,6 +11,7 @@ import pytest
 from refrain import (
     ApplicationConfiguration,
     DailySnapshot,
+    DisplayBackendConfiguration,
     DisplayDayBoundary,
     DisplayDayBoundaryObserver,
     PersistentState,
@@ -31,7 +32,7 @@ def make_configuration(
 ) -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),
-        display_backend="window",
+        display_backends=(DisplayBackendConfiguration("window"),),
         timezone=ZoneInfo(timezone_name),
         day_start=time.fromisoformat(day_start),
         content_directory=Path("/content"),

@@ -102,11 +102,20 @@ class PresentationRegion:
 
 
 @dataclass(frozen=True)
+class DisplayBackendConfiguration:
+    """Validated settings for one configured built-in display backend."""
+
+    type: str
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
+@dataclass(frozen=True)
 class ApplicationConfiguration:
     """Validated, hardware-independent application configuration."""
 
     file: Path
-    display_backend: str
+    display_backends: tuple[DisplayBackendConfiguration, ...]
     timezone: ZoneInfo
     day_start: time
     content_directory: Path
@@ -116,8 +125,6 @@ class ApplicationConfiguration:
     default_fonts: tuple[str, ...]
     min_font_size: int
     max_font_size: int
-    image_server_host: str = "127.0.0.1"
-    image_server_port: int = 8080
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -224,52 +231,56 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
 
     display = _mapping(data.get("display", {}), "display", report)
-    _known_fields(display, {"backend", "image-server"}, "display", report)
-    display_backend = display.get("backend")
-    if not isinstance(display_backend, str) or display_backend not in _DISPLAY_BACKENDS:
-        if display_backend is None:
-            report(
-                "display.backend",
-                "is required and must be one of: 'window', 'waveshare-13in3-e', 'image-server'",
-                logging.ERROR,
-            )
-        else:
-            report(
-                "display.backend",
-                "must be one of the supported backends: 'window', 'waveshare-13in3-e', 'image-server'",
-                logging.ERROR,
-            )
-        display_backend = None
-    image_server_host = "127.0.0.1"
-    image_server_port = 8080
-    if "image-server" not in display:
-        use_default("display.image-server.host", repr(image_server_host))
-        use_default("display.image-server.port", str(image_server_port))
+    _known_fields(display, {"backends"}, "display", report)
+    configured_backends = display.get("backends")
+    display_backends: list[DisplayBackendConfiguration] = []
+    seen_backends: set[str] = set()
+    if not isinstance(configured_backends, list) or not configured_backends:
+        report("display.backends", "is required and must be a nonempty sequence of backend mappings", logging.ERROR)
     else:
-        image_server_data = _mapping(display["image-server"], "display.image-server", report)
-        _known_fields(image_server_data, {"host", "port"}, "display.image-server", report)
-        host_value = image_server_data.get("host")
-        if "host" not in image_server_data:
-            use_default("display.image-server.host", repr(image_server_host))
-        if _valid_image_server_host(host_value):
-            image_server_host = host_value
-        elif "host" in image_server_data:
-            report(
-                "display.image-server.host",
-                "must be a nonempty local bind address or hostname; using the documented default '127.0.0.1'",
-            )
-        host_value = image_server_host
-        port_value = image_server_data.get("port")
-        if "port" not in image_server_data:
-            use_default("display.image-server.port", str(image_server_port))
-        if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
-            if "port" in image_server_data:
+        for index, value in enumerate(configured_backends):
+            field = f"display.backends[{index}]"
+            if not isinstance(value, dict):
+                report(field, "must be a backend mapping", logging.ERROR)
+                continue
+            backend_type = value.get("type")
+            if not isinstance(backend_type, str) or backend_type not in _DISPLAY_BACKENDS:
                 report(
-                    "display.image-server.port",
-                    "must be an integer between 1 and 65535; using the documented default 8080",
+                    f"{field}.type",
+                    "must be one of the supported backends: 'window', 'waveshare-13in3-e', 'image-server'",
+                    logging.ERROR,
                 )
-        else:
-            image_server_port = port_value
+                continue
+            if backend_type in seen_backends:
+                report(f"{field}.type", f"duplicates backend type {backend_type!r}", logging.ERROR)
+                continue
+            seen_backends.add(backend_type)
+            allowed = {"type", "host", "port"} if backend_type == "image-server" else {"type"}
+            _known_fields(value, allowed, field, report)
+            host = "127.0.0.1"
+            port = 8080
+            if backend_type == "image-server":
+                if "host" not in value:
+                    use_default(f"{field}.host", repr(host))
+                elif _valid_image_server_host(value["host"]):
+                    host = value["host"]
+                else:
+                    report(
+                        f"{field}.host",
+                        "must be a nonempty local bind address or hostname; using the documented default '127.0.0.1'",
+                    )
+                if "port" not in value:
+                    use_default(f"{field}.port", str(port))
+                port_value = value.get("port")
+                if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
+                    if "port" in value:
+                        report(
+                            f"{field}.port",
+                            "must be an integer between 1 and 65535; using the documented default 8080",
+                        )
+                else:
+                    port = port_value
+            display_backends.append(DisplayBackendConfiguration(backend_type, host, port))
 
     general = _mapping(data.get("general", {}), "general", report)
     _known_fields(general, {"timezone", "day_start"}, "general", report)
@@ -473,10 +484,10 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     assert timezone is not None
     assert presentation_region is not None
-    assert display_backend is not None
+    assert display_backends
     return ApplicationConfiguration(
         file=file,
-        display_backend=display_backend,
+        display_backends=tuple(display_backends),
         timezone=timezone,
         day_start=day_start,
         content_directory=content_directory,
@@ -486,6 +497,4 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         default_fonts=default_fonts,
         min_font_size=sizes["min_font_size"],
         max_font_size=sizes["max_font_size"],
-        image_server_host=image_server_host,
-        image_server_port=image_server_port,
     )

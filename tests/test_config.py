@@ -15,7 +15,7 @@ def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "general": {"timezone": "America/Toronto"},
         "content": {"directory": "content"},
-        "display": {"backend": "window"},
+        "display": {"backends": [{"type": "window"}]},
         "layout": {
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"]},
@@ -45,7 +45,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     config = load_application_config(config_path)
 
     assert config.timezone.key == "America/Toronto"
-    assert config.display_backend == "window"
+    assert [backend.type for backend in config.display_backends] == ["window"]
     assert config.day_start == time(6)
     assert config.content_directory == tmp_path / "content"
     assert config.reveal.quotation == time(6)
@@ -76,16 +76,19 @@ def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> 
 def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 
-    assert config.display_backend == "window"
+    assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
     assert config.default_fonts == ("libre-baskerville", "lora", "source-sans-3")
 
 
 def test_recognizes_reserved_waveshare_backend(tmp_path: Path) -> None:
     config = load_application_config(
-        write_config(tmp_path / "config.yaml", configuration_data(display={"backend": "waveshare-13in3-e"}))
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(display={"backends": [{"type": "waveshare-13in3-e"}]}),
+        )
     )
 
-    assert config.display_backend == "waveshare-13in3-e"
+    assert config.display_backends[0].type == "waveshare-13in3-e"
 
 
 def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Path, caplog) -> None:
@@ -93,7 +96,7 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
         default_config = load_application_config(
             write_config(
                 tmp_path / "default.yaml",
-                configuration_data(display={"backend": "image-server"}),
+                configuration_data(display={"backends": [{"type": "image-server"}]}),
             )
         )
     configured = load_application_config(
@@ -101,34 +104,31 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
             tmp_path / "configured.yaml",
             configuration_data(
                 display={
-                    "backend": "image-server",
-                    "image-server": {"host": "0.0.0.0", "port": 8123},
+                    "backends": [{"type": "image-server", "host": "0.0.0.0", "port": 8123}],
                 }
             ),
         )
     )
 
-    assert "display.image-server.host" in caplog.text
-    assert "display.image-server.port" in caplog.text
-    assert default_config.display_backend == "image-server"
-    assert default_config.image_server_host == "127.0.0.1"
-    assert default_config.image_server_port == 8080
-    assert configured.image_server_host == "0.0.0.0"
-    assert configured.image_server_port == 8123
+    assert "display.backends[0].host" in caplog.text
+    assert "display.backends[0].port" in caplog.text
+    assert default_config.display_backends[0].host == "127.0.0.1"
+    assert default_config.display_backends[0].port == 8080
+    assert configured.display_backends[0].host == "0.0.0.0"
+    assert configured.display_backends[0].port == 8123
 
 
 @pytest.mark.parametrize(
     ("image_server", "expected_field"),
     [
-        ([], "display.image-server"),
-        ({"unknown": 1}, "display.image-server.unknown"),
-        ({"host": ""}, "display.image-server.host"),
-        ({"host": "not a hostname"}, "display.image-server.host"),
-        ({"host": True}, "display.image-server.host"),
-        ({"port": True}, "display.image-server.port"),
-        ({"port": "8080"}, "display.image-server.port"),
-        ({"port": 0}, "display.image-server.port"),
-        ({"port": 65536}, "display.image-server.port"),
+        ({"unknown": 1}, "display.backends[1].unknown"),
+        ({"host": ""}, "display.backends[1].host"),
+        ({"host": "not a hostname"}, "display.backends[1].host"),
+        ({"host": True}, "display.backends[1].host"),
+        ({"port": True}, "display.backends[1].port"),
+        ({"port": "8080"}, "display.backends[1].port"),
+        ({"port": 0}, "display.backends[1].port"),
+        ({"port": 65536}, "display.backends[1].port"),
     ],
 )
 def test_invalid_image_server_settings_are_recoverable(
@@ -137,13 +137,20 @@ def test_invalid_image_server_settings_are_recoverable(
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(display={"backend": "window", "image-server": image_server}),
+            configuration_data(
+                display={
+                    "backends": [
+                        {"type": "window"},
+                        {"type": "image-server", **image_server},
+                    ]
+                }
+            ),
         )
     )
 
     assert expected_field in caplog.text
-    assert config.image_server_host == "127.0.0.1"
-    assert config.image_server_port == 8080
+    assert config.display_backends[1].host == "127.0.0.1"
+    assert config.display_backends[1].port == 8080
 
 
 @pytest.mark.parametrize(
@@ -151,8 +158,9 @@ def test_invalid_image_server_settings_are_recoverable(
     [
         (None, "is required"),
         ({}, "is required"),
-        ({"backend": "unknown"}, "supported backends"),
-        ({"backend": 1}, "supported backends"),
+        ({"backends": "window"}, "nonempty sequence"),
+        ({"backends": [{"type": "unknown"}]}, "supported backends"),
+        ({"backends": [{"type": "window"}, {"type": "window"}]}, "duplicates backend"),
     ],
 )
 def test_required_and_invalid_display_backend_are_rejected(
@@ -168,8 +176,29 @@ def test_required_and_invalid_display_backend_are_rejected(
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    diagnostic = next(item for item in error.value.diagnostics if item.field == "display.backend")
+    diagnostic = next(item for item in error.value.diagnostics if item.severity >= 40)
     assert expected_message in diagnostic.message
+
+
+def test_singular_display_configuration_is_not_supported(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path / "config.yaml", configuration_data(display={"backend": "window"}))
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(item.field == "display.backends" for item in error.value.diagnostics)
+
+
+def test_non_mapping_backend_entry_is_diagnosed(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(display={"backends": [{"type": "window"}, None]}),
+    )
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(item.field == "display.backends[1]" for item in error.value.diagnostics)
 
 
 def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Path) -> None:

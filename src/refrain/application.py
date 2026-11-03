@@ -15,9 +15,16 @@ from threading import Event
 from PIL import Image
 
 from .artifacts import ArtifactStoreError, PreparedImageArtifactSet, PreparedImageArtifactStore
-from .config import ApplicationConfiguration, ApplicationConfigurationError, FontResource, load_application_config
+from .config import (
+    ApplicationConfiguration,
+    ApplicationConfigurationError,
+    DisplayBackendConfiguration,
+    FontResource,
+    load_application_config,
+)
 from .content import ContentLibraryError, load_content_library
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
+from .display.coordinator import DisplayPublicationCoordinator
 from .eligibility import build_eligible_quotation_pool
 from .persistence import (
     DailySnapshot,
@@ -65,14 +72,14 @@ class StartupResult:
     selected_initial_quotation: bool
 
 
-BackendFactory = Callable[[ApplicationConfiguration], DisplayBackend]
+BackendFactory = Callable[[DisplayBackendConfiguration], DisplayBackend]
 
 
-def _default_backend_factory(configuration: ApplicationConfiguration) -> DisplayBackend:
+def _default_backend_factory(configuration: DisplayBackendConfiguration) -> DisplayBackend:
     return create_display_backend(
-        configuration.display_backend,
-        image_server_host=configuration.image_server_host,
-        image_server_port=configuration.image_server_port,
+        configuration.type,
+        image_server_host=configuration.host,
+        image_server_port=configuration.port,
     )
 
 
@@ -274,11 +281,11 @@ def run_startup(
     backend_factory: BackendFactory = _default_backend_factory,
     keep_open: Callable[[str], None] | None = None,
 ) -> StartupResult:
-    """Run one startup cycle: recover or select, prepare images, and present the required stage.
+    """Run one startup cycle: recover or select, prepare images, and publish the required stage.
 
     ``now`` defaults to the current UTC time and exists so tests can control scheduling.
-    ``keep_open`` is called with the backend name after a successful presentation while the
-    backend is still open, for backends that only serve while the process runs.
+    ``keep_open`` is called with one successfully updated serving backend name while its
+    backend remains open.
     """
     configuration = _load_configuration(config_file)
     store = PersistentStateStore(Path(state_path).absolute())
@@ -305,27 +312,29 @@ def run_startup(
     except SchedulingEvaluationError as error:
         raise ApplicationError(f"scheduling evaluation failed: {error}") from error
 
-    artifacts = _recover_images(state, artifact_store, configuration.fonts)
-
-    try:
-        backend = backend_factory(configuration)
-    except DisplayBackendError as error:
-        raise ApplicationError(f"cannot initialize display backend: {error}") from error
-    try:
-        present_prepared_stage(backend, artifacts, stage)
+    if stage > state.highest_reveal_stage:
         state = _persist_reveal_progress(store, state, stage)
-        if keep_open is not None:
-            keep_open(configuration.display_backend)
-    except BaseException:
-        try:
-            backend.close()
-        except Exception as close_error:
-            _LOGGER.warning("Display backend cleanup failed: %s", close_error)
-        raise
+    artifacts = _recover_images(state, artifact_store, configuration.fonts)
+    coordinator = DisplayPublicationCoordinator(configuration.display_backends, backend_factory, retry=False)
     try:
-        backend.close()
-    except DisplayBackendError as error:
-        raise ApplicationError(f"display cleanup failed: {error}") from error
+        try:
+            image = artifacts.load_stage(stage)
+        except ArtifactStoreError as error:
+            raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
+        identity = (state.revision, stage)
+        coordinator.publish(identity, image)
+        if not coordinator.wait_for_publication(identity):
+            raise ApplicationError("all configured display destinations are unavailable")
+        if keep_open is not None:
+            for backend_configuration in configuration.display_backends:
+                if (
+                    backend_configuration.type in {"window", "image-server"}
+                    and coordinator.acknowledgements[backend_configuration.type] == identity
+                ):
+                    keep_open(backend_configuration.type)
+                    break
+    finally:
+        coordinator.close()
     return StartupResult(state=state, presented_stage=stage, selected_initial_quotation=initial)
 
 
@@ -344,7 +353,7 @@ def run_application(
     monotonic_clock: Callable[[], float] = time.monotonic,
     scheduling_wait: Callable[..., bool] = wait_for_scheduling_event,
 ) -> None:
-    """Operate until shutdown, retaining one backend and authoritative committed state.
+    """Operate until shutdown, retaining independent display workers and authoritative state.
 
     Clocks, scheduling waits, and the shutdown event can be supplied for deterministic,
     hardware-independent integration tests. Retry waits use the event's interruptible
@@ -357,10 +366,10 @@ def run_application(
     observer = DisplayDayBoundaryObserver(configuration)
     shutdown = shutdown_event if shutdown_event is not None else Event()
     chooser = random_source if random_source is not None else random.Random()
-    backend: DisplayBackend | None = None
+    coordinator: DisplayPublicationCoordinator | None = None
     artifacts: PreparedImageArtifactSet | None = None
     artifact_revision: int | None = None
-    presented: tuple[int, int] | None = None
+    latest_desired: tuple[int, int] | None = None
     pending_history: tuple[int, DailySnapshot, frozenset[str]] | None = None
     last_failure: str | None = None
     retry_delay = 1.0
@@ -398,9 +407,14 @@ def run_application(
                     continue
                 assert state is not None and decision.required_reveal_stage is not None
                 stage = decision.required_reveal_stage
-                if presented is not None and presented[0] == state.revision:
-                    stage = max(stage, presented[1])
+                if latest_desired is not None and latest_desired[0] == state.revision:
+                    stage = max(stage, latest_desired[1])
+                latest_desired = (state.revision, stage)
                 if artifacts is None or artifact_revision != state.revision:
+                    if coordinator is not None:
+                        desired_identity = coordinator.desired_identity
+                        if desired_identity is not None and desired_identity[0] != state.revision:
+                            coordinator.clear_desired()
                     artifacts = _recover_images(state, artifact_store, configuration.fonts)
                     artifact_revision = state.revision
                     try:
@@ -408,28 +422,26 @@ def run_application(
                     except ArtifactStoreError as error:
                         _LOGGER.warning("Cannot clean obsolete prepared images: %s", error)
                     continue
-                if backend is None:
-                    try:
-                        backend = backend_factory(configuration)
-                    except DisplayBackendError as error:
-                        if not error.recoverable:
-                            raise ApplicationError(f"cannot initialize display backend: {error}") from error
-                        raise _RetryableApplicationError(f"cannot initialize display backend: {error}") from error
-                    continue
-                if presented != (state.revision, stage):
-                    try:
-                        present_prepared_stage(backend, artifacts, stage)
-                    except _RetryableApplicationError as error:
-                        if isinstance(error.__cause__, ArtifactStoreError):
-                            artifacts = None
-                        raise
-                    presented = (state.revision, stage)
-                    _LOGGER.info("Presented selection %s stage %s", state.revision, stage)
-                    if stage > state.highest_reveal_stage:
-                        _persist_reveal_progress(store, state, stage)
-                    continue
                 if stage > state.highest_reveal_stage:
-                    _persist_reveal_progress(store, state, stage)
+                    state = _persist_reveal_progress(store, state, stage)
+                identity = (state.revision, stage)
+                if coordinator is None:
+                    coordinator = DisplayPublicationCoordinator(
+                        configuration.display_backends,
+                        backend_factory,
+                        all_unavailable_event=shutdown,
+                    )
+                if coordinator.all_unavailable:
+                    raise ApplicationError("all configured display destinations are unavailable")
+                if coordinator.desired_identity != identity:
+                    try:
+                        image = artifacts.load_stage(stage)
+                    except ArtifactStoreError as error:
+                        artifacts = None
+                        raise _RetryableApplicationError(
+                            f"cannot load prepared image for stage {stage}: {error}"
+                        ) from error
+                    coordinator.publish(identity, image)
                     continue
                 if last_failure is not None:
                     _LOGGER.info("Application operation recovered")
@@ -453,12 +465,11 @@ def run_application(
             except SchedulingEvaluationError as error:
                 raise ApplicationError(f"scheduling evaluation failed: {error}") from error
     finally:
-        if backend is not None:
-            try:
-                backend.close()
-            except DisplayBackendError as error:
-                _LOGGER.warning("Display backend cleanup failed: %s", error)
+        if coordinator is not None:
+            coordinator.close()
         _LOGGER.info("Continuous presentation stopped")
+    if coordinator is not None and coordinator.all_unavailable:
+        raise ApplicationError("all configured display destinations are unavailable")
 
 
 __all__ = [
