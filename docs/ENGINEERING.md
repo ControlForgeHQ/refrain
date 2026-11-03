@@ -872,6 +872,8 @@ The coordinator must remain responsive to scheduling events while backend worker
 
 Track the latest required presentation independently from each backend's most recent successful update.
 
+Persist advancement of the globally required reveal stage through the existing operational-state mechanism without waiting for all backend updates to complete. Backend workers must not independently advance authoritative reveal progress. A failed or uncertain backend update affects only that backend's publication status and recovery requirements.
+
 A backend update is successful only when its own `update()` operation completes successfully. Success on another backend must not satisfy its pending update.
 
 Use committed selection revisions and reveal-stage identifiers to distinguish presentation requirements. Do not rely on display dates alone, since dates may repeat after clock adjustments.

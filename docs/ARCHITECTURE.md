@@ -1273,11 +1273,15 @@ Each backend operates independently. A slow or failed update must not delay publ
 
 An active update to one backend must not overlap another update to the same backend. Updates to different backends may proceed concurrently.
 
-Each backend maintains its own presentation progress and recovery status during the application lifetime.
+The persisted highest reveal stage represents the application's globally reached reveal progression. It does not certify successful presentation by any particular backend.
+
+Reveal progression advances monotonically when a later stage becomes required and is durably recorded independently of backend publication outcomes.
+
+Each backend maintains its own successful-publication status during the application lifetime.
 
 The application must distinguish the globally required reveal stage from the stage last successfully presented by each backend. A successful update to one destination does not establish successful presentation to another.
 
-Backend-specific presentation progress is operational state and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available backend.
+Backend-specific publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available backend.
 
 If a new presentation becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
 
