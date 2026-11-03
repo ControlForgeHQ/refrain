@@ -1277,7 +1277,7 @@ The persisted highest reveal stage represents the application's globally reached
 
 Reveal progression advances monotonically when a later stage becomes required and is durably recorded independently of backend publication outcomes.
 
-Each backend maintains its own successful-publication status during the application lifetime.
+The application coordinator maintains independent successful-publication status for each backend during the application lifetime.
 
 The application must distinguish the currently required prepared presentation from the presentation last successfully published to each backend. A successful update to one destination does not establish successful publication to another.
 
