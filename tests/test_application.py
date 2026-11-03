@@ -161,6 +161,24 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert len(png_files(workspace.artifacts)) == 3
 
 
+def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Workspace, caplog) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(
+        _CONFIG.replace('day_start: "06:00"', 'day_start: "08:00"').replace(
+            "reveal:\n  source:", 'reveal:\n  quotation: "00:00"\n  source:'
+        ),
+        encoding="utf-8",
+    )
+
+    result, _ = workspace.run(at(10, 8, 30))
+
+    state = workspace.load()
+    assert result.presented_stage == 0
+    assert state is not None
+    assert state.snapshot.reveal_schedule["quotation"] == "08:00"
+    assert "reveal.quotation" in caplog.text
+
+
 def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.config.write_text(

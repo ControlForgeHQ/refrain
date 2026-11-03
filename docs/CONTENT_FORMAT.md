@@ -136,7 +136,6 @@ content:
   directory: "content"
 
 reveal:
-  quotation: "06:00"
   source: "12:00"
   attribution: "18:00"
 
@@ -308,13 +307,12 @@ Directory organization does not influence content eligibility, priority, or sele
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `reveal.quotation` | Time string | No | Display-day start |
 | `reveal.source` | Time string | No | `"12:00"` |
 | `reveal.attribution` | Time string | No | `"18:00"` |
 
-The global reveal schedule establishes default local times for the supported semantic fields.
+The global reveal schedule establishes default local times for source and attribution.
 
-`quotation` is the initial presentation stage and must coincide with the configured display-day start.
+The initial presentation stage, which reveals the quotation, occurs at `general.day_start`.
 
 `source` and `attribution` specify when those fields first become visible, if present in the selected content entry.
 
