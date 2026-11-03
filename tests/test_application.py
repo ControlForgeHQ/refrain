@@ -964,8 +964,17 @@ def test_information_view_preparation_failure_falls_back_to_daily_presentation(
         lambda _configuration: (_ for _ in ()).throw(InformationViewPreparationError("render failed")),
     )
     clock = RuntimeClock(at(10, 7))
+    display = FakeDisplay()
 
-    stages, _, display = run_continuously(workspace, clock, monkeypatch)
+    def wait_for_daily_image(_deadline, _shutdown, **_kwargs):
+        deadline = monotonic() + 2
+        while not display.sizes and monotonic() < deadline:
+            sleep(0.01)
+        assert display.sizes == [(1600, 1200)]
+        clock.set()
+        return True
+
+    stages, _, _ = run_continuously(workspace, clock, monkeypatch, display, scheduling_wait=wait_for_daily_image)
 
     assert stages == [(1, 0)]
     assert display.sizes == [(1600, 1200)]
