@@ -1279,7 +1279,9 @@ Reveal progression advances monotonically when a later stage becomes required an
 
 Each backend maintains its own successful-publication status during the application lifetime.
 
-The application must distinguish the globally required reveal stage from the stage last successfully presented by each backend. A successful update to one destination does not establish successful presentation to another.
+The application must distinguish the currently required prepared presentation from the presentation last successfully published to each backend. A successful update to one destination does not establish successful publication to another.
+
+Publication tracking is owned by the application coordinator, not by individual display backends. Backends receive complete images and do not interpret selection revisions, reveal stages, or persistent operational state.
 
 Backend-specific publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available backend.
 

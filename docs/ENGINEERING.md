@@ -876,7 +876,9 @@ Persist advancement of the globally required reveal stage through the existing o
 
 A backend update is successful only when its own `update()` operation completes successfully. Success on another backend must not satisfy its pending update.
 
-Use committed selection revisions and reveal-stage identifiers to distinguish presentation requirements. Do not rely on display dates alone, since dates may repeat after clock adjustments.
+Identify each requested presentation using an opaque identity associated with the prepared image. The coordinator may derive this identity from the committed selection revision and resolved reveal stage, but backend implementations must not depend on those values or inspect persistent operational state.
+
+Associate each outstanding backend update with the identity of the presentation it was asked to publish. Record successful publication only for that identity, so completion of an older update cannot incorrectly satisfy a newer pending request.
 
 Avoid unnecessary image duplication. Backend workers must receive images whose lifetime remains valid throughout their update operation.
 
