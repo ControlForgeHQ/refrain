@@ -85,14 +85,18 @@ The first release should be useful in normal household operation without dependi
 - Support optional automatic presentation of the information view for a configurable, bounded duration, enabled by default.
 - Allow the information view to be presented independently of the committed daily selection and its reveal progression.
 
-### Physical display
+### Display destinations
 
 - Support the Waveshare 13.3-inch e-Paper HAT+ (E).
 - Operate on Raspberry Pi OS Lite, initially targeting Raspberry Pi 3 B+.
-- Perform complete display updates at the configured reveal stages and display-day boundary.
-- Avoid unnecessary refreshes.
-- Handle recoverable display communication failures.
-- Preserve the existing image when practical during application failures or restarts.
+- Support simultaneous presentation through multiple configured display backends.
+- Allow each supported backend type to be configured at most once.
+- Distribute the same prepared presentation image to every configured backend.
+- Update display backends independently so that slow or unavailable destinations do not delay other destinations.
+- Isolate backend failures and provide bounded recovery without interrupting otherwise functional destinations.
+- Perform complete physical display updates at the configured reveal stages and display-day boundary.
+- Avoid unnecessary physical refreshes.
+- Preserve existing displayed content when practical during application failures or restarts.
 - Support normal unattended operation and graceful shutdown.
 
 ### Development and validation
@@ -104,6 +108,7 @@ The first release should be useful in normal household operation without dependi
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
 - Validate physical display behavior on the target hardware.
+- Validate simultaneous backend operation, independent updates, failure isolation, and recovery.
 - Document installation, configuration, content creation, and ordinary operation.
 
 ## Non-goals
@@ -117,7 +122,7 @@ Version 0.1 does not include:
 - external playback actions;
 - remote administration;
 - content synchronization between devices;
-- multiple physical display targets;
+- independent presentation layouts, resolutions, or reveal schedules for individual display backends;
 - multiple presentation themes;
 - a general plugin system;
 - online quotation retrieval;
