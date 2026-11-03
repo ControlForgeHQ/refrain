@@ -979,7 +979,7 @@ For daily images, preparation generates a paper-white background independently o
 
 ### Information view
 
-Refrain will provide an information view presenting application identity and selected diagnostic information in a format consistent with its quotation-based visual design.
+Refrain provides an information view presenting application identity and selected runtime information in a format consistent with its quotation-based visual design.
 
 The information view contains:
 
@@ -987,24 +987,51 @@ The information view contains:
 - optional source and attribution identifying the quotation's context;
 - the Refrain and ControlForge project identity;
 - application version and available build or commit information;
-- selected runtime and environment details where available;
+- basic platform, Python runtime, and network information where available;
+- the configured display backend types;
 - an appropriate copyright notice.
 
-The curated literary content is not drawn from the user content library and does not participate in daily selection, priority, repetition history, or global selection history.
+The curated quotation is supplied by the application rather than selected from the user content library. It remains consistent for a given release and does not participate in daily selection, priority, repetition history, or global selection history.
 
-The information-view background generator owns branding, diagnostic information, and other non-literary presentation elements.
+The information-view background generator owns branding, runtime information, and other non-literary presentation elements.
 
 The shared quotation renderer presents the curated quotation and its optional source and attribution using the same composition and typography facilities as normal daily quotations.
 
-The literary composition remains visually primary. Branding and diagnostic information are subordinate and should not compromise readability.
+The literary composition remains visually primary. The initial design favors approximately 70% literary presentation and 30% supporting information, without prescribing rigid layout proportions.
 
-The information view is independent of the committed daily selection. Displaying it does not create a new selection, modify selection histories, or advance reveal progress.
+Branding and runtime information must remain visually subordinate and must not compromise readability.
 
-The information view may be requested independently of automatic presentation behavior.
+The initial information view uses one application-owned layout. Multiple configurable information-view styles are not required.
 
-Application configuration will provide an optional automatic-display duration. A duration of zero disables automatic presentation without disabling the information view itself.
+Runtime information is a snapshot of available information at the time the view is prepared, not a continuously updated monitoring interface.
 
-An unavailable optional diagnostic value must not prevent the information view from being rendered.
+Version information should identify the running application release. Build or commit information may be included when available without requiring access to a Git checkout at runtime.
+
+Network information should favor useful connection information, including the image-server URL when that backend is configured and a usable address is available.
+
+Configured display backend types are reported without attempting to represent their current health or publication status.
+
+Optional runtime details must be omitted gracefully when unavailable. Missing diagnostic information must not prevent preparation of the information view.
+
+The information view is independent of the committed daily selection. Preparing or displaying it must not create a new selection, modify selection histories, or advance reveal progress.
+
+The same complete information-view image is supplied to all configured display backends through the normal publication facilities.
+
+Automatic presentation occurs once on each application start, subject to the configured duration. It does not repeat at ordinary display-day boundaries.
+
+The automatic duration defaults to 60 seconds. A duration of zero disables automatic presentation without disabling the information-view capability.
+
+The configured duration is measured using elapsed monotonic time beginning when the first backend successfully publishes the information view.
+
+Publication to other backends remains independent. A slow or unavailable backend must not delay the transition to daily presentation for other destinations.
+
+If no backend successfully publishes the information view within a bounded initial attempt period, the application proceeds toward normal daily presentation rather than waiting indefinitely.
+
+When the duration expires, Refrain determines the currently required daily presentation using the normal scheduling and recovery rules. It does not replay reveal stages that are no longer required.
+
+An information-view preparation or publication failure must not invalidate the committed selection or prevent ordinary daily presentation when a functional display destination remains available.
+
+The architecture permits the information view to be requested independently of automatic startup behavior. Version 0.1 does not require an external trigger, interactive interface, or runtime control mechanism for requesting it.
 
 ### Initial visual design
 
@@ -1402,9 +1429,20 @@ Normal startup performs the following logical operations:
 5. Perform and commit a new selection when required and when a usable effective content library is available.
 6. Verify that all required reveal-stage images are available and valid for the committed selection.
 7. Prepare or recover any missing presentation artifacts using available font resources.
-8. Determine the currently required reveal stage, respecting previously reached progression.
-9. Initialize configured display backends and independently publish the required prepared image to available destinations.
-10. Continue operating until shutdown.
+8. Initialize configured display backends independently.
+9. If automatic information-view presentation is enabled, prepare and request publication of the information view.
+10. Observe the configured information-view duration and transition to daily presentation when it expires, or proceed directly when automatic presentation is disabled or cannot be completed.
+11. Determine the currently required daily reveal stage, respecting previously reached progression and any scheduling events that occurred during startup.
+12. Independently publish the corresponding prepared image to available destinations.
+13. Continue operating until shutdown.
+
+The application may prepare or recover the committed daily presentation before or during information-view publication. Information-view presentation does not defer required selection commitment or alter authoritative reveal progression.
+
+The information-view duration begins with the first successful publication acknowledgement, not with process launch or the beginning of image preparation.
+
+An unsuccessful initial information-view publication attempt must not indefinitely delay ordinary presentation.
+
+The transition to daily presentation requests the image appropriate to the current scheduling state. Missed intermediate reveal stages are not replayed.
 
 Recoverable configuration problems and individual invalid content files or entries must not prevent otherwise valid operation.
 

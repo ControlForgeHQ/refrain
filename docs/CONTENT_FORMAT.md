@@ -139,6 +139,9 @@ reveal:
   source: "12:00"
   attribution: "18:00"
 
+information_view:
+  duration: 60
+
 display:
   backends:
     - type: "window"
@@ -167,7 +170,7 @@ layout:
     max_font_size: 100
 ```
 
-The example illustrates the initial configuration structure, including simultaneous desktop window and image-server backends, a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
+The example illustrates the initial configuration structure, including simultaneous desktop window and image-server backends, automatic information-view presentation, a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
 
 Refrain automatically registers its bundled fonts. They can be referenced by their stable identifiers without declaring filesystem paths in application configuration.
 
@@ -286,6 +289,37 @@ Times use 24-hour `HH:MM` notation with two-digit hours and minutes.
 Examples of valid times are `"00:00"`, `"06:00"`, and `"18:30"`.
 
 Seconds, timezone suffixes, and loosely formatted times are not supported in Version 0.1.
+
+### Information view settings
+
+The optional `information_view` mapping controls automatic presentation of Refrain's application information view during startup.
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `information_view.duration` | Integer | No | `60` |
+
+`duration` specifies the automatic information-view presentation duration in seconds.
+
+Valid values are integers from 0 through 300, inclusive.
+
+- `0` disables automatic information-view presentation.
+- Values from `1` through `300` enable automatic presentation for the specified duration.
+
+The duration begins when the first configured display backend successfully publishes the information view.
+
+The duration is measured using elapsed time rather than wall-clock time. Changes to the system clock do not extend or shorten it.
+
+The information view appears once on each application start when enabled. It does not automatically reappear at a display-day boundary.
+
+If the information view cannot be prepared or successfully published within the application's bounded initial attempt period, ordinary daily presentation proceeds without requiring successful information-view publication.
+
+Omitting `information_view` or its `duration` field uses the documented default of 60 seconds.
+
+An explicitly supplied invalid duration produces a warning and uses the documented default, according to the application's configuration-validation rules.
+
+Boolean values, strings, floating-point values, negative integers, and integers greater than 300 are invalid.
+
+This configuration controls automatic startup presentation only. It does not define an external request interface or additional scheduling rules.
 
 ### Content settings
 

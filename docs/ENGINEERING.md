@@ -814,6 +814,60 @@ Tests must verify that all present quotation, source, and attribution text remai
 
 Visual inspection remains appropriate for typography and layout quality.
 
+### Information view preparation and publication
+
+Prepare the information view using the existing Pillow image-composition facilities.
+
+Keep view-specific background composition separate from the shared quotation renderer. The background generator is responsible for project identity, build information, runtime details, and copyright information. The quotation renderer remains responsible for the literary composition.
+
+Supply the information view's curated quotation from application-owned release resources rather than the user content library.
+
+Render the information view as one complete, fully visible image. Do not introduce reveal stages or daily-selection artifacts for this view.
+
+Keep optional runtime-data collection lightweight and tolerant of unavailable platform facilities. Do not require network connectivity, Git, hardware-specific dependencies, or additional background services merely to prepare the view.
+
+Use the installed application version as the primary version identifier. Include build or commit metadata when reliably available without requiring a Git working tree.
+
+Collect basic environment details through appropriate Python or platform facilities. Avoid unnecessary subprocesses, external service calls, broad network enumeration, or repeated system probing.
+
+Do not include credentials, tokens, private configuration contents, or privileged filesystem information in the rendered view.
+
+Use the existing display publication coordinator to distribute the prepared information-view image to configured backends.
+
+Distinguish information-view publication identity from committed daily presentation identity without exposing view semantics to display backend implementations.
+
+The startup information-view interval is transient application state. It does not require durable storage or modification of the committed daily snapshot.
+
+Use a monotonic clock for the configured display duration. Begin timing when the first backend successfully acknowledges publication of the information view.
+
+Bound the initial attempt to obtain a successful information-view publication so recoverable backend failures cannot postpone daily presentation indefinitely.
+
+Do not require successful publication by every backend before the information-view interval begins or ends.
+
+When the interval ends, reevaluate the normal scheduling requirements and request the currently appropriate prepared daily image. Preserve independent backend execution, pending-update coalescing, and safe handling of active hardware transfers.
+
+Do not reset or reconstruct display backends merely to transition between the information and daily views.
+
+Information-view preparation failures must be reported without preventing ordinary daily presentation when that remains possible.
+
+Include hardware-independent automated tests covering:
+
+- default, disabled, and explicitly configured information-view durations;
+- invalid duration values and documented fallback behavior;
+- preparation when optional build, network, or environment information is unavailable;
+- correct use of application-owned literary content independently of the content library;
+- preservation of committed selection, repetition history, and reveal progression;
+- publication to multiple independent backends;
+- timer start after the first successful publication;
+- wall-clock adjustments during the information-view interval;
+- bounded initial publication attempts when no backend succeeds;
+- transition to the latest required daily presentation after missed reveal events;
+- failure isolation and shutdown during information-view presentation.
+
+Inspect representative information-view images at the target resolution to evaluate typography, branding, information density, and visual hierarchy.
+
+The initial implementation needs one application-owned information-view layout. Do not introduce an independent styling system, plugin interface, interactive control service, or general-purpose diagnostic framework.
+
 ## Display backend
 
 ### Interface and implementation boundaries
