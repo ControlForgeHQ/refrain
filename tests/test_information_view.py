@@ -6,6 +6,7 @@ from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 import refrain.information_view as information_view
@@ -14,11 +15,16 @@ from refrain import load_application_config
 
 def test_prepares_complete_application_owned_image_without_user_content(tmp_path: Path, monkeypatch) -> None:
     configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
-    configuration = replace(configuration, content_directory=tmp_path / "missing-content")
+    configuration = replace(
+        configuration,
+        content_directory=tmp_path / "missing-content",
+    )
+
     compositions = []
-    original_layout = information_view.layout_composition
     fitted_text = []
     direct_text = []
+
+    original_layout = information_view.layout_composition
     original_draw_fitted = information_view._draw_fitted_text
     original_draw_text = ImageDraw.ImageDraw.text
 
@@ -28,7 +34,7 @@ def test_prepares_complete_application_owned_image_without_user_content(tmp_path
 
     def capture_fitted_text(draw, text, font_data, bounds, **kwargs):
         result = original_draw_fitted(draw, text, font_data, bounds, **kwargs)
-        fitted_text.append((text, bounds, result))
+        fitted_text.append(text)
         return result
 
     def capture_direct_text(draw, position, text, *args, **kwargs):
@@ -41,65 +47,103 @@ def test_prepares_complete_application_owned_image_without_user_content(tmp_path
 
     image = information_view.prepare_information_view(configuration)
     try:
-        assert image.mode == "RGB" and image.size == (1600, 1200)
+        assert image.mode == "RGB"
+        assert image.size == (1600, 1200)
         assert image.getpixel((0, 0)) == (250, 249, 245)
+
         with Image.new("RGB", image.size, image.getpixel((0, 0))) as blank:
             assert ImageChops.difference(image, blank).getbbox()
+
         assert len(compositions) == 1
         assert compositions[0].quotation == information_view._QUOTATION
-        assert compositions[0].attribution == "Forge, Refrain Development Team"
+        assert compositions[0].attribution == ("Forge, Refrain Development Team")
+
         assert not configuration.content_directory.exists()
-        assert any("Made for a quieter kind of noticing." in text for text, _, _ in fitted_text)
-        assert any(text.startswith("Version 0.1.0") for text, _, _ in fitted_text)
-        assert any("github.com/ControlForgeHQ/refrain" in text for text, _, _ in fitted_text)
-        assert "ControlForge" not in direct_text
+
+        assert "Made for a quieter kind of noticing." in fitted_text
+        assert any(text.startswith("Version ") for text in fitted_text)
+        assert "github.com/ControlForgeHQ/refrain" in fitted_text
+        assert "© 2026 Edward Wright" in fitted_text
+
+        assert "RUNNING ON" in fitted_text
+        assert "DISPLAY BACKENDS" in fitted_text
+        assert "NETWORK" not in fitted_text
+
         assert "1672" in direct_text
-        assert "© 2026 Edward Wright" in [text for text, _, _ in fitted_text]
-        assert any("RUNNING ON" in text for text, _, _ in fitted_text)
-        assert any("NETWORK" in text for text, _, _ in fitted_text)
-        assert any("DISPLAY BACKENDS" in text for text, _, _ in fitted_text)
-        logo = information_view._read_logo()
-        assert logo is not None and logo.mode == "RGBA" and logo.getbbox()
-        logo.close()
-        with Image.new("RGB", (260, 44), image.getpixel((0, 0))) as blank:
-            logo_region = image.crop((1248, 72, 1508, 116))
+
+        for filename in (
+            "refrain-logo.png",
+            "controlforge-logo.png",
+        ):
+            logo = information_view._read_logo(filename)
+            assert logo is not None
             try:
-                assert ImageChops.difference(logo_region, blank).getbbox()
+                assert logo.mode == "RGBA"
+                assert logo.getbbox() is not None
             finally:
-                logo_region.close()
-        assert any(bounds[1] >= 960 for _, bounds, _ in fitted_text)
+                logo.close()
+
     finally:
         image.close()
 
 
-def test_missing_controlforge_logo_does_not_prevent_information_view_rendering(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "missing_filename",
+    [
+        "controlforge-logo.png",
+        "refrain-logo.png",
+    ],
+)
+def test_missing_logo_does_not_prevent_information_view_rendering(
+    tmp_path: Path,
+    monkeypatch,
+    missing_filename: str,
+) -> None:
     configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
-    with monkeypatch.context() as missing_resource:
-        missing_resource.setattr(
-            information_view,
-            "files",
-            lambda _package: (_ for _ in ()).throw(OSError("resource unavailable")),
-        )
-        assert information_view._read_logo() is None
-    monkeypatch.setattr(information_view, "_read_logo", lambda: None)
-    configuration = replace(configuration, content_directory=tmp_path / "unused")
+    configuration = replace(
+        configuration,
+        content_directory=tmp_path / "unused",
+    )
+
+    original_read_logo = information_view._read_logo
+
+    def read_logo_with_missing_resource(filename: str):
+        if filename == missing_filename:
+            return None
+        return original_read_logo(filename)
+
+    monkeypatch.setattr(
+        information_view,
+        "_read_logo",
+        read_logo_with_missing_resource,
+    )
+
     image = information_view.prepare_information_view(configuration)
     try:
+        assert image.mode == "RGB"
         assert image.size == (1600, 1200)
     finally:
         image.close()
 
 
-def test_omits_unavailable_optional_runtime_and_network_details(tmp_path: Path, monkeypatch) -> None:
+def test_omits_unavailable_optional_runtime_details(tmp_path: Path, monkeypatch) -> None:
     configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
     configuration = replace(
         configuration,
         content_directory=tmp_path / "unavailable-library",
         display_backends=(),
     )
-    monkeypatch.setattr(information_view, "_runtime_information", lambda: (None, None))
-    monkeypatch.setattr(information_view, "_network_information", lambda _configuration: None)
-    monkeypatch.setattr(information_view, "_application_version", lambda: "0.1.0")
+
+    monkeypatch.setattr(
+        information_view,
+        "_runtime_information",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(
+        information_view,
+        "_application_version",
+        lambda: "0.1.0",
+    )
 
     fitted_text = []
     original_draw_fitted = information_view._draw_fitted_text
@@ -108,24 +152,28 @@ def test_omits_unavailable_optional_runtime_and_network_details(tmp_path: Path, 
         fitted_text.append(text)
         return original_draw_fitted(draw, text, font_data, bounds, **kwargs)
 
-    monkeypatch.setattr(information_view, "_draw_fitted_text", capture_fitted_text)
+    monkeypatch.setattr(
+        information_view,
+        "_draw_fitted_text",
+        capture_fitted_text,
+    )
+
     image = information_view.prepare_information_view(configuration)
     try:
+        assert image.mode == "RGB"
         assert image.size == (1600, 1200)
-        assert not any("Linux" in text or "http" in text for text in fitted_text)
+
         assert "Version 0.1.0" in fitted_text
         assert not any("build" in text for text in fitted_text)
-        paper = image.getpixel((0, 0))
-        for bounds in (
-            (92, 962, 622, 1008),
-            (92, 1046, 622, 1120),
-            (978, 962, 1508, 1072),
-        ):
-            with (
-                image.crop(bounds) as value_region,
-                Image.new("RGB", (bounds[2] - bounds[0], bounds[3] - bounds[1]), paper) as blank,
-            ):
-                assert ImageChops.difference(value_region, blank).getbbox() is None
+
+        assert "RUNNING ON" in fitted_text
+        assert "DISPLAY BACKENDS" in fitted_text
+
+        assert not any(
+            "Python " in text or "Windows" in text or "Linux" in text or "IMAGE-SERVER" in text for text in fitted_text
+        )
+
+        assert "NETWORK" not in fitted_text
     finally:
         image.close()
 

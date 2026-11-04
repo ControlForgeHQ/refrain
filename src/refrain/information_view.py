@@ -25,7 +25,7 @@ _INK = "#26332E"
 _MUTED = "#65716B"
 _BUILD_VERSION = re.compile(r"v?\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+][A-Za-z0-9.-]{1,24})?\Z")
 _COMMIT_HASH = re.compile(r"[0-9a-fA-F]{7,40}\Z")
-_REGION_MARGIN = 92
+_REGION_MARGIN = 32
 _MIN_SUPPORTING_FONT_SIZE = 12
 _QUOTATION = (
     "“The world is already full of remarkable things; we don't necessarily need to make them louder, "
@@ -62,14 +62,14 @@ def _read_font(name: str) -> ResolvedFont:
     return ResolvedFont(name, data)
 
 
-def _read_logo() -> Image.Image | None:
+def _read_logo(filename: str) -> Image.Image | None:
     try:
-        resource = files("refrain").joinpath("assets", "branding", "controlforge-logo.png")
+        resource = files("refrain").joinpath("assets", "branding", filename)
         with resource.open("rb") as logo_file, Image.open(logo_file) as logo:
             logo.load()
             return logo.convert("RGBA")
     except Exception as error:
-        _LOGGER.warning("ControlForge logo is unavailable; omitting it from the information view: %s", error)
+        _LOGGER.warning("Branding asset %s is unavailable: %s", filename, error)
         return None
 
 
@@ -98,19 +98,6 @@ def _application_version() -> str:
         return version("refrain")
     except PackageNotFoundError:
         return "development"
-
-
-def _network_information(configuration: ApplicationConfiguration) -> str | None:
-    for backend in configuration.display_backends:
-        if backend.type != "image-server":
-            continue
-        host = backend.host
-        if host == "0.0.0.0" or host == "::":
-            return f"HTTP image server · port {backend.port}"
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        return f"http://{host}:{backend.port}/display/current"
-    return None
 
 
 def _wrap_to_width(text: str, font: ImageFont.FreeTypeFont, width: int) -> tuple[str, ...]:
@@ -177,69 +164,134 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
     background: Image.Image | None = None
     image: Image.Image | None = None
     logo: Image.Image | None = None
+    refrain_logo: Image.Image | None = None
     try:
         quotation_font = _read_font("lora")
         supporting_font = _read_font("source-sans-3")
         background = Image.new("RGB", _IMAGE_SIZE, _PAPER)
         draw = ImageDraw.Draw(background)
 
+        top = _REGION_MARGIN
         left = _REGION_MARGIN
         right = _IMAGE_SIZE[0] - _REGION_MARGIN
         corner_width = 530
-        brand_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=34)
-        draw.text((left, 76), "REFRAIN", font=brand_font, fill=_INK)
+
+        # Upper-left corner
+        refrain_logo = _read_logo("refrain-logo.png")
+        if refrain_logo is not None:
+            refrain_logo.thumbnail((300, 40), Image.Resampling.LANCZOS)
+            background.paste(refrain_logo, (left, top), refrain_logo)
+        else:
+            fallback_font = ImageFont.truetype(
+                io.BytesIO(quotation_font.data),
+                size=34,
+            )
+            draw.text((left, top), "Refrain", font=fallback_font, fill=_INK)
+        top_offset = top + 44
         _draw_fitted_text(
             draw,
             "Made for a quieter kind of noticing.",
             supporting_font.data,
-            (left, 125, left + corner_width, 157),
-            preferred_size=20,
+            (left, top_offset, left + corner_width, top_offset + 32),
+            preferred_size=14,
             fill=_MUTED,
         )
         runtime, build = _runtime_information()
         version_text = f"Version {_application_version()}"
         if build:
             version_text = f"{version_text} · build {build}"
+        top_offset = top_offset + 24
         _draw_fitted_text(
             draw,
             version_text,
             supporting_font.data,
-            (left, 164, left + corner_width, 195),
-            preferred_size=18,
+            (left + 1, top_offset, left + corner_width + 1, top_offset + 32),
+            preferred_size=14,
             fill=_MUTED,
         )
 
-        logo = _read_logo()
+        # Upper-Right Corner
+        egg_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=12)
+        egg_width = int(egg_font.getlength("1672"))
+        draw.text((right - egg_width, top), "1672", font=egg_font, fill="#AEB6B0")
+
+        # Lower-Left Corner
+        top_offset = 1064
+        _draw_fitted_text(
+            draw,
+            "RUNNING ON",
+            supporting_font.data,
+            (left, top_offset, left + corner_width, top_offset + 32),
+            preferred_size=13,
+            fill=_MUTED,
+        )
+        top_offset = top_offset + 22
+        if runtime:
+            _draw_fitted_text(
+                draw,
+                runtime,
+                supporting_font.data,
+                (left, top_offset, left + corner_width, top_offset + 32),
+                preferred_size=18,
+                fill=_MUTED,
+            )
+        top_offset = top_offset + 36
+        _draw_fitted_text(
+            draw,
+            "DISPLAY BACKENDS",
+            supporting_font.data,
+            (left, top_offset, left + corner_width, top_offset + 32),
+            preferred_size=13,
+            fill=_MUTED,
+        )
+        backend_names = ", ".join(backend.type.upper() for backend in configuration.display_backends)
+        top_offset = top_offset + 22
+        if backend_names:
+            _draw_fitted_text(
+                draw,
+                backend_names,
+                supporting_font.data,
+                (left, top_offset, left + corner_width, top_offset + 32),
+                preferred_size=18,
+                fill=_MUTED,
+            )
+
+        # Lower-right corner
+        top_offset = 1084
+        logo = _read_logo("controlforge-logo.png")
         if logo is not None:
-            logo.thumbnail((260, 92), Image.Resampling.LANCZOS)
-            background.paste(logo, (right - logo.width, 72), logo)
+            logo.thumbnail((260, 40), Image.Resampling.LANCZOS)
+            background.paste(logo, (right - logo.width, top_offset), logo)
+        top_offset = top_offset + 44
         _draw_fitted_text(
             draw,
             "github.com/ControlForgeHQ/refrain",
             supporting_font.data,
-            (right - corner_width, 122, right, 150),
-            preferred_size=17,
+            (right - corner_width, top_offset, right, top_offset + 32),
+            preferred_size=14,
             fill=_MUTED,
             right_align=True,
         )
+        top_offset = top_offset + 24
         _draw_fitted_text(
             draw,
             "© 2026 Edward Wright",
             supporting_font.data,
-            (right - corner_width, 157, right, 181),
+            (right - corner_width, top_offset, right, top_offset + 32),
             preferred_size=14,
             fill=_MUTED,
             right_align=True,
         )
 
+        # Quotation
         composition = LiteraryComposition(quotation=_QUOTATION, attribution=_ATTRIBUTION)
         layout = layout_composition(
             composition,
             quotation_font,
-            _Region(0.17, 0.27, 0.66, 0.40),
+            _Region(0.10, 0.25, 0.80, 0.50),
             _IMAGE_SIZE,
-            min_font_size=26,
-            max_font_size=42,
+            min_font_size=42,
+            max_font_size=56,
             presentation_style="centered",
         )
         rendered = render_reveal_stages(
@@ -253,66 +305,6 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         image = rendered[0]
         draw = ImageDraw.Draw(image)
 
-        _draw_fitted_text(
-            draw,
-            "RUNNING ON",
-            supporting_font.data,
-            (left, 934, left + corner_width, 954),
-            preferred_size=13,
-            fill=_MUTED,
-        )
-        _draw_fitted_text(
-            draw,
-            "NETWORK",
-            supporting_font.data,
-            (left, 1018, left + corner_width, 1038),
-            preferred_size=13,
-            fill=_MUTED,
-        )
-        _draw_fitted_text(
-            draw,
-            "DISPLAY BACKENDS",
-            supporting_font.data,
-            (right - corner_width, 934, right, 954),
-            preferred_size=13,
-            fill=_MUTED,
-            right_align=True,
-        )
-        left_bounds = (left, 962, left + corner_width, 1008)
-        right_bounds = (right - corner_width, 962, right, 1072)
-        if runtime:
-            _draw_fitted_text(
-                draw,
-                runtime,
-                supporting_font.data,
-                left_bounds,
-                preferred_size=18,
-                fill=_MUTED,
-            )
-        network = _network_information(configuration)
-        if network:
-            _draw_fitted_text(
-                draw,
-                network,
-                supporting_font.data,
-                (left, 1046, left + corner_width, 1120),
-                preferred_size=16,
-                fill=_MUTED,
-            )
-        backend_names = ", ".join(backend.type.upper() for backend in configuration.display_backends)
-        if backend_names:
-            _draw_fitted_text(
-                draw,
-                backend_names,
-                supporting_font.data,
-                right_bounds,
-                preferred_size=18,
-                fill=_MUTED,
-                right_align=True,
-            )
-        egg_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=8)
-        egg_width = int(egg_font.getlength("1672"))
-        draw.text((right - egg_width, 1085), "1672", font=egg_font, fill="#AEB6B0")
         return image
     except Exception as error:
         if background is not None:
@@ -323,6 +315,8 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
     finally:
         if logo is not None:
             logo.close()
+        if refrain_logo is not None:
+            refrain_logo.close()
 
 
 __all__ = ["InformationViewPreparationError", "prepare_information_view"]

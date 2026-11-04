@@ -987,7 +987,7 @@ The information view contains:
 - optional source and attribution identifying the quotation's context;
 - the Refrain and ControlForge project identity;
 - application version and available build or commit information;
-- basic platform, Python runtime, and network information where available;
+- basic platform and Python runtime
 - the configured display backend types;
 - an appropriate copyright notice.
 
@@ -1006,8 +1006,6 @@ The initial information view uses one application-owned layout. Multiple configu
 Runtime information is a snapshot of available information at the time the view is prepared, not a continuously updated monitoring interface.
 
 Version information should identify the running application release. Build or commit information may be included when available without requiring access to a Git checkout at runtime.
-
-Network information should favor useful connection information, including the image-server URL when that backend is configured and a usable address is available.
 
 Configured display backend types are reported without attempting to represent their current health or publication status.
 

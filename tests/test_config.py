@@ -58,7 +58,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.min_font_size == 28
     assert config.max_font_size == 100
     assert config.information_view_duration == 60
-    assert set(config.fonts) == {"libre-baskerville", "lora", "orbitron", "source-sans-3"}
+    assert set(config.fonts) == {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
     assert "orbitron" not in config.default_fonts
     assert all(font.bundled for font in config.fonts.values())
     assert all(font.path.is_file() for font in config.fonts.values())
