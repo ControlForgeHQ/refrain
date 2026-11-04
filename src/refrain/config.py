@@ -48,6 +48,7 @@ _LOGGER = logging.getLogger(__name__)
 _BUNDLED_FONT_FILES = {
     "libre-baskerville": ("assets", "fonts", "libre-baskerville", "LibreBaskerville-Regular.ttf"),
     "lora": ("assets", "fonts", "lora", "Lora-Regular.ttf"),
+    "orbitron": ("assets", "fonts", "orbitron", "Orbitron-Regular.ttf"),
     "source-sans-3": ("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf"),
 }
 
