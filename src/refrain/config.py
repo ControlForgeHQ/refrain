@@ -20,7 +20,7 @@ from PIL import ImageFont
 
 from ._yaml import load_yaml, yaml_error_location
 
-_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout"}
+_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view"}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -46,8 +46,10 @@ _TIMEZONE_ABBREVIATIONS = {
 _NON_IANA_TIMEZONE_KEYS = {"localtime", "posixrules"}
 _LOGGER = logging.getLogger(__name__)
 _BUNDLED_FONT_FILES = {
+    "alegreya": ("assets", "fonts", "alegreya", "Alegreya-Regular.ttf"),
     "libre-baskerville": ("assets", "fonts", "libre-baskerville", "LibreBaskerville-Regular.ttf"),
     "lora": ("assets", "fonts", "lora", "Lora-Regular.ttf"),
+    "orbitron": ("assets", "fonts", "orbitron", "Orbitron-Regular.ttf"),
     "source-sans-3": ("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf"),
 }
 
@@ -124,6 +126,7 @@ class ApplicationConfiguration:
     default_fonts: tuple[str, ...]
     min_font_size: int
     max_font_size: int
+    information_view_duration: int = 60
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -322,6 +325,22 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     if not content_directory.is_absolute():
         content_directory = file.parent / content_directory
 
+    information_view = _mapping(data.get("information_view", {}), "information_view", report)
+    _known_fields(information_view, {"duration"}, "information_view", report)
+    information_view_duration = information_view.get("duration", 60)
+    if "duration" not in information_view:
+        use_default("information_view.duration", "60")
+    elif (
+        isinstance(information_view_duration, bool)
+        or not isinstance(information_view_duration, int)
+        or not 0 <= information_view_duration <= 300
+    ):
+        report(
+            "information_view.duration",
+            "must be an integer between 0 and 300; using the documented default 60",
+        )
+        information_view_duration = 60
+
     reveal_data = _mapping(data.get("reveal", {}), "reveal", report)
     _known_fields(reveal_data, {"source", "attribution"}, "reveal", report)
 
@@ -481,4 +500,5 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         default_fonts=default_fonts,
         min_font_size=sizes["min_font_size"],
         max_font_size=sizes["max_font_size"],
+        information_view_duration=information_view_duration,
     )

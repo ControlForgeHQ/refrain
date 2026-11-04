@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 
@@ -26,6 +26,7 @@ from .content import ContentLibraryError, load_content_library
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .display.coordinator import DisplayPublicationCoordinator
 from .eligibility import build_eligible_quotation_pool
+from .information_view import InformationViewPreparationError, prepare_information_view
 from .persistence import (
     DailySnapshot,
     GlobalHistoryStore,
@@ -49,6 +50,8 @@ from .timekeeping import DisplayDayBoundaryObserver, next_scheduling_deadline, w
 
 _LOGGER = logging.getLogger(__name__)
 _IMAGE_SIZE = (1600, 1200)
+_INFORMATION_VIEW_IDENTITY = (0, -1)
+_INFORMATION_VIEW_PUBLICATION_TIMEOUT = 60.0
 
 
 class ApplicationError(Exception):
@@ -73,6 +76,29 @@ class StartupResult:
 
 
 BackendFactory = Callable[[DisplayBackendConfiguration], DisplayBackend]
+
+
+class _InformationPublicationWakeEvent:
+    def __init__(
+        self,
+        coordinator: DisplayPublicationCoordinator,
+        identity: tuple[int, int],
+        shutdown: Event,
+    ) -> None:
+        self._coordinator = coordinator
+        self._identity = identity
+        self._shutdown = shutdown
+
+    def is_set(self) -> bool:
+        return self._shutdown.is_set() or self._coordinator.has_successful_publication(self._identity)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self._coordinator.wait_for_any_publication(
+            self._identity,
+            timeout,
+            cancellation_event=self._shutdown,
+        )
+        return self.is_set()
 
 
 def _default_backend_factory(configuration: DisplayBackendConfiguration) -> DisplayBackend:
@@ -280,6 +306,9 @@ def run_startup(
     history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     keep_open: Callable[[str], None] | None = None,
+    wall_clock: Callable[[], datetime] | None = None,
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], None] = time.sleep,
 ) -> StartupResult:
     """Run one startup cycle: recover or select, prepare images, and publish the required stage.
 
@@ -291,7 +320,9 @@ def run_startup(
     store = PersistentStateStore(Path(state_path).absolute())
     history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
-    current_time = datetime.now(timezone.utc) if now is None else now
+    current_time = (
+        wall_clock() if now is None and wall_clock is not None else (datetime.now(timezone.utc) if now is None else now)
+    )
 
     state = _reload(store)
     try:
@@ -315,8 +346,43 @@ def run_startup(
     if stage > state.highest_reveal_stage:
         state = _persist_reveal_progress(store, state, stage)
     artifacts = _recover_images(state, artifact_store, configuration.fonts)
-    coordinator = DisplayPublicationCoordinator(configuration.display_backends, backend_factory, retry=False)
+    coordinator = DisplayPublicationCoordinator(
+        configuration.display_backends,
+        backend_factory,
+        retry=False,
+        monotonic_clock=monotonic_clock,
+    )
     try:
+        if configuration.information_view_duration > 0:
+            try:
+                information_image = prepare_information_view(configuration)
+            except InformationViewPreparationError as error:
+                _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
+            else:
+                coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_image)
+                if coordinator.wait_for_any_publication(
+                    _INFORMATION_VIEW_IDENTITY,
+                    timeout=_INFORMATION_VIEW_PUBLICATION_TIMEOUT,
+                ):
+                    acknowledged_at = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
+                    if acknowledged_at is not None:
+                        remaining = configuration.information_view_duration - (monotonic_clock() - acknowledged_at)
+                        if remaining > 0:
+                            wait(remaining)
+                else:
+                    _LOGGER.warning(
+                        "Information view was not published within the initial attempt period; "
+                        "proceeding to daily presentation"
+                    )
+            current_time = wall_clock() if wall_clock is not None else datetime.now(timezone.utc)
+            try:
+                decision = evaluate_scheduling(current_time, configuration, state)
+                assert decision.required_reveal_stage is not None
+                stage = decision.required_reveal_stage
+            except SchedulingEvaluationError as error:
+                raise ApplicationError(f"scheduling evaluation failed after information view: {error}") from error
+        if stage > state.highest_reveal_stage:
+            state = _persist_reveal_progress(store, state, stage)
         try:
             image = artifacts.load_stage(stage)
         except ArtifactStoreError as error:
@@ -373,10 +439,18 @@ def run_application(
     pending_history: tuple[int, DailySnapshot, frozenset[str]] | None = None
     last_failure: str | None = None
     retry_delay = 1.0
+    information_view_done = configuration.information_view_duration == 0
+    information_view_image: Image.Image | None = None
+    information_view_requested = False
+    information_view_attempt_started: float | None = None
+    information_view_started: float | None = None
+    information_view_acknowledgement_logged = False
     _LOGGER.info("Starting continuous presentation")
     try:
         while not shutdown.is_set():
             try:
+                if coordinator is not None and information_view_requested and information_view_started is None:
+                    information_view_started = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
                 # Reload before observing time, including after uncertain publication.
                 state = _reload(store)
                 if pending_history is not None and state is not None:
@@ -413,7 +487,11 @@ def run_application(
                 if artifacts is None or artifact_revision != state.revision:
                     if coordinator is not None:
                         desired_identity = coordinator.desired_identity
-                        if desired_identity is not None and desired_identity[0] != state.revision:
+                        if (
+                            desired_identity is not None
+                            and desired_identity != _INFORMATION_VIEW_IDENTITY
+                            and desired_identity[0] != state.revision
+                        ):
                             coordinator.clear_desired()
                     artifacts = _recover_images(state, artifact_store, configuration.fonts)
                     artifact_revision = state.revision
@@ -430,9 +508,77 @@ def run_application(
                         configuration.display_backends,
                         backend_factory,
                         all_unavailable_event=shutdown,
+                        monotonic_clock=monotonic_clock,
                     )
                 if coordinator.all_unavailable:
                     raise ApplicationError("all configured display destinations are unavailable")
+                if not information_view_done:
+                    current_monotonic = monotonic_clock()
+                    if information_view_requested:
+                        if information_view_started is None:
+                            information_view_started = coordinator.first_successful_publication_time(
+                                _INFORMATION_VIEW_IDENTITY
+                            )
+                        if information_view_started is not None and not information_view_acknowledgement_logged:
+                            _LOGGER.info("Information view publication acknowledged")
+                            information_view_acknowledgement_logged = True
+                        if (
+                            information_view_started is not None
+                            and current_monotonic - information_view_started >= configuration.information_view_duration
+                        ):
+                            information_view_done = True
+                            _LOGGER.info("Information view duration expired")
+                            continue
+                        elif (
+                            information_view_started is None
+                            and information_view_attempt_started is not None
+                            and current_monotonic - information_view_attempt_started
+                            >= _INFORMATION_VIEW_PUBLICATION_TIMEOUT
+                        ):
+                            information_view_done = True
+                            _LOGGER.warning("Information view was not published within the initial attempt period")
+                    if not information_view_done and information_view_image is None:
+                        try:
+                            information_view_image = prepare_information_view(configuration)
+                        except InformationViewPreparationError as error:
+                            _LOGGER.warning(
+                                "Cannot prepare information view; proceeding to daily presentation: %s",
+                                error,
+                            )
+                            information_view_done = True
+                    if not information_view_done and not information_view_requested:
+                        assert information_view_image is not None
+                        coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_view_image)
+                        information_view_image = None
+                        information_view_requested = True
+                        information_view_attempt_started = monotonic_clock()
+                        _LOGGER.info("Requested startup information view")
+                        continue
+                    if not information_view_done:
+                        deadline = next_scheduling_deadline(now, configuration, state)
+                        if information_view_started is None:
+                            assert information_view_attempt_started is not None
+                            remaining = _INFORMATION_VIEW_PUBLICATION_TIMEOUT - (
+                                current_monotonic - information_view_attempt_started
+                            )
+                            wake_event = _InformationPublicationWakeEvent(
+                                coordinator, _INFORMATION_VIEW_IDENTITY, shutdown
+                            )
+                        else:
+                            remaining = configuration.information_view_duration - (
+                                current_monotonic - information_view_started
+                            )
+                            wake_event = shutdown
+                        information_deadline = now + timedelta(seconds=max(0.0, remaining))
+                        if information_deadline.astimezone(timezone.utc) < deadline.astimezone(timezone.utc):
+                            deadline = information_deadline
+                        scheduling_wait(
+                            deadline,
+                            wake_event,
+                            wall_clock=wall_clock,
+                            monotonic_clock=monotonic_clock,
+                        )
+                        continue
                 if coordinator.desired_identity != identity:
                     try:
                         image = artifacts.load_stage(stage)
@@ -467,6 +613,8 @@ def run_application(
     finally:
         if coordinator is not None:
             coordinator.close()
+        if information_view_image is not None:
+            information_view_image.close()
         _LOGGER.info("Continuous presentation stopped")
     if coordinator is not None and coordinator.all_unavailable:
         raise ApplicationError("all configured display destinations are unavailable")

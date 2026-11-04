@@ -30,6 +30,7 @@ class _BackendState:
     configuration: DisplayBackendConfiguration
     backend: DisplayBackend | None = None
     successful_identity: tuple[int, int] | None = None
+    successful_at: float | None = None
     terminal: bool = False
     error: str | None = None
 
@@ -44,11 +45,13 @@ class DisplayPublicationCoordinator:
         *,
         retry: bool = True,
         all_unavailable_event: Event | None = None,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._condition = Condition()
         self._factory = backend_factory or self._default_factory
         self._retry = retry
         self._all_unavailable_event = all_unavailable_event
+        self._monotonic_clock = monotonic_clock
         self._stopping = False
         self._desired: _Presentation | None = None
         self._states = {configuration.type: _BackendState(configuration) for configuration in configurations}
@@ -117,6 +120,44 @@ class DisplayPublicationCoordinator:
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     break
+                self._condition.wait(remaining)
+            return any(state.successful_identity == identity for state in self._states.values())
+
+    def has_successful_publication(self, identity: tuple[int, int]) -> bool:
+        """Return whether any backend has acknowledged ``identity``."""
+        with self._condition:
+            return any(state.successful_identity == identity for state in self._states.values())
+
+    def first_successful_publication_time(self, identity: tuple[int, int]) -> float | None:
+        """Return the earliest monotonic acknowledgement time for ``identity``."""
+        with self._condition:
+            times = [
+                state.successful_at
+                for state in self._states.values()
+                if state.successful_identity == identity and state.successful_at is not None
+            ]
+            return min(times) if times else None
+
+    def wait_for_any_publication(
+        self,
+        identity: tuple[int, int],
+        timeout: float | None = None,
+        *,
+        cancellation_event: Event | None = None,
+    ) -> bool:
+        """Wait for the first successful acknowledgement or for all backends to become terminal."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._condition:
+            while not any(state.successful_identity == identity for state in self._states.values()):
+                if all(state.terminal for state in self._states.values()):
+                    break
+                if cancellation_event is not None and cancellation_event.is_set():
+                    break
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    break
+                if cancellation_event is not None:
+                    remaining = 0.25 if remaining is None else min(remaining, 0.25)
                 self._condition.wait(remaining)
             return any(state.successful_identity == identity for state in self._states.values())
 
@@ -231,6 +272,7 @@ class DisplayPublicationCoordinator:
                 else:
                     with self._condition:
                         state.successful_identity = presentation.identity
+                        state.successful_at = self._monotonic_clock()
                         state.error = None
                         self._condition.notify_all()
                     _LOGGER.info("Display backend %s published presentation %s", name, presentation.identity)
