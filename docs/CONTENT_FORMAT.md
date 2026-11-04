@@ -451,9 +451,12 @@ Refrain automatically registers the following bundled fonts:
 |---|---|
 | `libre-baskerville` | Libre Baskerville |
 | `lora` | Lora |
+| `orbitron` | Orbitron |
 | `source-sans-3` | Source Sans 3 |
 
 Bundled fonts are application resources and do not require entries in `layout.fonts.available`.
+
+`orbitron` is available for explicit font selection and is not included in the default font pool unless configured there.
 
 Their identifiers are reserved. Application configuration must not redefine or override a bundled font identifier.
 

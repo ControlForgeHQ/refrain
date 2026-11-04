@@ -100,3 +100,46 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     assert not any(Path(name).name in _LIBRARIES for name in sdist_names)
     assert any(name.endswith("display/vendor/waveshare/README.md") for name in wheel_names)
     assert any(name.endswith("display/vendor/waveshare/README.md") for name in sdist_names)
+    assert any(name.endswith("assets/branding/controlforge-logo.png") for name in wheel_names)
+    assert any(name.endswith("assets/fonts/orbitron/Orbitron-Regular.ttf") for name in wheel_names)
+    assert any(name.endswith("assets/fonts/orbitron/OFL.txt") for name in wheel_names)
+    assert any(name.endswith("assets/branding/controlforge-logo.png") for name in sdist_names)
+    assert any(name.endswith("assets/fonts/orbitron/Orbitron-Regular.ttf") for name in sdist_names)
+    assert any(name.endswith("assets/fonts/orbitron/OFL.txt") for name in sdist_names)
+
+    installed = tmp_path / "installed"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--ignore-requires-python",
+            "--target",
+            str(installed),
+            str(wheel),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    env["PYTHONPATH"] = str(installed)
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from importlib.resources import files; "
+                "root=files('refrain'); "
+                "assert root.joinpath('assets','branding','controlforge-logo.png').is_file(); "
+                "assert root.joinpath('assets','fonts','orbitron','Orbitron-Regular.ttf').is_file(); "
+                "assert root.joinpath('assets','fonts','orbitron','OFL.txt').is_file()"
+            ),
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )

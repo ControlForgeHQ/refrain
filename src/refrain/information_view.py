@@ -62,6 +62,17 @@ def _read_font(name: str) -> ResolvedFont:
     return ResolvedFont(name, data)
 
 
+def _read_logo() -> Image.Image | None:
+    try:
+        resource = files("refrain").joinpath("assets", "branding", "controlforge-logo.png")
+        with resource.open("rb") as logo_file, Image.open(logo_file) as logo:
+            logo.load()
+            return logo.convert("RGBA")
+    except Exception as error:
+        _LOGGER.warning("ControlForge logo is unavailable; omitting it from the information view: %s", error)
+        return None
+
+
 def _runtime_information() -> tuple[str | None, str | None]:
     try:
         system = platform.system()
@@ -134,6 +145,7 @@ def _draw_fitted_text(
     *,
     preferred_size: int,
     fill: str,
+    right_align: bool = False,
 ) -> tuple[int, tuple[str, ...]]:
     left, top, right, bottom = bounds
     width, height = right - left, bottom - top
@@ -146,7 +158,13 @@ def _draw_fitted_text(
             all(font.getlength(line) <= width for line in lines)
             and len(lines) * line_height + (len(lines) - 1) * spacing <= height
         ):
-            draw.multiline_text((left, top), "\n".join(lines), font=font, fill=fill, spacing=spacing)
+            if right_align:
+                y = top
+                for line in lines:
+                    draw.text((right, y), line, font=font, fill=fill, anchor="rt")
+                    y += line_height + spacing
+            else:
+                draw.multiline_text((left, top), "\n".join(lines), font=font, fill=fill, spacing=spacing)
             return size, lines
     raise ValueError(f"information text does not fit its allocated region: {text!r}")
 
@@ -158,6 +176,7 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
 
     background: Image.Image | None = None
     image: Image.Image | None = None
+    logo: Image.Image | None = None
     try:
         quotation_font = _read_font("lora")
         supporting_font = _read_font("source-sans-3")
@@ -190,23 +209,28 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
             fill=_MUTED,
         )
 
-        # The repository has no official logo asset; do not approximate the mark.
-        controlforge_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=28)
-        controlforge = "ControlForge"
-        controlforge_width = int(controlforge_font.getlength(controlforge))
-        draw.text((right - controlforge_width, 79), controlforge, font=controlforge_font, fill=_INK)
+        logo = _read_logo()
+        if logo is not None:
+            logo.thumbnail((260, 92), Image.Resampling.LANCZOS)
+            background.paste(logo, (right - logo.width, 72), logo)
         _draw_fitted_text(
             draw,
             "github.com/ControlForgeHQ/refrain",
             supporting_font.data,
-            (right - corner_width, 125, right, 153),
+            (right - corner_width, 122, right, 150),
             preferred_size=17,
             fill=_MUTED,
+            right_align=True,
         )
-        copyright_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=14)
-        copyright_text = "© 2026 Edward Wright"
-        copyright_width = int(copyright_font.getlength(copyright_text))
-        draw.text((right - copyright_width, 165), copyright_text, font=copyright_font, fill=_MUTED)
+        _draw_fitted_text(
+            draw,
+            "© 2026 Edward Wright",
+            supporting_font.data,
+            (right - corner_width, 157, right, 181),
+            preferred_size=14,
+            fill=_MUTED,
+            right_align=True,
+        )
 
         composition = LiteraryComposition(quotation=_QUOTATION, attribution=_ATTRIBUTION)
         layout = layout_composition(
@@ -229,10 +253,33 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         image = rendered[0]
         draw = ImageDraw.Draw(image)
 
-        bottom_top = 960
-        bottom_height = 160
-        left_bounds = (left, bottom_top, left + corner_width, bottom_top + 50)
-        right_bounds = (right - corner_width, bottom_top, right, bottom_top + bottom_height)
+        _draw_fitted_text(
+            draw,
+            "RUNNING ON",
+            supporting_font.data,
+            (left, 934, left + corner_width, 954),
+            preferred_size=13,
+            fill=_MUTED,
+        )
+        _draw_fitted_text(
+            draw,
+            "NETWORK",
+            supporting_font.data,
+            (left, 1018, left + corner_width, 1038),
+            preferred_size=13,
+            fill=_MUTED,
+        )
+        _draw_fitted_text(
+            draw,
+            "DISPLAY BACKENDS",
+            supporting_font.data,
+            (right - corner_width, 934, right, 954),
+            preferred_size=13,
+            fill=_MUTED,
+            right_align=True,
+        )
+        left_bounds = (left, 962, left + corner_width, 1008)
+        right_bounds = (right - corner_width, 962, right, 1072)
         if runtime:
             _draw_fitted_text(
                 draw,
@@ -248,7 +295,7 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
                 draw,
                 network,
                 supporting_font.data,
-                (left, bottom_top + 62, left + corner_width, bottom_top + bottom_height),
+                (left, 1046, left + corner_width, 1120),
                 preferred_size=16,
                 fill=_MUTED,
             )
@@ -261,10 +308,11 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
                 right_bounds,
                 preferred_size=18,
                 fill=_MUTED,
+                right_align=True,
             )
         egg_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=8)
         egg_width = int(egg_font.getlength("1672"))
-        draw.text((right - egg_width, 1158), "1672", font=egg_font, fill="#AEB6B0")
+        draw.text((right - egg_width, 1085), "1672", font=egg_font, fill="#AEB6B0")
         return image
     except Exception as error:
         if background is not None:
@@ -272,6 +320,9 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         if image is not None:
             image.close()
         raise InformationViewPreparationError(f"cannot prepare information view: {error}") from error
+    finally:
+        if logo is not None:
+            logo.close()
 
 
 __all__ = ["InformationViewPreparationError", "prepare_information_view"]

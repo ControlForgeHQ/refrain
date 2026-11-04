@@ -52,10 +52,40 @@ def test_prepares_complete_application_owned_image_without_user_content(tmp_path
         assert any("Made for a quieter kind of noticing." in text for text, _, _ in fitted_text)
         assert any(text.startswith("Version 0.1.0") for text, _, _ in fitted_text)
         assert any("github.com/ControlForgeHQ/refrain" in text for text, _, _ in fitted_text)
-        assert "ControlForge" in direct_text
-        assert "© 2026 Edward Wright" in direct_text
+        assert "ControlForge" not in direct_text
         assert "1672" in direct_text
+        assert "© 2026 Edward Wright" in [text for text, _, _ in fitted_text]
+        assert any("RUNNING ON" in text for text, _, _ in fitted_text)
+        assert any("NETWORK" in text for text, _, _ in fitted_text)
+        assert any("DISPLAY BACKENDS" in text for text, _, _ in fitted_text)
+        logo = information_view._read_logo()
+        assert logo is not None and logo.mode == "RGBA" and logo.getbbox()
+        logo.close()
+        with Image.new("RGB", (260, 44), image.getpixel((0, 0))) as blank:
+            logo_region = image.crop((1248, 72, 1508, 116))
+            try:
+                assert ImageChops.difference(logo_region, blank).getbbox()
+            finally:
+                logo_region.close()
         assert any(bounds[1] >= 960 for _, bounds, _ in fitted_text)
+    finally:
+        image.close()
+
+
+def test_missing_controlforge_logo_does_not_prevent_information_view_rendering(tmp_path: Path, monkeypatch) -> None:
+    configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
+    with monkeypatch.context() as missing_resource:
+        missing_resource.setattr(
+            information_view,
+            "files",
+            lambda _package: (_ for _ in ()).throw(OSError("resource unavailable")),
+        )
+        assert information_view._read_logo() is None
+    monkeypatch.setattr(information_view, "_read_logo", lambda: None)
+    configuration = replace(configuration, content_directory=tmp_path / "unused")
+    image = information_view.prepare_information_view(configuration)
+    try:
+        assert image.size == (1600, 1200)
     finally:
         image.close()
 
@@ -86,7 +116,11 @@ def test_omits_unavailable_optional_runtime_and_network_details(tmp_path: Path, 
         assert "Version 0.1.0" in fitted_text
         assert not any("build" in text for text in fitted_text)
         paper = image.getpixel((0, 0))
-        for bounds in ((92, 960, 622, 1120), (978, 960, 1508, 1120)):
+        for bounds in (
+            (92, 962, 622, 1008),
+            (92, 1046, 622, 1120),
+            (978, 962, 1508, 1072),
+        ):
             with (
                 image.crop(bounds) as value_region,
                 Image.new("RGB", (bounds[2] - bounds[0], bounds[3] - bounds[1]), paper) as blank,
@@ -135,6 +169,32 @@ def test_fitted_technical_text_wraps_long_network_values_without_overflow() -> N
         assert drawn_bounds is not None
         assert 10 <= drawn_bounds[0] <= drawn_bounds[2] <= 530
         assert 10 <= drawn_bounds[1] <= drawn_bounds[3] <= 130
+    finally:
+        image.close()
+
+
+def test_fitted_text_can_align_an_identity_block_to_its_right_edge() -> None:
+    font_data = information_view._read_font("source-sans-3").data
+    image = Image.new("RGB", (520, 80), "white")
+    try:
+        information_view._draw_fitted_text(
+            ImageDraw.Draw(image),
+            "Short\nA considerably longer second line",
+            font_data,
+            (10, 10, 500, 70),
+            preferred_size=18,
+            fill="#333333",
+            right_align=True,
+        )
+        with Image.new("RGB", image.size, "white") as blank:
+            difference = ImageChops.difference(image, blank)
+        try:
+            bounds = difference.getbbox()
+        finally:
+            difference.close()
+        assert bounds is not None
+        assert 10 <= bounds[0] < bounds[2] <= 500
+        assert bounds[2] >= 496
     finally:
         image.close()
 
