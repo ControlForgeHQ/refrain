@@ -6,3 +6,6 @@ build/
 dist/
 *.egg-info/
 src/refrain/display/vendor/waveshare/DEV_Config_*.so
+
+# Generated information-view preview
+/examples/information-view.png
