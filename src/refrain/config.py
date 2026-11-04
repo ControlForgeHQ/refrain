@@ -46,6 +46,7 @@ _TIMEZONE_ABBREVIATIONS = {
 _NON_IANA_TIMEZONE_KEYS = {"localtime", "posixrules"}
 _LOGGER = logging.getLogger(__name__)
 _BUNDLED_FONT_FILES = {
+    "alegreya": ("assets", "fonts", "alegreya", "Alegreya-Regular.ttf"),
     "libre-baskerville": ("assets", "fonts", "libre-baskerville", "LibreBaskerville-Regular.ttf"),
     "lora": ("assets", "fonts", "lora", "Lora-Regular.ttf"),
     "orbitron": ("assets", "fonts", "orbitron", "Orbitron-Regular.ttf"),
