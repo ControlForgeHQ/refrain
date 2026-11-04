@@ -176,6 +176,31 @@ def test_one_shot_startup_presents_information_before_daily_image(workspace: Wor
     assert len(workspace.history_records()) == 1
 
 
+def test_one_shot_startup_advances_reveal_due_during_information_interval(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
+    elapsed = [0.0]
+    current_time = [at(10, 11, 59)]
+
+    def wait(duration: float) -> None:
+        elapsed[0] += duration
+        current_time[0] = at(10, 12, 1)
+
+    result, display = workspace.run(
+        at(10, 11, 59),
+        wall_clock=lambda: current_time[0],
+        monotonic_clock=lambda: elapsed[0],
+        wait=wait,
+    )
+
+    state = workspace.load()
+    assert result.presented_stage == 1
+    assert state.highest_reveal_stage == 1
+    assert [image.size for image in display.images] == [(1600, 1200), (1600, 1200)]
+    assert display.images[0].tobytes() != display.images[1].tobytes()
+    assert state.revision == 1 and len(workspace.history_records()) == 1
+
+
 def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
     workspace.config.write_text(
@@ -798,9 +823,10 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
 
 
 def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(
-    workspace: Workspace, monkeypatch
+    workspace: Workspace, monkeypatch, caplog
 ) -> None:
     ordinary(workspace)
+    caplog.set_level(logging.INFO)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 2"))
     coordinators = install_recording_coordinator(monkeypatch, acknowledge_information_view=True)
     clock = RuntimeClock(at(10, 7))
@@ -836,6 +862,7 @@ def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(
     assert clock.elapsed == 2
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
+    assert caplog.text.count("Information view publication acknowledged") == 1
 
 
 def test_bounded_information_attempt_transitions_to_current_day_and_reveal(workspace: Workspace, monkeypatch) -> None:

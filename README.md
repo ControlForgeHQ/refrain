@@ -124,6 +124,14 @@ Add `--once` to run only the startup-and-presentation workflow:
 
 One-shot execution does not schedule future updates or retry failures. When enabled, it presents the startup information view for its configured duration before the current daily image. For `window` and `image-server`, it holds the daily presentation open until Ctrl+C; the Waveshare panel retains its image after the command exits. The Python API also preserves `run_startup(...)` for one-shot use and exposes `run_application(..., shutdown_event=event)` for continuous operation with an explicit `threading.Event`.
 
+To preview the information view without starting display backends or the application lifecycle:
+
+```powershell
+python examples/information_view.py `
+    --config examples/config.yaml `
+    --output information-view.png
+```
+
 ### Recovery limitation
 
 Boundary observations exist only during the current process lifetime. After an interruption spanning a display-day transition, the stored scheduling context and an isolated startup timestamp cannot reliably distinguish a missed transition from a clock correction. Recovery therefore conservatively retains the committed selection, presenting its latest required reveal stage, until a subsequent boundary is actually observed. During continuous execution, a forward jump across several display days selects only for the currently appropriate date; a backward correction preserves the current selection until a newly observed boundary. See [boundary recognition](docs/ARCHITECTURE.md#boundary-recognition).

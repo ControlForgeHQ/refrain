@@ -306,6 +306,9 @@ def run_startup(
     history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     keep_open: Callable[[str], None] | None = None,
+    wall_clock: Callable[[], datetime] | None = None,
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], None] = time.sleep,
 ) -> StartupResult:
     """Run one startup cycle: recover or select, prepare images, and publish the required stage.
 
@@ -317,7 +320,9 @@ def run_startup(
     store = PersistentStateStore(Path(state_path).absolute())
     history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
-    current_time = datetime.now(timezone.utc) if now is None else now
+    current_time = (
+        wall_clock() if now is None and wall_clock is not None else (datetime.now(timezone.utc) if now is None else now)
+    )
 
     state = _reload(store)
     try:
@@ -341,7 +346,12 @@ def run_startup(
     if stage > state.highest_reveal_stage:
         state = _persist_reveal_progress(store, state, stage)
     artifacts = _recover_images(state, artifact_store, configuration.fonts)
-    coordinator = DisplayPublicationCoordinator(configuration.display_backends, backend_factory, retry=False)
+    coordinator = DisplayPublicationCoordinator(
+        configuration.display_backends,
+        backend_factory,
+        retry=False,
+        monotonic_clock=monotonic_clock,
+    )
     try:
         if configuration.information_view_duration > 0:
             try:
@@ -356,14 +366,23 @@ def run_startup(
                 ):
                     acknowledged_at = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
                     if acknowledged_at is not None:
-                        remaining = configuration.information_view_duration - (time.monotonic() - acknowledged_at)
+                        remaining = configuration.information_view_duration - (monotonic_clock() - acknowledged_at)
                         if remaining > 0:
-                            time.sleep(remaining)
+                            wait(remaining)
                 else:
                     _LOGGER.warning(
                         "Information view was not published within the initial attempt period; "
                         "proceeding to daily presentation"
                     )
+            current_time = wall_clock() if wall_clock is not None else datetime.now(timezone.utc)
+            try:
+                decision = evaluate_scheduling(current_time, configuration, state)
+                assert decision.required_reveal_stage is not None
+                stage = decision.required_reveal_stage
+            except SchedulingEvaluationError as error:
+                raise ApplicationError(f"scheduling evaluation failed after information view: {error}") from error
+        if stage > state.highest_reveal_stage:
+            state = _persist_reveal_progress(store, state, stage)
         try:
             image = artifacts.load_stage(stage)
         except ArtifactStoreError as error:
@@ -425,6 +444,7 @@ def run_application(
     information_view_requested = False
     information_view_attempt_started: float | None = None
     information_view_started: float | None = None
+    information_view_acknowledgement_logged = False
     _LOGGER.info("Starting continuous presentation")
     try:
         while not shutdown.is_set():
@@ -499,8 +519,9 @@ def run_application(
                             information_view_started = coordinator.first_successful_publication_time(
                                 _INFORMATION_VIEW_IDENTITY
                             )
-                        if information_view_started is not None and current_monotonic >= information_view_started:
+                        if information_view_started is not None and not information_view_acknowledgement_logged:
                             _LOGGER.info("Information view publication acknowledged")
+                            information_view_acknowledgement_logged = True
                         if (
                             information_view_started is not None
                             and current_monotonic - information_view_started >= configuration.information_view_duration

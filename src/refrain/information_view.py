@@ -9,7 +9,6 @@ import platform
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 
@@ -24,9 +23,10 @@ _IMAGE_SIZE = (1600, 1200)
 _PAPER = "#FAF9F5"
 _INK = "#26332E"
 _MUTED = "#65716B"
-_ACCENT = "#6E8976"
 _BUILD_VERSION = re.compile(r"v?\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+][A-Za-z0-9.-]{1,24})?\Z")
 _COMMIT_HASH = re.compile(r"[0-9a-fA-F]{7,40}\Z")
+_REGION_MARGIN = 92
+_MIN_SUPPORTING_FONT_SIZE = 12
 _QUOTATION = (
     "“The world is already full of remarkable things; we don't necessarily need to make them louder, "
     "bigger, or more complicated. Sometimes we just need to become better at noticing them.”"
@@ -102,12 +102,53 @@ def _network_information(configuration: ApplicationConfiguration) -> str | None:
     return None
 
 
-def _draw_label(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, position: tuple[int, int], text: str) -> None:
-    draw.text(position, text, font=font, fill=_ACCENT)
+def _wrap_to_width(text: str, font: ImageFont.FreeTypeFont, width: int) -> tuple[str, ...]:
+    lines: list[str] = []
+    line = ""
+    for word in text.split():
+        if line and font.getlength(f"{line} {word}") <= width:
+            line = f"{line} {word}"
+            continue
+        if line:
+            lines.append(line)
+            line = ""
+        remaining = word
+        while remaining and font.getlength(remaining) > width:
+            split = max(
+                (index for index in range(1, len(remaining) + 1) if font.getlength(remaining[:index]) <= width),
+                default=1,
+            )
+            lines.append(remaining[:split])
+            remaining = remaining[split:]
+        line = remaining
+    if line:
+        lines.append(line)
+    return tuple(lines)
 
 
-def _draw_value(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, position: tuple[int, int], text: str) -> None:
-    draw.text(position, text, font=font, fill=_INK)
+def _draw_fitted_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font_data: bytes,
+    bounds: tuple[int, int, int, int],
+    *,
+    preferred_size: int,
+    fill: str,
+) -> tuple[int, tuple[str, ...]]:
+    left, top, right, bottom = bounds
+    width, height = right - left, bottom - top
+    for size in range(preferred_size, _MIN_SUPPORTING_FONT_SIZE - 1, -1):
+        font = ImageFont.truetype(io.BytesIO(font_data), size=size)
+        lines = _wrap_to_width(text, font, width)
+        line_height = max(font.getbbox(line)[3] - font.getbbox(line)[1] for line in lines)
+        spacing = max(2, size // 5)
+        if (
+            all(font.getlength(line) <= width for line in lines)
+            and len(lines) * line_height + (len(lines) - 1) * spacing <= height
+        ):
+            draw.multiline_text((left, top), "\n".join(lines), font=font, fill=fill, spacing=spacing)
+            return size, lines
+    raise ValueError(f"information text does not fit its allocated region: {text!r}")
 
 
 def prepare_information_view(configuration: ApplicationConfiguration) -> Image.Image:
@@ -123,29 +164,58 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         background = Image.new("RGB", _IMAGE_SIZE, _PAPER)
         draw = ImageDraw.Draw(background)
 
-        margin = 140
+        left = _REGION_MARGIN
+        right = _IMAGE_SIZE[0] - _REGION_MARGIN
+        corner_width = 530
         brand_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=34)
-        detail_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=20)
-        label_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=18)
-        footer_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=18)
-
-        draw.text((margin, 62), "REFRAIN", font=brand_font, fill=_INK)
-        draw.text((margin + 190, 75), "A CONTROLFORGE PROJECT", font=label_font, fill=_MUTED)
-        version_text = f"VERSION {_application_version()}"
-        draw.text((margin, 131), version_text, font=label_font, fill=_MUTED)
+        draw.text((left, 76), "REFRAIN", font=brand_font, fill=_INK)
+        _draw_fitted_text(
+            draw,
+            "Made for a quieter kind of noticing.",
+            supporting_font.data,
+            (left, 125, left + corner_width, 157),
+            preferred_size=20,
+            fill=_MUTED,
+        )
         runtime, build = _runtime_information()
+        version_text = f"Version {_application_version()}"
         if build:
-            draw.text((margin + 260, 131), f"BUILD {build}", font=label_font, fill=_MUTED)
-        draw.line((margin, 174, _IMAGE_SIZE[0] - margin, 174), fill="#D9DED8", width=2)
+            version_text = f"{version_text} · build {build}"
+        _draw_fitted_text(
+            draw,
+            version_text,
+            supporting_font.data,
+            (left, 164, left + corner_width, 195),
+            preferred_size=18,
+            fill=_MUTED,
+        )
+
+        # The repository has no official logo asset; do not approximate the mark.
+        controlforge_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=28)
+        controlforge = "ControlForge"
+        controlforge_width = int(controlforge_font.getlength(controlforge))
+        draw.text((right - controlforge_width, 79), controlforge, font=controlforge_font, fill=_INK)
+        _draw_fitted_text(
+            draw,
+            "github.com/ControlForgeHQ/refrain",
+            supporting_font.data,
+            (right - corner_width, 125, right, 153),
+            preferred_size=17,
+            fill=_MUTED,
+        )
+        copyright_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=14)
+        copyright_text = "© 2026 Edward Wright"
+        copyright_width = int(copyright_font.getlength(copyright_text))
+        draw.text((right - copyright_width, 165), copyright_text, font=copyright_font, fill=_MUTED)
 
         composition = LiteraryComposition(quotation=_QUOTATION, attribution=_ATTRIBUTION)
         layout = layout_composition(
             composition,
             quotation_font,
-            _Region(0.10, 0.19, 0.80, 0.54),
+            _Region(0.17, 0.27, 0.66, 0.40),
             _IMAGE_SIZE,
-            min_font_size=42,
-            max_font_size=72,
+            min_font_size=26,
+            max_font_size=42,
             presentation_style="centered",
         )
         rendered = render_reveal_stages(
@@ -159,25 +229,42 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         image = rendered[0]
         draw = ImageDraw.Draw(image)
 
-        information_top = 900
-        draw.line((margin, information_top, _IMAGE_SIZE[0] - margin, information_top), fill="#D9DED8", width=2)
+        bottom_top = 960
+        bottom_height = 160
+        left_bounds = (left, bottom_top, left + corner_width, bottom_top + 50)
+        right_bounds = (right - corner_width, bottom_top, right, bottom_top + bottom_height)
+        if runtime:
+            _draw_fitted_text(
+                draw,
+                runtime,
+                supporting_font.data,
+                left_bounds,
+                preferred_size=18,
+                fill=_MUTED,
+            )
         network = _network_information(configuration)
+        if network:
+            _draw_fitted_text(
+                draw,
+                network,
+                supporting_font.data,
+                (left, bottom_top + 62, left + corner_width, bottom_top + bottom_height),
+                preferred_size=16,
+                fill=_MUTED,
+            )
         backend_names = ", ".join(backend.type.upper() for backend in configuration.display_backends)
-        columns = (
-            ("RUNNING ON", runtime),
-            ("NETWORK", network),
-            ("DISPLAY BACKENDS", backend_names or None),
-        )
-        column_width = (_IMAGE_SIZE[0] - 2 * margin) // len(columns)
-        for index, (label, value) in enumerate(columns):
-            x = margin + index * column_width
-            _draw_label(draw, label_font, (x, 936), label)
-            if value:
-                _draw_value(draw, detail_font, (x, 970), value)
-        draw.line((margin, 1040, _IMAGE_SIZE[0] - margin, 1040), fill="#D9DED8", width=1)
-        copyright = f"© {datetime.now().year} ControlForgeHQ · Refrain"
-        draw.text((margin, 1065), copyright, font=footer_font, fill=_MUTED)
-        draw.text((margin, 1112), "Made for a quieter kind of noticing.", font=footer_font, fill=_MUTED)
+        if backend_names:
+            _draw_fitted_text(
+                draw,
+                backend_names,
+                supporting_font.data,
+                right_bounds,
+                preferred_size=18,
+                fill=_MUTED,
+            )
+        egg_font = ImageFont.truetype(io.BytesIO(supporting_font.data), size=8)
+        egg_width = int(egg_font.getlength("1672"))
+        draw.text((right - egg_width, 1158), "1672", font=egg_font, fill="#AEB6B0")
         return image
     except Exception as error:
         if background is not None:
