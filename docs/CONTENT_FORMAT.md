@@ -449,6 +449,7 @@ Refrain automatically registers the following bundled fonts:
 
 | Identifier | Font family |
 |---|---|
+| `alegreya` | Alegreya |
 | `libre-baskerville` | Libre Baskerville |
 | `lora` | Lora |
 | `orbitron` | Orbitron |
