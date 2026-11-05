@@ -662,21 +662,23 @@ The daily snapshot contains a complete copy of the selected quotation and the co
 
 It includes only the selected quotation from its containing content entry, not the entry's other quotations.
 
-The snapshot contains the selected quotation, available source and attribution, selected font identifier, effective presentation style, reveal schedule, and presentation configuration required for rendering.
+The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering.
 
-Font selection occurs before the daily snapshot is committed.
+Font, background, and decoration selection occurs after quotation selection and before the daily snapshot is committed.
 
-An entry's explicit font preference is used when the font is available in the configured registry. Otherwise, the presentation uses a font selected from the configured default pool according to the content-format specification.
+An entry's explicit resource preferences take precedence according to the selection rules defined in the presentation and rendering section. Unavailable preferences do not invalidate otherwise usable quotations.
 
-The selected font identifier and presentation settings remain fixed throughout the committed display day.
+The selected resource identifiers and effective presentation settings remain fixed throughout the committed display day.
 
 The snapshot contains resolved presentation values rather than references to mutable content-library entries or configuration that may subsequently change.
 
-The snapshot does not contain font file contents or font file hashes.
+The snapshot does not contain font or image resource bytes, filesystem paths, or content hashes.
 
 The snapshot is immutable after commitment.
 
-The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. Regeneration preserves the selected content, reveal schedule, and committed presentation settings. Font resources are resolved at preparation time and may differ from those originally used if an installed font has changed or become unavailable.
+The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. Regeneration preserves the selected content, reveal schedule, effective presentation region, and committed resource identifiers.
+
+Presentation resources are resolved at preparation time. Missing fonts use the documented bundled-font fallback policy. Missing background or decoration images use the documented visual-resource recovery policy.
 
 Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or committed presentation configuration.
 
@@ -955,7 +957,7 @@ Rendered output must be testable and inspectable without Raspberry Pi display ha
 
 Refrain separates view-specific background composition from literary content rendering.
 
-A background generator produces a base image containing the visual elements owned by that view, including decorative elements, branding, diagnostic information, and other content outside the literary composition.
+A background generator produces a base image containing the visual elements owned by that view, including background imagery, decorative elements, branding, diagnostic information, and other content outside the literary composition.
 
 The shared quotation renderer accepts a background image and a literary composition consisting of:
 
@@ -967,15 +969,87 @@ The renderer owns the typography, fitting, positioning, and drawing of all three
 
 The renderer is independent of the purpose of the background image. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
 
-For normal daily presentations, the presentation region is resolved from application configuration. Other views may supply their own presentation region without changing the renderer's behavior.
+For normal daily presentations, preparation resolves the selected background and decoration before invoking the shared renderer. Background and decoration selection does not modify the selected quotation or its repetition identity.
+
+The daily background is composed in this order:
+
+1. Create a paper-white base image.
+2. Composite the selected background image, if any.
+3. Composite the selected decoration image, if any.
+4. Render the literary composition within the effective presentation region.
+
+Backgrounds and decorations are distinct resources. A background supplies the underlying image, while a decoration supplies a transparent overlay that may define an appropriate presentation region and an optional preferred background.
+
+The effective presentation region comes from the selected decoration when that decoration defines an override. Otherwise, it comes from `layout.presentation_region`.
+
+The resolved region applies to the complete literary composition and remains fixed throughout every reveal stage of the committed selection.
+
+The same composed background and resolved literary layout are used to prepare all reveal stages. Backgrounds and decorations are not independently selected or repositioned between stages.
+
+Other views, including the information view, may provide their own backgrounds and presentation regions without using the daily background or decoration pools.
 
 The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
 
 The renderer does not require a content-library entry or committed daily snapshot as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
 
-The architecture does not require a general-purpose layout framework, externally supplied rendering components, or a plugin interface.
+The architecture does not require a general-purpose layout framework, externally supplied rendering components, a theme engine, or a plugin interface.
 
-For daily images, preparation generates a paper-white background independently of literary rendering. The background contains no quotation, source, or attribution text.
+### Daily background and decoration selection
+
+Refrain maintains separate effective registries for backgrounds and decorations, each containing bundled resources and accepted user-registered resources.
+
+Application configuration defines a default selection pool for each resource type. Each pool may contain the reserved value `"none"`, representing the intentional absence of that resource.
+
+An omitted resource configuration preserves the plain paper-white, undecorated presentation.
+
+Background and decoration selection occurs after quotation selection and before committing the daily snapshot.
+
+For each selected quotation, Refrain resolves the decoration first:
+
+1. Use the content entry's explicit decoration when available.
+2. An explicit decoration value of `"none"` suppresses decoration selection.
+3. Otherwise, select from the effective default decoration pool.
+
+Refrain then resolves the background:
+
+1. Use the content entry's explicit background when available.
+2. An explicit background value of `"none"` suppresses all background selection, including a decoration's preferred background.
+3. Otherwise, use the selected decoration's preferred background when specified and available.
+4. Otherwise, select from the effective default background pool.
+
+A decoration may explicitly prefer `"none"` as its background. This suppresses automatic background selection unless the content entry supplies its own background preference.
+
+When a requested resource is unavailable, Refrain retains an otherwise valid content entry and follows the corresponding default-pool selection rules, with an appropriate diagnostic. Invalid decoration registrations must not make unrelated backgrounds or decorations unavailable.
+
+Each effective default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
+
+The selected background identifier, decoration identifier, and effective presentation region are committed with the daily presentation. They are not part of quotation identity or repetition history.
+
+Both resource selections remain fixed throughout the committed display day, including after restarts.
+
+The registries, valid identifiers, image requirements, pool configuration, and content-entry overrides are specified in `docs/CONTENT_FORMAT.md`.
+
+### Background and decoration recovery
+
+The committed daily snapshot identifies the selected background and decoration and contains the effective presentation region.
+
+The snapshot does not embed background or decoration image bytes, filesystem paths, or content hashes.
+
+Image preparation resolves the committed identifiers against available resources. Existing valid prepared images remain reusable when installed resources change.
+
+When prepared images must be regenerated, Refrain uses the committed identifiers rather than repeating background or decoration selection.
+
+If a committed background becomes unavailable, preparation uses the paper-white base with an appropriate diagnostic. It does not randomly select another background.
+
+If a committed decoration becomes unavailable, preparation omits the decoration with an appropriate diagnostic. It retains the committed effective presentation region rather than recalculating it from the current decoration registry or global configuration.
+
+The same rule applies when a decoration's preferred background was selected and subsequently becomes unavailable.
+
+A recoverable missing image resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required snapshot data or an unrenderable literary composition, remain errors.
+
+Resource substitution during regeneration may alter appearance, but it must not modify the committed snapshot.
+
+The daily background and decoration system does not alter the independent composition or recovery policies of the information view.
 
 ### Information view
 
@@ -1166,29 +1240,29 @@ All reveal stages use the same resolved composition layout.
 
 Content that cannot be rendered legibly within the supported presentation region must be handled explicitly rather than silently clipped, truncated, or omitted.
 
-
 ### Committed daily presentation data
 
-A daily snapshot must contain the selected quotation, its presentation metadata, effective reveal schedule, selected font identifier, and resolved layout values needed to prepare the presentation without consulting the original content library or current presentation configuration.
+A daily snapshot must contain the selected quotation, its presentation metadata, effective reveal schedule, selected font, background, and decoration identifiers, and resolved layout values needed to prepare the presentation without consulting the original content library or current presentation configuration.
 
 `presentation_metadata` contains optional nonempty `source` and `attribution` strings, plus the required built-in `presentation_style` (`centered` or `left-aligned`). An absent optional field is represented by a missing key or `null`.
 
 `layout` contains:
 
 - `image_size`: a two-item sequence of positive integer pixel dimensions in width, height order;
-- `presentation_region`: a normalized rectangle with `x`, `y`, `width`, and `height`;
+- `presentation_region`: the effective normalized rectangle with `x`, `y`, `width`, and `height`, including any selected decoration override;
 - `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
 
-The snapshot stores the selected font identifier, not the font's binary contents or a digest of those contents.
+The snapshot also preserves the resolved background and decoration identifiers. The reserved value `"none"` represents the absence of the corresponding resource.
+
+The snapshot stores resource identifiers, not font or image contents or their digests.
 
 Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
 
-Font resources are resolved through the available registry during preparation. If the selected identifier cannot be used, regeneration may use a deterministic bundled fallback while preserving the committed quotation, metadata, reveal schedule, and layout configuration.
+Presentation resources are resolved using the available registries during preparation. Font and image recovery follow their separately documented fallback policies without changing the committed quotation, metadata, reveal schedule, resource identifiers, or effective layout.
 
 Missing or invalid required presentation data, failure to resolve any usable font, or a composition that does not fit is a preparation error.
 
 Preparation does not change the committed snapshot or persistent selection state.
-
 
 ### Complete stage preparation
 
@@ -1219,7 +1293,9 @@ Missing or invalid prepared images may be regenerated without access to the orig
 
 Regeneration resolves the selected font identifier through the available font registry and may use a bundled fallback if the originally selected font is unavailable or unusable.
 
-Recovery must not change the selected quotation, presentation metadata, reveal schedule, or committed layout configuration.
+Committed background and decoration identifiers are resolved through the available resource registries. Missing or unusable image resources are omitted according to the background and decoration recovery policy. Regeneration retains the committed effective presentation region and does not select replacement backgrounds or decorations.
+
+Recovery must not change the selected quotation, presentation metadata, reveal schedule, committed resource identifiers, or committed layout configuration.
 
 Exact pixel reproduction is not required when installed font resources have changed. Existing valid prepared images remain reusable independently of those changes.
 
