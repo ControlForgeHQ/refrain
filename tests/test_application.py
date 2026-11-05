@@ -136,6 +136,65 @@ def ordinary(workspace: Workspace, text: str = "An ordinary quotation.", extra: 
     workspace.entry("ordinary", f'source: "A Book"\nattribution: "An Author"\n{extra}quotations:\n  - "{text}"\n')
 
 
+@pytest.mark.parametrize(
+    ("preference", "expected"),
+    [(None, "canvas"), ("cloth", "cloth"), ("none", "none"), ("unavailable-paper", "canvas")],
+)
+def test_background_preference_resolves_before_commit(workspace: Workspace, caplog, preference, expected) -> None:
+    workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
+    ordinary(workspace, extra="" if preference is None else f'background: "{preference}"\n')
+    configuration = application.load_application_config(workspace.config)
+    proposal, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+    state = PersistentStateStore(workspace.state).commit(proposal, snapshot)
+    assert state.snapshot.background_identifier == expected
+    assert state.snapshot.decoration_identifier == "none"
+    assert dict(state.snapshot.layout["presentation_region"]) == {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55}
+    assert PersistentStateStore(workspace.state).load() == state
+    if preference == "unavailable-paper":
+        assert "Requested background 'unavailable-paper'" in caplog.text
+
+
+def test_background_pool_selects_distinct_usable_members(workspace: Workspace) -> None:
+    workspace.config.write_text(
+        _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas", "none", "canvas", "cloth"]\n  fonts:')
+    )
+    configuration = application.load_application_config(workspace.config)
+
+    class RecordingChooser:
+        def choice(self, members):
+            assert members == ("canvas", "none", "cloth")
+            return members[-1]
+
+    assert application._resolve_background(configuration, None, RecordingChooser()) == "cloth"
+
+
+def test_committed_background_survives_restart_config_changes_and_resource_loss(workspace: Workspace, caplog) -> None:
+    path = workspace.root / "paper.png"
+    with Image.new("RGB", (1600, 1200), (100, 140, 180)) as image:
+        image.save(path)
+    workspace.config.write_text(
+        _CONFIG.replace(
+            "  fonts:",
+            '  backgrounds:\n    available: {paper: "paper.png"}\n    default: ["paper"]\n  fonts:',
+        )
+    )
+    ordinary(workspace)
+    first, first_display = workspace.run(at(10, 7))
+    assert first.state.snapshot.background_identifier == "paper"
+    assert first_display.images[-1].getpixel((0, 0)) == (100, 140, 180)
+    path.unlink()
+    workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
+    second, second_display = workspace.run(at(10, 7))
+    assert second.state == first.state
+    assert second_display.images[-1].tobytes() == first_display.images[-1].tobytes()
+    for artifact in png_files(workspace.artifacts):
+        artifact.unlink()
+    third, third_display = workspace.run(at(10, 7))
+    assert third.state == first.state
+    assert third_display.images[-1].getpixel((0, 0)) == (255, 255, 255)
+    assert "Committed background 'paper'" in caplog.text
+
+
 def png_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.png"))
 

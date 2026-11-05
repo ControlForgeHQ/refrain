@@ -18,6 +18,7 @@ from .artifacts import ArtifactStoreError, PreparedImageArtifactSet, PreparedIma
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
+    BackgroundResource,
     DisplayBackendConfiguration,
     FontResource,
     load_application_config,
@@ -124,6 +125,14 @@ def _resolve_font(configuration: ApplicationConfiguration, preferred: str | None
     return identifier
 
 
+def _resolve_background(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
+    if preferred == "none" or preferred in configuration.backgrounds:
+        return preferred
+    if preferred is not None:
+        _LOGGER.warning("Requested background %r is not available; using the default background pool", preferred)
+    return chooser.choice(configuration.default_backgrounds)
+
+
 def _select_snapshot(
     configuration: ApplicationConfiguration,
     display_date,
@@ -164,6 +173,8 @@ def _select_snapshot(
             quotation_text=candidate.text,
             quotation_identity=candidate.identity,
             font_identifier=_resolve_font(configuration, entry.font, chooser),
+            background_identifier=_resolve_background(configuration, entry.background, chooser),
+            decoration_identifier="none",
             presentation_metadata=metadata,
             reveal_schedule={
                 "quotation": configuration.day_start.strftime("%H:%M"),
@@ -256,6 +267,7 @@ def _recover_images(
     state: PersistentState,
     artifact_store: PreparedImageArtifactStore,
     font_registry: Mapping[str, FontResource],
+    background_registry: Mapping[str, BackgroundResource] | None = None,
 ) -> PreparedImageArtifactSet:
     try:
         return recover_prepared_daily_images(
@@ -263,6 +275,7 @@ def _recover_images(
             artifact_store,
             resolve_reveal_stages(state.snapshot),
             font_registry,
+            background_registry,
         )
     except DailyImagePreparationError as error:
         raise _RetryableApplicationError(f"cannot prepare daily images: {error}") from error
@@ -345,7 +358,7 @@ def run_startup(
 
     if stage > state.highest_reveal_stage:
         state = _persist_reveal_progress(store, state, stage)
-    artifacts = _recover_images(state, artifact_store, configuration.fonts)
+    artifacts = _recover_images(state, artifact_store, configuration.fonts, configuration.backgrounds)
     coordinator = DisplayPublicationCoordinator(
         configuration.display_backends,
         backend_factory,
@@ -493,7 +506,7 @@ def run_application(
                             and desired_identity[0] != state.revision
                         ):
                             coordinator.clear_desired()
-                    artifacts = _recover_images(state, artifact_store, configuration.fonts)
+                    artifacts = _recover_images(state, artifact_store, configuration.fonts, configuration.backgrounds)
                     artifact_revision = state.revision
                     try:
                         artifact_store.cleanup(state.revision)

@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 
 from PIL import Image, ImageFont
 
-from .config import FontResource, PresentationRegion
+from .config import BackgroundResource, FontResource, PresentationRegion, load_background_image
 from .persistence import DailySnapshot, ResolvedFont
 from .renderer import (
     CompositionVisibility,
@@ -87,8 +87,30 @@ def _resolve_presentation(
     return composition, region, (size[0], size[1]), min_font_size, max_font_size, style
 
 
-def _generate_daily_background(image_size: tuple[int, int]) -> Image.Image:
-    return Image.new("RGB", image_size, _BACKGROUND_COLOR)
+def _generate_daily_background(
+    image_size: tuple[int, int],
+    identifier: str,
+    registry: Mapping[str, BackgroundResource],
+) -> Image.Image:
+    base = Image.new("RGB", image_size, _BACKGROUND_COLOR)
+    if identifier == "none":
+        return base
+    resource = registry.get(identifier)
+    if resource is None:
+        _LOGGER.warning("Committed background %r is unavailable; using the paper-white base", identifier)
+        return base
+    try:
+        with load_background_image(resource) as image:
+            if image.size != image_size:
+                raise ValueError("background dimensions do not match the committed image size")
+            base.paste(image, (0, 0), image if image.mode == "RGBA" else None)
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+        _LOGGER.warning(
+            "Committed background %r is unavailable or unusable; using the paper-white base: %s",
+            identifier,
+            error,
+        )
+    return base
 
 
 def _read_font(resource: FontResource) -> ResolvedFont:
@@ -132,6 +154,7 @@ def prepare_daily_images(
     snapshot: DailySnapshot,
     stages: Sequence[CompositionVisibility],
     font_registry: Mapping[str, FontResource],
+    background_registry: Mapping[str, BackgroundResource] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -145,6 +168,8 @@ def prepare_daily_images(
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
     if not isinstance(font_registry, Mapping):
         raise DailyImagePreparationError("font_registry must be a mapping of font identifiers to font resources")
+    if background_registry is not None and not isinstance(background_registry, Mapping):
+        raise DailyImagePreparationError("background_registry must be a mapping of identifiers to background resources")
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
     font = _resolve_font(snapshot, font_registry)
@@ -159,14 +184,19 @@ def prepare_daily_images(
             style,
             byline_gap_factor=_BYLINE_GAP_FACTOR,
         )
-        background = _generate_daily_background(image_size)
-        return render_reveal_stages(
-            background,
-            font,
-            layout,
-            tuple(stages),
-            concealment="pixel-distortion",
+        background = _generate_daily_background(
+            image_size, snapshot.background_identifier, {} if background_registry is None else background_registry
         )
+        try:
+            return render_reveal_stages(
+                background,
+                font,
+                layout,
+                tuple(stages),
+                concealment="pixel-distortion",
+            )
+        finally:
+            background.close()
     except QuotationRenderError as error:
         raise DailyImagePreparationError(f"cannot prepare daily snapshot images: {error}") from error
 

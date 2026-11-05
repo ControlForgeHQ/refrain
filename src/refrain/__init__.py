@@ -20,12 +20,14 @@ from .artifacts import (
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
+    BackgroundResource,
     ConfigurationDiagnostic,
     DisplayBackendConfiguration,
     FontResource,
     PresentationRegion,
     RevealSchedule,
     load_application_config,
+    load_background_image,
 )
 from .content import (
     ContentDiagnostic,
@@ -98,6 +100,7 @@ __all__ = [
     "PreparedImageArtifactStore",
     "ApplicationConfiguration",
     "ApplicationConfigurationError",
+    "BackgroundResource",
     "ConfigurationDiagnostic",
     "DisplayBackendConfiguration",
     "ContentDiagnostic",
@@ -142,6 +145,7 @@ __all__ = [
     "UnsupportedStateVersionError",
     "load_content_library",
     "load_application_config",
+    "load_background_image",
     "layout_composition",
     "normalize_quotation",
     "prepare_daily_images",

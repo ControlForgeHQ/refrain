@@ -66,6 +66,8 @@ def _snapshot_digest(snapshot: DailySnapshot) -> str:
         "quotation_text": snapshot.quotation_text,
         "quotation_identity": snapshot.quotation_identity,
         "font_identifier": snapshot.font_identifier,
+        "background_identifier": snapshot.background_identifier,
+        "decoration_identifier": snapshot.decoration_identifier,
         "presentation_metadata": _json_value(snapshot.presentation_metadata),
         "reveal_schedule": _json_value(snapshot.reveal_schedule),
         "layout": _json_value(snapshot.layout),

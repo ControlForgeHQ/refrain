@@ -9,7 +9,7 @@ from .artifacts import (
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
-from .config import FontResource
+from .config import BackgroundResource, FontResource
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -20,6 +20,7 @@ def recover_prepared_daily_images(
     artifact_store: PreparedImageArtifactStore,
     stages: Sequence[CompositionVisibility],
     font_registry: Mapping[str, FontResource],
+    background_registry: Mapping[str, BackgroundResource] | None = None,
 ) -> PreparedImageArtifactSet:
     """Reuse or regenerate the complete images for an existing committed selection.
 
@@ -56,7 +57,7 @@ def recover_prepared_daily_images(
     if existing is not None:
         return existing
 
-    images = prepare_daily_images(state.snapshot, ordered_stages, font_registry)
+    images = prepare_daily_images(state.snapshot, ordered_stages, font_registry, background_registry)
     try:
         return artifact_store.store(state.revision, state.snapshot, images)
     finally:

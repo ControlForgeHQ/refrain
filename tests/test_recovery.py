@@ -29,6 +29,7 @@ from refrain import (
     prepare_daily_images,
     recover_prepared_daily_images,
 )
+from refrain.config import BackgroundResource
 
 _STAGES = (
     CompositionVisibility(),
@@ -98,6 +99,32 @@ def _assert_images_closed(images: tuple[Image.Image, ...]) -> None:
     for image in images:
         with pytest.raises(ValueError, match="closed"):
             image.getpixel((0, 0))
+
+
+def test_missing_committed_background_never_reselects_and_reuses_valid_images(
+    committed_state, artifact_store, tmp_path: Path, caplog
+) -> None:
+    state, _ = committed_state
+    snapshot = replace(
+        state.snapshot,
+        background_identifier="lost-paper",
+        layout={**state.snapshot.layout, "image_size": (1600, 1200)},
+    )
+    state = replace(state, snapshot=snapshot)
+    substitute = tmp_path / "substitute.png"
+    with Image.new("RGB", (1600, 1200), "red") as image:
+        image.save(substitute)
+    registry = {"substitute": BackgroundResource("substitute", substitute, False)}
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, registry)
+    with result.load_stage(0) as image:
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert "Committed background 'lost-paper'" in caplog.text
+    assert state.snapshot == snapshot
+    manifest_before = (result.directory / "manifest.json").read_bytes()
+    caplog.clear()
+    assert recover_prepared_daily_images(state, artifact_store, _STAGES, {}, {}) == result
+    assert (result.directory / "manifest.json").read_bytes() == manifest_before
+    assert not caplog.records
 
 
 def test_reuses_complete_artifacts_without_preparing_or_writing(
@@ -349,7 +376,7 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
     monkeypatch.setattr(artifact_store, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
     prepared = []
 
-    def prepare(snapshot, stages, font_registry):
+    def prepare(snapshot, stages, font_registry, background_registry=None):
         prepared.append(tuple(stages))
         return tuple(Image.new("RGB", (320, 240), "white") for _ in stages)
 

@@ -6,7 +6,7 @@ import ipaddress
 import logging
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import time
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -16,7 +16,7 @@ from typing import Callable, Mapping, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import yaml
-from PIL import ImageFont
+from PIL import Image, ImageFont
 
 from ._yaml import load_yaml, yaml_error_location
 
@@ -52,6 +52,7 @@ _BUNDLED_FONT_FILES = {
     "orbitron": ("assets", "fonts", "orbitron", "Orbitron-Regular.ttf"),
     "source-sans-3": ("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf"),
 }
+_BUNDLED_BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,15 @@ class ApplicationConfigurationError(Exception):
 @dataclass(frozen=True)
 class FontResource:
     """A validated bundled or user-registered Pillow-compatible font."""
+
+    identifier: str
+    path: Union[Path, Traversable]
+    bundled: bool
+
+
+@dataclass(frozen=True)
+class BackgroundResource:
+    """A validated bundled or user-registered background PNG."""
 
     identifier: str
     path: Union[Path, Traversable]
@@ -127,6 +137,8 @@ class ApplicationConfiguration:
     min_font_size: int
     max_font_size: int
     information_view_duration: int = 60
+    backgrounds: Mapping[str, BackgroundResource] = field(default_factory=lambda: MappingProxyType({}))
+    default_backgrounds: tuple[str, ...] = ("none",)
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -187,6 +199,38 @@ def _load_font(path: Union[Path, Traversable], field: str, report: Callable[[str
         report(field, f"is excluded; it must be an existing, readable font supported by Pillow: {error}")
         return False
     return True
+
+
+def load_background_image(resource: BackgroundResource) -> Image.Image:
+    """Revalidate a resource and return a detached RGB/RGBA image owned by the caller.
+
+    Unreadable resources raise their loading exception; unsupported images raise
+    ``ValueError``. No image is cached, so regeneration checks the current resource.
+    """
+    with resource.path.open("rb") as background_file:
+        with Image.open(background_file) as image:
+            if image.format != "PNG":
+                raise ValueError("background must be a PNG image")
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError("background must be a single-frame PNG image")
+            if image.size != (1600, 1200):
+                raise ValueError("background dimensions must be exactly 1600 × 1200 pixels")
+            if image.mode not in {"RGB", "RGBA"}:
+                raise ValueError("background mode must be RGB or RGBA")
+            image.load()
+            return image.copy()
+
+
+def _register_background(
+    resource: BackgroundResource, field: str, registry: dict[str, BackgroundResource], report: Callable[..., None]
+) -> None:
+    try:
+        with load_background_image(resource):
+            pass
+    except Exception as error:
+        report(field, f"is excluded; it must be an existing, readable background PNG: {error}")
+    else:
+        registry[resource.identifier] = resource
 
 
 def load_application_config(config_file: Union[str, Path]) -> ApplicationConfiguration:
@@ -374,7 +418,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     reveal = RevealSchedule(reveal_times["source"], reveal_times["attribution"])
 
     layout = _mapping(data.get("layout", {}), "layout", report)
-    _known_fields(layout, {"presentation_region", "fonts", "text"}, "layout", report)
+    _known_fields(layout, {"presentation_region", "fonts", "backgrounds", "text"}, "layout", report)
     region_data = _mapping(layout.get("presentation_region", {}), "layout.presentation_region", report)
     _known_fields(region_data, {"x", "y", "width", "height"}, "layout.presentation_region", report)
     region_values: dict[str, float] = {}
@@ -469,6 +513,74 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                 seen_default_fonts.add(identifier)
         default_fonts = tuple(effective_default_fonts)
 
+    backgrounds_data = _mapping(layout.get("backgrounds", {}), "layout.backgrounds", report)
+    _known_fields(backgrounds_data, {"default", "available"}, "layout.backgrounds", report)
+    background_registry: dict[str, BackgroundResource] = {}
+    for identifier in _BUNDLED_BACKGROUNDS:
+        resource = BackgroundResource(
+            identifier=identifier,
+            path=package_root.joinpath("assets", "backgrounds", f"{identifier}.png"),
+            bundled=True,
+        )
+        _register_background(resource, f"layout.backgrounds.bundled.{identifier}", background_registry, report)
+
+    if "available" in backgrounds_data:
+        available_backgrounds = _mapping(backgrounds_data["available"], "layout.backgrounds.available", report)
+    else:
+        available_backgrounds = {}
+        use_default("layout.backgrounds.available", "an empty mapping")
+    for identifier, path_value in available_backgrounds.items():
+        field_name = (
+            f"layout.backgrounds.available.{identifier}"
+            if isinstance(identifier, str)
+            else f"layout.backgrounds.available[{identifier!r}]"
+        )
+        if not isinstance(identifier, str) or not identifier.strip():
+            report(field_name, "background identifiers must be nonempty strings; this registration is excluded")
+            continue
+        if identifier == "none" or identifier in _BUNDLED_BACKGROUNDS:
+            report(field_name, f"identifier {identifier!r} is reserved; this registration is ignored")
+            continue
+        if not isinstance(path_value, str) or not path_value.strip():
+            report(field_name, "must be a nonempty background file path; this registration is excluded")
+            continue
+        background_path = Path(path_value)
+        if not background_path.is_absolute():
+            background_path = file.parent / background_path
+        _register_background(
+            BackgroundResource(identifier=identifier, path=background_path, bundled=False),
+            field_name,
+            background_registry,
+            report,
+        )
+
+    default_backgrounds = ("none",)
+    if "default" not in backgrounds_data:
+        use_default("layout.backgrounds.default", "['none']")
+    else:
+        background_default_value = backgrounds_data["default"]
+        effective_backgrounds: list[str] = []
+        seen_backgrounds: set[str] = set()
+        if not isinstance(background_default_value, list):
+            report("layout.backgrounds.default", "must be a nonempty sequence of background identifiers")
+        else:
+            for index, identifier in enumerate(background_default_value):
+                field_name = f"layout.backgrounds.default[{index}]"
+                if not isinstance(identifier, str) or not identifier.strip():
+                    report(field_name, "must be a nonempty background identifier; it is excluded")
+                    continue
+                if identifier in seen_backgrounds:
+                    continue
+                seen_backgrounds.add(identifier)
+                if identifier != "none" and identifier not in background_registry:
+                    report(field_name, f"background identifier {identifier!r} is unavailable; it is excluded")
+                else:
+                    effective_backgrounds.append(identifier)
+        if effective_backgrounds:
+            default_backgrounds = tuple(effective_backgrounds)
+        else:
+            report("layout.backgrounds.default", "has no usable members; using ['none']")
+
     text_data = _mapping(layout.get("text", {}), "layout.text", report)
     _known_fields(text_data, {"min_font_size", "max_font_size"}, "layout.text", report)
     sizes: dict[str, int] = {}
@@ -501,4 +613,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         min_font_size=sizes["min_font_size"],
         max_font_size=sizes["max_font_size"],
         information_view_duration=information_view_duration,
+        backgrounds=MappingProxyType(background_registry),
+        default_backgrounds=default_backgrounds,
     )

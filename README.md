@@ -67,7 +67,7 @@ Hardware-independent validation does not replace physical display validation whe
 
 ## Loading application configuration
 
-`load_application_config` reads and validates `config.yaml`, returning resolved paths, the effective font registry, and the settings required by downstream components. Missing optional settings use documented defaults; invalid optional settings and unknown fields are reported through Python logging and do not discard unrelated valid settings. Required values without usable fallbacks remain fatal. Relative content and user-font paths are based on the configuration file's directory. See [`examples/config.yaml`](examples/config.yaml) for a bundled-font example and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative configuration specification.
+`load_application_config` reads and validates `config.yaml`, returning resolved paths, effective font and background registries, and the settings required by downstream components. Missing optional settings use documented defaults; invalid optional settings and unknown fields are reported through Python logging and do not discard unrelated valid settings. Required values without usable fallbacks remain fatal. Relative content, user-font, and user-background paths are based on the configuration file's directory. See [`examples/config.yaml`](examples/config.yaml) for a bundled-resource example and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative configuration specification.
 
 ```python
 from refrain import ApplicationConfigurationError, load_application_config
@@ -83,6 +83,26 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
+### Daily backgrounds
+
+The five bundled backgrounds have stable, reserved identifiers: `aged-paper`, `canvas`, `cloth`, `ethereal`, and `hex`. They are available through `config.backgrounds` as installed package resources, but are not automatically added to the default pool. Asset provenance is documented in [`src/refrain/assets/README.md`](src/refrain/assets/README.md).
+
+Use `layout.backgrounds.default` to select equally among distinct usable identifiers, including `"none"` for the plain paper-white base. Omission defaults to `["none"]`; invalid or unavailable members are excluded with warnings, duplicates are ignored, and a configured pool with no usable members falls back to `["none"]` with a warning.
+
+```yaml
+layout:
+  backgrounds:
+    default: ["none", "aged-paper", "canvas"]
+    available:
+      handmade-paper: "backgrounds/HandmadePaper.png"
+```
+
+Custom registrations must be readable, single-frame PNG images, exactly 1600 × 1200 pixels, in RGB or RGBA mode. Relative paths resolve against the configuration directory; absolute paths are permitted. Invalid registrations are excluded individually with warnings, and reserved identifiers cannot be overridden. RGBA transparency exposes the paper-white base.
+
+A content entry's available `background: "<id>"` wins over the default pool; `background: "none"` suppresses automatic selection. An unavailable, syntactically valid preference warns and falls back to the pool without rejecting the entry. The resolved identifier remains committed across reveals and restarts. If regeneration cannot load that resource, preparation warns and uses paper-white without selecting a replacement or changing committed state. Valid prepared images remain reusable after resource changes. See [Background registry](docs/CONTENT_FORMAT.md#background-registry) and [Background and decoration recovery](docs/ARCHITECTURE.md#background-and-decoration-recovery).
+
+Decoration registration, selection, rendering, and decoration-driven font/background or region preferences are deferred. The committed `decoration_identifier` is currently always `"none"`, and the effective presentation region remains the global `layout.presentation_region`.
+
 ## Running Refrain
 
 `python -m refrain` runs continuously, showing the startup information view for 60 seconds by default before presenting the current daily quotation. Set `information_view.duration` to `0` to disable it, or to an integer from `1` through `300` to choose another duration. The interval starts after the first display backend successfully publishes the view. Refrain then presents the latest required daily reveal and continues selecting quotations at observed display-day boundaries. All three locations are required and are never inferred from a user's home directory or installation layout:
@@ -95,14 +115,14 @@ Bundled fonts are package resources, not paths relative to the current directory
   --history /path/to/refrain/global-history.jsonl
 ```
 
-- `--config` is the application configuration file; relative content and font paths resolve against its directory.
+- `--config` is the application configuration file; relative content, font, and background paths resolve against its directory.
 - `--state` is the persistent selection-state file. It is created on first use, and its parent directory is created if needed.
 - `--artifacts` is the directory for derived prepared images. It is separate from state and content and may be regenerated from committed state.
 - `--history` is the separate JSONL selection-history file; by default it is `global-history.jsonl` beside the state file. `--history-segment-size` and `--history-max-segments` configure bounded retention (defaults: 1 MiB per segment and 20 segments, including the active segment).
 
 With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot and repetition history, records the selection independently in global history, prepares the reveal images, and presents the stage required at the current time. History recording is best-effort and does not block presentation. With existing state, it recovers the committed selection without needing its original content library and reuses valid prepared images (regenerating missing or invalid ones). Missed reveals advance directly to the latest required stage; backward clock adjustments never hide information already revealed.
 
-Operational state uses format version 3 and contains the current snapshot, revision, repetition history, scheduling context, and reveal progress. Global selection history is a separate append-only JSONL log with size-based rotation and bounded retention; it is not read during startup or recovery and never determines the next revision. Development state formats 1 and 2 are unsupported and are not migrated or replaced automatically. Archive or remove an old development state file before starting Refrain; the compatibility error leaves it unchanged.
+Operational state uses format version 4 and contains the current snapshot, revision, repetition history, scheduling context, and reveal progress. The snapshot preserves `font_identifier`, `background_identifier`, `decoration_identifier` (currently `"none"`), and the effective global layout. Global selection history is a separate append-only JSONL log with size-based rotation and bounded retention; it is not read during startup or recovery and never determines the next revision. Development state formats 1, 2, and 3 are unsupported and are not migrated or replaced automatically. Archive or remove an old development state file before starting Refrain; the actionable compatibility error leaves it unchanged.
 
 The continuous runtime gives each configured backend its own worker, so a slow destination cannot block another backend or the scheduling loop. Updates remain synchronous within each worker, are never overlapped for one backend, and coalesce to the latest required image. Recoverable content, storage, and preparation failures retry with monotonic delays increasing from 1 to at most 60 seconds; recoverable display failures retry independently on that backend. A failed presentation never causes reselection, and the globally reached reveal stage is persisted independently of backend success. Invalid application configuration, corrupted authoritative state, or loss of every display destination terminates with status 1 rather than retrying indefinitely. Configuration is loaded once; content is reloaded only when a new selection is needed. After recovering the active image set, the coordinator removes obsolete revision artifacts while retaining the active revision and images used by outstanding backend updates.
 
@@ -243,7 +263,7 @@ The complete byline reads `— An Example Author, A Book of Examples`; if either
 
 ## Preparing images from a daily snapshot
 
-`prepare_daily_images(snapshot, stages, font_registry)` produces complete RGB Pillow images from a committed `DailySnapshot`, its selected font identifier, the effective font registry, and an explicit sequence of cumulative `CompositionVisibility` stages. It resolves the font from that registry, using a deterministic bundled fallback if necessary; every stage in the operation uses the same resolved font. Missing or invalid required presentation data, the absence of a usable font, and content that cannot fit raise `DailyImagePreparationError`. Preparation does not load content or modify persistent state. See the [committed daily presentation data contract](docs/ARCHITECTURE.md#committed-daily-presentation-data).
+`prepare_daily_images(snapshot, stages, font_registry, background_registry=None)` produces complete RGB Pillow images from a committed `DailySnapshot` and an explicit sequence of cumulative `CompositionVisibility` stages. Pass the effective background registry as the optional final argument to resolve selected backgrounds; omission supplies no background resources and preserves paper-white fallback. Preparation composites the committed background over paper-white before invoking the shared quotation renderer. Missing or unusable backgrounds warn and leave the paper-white base without reselection. It resolves the font from its registry, using a deterministic bundled fallback if necessary; every stage uses the same composed background, resolved font, and literary layout. Missing or invalid required presentation data, the absence of a usable font, and content that cannot fit raise `DailyImagePreparationError`. Preparation does not load content or modify persistent state. See the [committed daily presentation data contract](docs/ARCHITECTURE.md#committed-daily-presentation-data).
 
 ```python
 from refrain import CompositionVisibility, PersistentStateStore, load_application_config, prepare_daily_images
@@ -261,7 +281,7 @@ if metadata.get("source") is not None:
     stages.append(CompositionVisibility(source=True))
 if metadata.get("attribution") is not None:
     stages.append(CompositionVisibility(source=source_revealed, attribution=True))
-images = prepare_daily_images(state.snapshot, tuple(stages), config.fonts)
+images = prepare_daily_images(state.snapshot, tuple(stages), config.fonts, config.backgrounds)
 for index, image in enumerate(images):
     image.save(f"daily-stage-{index}.png")
 ```
@@ -306,7 +326,7 @@ The caller must serialize store operations and coordinate cleanup with all users
 
 ## Recovering prepared images
 
-`recover_prepared_daily_images(state, artifact_store, stages, font_registry)` reuses a complete valid set for the committed revision and snapshot. `stages` must be the full ordered sequence of cumulative `CompositionVisibility` values, ending with all available fields revealed; it is validated before reuse and supplies the expected stage count. Pass the same sequence used to prepare the stored set: the existing artifact format records its count, not individual visibility definitions. If the set is absent or invalid, recovery prepares and stores every stage from `state.snapshot`, resolving its font identifier from the supplied registry. It does not load content or alter persistent state or clean artifact directories.
+`recover_prepared_daily_images(state, artifact_store, stages, font_registry, background_registry=None)` reuses a complete valid set for the committed revision and snapshot. Pass the effective background registry as the optional final argument for regeneration; omission supplies no background resources. `stages` must be the full ordered sequence of cumulative `CompositionVisibility` values, ending with all available fields revealed; it is validated before reuse and supplies the expected stage count. Pass the same sequence used to prepare the stored set: the existing artifact format records its count, not individual visibility definitions. If the set is absent or invalid, recovery prepares and stores every stage from `state.snapshot`, resolving its committed font and background identifiers against available resources. A missing background warns and falls back to paper-white without reselection. Recovery does not load content, alter committed identifiers or layout, or clean artifact directories.
 
 ```python
 from refrain import (
@@ -318,7 +338,7 @@ from refrain import (
 
 config = load_application_config("config.yaml")
 store = PreparedImageArtifactStore("/absolute/path/chosen-for-this-installation/prepared-images")
-artifacts = recover_prepared_daily_images(state, store, stages, config.fonts)
+artifacts = recover_prepared_daily_images(state, store, stages, config.fonts, config.backgrounds)
 
 # The returned set contains validated paths, not retained decoded images.
 with artifacts.load_stage(0) as image:
@@ -380,7 +400,7 @@ if proposal.selected_candidate is not None:
 
 ## Persisting and recovering a selection
 
-`PersistentStateStore` distinguishes an uninitialized location (`load()` returns `None`) from invalid existing state (a `StateRecoveryError`). It supports operational state format 3; formats 1 and 2 are unsupported and remain untouched when reported. A commit requires the caller's provisional selection and a complete `DailySnapshot` containing resolved presentation, scheduling, layout, and a font identifier. Font bytes and content digests are not embedded in state. Choose an absolute state-file path appropriate to the installation.
+`PersistentStateStore` distinguishes an uninitialized location (`load()` returns `None`) from invalid existing state (a `StateRecoveryError`). It supports operational state format 4; formats 1, 2, and 3 are rejected with an actionable compatibility error and remain untouched, without migration. A commit requires the caller's provisional selection and a complete `DailySnapshot` containing resolved presentation, scheduling, effective global layout, `font_identifier`, `background_identifier`, and `decoration_identifier` (currently `"none"`). Resource bytes, paths, and content digests are not embedded in state. Choose an absolute state-file path appropriate to the installation.
 
 The example assumes the caller has already recognized a display-day transition. Compare state revisions, not display dates, when deciding whether a proposal is stale; clock adjustments can legitimately lead to a later commit for a previously used date.
 
@@ -423,11 +443,13 @@ if selection_boundary_recognized:
     candidate = proposal.selected_candidate
 
     if candidate is not None:
-        # Assume the application's selection policy resolved this candidate to "lora".
+        # Assume selection policy resolved the font to "lora" and background to "aged-paper".
         snapshot = DailySnapshot(
             quotation_text=candidate.text,
             quotation_identity=candidate.identity,
             font_identifier="lora",
+            background_identifier="aged-paper",
+            decoration_identifier="none",
             presentation_metadata={
                 "source": candidate.entry.source,
                 "attribution": candidate.entry.attribution,

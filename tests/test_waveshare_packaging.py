@@ -10,6 +10,7 @@ from zipfile import ZipFile
 
 _ROOT = Path(__file__).parent.parent
 _LIBRARIES = {f"DEV_Config_{bits}_{variant}.so" for bits in ("32", "64") for variant in ("b", "w")}
+_BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
 
 
 def _copy_build_tree(project: Path) -> Path:
@@ -112,6 +113,10 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     assert any(name.endswith("assets/fonts/alegreya/OFL.txt") for name in sdist_names)
     assert any(name.endswith("assets/fonts/orbitron/Orbitron-Regular.ttf") for name in sdist_names)
     assert any(name.endswith("assets/fonts/orbitron/OFL.txt") for name in sdist_names)
+    for names in (wheel_names, sdist_names):
+        assert any(name.endswith("assets/README.md") for name in names)
+        for identifier in _BACKGROUNDS:
+            assert any(name.endswith(f"assets/backgrounds/{identifier}.png") for name in names)
 
     installed = tmp_path / "installed"
     subprocess.run(
@@ -137,10 +142,23 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
             "-c",
             (
                 "from importlib.resources import files; "
+                "from PIL import Image; "
                 "root=files('refrain'); "
                 "assert root.joinpath('assets','branding','controlforge-logo.png').is_file(); "
                 "assert root.joinpath('assets','fonts','orbitron','Orbitron-Regular.ttf').is_file(); "
-                "assert root.joinpath('assets','fonts','orbitron','OFL.txt').is_file()"
+                "assert root.joinpath('assets','fonts','orbitron','OFL.txt').is_file(); "
+                "assert root.joinpath('assets','README.md').read_text(encoding='utf-8'); "
+                "resource=root.joinpath('assets','backgrounds','aged-paper.png'); "
+                "stream=resource.open('rb'); "
+                "image=Image.open(stream); "
+                "assert image.format == 'PNG'; "
+                "assert image.size == (1600,1200); "
+                "assert image.mode in ('RGB','RGBA'); "
+                "assert image.n_frames == 1; "
+                "image.load(); "
+                "assert isinstance(image.getpixel((0,0)),tuple); "
+                "image.close(); "
+                "stream.close()"
             ),
         ],
         cwd=tmp_path,

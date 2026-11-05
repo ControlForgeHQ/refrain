@@ -32,6 +32,16 @@ layout:
       - "lora"
       - "source-sans-3"
 
+  backgrounds:
+    # Omission also preserves the plain paper-white appearance.
+    default:
+      - "none"
+    # Bundled choices: aged-paper, canvas, cloth, ethereal, hex.
+    # Custom readable, single-frame RGB/RGBA PNGs must be 1600 x 1200.
+    # Paths are relative to this configuration file (absolute paths also work).
+    # available:
+    #   handmade-paper: "backgrounds/HandmadePaper.png"
+
   text:
     min_font_size: 28
     max_font_size: 100

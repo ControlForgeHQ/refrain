@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -319,23 +320,46 @@ def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -
         PersistentStateStore(state_path).load()
 
 
-def test_state_v3_excludes_global_history_and_font_contents(tmp_path: Path) -> None:
+def test_state_v4_excludes_global_history_and_font_contents(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    assert document["format_version"] == 3
+    assert document["format_version"] == 4
     assert "global_history" not in document["state"]
     assert document["state"]["snapshot"]["font_identifier"] == "test-font"
     assert "font" not in document["state"]["snapshot"]
     assert "sha256" in document and "sha256" not in document["state"]["snapshot"]
 
 
-@pytest.mark.parametrize("version", [1, 2])
+def test_background_and_fixed_decoration_round_trip(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    snapshot = replace(make_snapshot("Persisted."), background_identifier="custom-paper")
+    committed = store.commit(make_proposal("Persisted."), snapshot)
+    assert store.load() == committed
+    assert store.load().snapshot.background_identifier == "custom-paper"
+    assert store.load().snapshot.decoration_identifier == "none"
+    document = json.loads(store.path.read_text())
+    assert document["state"]["snapshot"]["background_identifier"] == "custom-paper"
+    assert document["state"]["snapshot"]["decoration_identifier"] == "none"
+
+
+@pytest.mark.parametrize("field", ["background_identifier", "decoration_identifier"])
+def test_format_four_requires_visual_resource_fields(tmp_path: Path, field: str) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Persisted.")
+    document = json.loads(store.path.read_text())
+    del document["state"]["snapshot"][field]
+    _write_document(store.path, document)
+    with pytest.raises(StateRecoveryError, match="missing fields"):
+        store.load()
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_unsupported_development_versions_are_not_modified(tmp_path: Path, version: int) -> None:
     state_path = tmp_path / "state.json"
     original = json.dumps({"format_version": version, "state": {}, "sha256": "bad"}).encode()
     state_path.write_bytes(original)
-    with pytest.raises(UnsupportedStateVersionError, match="version 3 is required"):
+    with pytest.raises(UnsupportedStateVersionError, match="version 4 is required"):
         PersistentStateStore(state_path).load()
     assert state_path.read_bytes() == original
 
@@ -618,7 +642,7 @@ def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) ->
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Committed.")
     document = json.loads(store.path.read_bytes())
-    assert document["format_version"] == 3
+    assert document["format_version"] == 4
     document["format_version"] = 1
     document["state"]["snapshot"]["highest_reveal_stage"] = document["state"].pop("highest_reveal_stage")
     _write_document(store.path, document)
