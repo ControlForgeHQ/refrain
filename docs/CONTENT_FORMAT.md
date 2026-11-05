@@ -1451,7 +1451,7 @@ An invalid entry must not invalidate otherwise valid entries or files.
 
 Conflicting duplicate entry identifiers must not be resolved by arbitrary filesystem enumeration order. All entries participating in a detected identifier conflict are excluded, with diagnostics identifying the conflicting entries.
 
-Content entries whose preferred font identifier is unavailable remain valid when the identifier itself satisfies the field's syntax rules. Font fallback behavior is defined in `docs/ARCHITECTURE.md`.
+Content entries whose preferred font, background, or decoration identifier is unavailable remain valid when the identifier itself satisfies the field's syntax rules. Resource fallback behavior is defined in `docs/ARCHITECTURE.md`.
 
 The effective content library consists of accepted, validated entries.
 

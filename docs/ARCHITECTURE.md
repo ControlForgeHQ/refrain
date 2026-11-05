@@ -616,9 +616,12 @@ For each new daily selection:
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
 13. Resolve the font using the entry's preference or the effective default pool.
-14. Prepare the complete daily snapshot.
-15. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
-16. Record the committed selection in global history on a best-effort basis.
+14. Resolve the decoration using the entry's preference or the effective default decoration pool.
+15. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
+16. Resolve the effective presentation region from the selected decoration or the global presentation region.
+17. Prepare the complete daily snapshot.
+18. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
+19. Record the committed selection in global history on a best-effort basis.
 
 Selection is not complete until operational-state commitment succeeds.
 
@@ -630,7 +633,7 @@ Failure to record global history after commitment does not invalidate the commit
 
 The next selection revision is derived from authoritative operational state, never from global-history contents.
 
-The random results of an uncommitted selection, including font selection, are not authoritative.
+The random results of an uncommitted selection, including font, decoration, and background selection, are not authoritative.
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
 
@@ -760,7 +763,7 @@ The exact storage formats, rotation mechanics, and persistence operations belong
 
 ### Prepared images
 
-After selection commitment, Refrain generates every required reveal-stage image from the committed snapshot and available font resources.
+After selection commitment, Refrain generates every required reveal-stage image from the committed snapshot and available presentation resources.
 
 Prepared images are persisted on disk.
 
@@ -770,11 +773,11 @@ Prepared images must remain associated with the snapshot from which they were ge
 
 A complete, valid set of prepared images should be reused after application restart.
 
-Missing, damaged, or incomplete prepared images must be regenerated using the committed snapshot and the currently available font resources.
+Missing, damaged, or incomplete prepared images must be regenerated using the committed snapshot and currently available presentation resources.
 
-If the snapshot's selected font identifier is unavailable or unusable, regeneration may use a supported bundled fallback font.
+Regeneration applies the documented font, background, and decoration recovery policies without changing committed identifiers or layout values.
 
-The same resolved font must be used for every stage prepared together. Font fallback must not introduce different typography between stages of the same prepared presentation.
+The same resolved resources and effective presentation region must be used for every stage prepared together.
 
 Regeneration must not trigger a new daily selection or alter repetition or global history.
 
@@ -788,15 +791,19 @@ The content library does not override a valid committed snapshot.
 
 If the original YAML entry has been removed, renamed, or modified, the current selection remains unchanged.
 
-Missing or invalid original content does not prevent recovery when the committed snapshot is valid and its presentation resources can be resolved.
+Missing or invalid original content does not prevent recovery when the committed snapshot is valid.
 
 If selection commitment was interrupted, Refrain must recover the last valid operational state and repeat selection when necessary.
 
 If rendering or image persistence was interrupted after commitment, Refrain resumes or repeats preparation using the same committed snapshot.
 
-Image regeneration may use a bundled fallback font if the selected font is no longer available. Exact pixel reproduction is not required when font resources have changed.
+Image regeneration may use a bundled fallback font if the selected font is no longer available.
 
 If no usable font resource can be resolved, the application must report the preparation failure rather than silently substitute an arbitrary system font.
+
+Missing or unusable committed background and decoration resources are omitted according to their documented recovery policies. They do not cause visual-resource reselection or alteration of the effective presentation region.
+
+Exact pixel reproduction is not required when installed presentation resources have changed.
 
 If the committed snapshot itself is unavailable or invalid, the application must report the failure and must not silently substitute another quotation.
 
@@ -847,7 +854,7 @@ The currently required stage is therefore the later of:
 
 Reveal progression must survive application restarts.
 
-Prepared images remain recoverable from the committed snapshot and available font resources, but pixel-identical reproduction is not guaranteed after changes to installed fonts.
+Prepared images remain recoverable from the committed snapshot and available presentation resources. Pixel-identical reproduction is not guaranteed after changes to installed fonts, backgrounds, or decorations.
 
 The future calendar archive is a separate historical presentation resource and is not authoritative for the active display.
 
@@ -1208,7 +1215,7 @@ Font registration, default-pool validation, and configuration fallback rules are
 
 The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage.
 
-The configured presentation region remains unchanged throughout the committed selection.
+The effective presentation region, resolved from the selected decoration or global configuration and recorded in the committed snapshot, remains unchanged throughout the committed selection.
 
 The resolved layout establishes the positions, typography, wrapping, and spacing of all present fields.
 
