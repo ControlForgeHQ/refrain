@@ -390,7 +390,8 @@ def test_cli_supplied_production_paths_are_never_read_or_modified(demo, monkeypa
     demo.assert_clean()
 
 
-def test_preparation_and_ack_latency_do_not_consume_interval(demo, monkeypatch):
+@pytest.mark.parametrize("observation_delay", [0, 2])
+def test_preparation_and_ack_latency_do_not_consume_interval(demo, monkeypatch, observation_delay):
     demo.entry()
     recover = application.recover_prepared_daily_images
 
@@ -402,6 +403,7 @@ def test_preparation_and_ack_latency_do_not_consume_interval(demo, monkeypatch):
     def delayed_ack(coordinator, identity):
         demo.clock.elapsed += 50
         coordinator.acknowledged[identity] = demo.clock.elapsed
+        demo.clock.elapsed += observation_delay
         return True
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", slow_prepare)
@@ -409,7 +411,7 @@ def test_preparation_and_ack_latency_do_not_consume_interval(demo, monkeypatch):
     demo.clock.limit = 4
     demo.run(5)
     assert [when for _, when, *_ in demo.publications] == [100, 155, 210, 365]
-    assert demo.clock.waits == [5] * 4
+    assert demo.clock.waits == [5 - observation_delay] * 4
     demo.assert_clean()
 
 
@@ -472,7 +474,9 @@ def test_recoverable_operations_retry_same_selection_and_stage(demo, monkeypatch
 
         def operation(self, stage):
             nonlocal failed
-            if stage == 1 and not failed:
+            if stage == 1 and not failed and demo.coordinators[-1].desired_identity == (1, 0):
+                assert [identity for identity, *_ in demo.publications] == [(1, 0)]
+                assert demo.stores[-1].load().highest_reveal_stage == 1
                 failed = True
                 self.stage_paths[stage].unlink()
             return original(self, stage)
@@ -521,10 +525,12 @@ def test_uncertain_published_commit_recovers_after_transient_reload_failure(demo
     committed = False
     reload_failed = False
     commit_calls = []
+    commit_arguments = []
 
     def commit(self, proposal, snapshot):
         nonlocal committed
         commit_calls.append(proposal.base_revision)
+        commit_arguments.append((proposal, snapshot))
         state = original_commit(self, proposal, snapshot)
         if not committed:
             committed = True
@@ -555,6 +561,9 @@ def test_uncertain_published_commit_recovers_after_transient_reload_failure(demo
     demo.run()
     assert committed and reload_failed
     assert commit_calls == [0, 0]
+    assert commit_arguments[0][0] is commit_arguments[1][0]
+    assert commit_arguments[0][1] is commit_arguments[1][1]
+    assert commit_arguments[0] == demo.selected[0]
     assert len(demo.selected) == 1
     assert [identity for identity, *_ in demo.publications] == [(1, 0), (1, 1), (1, 2)]
     assert demo.clock.waits == [1, 2.5, 2.5, 2.5]
@@ -723,6 +732,7 @@ def test_actual_coordinator_recoverable_backend_error_retries_before_ack(demo, m
     demo.entry()
     factory_calls = []
     updates = []
+    successful_update_times = []
     delays = []
     closed = []
     coordinators = []
@@ -734,6 +744,7 @@ def test_actual_coordinator_recoverable_backend_error_retries_before_ack(demo, m
             if phase == "update" and len(updates) == 1:
                 demo.clock.elapsed += 40
                 raise DisplayBackendUpdateError("temporary update failure")
+            successful_update_times.append(demo.clock.elapsed)
 
         def close(self):
             closed.append(True)
@@ -760,6 +771,7 @@ def test_actual_coordinator_recoverable_backend_error_retries_before_ack(demo, m
     assert delays == [1]
     assert updates == ([(1, 0), (1, 0), (1, 1), (1, 2)] if phase == "update" else [(1, 0), (1, 1), (1, 2)])
     assert demo.clock.waits == [5, 5, 5]
+    assert successful_update_times == [41, 46, 51]
     assert len(demo.selected) == 1 and len(demo.prepared) == 1
     assert closed == [True]
     assert all(not path.exists() for path in demo.sessions)
