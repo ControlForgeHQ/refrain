@@ -19,7 +19,7 @@ from typing import Any
 from .content import normalize_quotation
 from .selection import SelectionProposal
 
-_FORMAT_VERSION = 3
+_FORMAT_VERSION = 4
 _DEFAULT_HISTORY_SEGMENT_SIZE = 1_048_576
 _DEFAULT_HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -133,6 +133,8 @@ class DailySnapshot:
     reveal_schedule: Mapping[str, Any]
     layout: Mapping[str, Any]
     scheduling: SchedulingContext
+    background_identifier: str = "none"
+    decoration_identifier: str = "none"
 
     def __post_init__(self) -> None:
         _nonempty_string(self.quotation_text, "quotation_text")
@@ -140,6 +142,9 @@ class DailySnapshot:
         if normalize_quotation(self.quotation_text) != self.quotation_identity:
             raise ValueError("quotation_identity must match the normalized quotation_text")
         _nonempty_string(self.font_identifier, "font_identifier")
+        _nonempty_string(self.background_identifier, "background_identifier")
+        if self.decoration_identifier != "none":
+            raise ValueError("decoration_identifier must be 'none'; decorations are not yet supported")
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")
         for field in ("presentation_metadata", "reveal_schedule", "layout"):
@@ -472,6 +477,8 @@ def _decode_snapshot(value: object) -> DailySnapshot:
             "quotation_text",
             "quotation_identity",
             "font_identifier",
+            "background_identifier",
+            "decoration_identifier",
             "presentation_metadata",
             "reveal_schedule",
             "layout",
@@ -492,6 +499,8 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         quotation_text=data["quotation_text"],
         quotation_identity=data["quotation_identity"],
         font_identifier=_nonempty_string(data["font_identifier"], "snapshot.font_identifier"),
+        background_identifier=data["background_identifier"],
+        decoration_identifier=data["decoration_identifier"],
         presentation_metadata=data["presentation_metadata"],
         reveal_schedule=data["reveal_schedule"],
         layout=data["layout"],
@@ -506,7 +515,7 @@ def _decode_document(value: object) -> PersistentState:
         raise StateRecoveryError("persistent-state format_version must be an integer")
     if version != _FORMAT_VERSION:
         raise UnsupportedStateVersionError(
-            f"unsupported persistent-state format version {version}; version 3 is required. "
+            f"unsupported persistent-state format version {version}; version 4 is required. "
             "Archive or remove this development state file before starting Refrain; it was not modified."
         )
     payload = document["state"]
@@ -556,6 +565,8 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
             "quotation_text": snapshot.quotation_text,
             "quotation_identity": snapshot.quotation_identity,
             "font_identifier": snapshot.font_identifier,
+            "background_identifier": snapshot.background_identifier,
+            "decoration_identifier": snapshot.decoration_identifier,
             "presentation_metadata": _thaw_json(snapshot.presentation_metadata),
             "reveal_schedule": _thaw_json(snapshot.reveal_schedule),
             "layout": _thaw_json(snapshot.layout),

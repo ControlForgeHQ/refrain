@@ -378,13 +378,15 @@ Construct the effective default font pool from valid configured identifiers with
 
 An unavailable font preference in an otherwise valid content entry does not invalidate that entry. Report the unavailable preference and apply the documented default-font fallback.
 
+Validate registered backgrounds individually against the PNG requirements in `docs/CONTENT_FORMAT.md`. Preserve bundled resources and other accepted registrations when one registration fails. Build the effective default background pool without adding unrequested resources. Report unavailable content-entry background preferences without rejecting otherwise valid entries.
+
 Validate content independently by source file and, where supported, by entry. Preserve accepted entries when other entries fail validation.
 
 A nonempty effective content library may be used for new selections even when individual sources were rejected.
 
 Do not treat missing or inaccessible sources, unsuccessful discovery, or an empty effective content library as successful content removal for repetition-history cleanup.
 
-Resolve effective per-entry configuration, including font selection, before committing a daily snapshot.
+Resolve effective per-entry configuration, including font and background selection, before committing a daily snapshot.
 
 After commitment, the selected presentation must not depend on changes to the original content or configuration files.
 
@@ -459,9 +461,9 @@ Recovery behavior must be covered by automated tests using controlled failures a
 
 Persistent operational state uses an explicitly versioned representation.
 
-Version 3 is the initial supported format for the revised persistence model.
+Version 4 is the supported format for the visual-resource snapshot.
 
-Versions 1 and 2 are unsupported. They must produce a clear compatibility error without modifying the existing file.
+Versions 1, 2, and 3 are unsupported. They must produce a clear, actionable compatibility error without modifying the existing file.
 
 No migration implementation is required for these pre-release development formats.
 
@@ -475,16 +477,16 @@ The authoritative operational state is stored in one UTF-8 JSON file.
 
 Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload.
 
-Format version 3 contains:
+Format version 4 contains:
 
 - `revision`: the positive, monotonically increasing committed selection revision;
 - `snapshot`: the current committed daily snapshot;
 - `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The snapshot contains the selected quotation, normalized identity, selected font identifier, presentation metadata, reveal schedule, layout, and scheduling context.
+The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. Background support commits `decoration_identifier` as `"none"`; decoration registration, selection, rendering, and decoration-driven resource or region preferences remain deferred. The effective presentation region is therefore the existing global `layout.presentation_region`.
 
-The snapshot does not contain font-file bytes or font-content digests.
+The snapshot does not contain font or image resource bytes, filesystem paths, or content digests.
 
 Global selection history is not included in the operational-state document.
 
@@ -735,6 +737,22 @@ Font substitution during regeneration may change the rendered appearance, includ
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
 Do not introduce general font discovery, download, or substitution infrastructure without a demonstrated requirement.
+
+### Background loading and composition
+
+Background identifiers, registration requirements, and default-pool validation are defined in [Background registry](CONTENT_FORMAT.md#background-registry). Selection precedence and recovery behavior are defined in [Presentation and rendering](ARCHITECTURE.md#presentation-and-rendering).
+
+Load the five stable bundled identifiers (`aged-paper`, `canvas`, `cloth`, `ethereal`, and `hex`) through `importlib.resources`, so preparation works from installed packages without a source checkout. Preserve their reserved identifiers. Validate custom resources as readable, single-frame, 1600 × 1200 PNG images in RGB or RGBA mode.
+
+Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background identifier before committing the snapshot; do not select backgrounds in rendering or independently for reveal stages.
+
+Keep background composition outside the shared quotation renderer. Compose the committed background over a paper-white base, preserving RGBA transparency, then render the literary composition. Resolve and compose once per complete preparation operation and reuse the result for every stage.
+
+`prepare_daily_images(snapshot, stages, font_registry, background_registry=None)` and `recover_prepared_daily_images(state, artifact_store, stages, font_registry, background_registry=None)` require the effective background registry when the committed background identifier is not `"none"`. Omission or `None` in that case is a caller error and raises `DailyImagePreparationError`, including before artifact reuse. Callers should pass the configuration's effective registry for both bundled and custom backgrounds. A supplied empty registry represents unavailable resources and retains the paper-white recovery policy. For committed `"none"` backgrounds, the registry may be omitted.
+
+When regeneration cannot resolve or decode a committed background, report a warning and continue with paper-white. Do not reselect another background, mutate the committed identifier or effective layout, or invalidate an otherwise valid prepared image set merely because resources changed. Keep resource reads bounded and close decoded images when no longer needed.
+
+Wheel and source-distribution tests must verify all five bundled background PNGs and `assets/README.md`. Installed-package tests must open and decode a background through `importlib.resources`, not merely confirm its filename exists.
 
 ### Keep presentation configuration focused
 
@@ -1227,6 +1245,8 @@ Automated testing should cover:
 - explicitly invalid optional values with and without defaults;
 - unrecognized application-configuration fields;
 - unavailable or invalid registered fonts and effective font-pool construction;
+- bundled and custom background registration, independent rejection of invalid PNGs, reserved identifiers, and default-pool construction;
+- explicit background preferences, `"none"` suppression, and unavailable-preference fallback;
 - content-file parsing failures and independent rejection of invalid entries;
 - partial content-library acceptance with valid entries preserved;
 - duplicate entry identifiers and deterministic conflict handling;
@@ -1235,6 +1255,8 @@ Automated testing should cover:
 - preservation of repetition history when content discovery fails or no valid quotations remain;
 - recovery of committed selections independently of current content-library availability;
 - recovery and regeneration when a previously selected custom font becomes unavailable;
+- format-4 visual-resource snapshot round trips and unchanged rejection of state versions 1, 2, and 3;
+- committed background recovery without reselection or changes to the effective layout;
 - stable entry and quotation identities;
 - normalized quotation matching;
 - date-specificity precedence;
@@ -1300,6 +1322,8 @@ Test font configuration and selection behavior, including:
 - actionable failure when no usable font resource can be resolved.
 
 Use deterministic random sources where required.
+
+Test background composition beneath literary content, RGBA transparency over paper-white, consistent backgrounds across reveal stages, plain output for `"none"`, and warning-based recovery for missing or unusable committed resources. Verify reuse of valid artifacts after background-resource changes and preservation of `background_identifier` and the fixed `"none"` decoration identifier.
 
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 

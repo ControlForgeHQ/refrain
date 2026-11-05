@@ -107,6 +107,7 @@ def test_revisions_have_distinct_locations(store, snapshot, images) -> None:
     [
         {"quotation_text": "Another thought.", "quotation_identity": "Another thought."},
         {"font_identifier": "another-identifier"},
+        {"background_identifier": "canvas"},
         {"presentation_metadata": {"source": "Changed"}},
         {"reveal_schedule": {"quotation": "07:00"}},
         {"layout": {"image_size": (32, 24), "other": 1}},

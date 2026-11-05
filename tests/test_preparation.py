@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from importlib.resources import files
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
 import refrain.preparation as preparation
 from refrain import (
@@ -15,6 +18,7 @@ from refrain import (
     prepare_daily_images,
     resolve_reveal_stages,
 )
+from refrain.config import BackgroundResource
 
 _IMAGE_SIZE = (320, 240)
 _LAYOUT = {
@@ -126,6 +130,92 @@ def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_
     assert len(images) == len(stages)
     for image in images:
         image.close()
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path, mode: str) -> None:
+    path = tmp_path / "paper.png"
+    color = (80, 120, 160) if mode == "RGB" else (80, 120, 160, 255)
+    with Image.new(mode, (1600, 1200), color) as background:
+        if mode == "RGBA":
+            background.putpixel((0, 0), (0, 0, 0, 0))
+            background.putpixel((1, 0), (0, 0, 0, 128))
+        background.save(path)
+    snapshot = replace(
+        make_snapshot("lora", source=None, attribution=None, layout={**_LAYOUT, "image_size": (1600, 1200)}),
+        background_identifier="paper",
+    )
+    images = prepare_daily_images(
+        snapshot, (CompositionVisibility(),), _FONT_REGISTRY, {"paper": BackgroundResource("paper", path, False)}
+    )
+    try:
+        image = images[0]
+        assert image.getpixel((10, 10)) == color[:3]
+        assert (0, 0, 0) in image.get_flattened_data()
+        if mode == "RGBA":
+            assert image.getpixel((0, 0)) == (255, 255, 255)
+            assert image.getpixel((1, 0)) == (127, 127, 127)
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])
+def test_selected_background_requires_registry(kwargs, caplog) -> None:
+    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
+    with pytest.raises(DailyImagePreparationError, match="background_registry must be supplied"):
+        prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, **kwargs)
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}, {"background_registry": {}}])
+def test_none_background_allows_omitted_or_empty_registry(kwargs) -> None:
+    snapshot = make_snapshot("lora")
+    images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, **kwargs)
+    try:
+        assert all(image.getpixel((0, 0)) == (255, 255, 255) for image in images)
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize("damage", ["missing-id", "missing-file", "invalid-file"])
+def test_unusable_committed_background_warns_and_uses_white(tmp_path: Path, caplog, damage: str) -> None:
+    path = tmp_path / "missing.png"
+    registry = {} if damage == "missing-id" else {"paper": BackgroundResource("paper", path, False)}
+    if damage == "invalid-file":
+        path.write_text("not a PNG")
+    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
+    images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, registry)
+    try:
+        assert all(image.getpixel((0, 0)) == (255, 255, 255) for image in images)
+        assert "Committed background 'paper'" in caplog.text
+        assert "paper-white base" in caplog.text
+        assert snapshot.background_identifier == "paper"
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize("error", [SyntaxError("malformed PNG chunk"), Image.DecompressionBombError("oversized image")])
+def test_background_decode_errors_fall_back_to_white(tmp_path: Path, monkeypatch, caplog, error) -> None:
+    def unreadable(resource):
+        raise error
+
+    monkeypatch.setattr(preparation, "load_background_image", unreadable)
+    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
+    images = prepare_daily_images(
+        snapshot,
+        resolve_reveal_stages(snapshot),
+        _FONT_REGISTRY,
+        {"paper": BackgroundResource("paper", tmp_path / "paper.png", False)},
+    )
+    try:
+        assert all(image.getpixel((0, 0)) == (255, 255, 255) for image in images)
+        assert "paper-white base" in caplog.text
+    finally:
+        for image in images:
+            image.close()
 
 
 def test_preparation_is_deterministic(embedded_font: str) -> None:

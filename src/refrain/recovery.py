@@ -9,7 +9,7 @@ from .artifacts import (
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
-from .config import FontResource
+from .config import BackgroundResource, FontResource
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -20,6 +20,7 @@ def recover_prepared_daily_images(
     artifact_store: PreparedImageArtifactStore,
     stages: Sequence[CompositionVisibility],
     font_registry: Mapping[str, FontResource],
+    background_registry: Mapping[str, BackgroundResource] | None = None,
 ) -> PreparedImageArtifactSet:
     """Reuse or regenerate the complete images for an existing committed selection.
 
@@ -27,6 +28,8 @@ def recover_prepared_daily_images(
     validated before reuse and is used for both artifact validation and regeneration.
     Generated images remain caller-owned until publication and are closed here,
     whether publication succeeds or fails. The committed state is never modified.
+    A background registry is required unless the committed background is ``"none"``,
+    including when prepared images can be reused.
     """
     if not isinstance(state, PersistentState):
         raise TypeError("state must be a PersistentState")
@@ -36,6 +39,10 @@ def recover_prepared_daily_images(
         raise TypeError("artifact_store must be a PreparedImageArtifactStore")
     if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
+    if background_registry is None and state.snapshot.background_identifier != "none":
+        raise DailyImagePreparationError(
+            "background_registry must be supplied when the committed background identifier is not 'none'"
+        )
 
     ordered_stages = tuple(stages)
     metadata = state.snapshot.presentation_metadata
@@ -56,7 +63,7 @@ def recover_prepared_daily_images(
     if existing is not None:
         return existing
 
-    images = prepare_daily_images(state.snapshot, ordered_stages, font_registry)
+    images = prepare_daily_images(state.snapshot, ordered_stages, font_registry, background_registry)
     try:
         return artifact_store.store(state.revision, state.snapshot, images)
     finally:

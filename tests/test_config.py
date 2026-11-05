@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from datetime import time
 from importlib.resources import files
 from pathlib import Path
+from zipfile import Path as ZipPath
+from zipfile import ZipFile
 
 import pytest
 import yaml
+from PIL import Image
 
-from refrain import ApplicationConfigurationError, load_application_config
+from refrain import ApplicationConfigurationError, BackgroundResource, load_application_config, load_background_image
 
 
 def configuration_data(**overrides: object) -> dict[str, object]:
@@ -37,6 +41,220 @@ def diagnostic_fields(path: Path) -> tuple[str, ...]:
         load_application_config(path)
     assert all(str(path) in str(diagnostic) for diagnostic in error.value.diagnostics)
     return tuple(diagnostic.field for diagnostic in error.value.diagnostics)
+
+
+def background_configuration(**settings: object) -> dict[str, object]:
+    data = configuration_data()
+    data["layout"]["backgrounds"] = settings
+    return data
+
+
+def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
+
+    assert set(config.backgrounds) == {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
+    assert config.default_backgrounds == ("none",)
+    assert all(resource.bundled for resource in config.backgrounds.values())
+    assert not any(record.levelno >= 30 and "background" in record.message for record in caplog.records)
+    for identifier, resource in config.backgrounds.items():
+        assert resource.identifier == identifier
+        assert resource.path.name == f"{identifier}.png"
+        with load_background_image(resource) as image:
+            assert image.size == (1600, 1200)
+            assert image.mode in {"RGB", "RGBA"}
+    with pytest.raises(TypeError):
+        config.backgrounds["other"] = config.backgrounds["canvas"]
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+@pytest.mark.parametrize("absolute", [True, False])
+def test_custom_background_paths_and_modes(tmp_path: Path, mode: str, absolute: bool) -> None:
+    path = tmp_path / "paper.png"
+    Image.new(mode, (1600, 1200)).save(path)
+    path_value = str(path) if absolute else path.name
+    data = background_configuration(available={"paper": path_value}, default=["paper"])
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.backgrounds["paper"] == BackgroundResource("paper", path, False)
+    assert config.default_backgrounds == ("paper",)
+    with load_background_image(config.backgrounds["paper"]) as image:
+        assert image.mode == mode
+        assert image.getpixel((0, 0)) == ((0, 0, 0) if mode == "RGB" else (0, 0, 0, 0))
+
+
+@pytest.mark.parametrize("kind", ["jpeg", "palette", "gray", "size", "animation", "corrupt", "missing", "truncated"])
+def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
+    bad_path = tmp_path / "bad.png"
+    good_path = tmp_path / "good.png"
+    Image.new("RGB", (1600, 1200)).save(good_path)
+    if kind == "jpeg":
+        Image.new("RGB", (1600, 1200)).save(bad_path, format="JPEG")
+    elif kind in {"palette", "gray"}:
+        Image.new("P" if kind == "palette" else "L", (1600, 1200)).save(bad_path)
+    elif kind == "size":
+        Image.new("RGB", (1200, 1600)).save(bad_path)
+    elif kind == "animation":
+        Image.new("RGBA", (1600, 1200)).save(
+            bad_path, save_all=True, append_images=[Image.new("RGBA", (1600, 1200), "red")], duration=100
+        )
+    elif kind == "corrupt":
+        bad_path.write_bytes(b"not an image")
+    elif kind == "truncated":
+        bad_path.write_bytes(good_path.read_bytes()[:100])
+    data = background_configuration(available={"bad": "bad.png", "good": "good.png"}, default=["bad", "good"])
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert "bad" not in config.backgrounds
+    assert "good" in config.backgrounds
+    assert config.default_backgrounds == ("good",)
+    assert "layout.backgrounds.available.bad" in caplog.text
+    assert "excluded" in caplog.text
+
+
+@pytest.mark.parametrize("identifier", ["none", "aged-paper", "canvas", "cloth", "ethereal", "hex"])
+def test_reserved_background_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
+    data = background_configuration(available={identifier: "missing.png"})
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    if identifier == "none":
+        assert identifier not in config.backgrounds
+    else:
+        assert config.backgrounds[identifier].bundled
+    assert "reserved" in caplog.text
+    assert config.default_backgrounds == ("none",)
+
+
+@pytest.mark.parametrize(
+    "available",
+    [
+        None,
+        [],
+        "bad",
+        {None: "bad.png"},
+        {1: "bad.png"},
+        {"": "bad.png"},
+        {" ": "bad.png"},
+        {"custom": None},
+        {"custom": ""},
+        {"custom": " "},
+        {"custom": 1},
+    ],
+)
+def test_malformed_background_registrations_warn(tmp_path: Path, available: object, caplog) -> None:
+    data = background_configuration(available=available)
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert set(config.backgrounds) == {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
+    assert "layout.backgrounds.available" in caplog.text
+
+
+def test_default_background_pool_deduplicates_and_excludes_invalid_values(tmp_path: Path, caplog) -> None:
+    data = background_configuration(default=["canvas", "none", "canvas", None, False, "", " ", "Canvas", "hex", "none"])
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_backgrounds == ("canvas", "none", "hex")
+    assert "background identifier 'Canvas' is unavailable" in caplog.text
+    assert "must be a nonempty background identifier" in caplog.text
+
+
+@pytest.mark.parametrize("pool", [None, [], {}, "canvas", False, ["missing"], ["", None, " "]])
+def test_unusable_background_pool_falls_back_to_none(tmp_path: Path, pool: object, caplog) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", background_configuration(default=pool)))
+
+    assert config.default_backgrounds == ("none",)
+    assert "layout.backgrounds.default" in caplog.text
+    assert "has no usable members; using ['none']" in caplog.text
+
+
+@pytest.mark.parametrize("section", [None, [], "bad"])
+def test_malformed_background_section_warns_and_uses_default(tmp_path: Path, section: object, caplog) -> None:
+    data = configuration_data()
+    data["layout"]["backgrounds"] = section
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_backgrounds == ("none",)
+    assert "layout.backgrounds: must be a mapping" in caplog.text
+
+
+def test_unknown_background_settings_warn(tmp_path: Path, caplog) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", background_configuration(unknown=True)))
+
+    assert config.default_backgrounds == ("none",)
+    assert "layout.backgrounds.unknown" in caplog.text
+
+
+def test_background_loader_revalidates_resource_changes(tmp_path: Path) -> None:
+    path = tmp_path / "paper.png"
+    Image.new("RGB", (1600, 1200), "red").save(path)
+    resource = BackgroundResource("paper", path, False)
+    image = load_background_image(resource)
+    Image.new("RGB", (1600, 1200), "blue").save(path)
+    with load_background_image(resource) as changed_image:
+        assert changed_image.getpixel((0, 0)) == (0, 0, 255)
+    assert image.getpixel((0, 0)) == (255, 0, 0)
+    image.close()
+    Image.new("L", (1600, 1200)).save(path)
+    with pytest.raises(ValueError, match="mode must be RGB or RGBA"):
+        load_background_image(resource)
+    path.unlink()
+    with pytest.raises(OSError):
+        load_background_image(resource)
+
+
+def test_background_loader_supports_non_filesystem_package_resources(tmp_path: Path) -> None:
+    image_path = tmp_path / "paper.png"
+    Image.new("RGBA", (1600, 1200), (15, 30, 45, 128)).save(image_path)
+    archive_path = tmp_path / "resources.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.write(image_path, "assets/backgrounds/paper.png")
+    with ZipFile(archive_path) as archive:
+        resource = BackgroundResource("paper", ZipPath(archive, "assets/backgrounds/paper.png"), True)
+        image = load_background_image(resource)
+
+    assert image.getpixel((0, 0)) == (15, 30, 45, 128)
+    image.close()
+
+
+def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    background_path = tmp_path / "paper.png"
+    Image.new("RGB", (1600, 1200)).save(background_path)
+    config_path = write_config(
+        tmp_path / "config.yaml", background_configuration(available={"paper": "paper.png"}, default=["paper"])
+    )
+    original_open = Path.open
+
+    def deny_background_read(path: Path, *args, **kwargs):
+        if path == background_path:
+            raise PermissionError("background read denied")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_background_read)
+
+    config = load_application_config(config_path)
+
+    assert "paper" not in config.backgrounds
+    assert config.default_backgrounds == ("none",)
+    assert "layout.backgrounds.available.paper" in caplog.text
+    assert "background read denied" in caplog.text
+
+
+def test_configuration_background_defaults_support_legacy_direct_construction(tmp_path: Path) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
+    legacy_values = dict(vars(config))
+    legacy_values.pop("backgrounds")
+    legacy_values.pop("default_backgrounds")
+
+    legacy = type(config)(**legacy_values)
+
+    assert not legacy.backgrounds
+    assert legacy.default_backgrounds == ("none",)
+    assert replace(legacy).default_backgrounds == ("none",)
 
 
 def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
@@ -79,8 +297,10 @@ def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
-    assert config.default_fonts == ("libre-baskerville", "lora", "source-sans-3")
-    assert config.information_view_duration == 60
+    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
+    assert config.default_backgrounds == ("none", "aged-paper", "canvas", "cloth", "ethereal", "hex")
+    assert config.presentation_region.height == 0.70
+    assert config.information_view_duration == 5
 
 
 @pytest.mark.parametrize("duration", [0, 1, 60, 300])

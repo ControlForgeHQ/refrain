@@ -56,12 +56,50 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert entries[0].attribution is None
     assert entries[0].priority == 0
     assert entries[0].font is None
+    assert entries[0].background is None
     assert entries[0].presentation_style == "centered"
     assert entries[0].eligibility == (EligibilityRule(ordinary=True),)
     assert entries[0].reveal == RevealOverrides()
     assert entries[1].priority == -3
     assert [quotation.text for quotation in entries[1].quotations] == ["First candidate.", "Second candidate."]
     assert all(entry.file is not None for entry in entries)
+
+
+@pytest.mark.parametrize("background", ["canvas", "none", "unknown-resource", "Custom background", "Canvas"])
+def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path, background: str, caplog) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(background=background, quotations=["First quotation.", "Second quotation."]),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+    pool = build_eligible_quotation_pool((entry,), date(2026, 11, 5))
+
+    assert entry.background == background
+    assert len(pool.candidates) == 2
+    assert all(candidate.entry.background == background for candidate in pool.candidates)
+    assert "background" not in caplog.text
+
+
+@pytest.mark.parametrize("background", ["", " ", "\t\n", None, 1, False, [], {}])
+def test_invalid_background_preferences_rejected(tmp_path: Path, background: object) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(background=background))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(": background:" in diagnostic for diagnostic in diagnostics)
+    assert any("nonempty, nonblank string" in diagnostic for diagnostic in diagnostics)
+
+
+def test_invalid_background_entry_does_not_exclude_valid_entries(tmp_path: Path, caplog) -> None:
+    write_entry(tmp_path / "bad.yaml", entry_data(id="bad", background=None))
+    write_entry(tmp_path / "good.yaml", entry_data(id="good", background="unregistered"))
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["good"]
+    assert entries[0].background == "unregistered"
+    assert "background" in caplog.text
 
 
 @pytest.mark.parametrize("style", ["centered", "left-aligned"])

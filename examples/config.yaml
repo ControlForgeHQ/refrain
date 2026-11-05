@@ -10,7 +10,7 @@ reveal:
   attribution: "18:00"
 
 information_view:
-  duration: 60
+  duration: 5
 
 display:
   backends:
@@ -24,13 +24,38 @@ layout:
     x: 0.10
     y: 0.15
     width: 0.80
-    height: 0.55
+    height: 0.70
 
   fonts:
+    # Bundled fonts are registered automatically.
+    # Only fonts listed here participate in random selection.
     default:
+      - "alegreya"
       - "libre-baskerville"
       - "lora"
+      - "orbitron"
       - "source-sans-3"
+
+    # Optional custom fonts.
+    # available:
+    #   my-lora: "fonts/MyCustomLora.otf"
+
+  backgrounds:
+    # Bundled backgrounds are registered automatically.
+    # Use "none" to include the plain paper-white background.
+    default:
+      - "none"
+      - "aged-paper"
+      - "canvas"
+      - "cloth"
+      - "ethereal"
+      - "hex"
+
+    # Optional custom backgrounds. Images must be readable, single-frame
+    # RGB/RGBA PNGs at 1600 x 1200.
+    # Relative paths resolve from the directory containing config.yaml.
+    # available:
+    #   handmade-paper: "backgrounds/HandmadePaper.png"
 
   text:
     min_font_size: 28
