@@ -45,6 +45,10 @@ def recover_prepared_daily_images(
         raise DailyImagePreparationError(
             "background_registry must be supplied when the committed background identifier is not 'none'"
         )
+    if decoration_registry is None and state.snapshot.decoration_identifier != "none":
+        raise DailyImagePreparationError(
+            "decoration_registry must be supplied when the committed decoration identifier is not 'none'"
+        )
 
     ordered_stages = tuple(stages)
     metadata = state.snapshot.presentation_metadata

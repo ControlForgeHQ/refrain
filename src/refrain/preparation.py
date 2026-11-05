@@ -208,6 +208,10 @@ def prepare_daily_images(
         )
     if background_registry is not None and not isinstance(background_registry, Mapping):
         raise DailyImagePreparationError("background_registry must be a mapping of identifiers to background resources")
+    if decoration_registry is None and snapshot.decoration_identifier != "none":
+        raise DailyImagePreparationError(
+            "decoration_registry must be supplied when the committed decoration identifier is not 'none'"
+        )
     if decoration_registry is not None and not isinstance(decoration_registry, Mapping):
         raise DailyImagePreparationError("decoration_registry must be a mapping of identifiers to decoration resources")
 

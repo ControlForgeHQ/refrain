@@ -215,6 +215,16 @@ def test_missing_committed_decoration_is_omitted_without_changing_snapshot(tmp_p
             image.close()
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"decoration_registry": None}])
+def test_selected_decoration_requires_registry(kwargs, caplog) -> None:
+    snapshot = replace(make_snapshot("lora"), decoration_identifier="overlay")
+
+    with pytest.raises(DailyImagePreparationError, match="decoration_registry must be supplied"):
+        prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, {}, **kwargs)
+
+    assert not caplog.records
+
+
 @pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])
 def test_selected_background_requires_registry(kwargs, caplog) -> None:
     snapshot = replace(make_snapshot("lora"), background_identifier="paper")
