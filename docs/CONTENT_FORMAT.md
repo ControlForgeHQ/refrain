@@ -165,20 +165,45 @@ layout:
     available:
       my-lora: "fonts/MyCustomLora.otf"
 
+  backgrounds:
+    default:
+      - "none"
+
+    available:
+      my-paper: "backgrounds/MyPaper.png"
+
+  decorations:
+    default:
+      - "none"
+
+    available:
+      my-border:
+        image: "decorations/MyBorder.png"
+        presentation_region:
+          x: 0.15
+          y: 0.20
+          width: 0.70
+          height: 0.55
+        background: "my-paper"
+
   text:
     min_font_size: 28
     max_font_size: 100
 ```
 
-The example illustrates the initial configuration structure, including simultaneous desktop window and image-server backends, automatic information-view presentation, a bounded presentation region, an explicit default font pool, an additional user-registered font, and font-size limits.
+The example illustrates simultaneous display backends, the information view, a default presentation region, registered fonts, backgrounds, and decorations, and automatic quotation fitting.
 
-Refrain automatically registers its bundled fonts. They can be referenced by their stable identifiers without declaring filesystem paths in application configuration.
+Refrain automatically registers its bundled fonts, backgrounds, and decorations. Registered resources can be referenced by stable identifiers without supplying paths in content entries.
 
-The `layout.fonts.available` mapping registers additional fonts supplied by the installation. It may be omitted when no additional fonts are required.
+The `available` mappings register installation-specific resources. Their paths resolve relative to the application configuration file when not absolute.
 
-The default font pool controls which registered fonts are eligible for automatic selection. A registered font that is not included in the default pool remains available for explicit selection by content entries.
+The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
 
-User-supplied font paths, rectangle dimensions, and font-size values are examples rather than universal defaults. They must be adjusted to match the resources and presentation layout provided by an installation.
+The reserved value `"none"` is available for backgrounds and decorations. The example uses it to preserve the original undecorated, paper-white presentation.
+
+User-supplied resource paths, rectangle dimensions, and font-size values are examples rather than universal defaults.
+
+The resolution and precedence of content-entry resource preferences are defined in the corresponding sections below.
 
 ### Display backends
 
@@ -366,24 +391,29 @@ The runtime behavior of clock adjustments, missed stages, and restarts is define
 
 ### Layout settings
 
-The initial release provides one configurable, typography-first presentation layout.
+Version 0.1 provides one configurable, typography-first presentation layout with optional backgrounds and decorations.
 
 The complete literary composition consists of the primary quotation and its optional source and attribution.
 
 The layout configuration defines:
 
-- the presentation region available to the complete composition;
-- available fonts;
-- fonts eligible for automatic daily selection;
+- a default presentation region for the complete composition;
+- available fonts and their default selection pool;
+- available backgrounds and their default selection pool;
+- available decorations and their default selection pool;
 - minimum and maximum primary quotation font sizes.
 
-The renderer determines the arrangement and fitting of all present fields within the presentation region.
+A selected decoration may override the default presentation region and may specify a preferred background.
+
+Backgrounds and decorations do not change the semantics of quotation, source, attribution, or progressive reveal.
+
+The renderer determines the arrangement and fitting of all present literary fields within the effective presentation region.
 
 A fixed quotation font size is not required.
 
 ### Presentation region
 
-The `layout.presentation_region` mapping defines the rectangular area available for the complete literary composition.
+The `layout.presentation_region` mapping defines the default rectangular area available for the complete literary composition.
 
 | Field | Type | Required |
 |---|---|---|
@@ -423,11 +453,15 @@ The values must satisfy:
 
 Boolean values are not valid coordinates.
 
-The presentation region contains the quotation and all source and attribution fields present in the selected entry.
+A decoration may specify its own `presentation_region` mapping using the same fields and validation rules.
+
+When the selected decoration provides a presentation region, that region replaces `layout.presentation_region` for the complete committed presentation. Otherwise, the global region applies.
+
+The effective presentation region contains the quotation and all source and attribution fields present in the selected entry.
 
 All included fields must fit within this region without overlapping, clipping, or truncation.
 
-The region remains fixed throughout every reveal stage of the committed selection.
+The effective region remains fixed throughout every reveal stage of the committed selection.
 
 The layout accounts for all present fields regardless of whether they are currently visible. Unrevealed fields retain their allocated positions until their reveal stages are reached.
 
@@ -435,7 +469,7 @@ Absent optional fields do not require reserved space.
 
 Version 0.1 does not expose separate configurable source or attribution regions.
 
-Only `layout.presentation_region` is supported.
+A content entry cannot directly specify a presentation region.
 
 ### Font registry
 
@@ -462,7 +496,6 @@ Bundled fonts are application resources and do not require entries in `layout.fo
 Their identifiers are reserved. Application configuration must not redefine or override a bundled font identifier.
 
 Bundled font identifiers form part of the public configuration interface and must remain stable across compatible releases.
-
 
 #### User-registered fonts
 
@@ -537,6 +570,225 @@ Bundled fallback during regeneration of an already committed presentation is ind
 
 Automatic font selection and its persistence are defined in `docs/ARCHITECTURE.md`.
 
+### Background registry
+
+Refrain maintains an effective background registry containing bundled background images and accepted user-registered images.
+
+Every background has a stable, case-sensitive identifier. The default background pool, decoration preferences, and content-entry preferences refer to these identifiers rather than filesystem paths.
+
+The reserved identifier `"none"` represents no background image. It is always available and cannot be registered or overridden.
+
+#### Bundled backgrounds
+
+Refrain includes a small collection of subtle, paper-like backgrounds, registered automatically under stable identifiers.
+
+The exact bundled identifiers are documented alongside the distributed assets when introduced. Identifiers included in a release are reserved and remain stable across compatible releases.
+
+Bundled backgrounds are available for explicit selection without being automatically added to the default pool.
+
+#### User-registered backgrounds
+
+The optional `layout.backgrounds.available` mapping registers additional background images.
+
+Each key is a user-defined background identifier and its value is the path to a PNG file.
+
+For example:
+
+```yaml
+layout:
+  backgrounds:
+    available:
+      handmade-paper: "backgrounds/HandmadePaper.png"
+      parchment: "backgrounds/Parchment.png"
+```
+
+When omitted, `layout.backgrounds.available` defaults to an empty mapping.
+
+Background identifiers must be nonempty, case-sensitive strings.
+
+User identifiers must not duplicate reserved or bundled identifiers. Such registrations are ignored with a warning.
+
+Relative paths resolve from the directory containing the application configuration file. Absolute paths are permitted.
+
+Background images must be readable, single-frame PNG images with dimensions of 1600 × 1200 pixels.
+
+RGB and RGBA backgrounds are supported. Other formats, image modes, dimensions, or unreadable resources are not accepted in Version 0.1.
+
+Invalid registrations are excluded individually from the effective registry with warnings. They must not prevent other usable backgrounds from being registered.
+
+Background images are drawn over the paper-white base image. An RGBA background may expose some of that base through transparency.
+
+#### Default background pool
+
+The optional `layout.backgrounds.default` field is a nonempty sequence of registered background identifiers and/or `"none"`.
+
+For example:
+
+```yaml
+layout:
+  backgrounds:
+    default:
+      - "none"
+      - "handmade-paper"
+      - "parchment"
+```
+
+When omitted, the default background pool is `["none"]`.
+
+The effective pool contains the distinct, usable identifiers from the configured pool. Invalid or unavailable identifiers are excluded with warnings. Duplicates are ignored after their first occurrence.
+
+Each member of the effective pool has equal selection probability.
+
+A registered background outside the default pool remains available for explicit selection by a content entry or decoration.
+
+An explicitly configured pool with no usable members falls back to `["none"]` with a warning.
+
+Backgrounds have no repetition history or selection weights.
+
+### Decoration registry
+
+Refrain maintains an effective decoration registry containing bundled decorations and accepted user-registered decorations.
+
+A decoration is a complete, transparent image overlay with optional composition metadata.
+
+Each decoration may define:
+
+- an image resource;
+- an effective presentation-region override;
+- a preferred font identifier;
+- a preferred background identifier, including `"none"`.
+
+The reserved identifier `"none"` represents no decoration. It is always available and cannot be registered or overridden.
+
+#### Bundled decorations
+
+Refrain includes a small collection of restrained graphical decorations such as borders, corner ornaments, and flourishes.
+
+Each bundled decoration has a stable identifier and may include its own presentation-region, font, and background preferences.
+
+The exact bundled identifiers and their associated metadata are documented alongside the distributed assets when introduced.
+
+Bundled decorations are registered automatically and remain available independently of the default decoration pool.
+
+#### User-registered decorations
+
+The optional `layout.decorations.available` mapping registers additional decoration entries.
+
+Each key is a user-defined decoration identifier. Its value is a mapping containing the decoration's image and optional metadata.
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `image` | String path | Yes | None |
+| `presentation_region` | Normalized rectangle mapping | No | Global presentation region |
+| `font` | Font identifier | No | No preference |
+| `background` | Background identifier or `"none"` | No | No preference |
+
+For example:
+
+```yaml
+layout:
+  decorations:
+    available:
+      botanical-corners:
+        image: "decorations/BotanicalCorners.png"
+        presentation_region:
+          x: 0.16
+          y: 0.18
+          width: 0.68
+          height: 0.58
+
+      futuristic-corners:
+        image: "decorations/FuturisticCorners.png"
+        presentation_region:
+          x: 0.12
+          y: 0.16
+          width: 0.76
+          height: 0.60
+        font: "orbitron"
+        background: "hex-paper"
+```
+
+When omitted, `layout.decorations.available` defaults to an empty mapping.
+
+Decoration identifiers follow the same nonempty, case-sensitive, reserved-identifier rules as background identifiers.
+
+Relative image paths resolve from the directory containing the application configuration file. Absolute paths are permitted.
+
+Decoration images must be readable, single-frame RGBA PNG images with dimensions of 1600 × 1200 pixels.
+
+Transparency is required so the underlying background can remain visible.
+
+The optional `presentation_region` must satisfy the validation rules defined for `layout.presentation_region`.
+
+The optional `font` must be a nonempty identifier referring to a usable registered font. An unavailable preferred font produces a warning and is treated as an absent preference without invalidating an otherwise usable decoration.
+
+The optional `background` must refer to a usable registered background or `"none"`. An unavailable preferred background produces a warning and is treated as an absent preference without invalidating an otherwise usable decoration.
+
+Invalid decoration image or presentation-region registrations are excluded individually from the effective registry, with warnings.
+
+Decorations provide artwork and composition metadata. They do not define arbitrary drawing instructions, independently positioned text fields, or new literary presentation styles.
+
+#### Default decoration pool
+
+The optional `layout.decorations.default` field is a nonempty sequence of registered decoration identifiers and/or `"none"`.
+
+For example:
+
+```yaml
+layout:
+  decorations:
+    default:
+      - "none"
+      - "botanical-corners"
+      - "lower-flourish"
+```
+
+When omitted, the default decoration pool is `["none"]`.
+
+The effective pool contains distinct, usable identifiers. Invalid or unavailable identifiers are excluded with warnings, and duplicates are ignored after their first occurrence.
+
+Each member has equal selection probability.
+
+A registered decoration outside the default pool remains available for explicit content-entry selection.
+
+An explicitly configured pool with no usable members falls back to `["none"]` with a warning.
+
+Decorations have no repetition history or selection weights.
+
+### Background and decoration resolution
+
+For each selected quotation, Refrain resolves the decoration before resolving the font and background.
+
+An available explicit content-entry decoration takes precedence over the default decoration pool. The value `"none"` suppresses decoration selection.
+
+When no explicit decoration is available, Refrain selects from the effective default decoration pool.
+
+For fonts, precedence is:
+
+1. An available explicit content-entry font.
+2. The selected decoration's available preferred font.
+3. Automatic selection from the effective default font pool.
+
+For backgrounds, precedence is:
+
+1. An available explicit content-entry background, including `"none"`.
+2. The selected decoration's available preferred background, including `"none"`.
+3. Automatic selection from the effective default background pool.
+
+An unavailable explicit content-entry preference produces a warning and falls back to the next applicable selection level. It does not invalidate the otherwise valid entry.
+
+An unavailable decoration font or background preference is ignored with a warning, without invalidating an otherwise usable decoration.
+
+An absent decoration preference does not prevent explicit content-entry resource selection or automatic selection from the corresponding default pool.
+
+The selected decoration determines the effective presentation region when it defines an override; otherwise the global presentation region applies.
+
+The final font, background, and decoration identifiers and effective presentation region are committed with the daily selection.
+
+No resource is reselected during reveal progression or restart recovery. Image regeneration resolves the committed identifiers independently of the original content-entry and decoration preferences.
+
+The handling of missing resources during regeneration is defined in `docs/ARCHITECTURE.md`.
+
 ### Automatic quotation fitting
 
 The `layout.text` mapping defines the permitted font-size bounds for the primary quotation.
@@ -567,27 +819,31 @@ The rendering and text-fitting behavior is defined in `docs/ARCHITECTURE.md`, wi
 
 ### Initial layout limitations
 
-Version 0.1 provides one presentation layout with two built-in presentation styles.
+Version 0.1 provides one presentation layout with two built-in literary presentation styles, optional background images, and optional decorative overlays.
 
 The initial public format does not define:
 
 - arbitrary layout templates;
 - custom drawing commands;
 - independent positioning of every presentation field;
-- per-entry presentation regions;
+- direct per-entry presentation-region values;
 - per-entry font-size overrides;
-- per-quotation presentation-style overrides;
-- user-defined presentation styles;
+- per-quotation presentation-style or visual-resource overrides;
+- user-defined literary presentation styles;
 - configurable source and attribution regions;
 - configurable concealment effects for unrevealed fields;
-- automatic selection among different fonts based on fitting results;
+- automatic selection among fonts based on fitting results;
+- automatic foreground/background contrast analysis;
+- arbitrary image transformations or independent artwork placement;
 - a general-purpose theme engine.
 
-Additional built-in presentation styles may be introduced in future versions without changing the content-entry structure.
+Decorations may define a presentation region, but content entries reference decorations by identifier rather than supplying arbitrary region coordinates.
+
+Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
 Display hardware selection and output resolution are not user-configurable through these layout fields in Version 0.1.
 
-The normalized presentation region preserves future resolution flexibility without promising that the initial layout has been validated at every possible resolution.
+Normalized presentation regions preserve future resolution flexibility without promising that the initial assets or layout have been validated at every possible resolution.
 
 ## Content entries
 
@@ -633,13 +889,15 @@ Each quotation is a separate selection candidate.
 | `attribution` | String | No | Absent |
 | `priority` | Integer | No | `0` |
 | `font` | String | No | Automatic selection from default font pool |
+| `background` | String | No | Decoration preference, then default background pool |
+| `decoration` | String | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
 | `eligibility` | Sequence of eligibility rules | No | Ordinary eligibility |
 | `reveal` | Mapping of reveal overrides | No | Global reveal schedule |
 
 No other entry-level fields are defined for Version 0.1.
 
-All quotations in an entry inherit the entry's metadata, priority, font preference, presentation style, eligibility, and reveal configuration.
+All quotations in an entry inherit the entry's metadata, priority, font preference, background preference, decoration preference, presentation style, eligibility, and reveal configuration.
 
 Individual quotations do not have independent overrides.
 
@@ -770,11 +1028,73 @@ An unregistered font identifier is permitted and does not invalidate an otherwis
 
 This allows content libraries to be shared between installations that have different font collections.
 
-An absent `font` field means that no specific font preference is expressed.
+An absent `font` field means that no specific content-entry font preference is expressed. An available preferred font from the selected decoration applies when present; otherwise Refrain selects from the effective default font pool.
 
 An explicit empty string or invalid field type is a validation error.
 
 The resolution of preferred fonts, fallback behavior, warnings, and persistence of the selected font are defined in `docs/ARCHITECTURE.md`.
+
+### Background preference
+
+The optional `background` field selects a background for every quotation in the content entry.
+
+It accepts a stable background identifier from the effective registry or the reserved value `"none"`.
+
+For example:
+
+```yaml
+id: "quiet-morning"
+background: "handmade-paper"
+
+quotations:
+  - "An example quotation."
+```
+
+To request an undecorated paper-white background regardless of the selected decoration's preferred background:
+
+```yaml
+background: "none"
+```
+
+An absent `background` field allows an available selected decoration's preferred background to apply. If none is available, Refrain selects from the effective default background pool.
+
+An explicit `"none"` overrides both a decoration's preferred background and the default background pool.
+
+Unknown background identifiers are permitted without invalidating otherwise valid content entries. They produce a warning and use the normal background fallback rules.
+
+Empty strings, non-string values, and YAML null are invalid.
+
+The resolved background identifier is committed for the display day and is not reconsidered during progressive reveals or restart recovery.
+
+### Decoration preference
+
+The optional `decoration` field selects a decoration for every quotation in the content entry.
+
+It accepts a stable decoration identifier from the effective registry or the reserved value `"none"`.
+
+For example:
+
+```yaml
+id: "example-poem"
+decoration: "lower-flourish"
+
+quotations:
+  - |-
+    The first line of a poem,
+    followed by the second.
+```
+
+An explicit `"none"` suppresses the default decoration pool and uses the global presentation region.
+
+An absent `decoration` field means automatic selection from the effective default decoration pool.
+
+A selected decoration may supply an effective presentation region, a preferred font, and a preferred background. Explicit content-entry font and background preferences always take precedence over the corresponding decoration preferences.
+
+Unknown decoration identifiers are permitted without invalidating otherwise valid content entries. They produce a warning and use the default decoration pool.
+
+Empty strings, non-string values, and YAML null are invalid.
+
+The resolved decoration identifier and its effective presentation region are committed for the display day and are not reconsidered during progressive reveals or restart recovery.
 
 ### Presentation style
 
@@ -1100,6 +1420,13 @@ Apply the following rules:
 - A missing or invalid required value without a usable fallback produces an error.
 - An unavailable or invalid user-registered font produces a warning and is excluded from the effective font registry.
 - An unavailable or unregistered default-pool identifier produces a warning and is excluded from the effective default pool.
+- An unavailable or invalid user-registered background or decoration produces a warning and is excluded from its effective registry.
+- An unavailable or unregistered default background or decoration identifier produces a warning and is excluded from its effective default pool.
+- An unavailable optional font preference on an otherwise usable decoration is ignored with a warning.
+- A missing background or decoration pool defaults to `["none"]`.
+- A configured background or decoration pool with no usable members falls back to `["none"]` with a warning.
+- An invalid decoration presentation region excludes that decoration without invalidating unrelated resources.
+- An unavailable optional background preference on an otherwise usable decoration is ignored with a warning.
 
 Fallback values must be defined by this specification. Validation must not invent undocumented defaults.
 
@@ -1140,7 +1467,7 @@ An invalid entry must not invalidate otherwise valid entries or files.
 
 Conflicting duplicate entry identifiers must not be resolved by arbitrary filesystem enumeration order. All entries participating in a detected identifier conflict are excluded, with diagnostics identifying the conflicting entries.
 
-Content entries whose preferred font identifier is unavailable remain valid when the identifier itself satisfies the field's syntax rules. Font fallback behavior is defined in `docs/ARCHITECTURE.md`.
+Content entries whose preferred font, background, or decoration identifier is unavailable remain valid when the identifier itself satisfies the field's syntax rules. Resource fallback behavior is defined in `docs/ARCHITECTURE.md`.
 
 The effective content library consists of accepted, validated entries.
 
@@ -1206,19 +1533,23 @@ The eventual content editor, if implemented, must produce files conforming to th
 
 The initial formats do not define:
 
-- per-quotation metadata or font overrides;
+- per-quotation metadata, font, background, or decoration overrides;
 - arbitrary eligibility expressions;
 - weekday or holiday calculation rules;
 - complex recurrence expressions;
-- dynamically downloaded content;
+- dynamically downloaded content or visual resources;
 - inline scripts;
 - arbitrary presentation templates;
-- per-entry presentation regions or font-size limits;
-- per-entry layout customization beyond the defined font preference;
+- direct per-entry presentation regions or font-size limits;
+- per-entry layout customization beyond the defined resource preferences and presentation style;
 - automatic font-family selection based on text-fitting performance;
-- font repetition histories or weighted font selection;
+- resource repetition histories or weighted resource selection;
+- automatic contrast adjustment or foreground recolouring;
+- arbitrary graphical transformations or decoration placement instructions;
+- configurable image resolution or multi-resolution asset variants;
+- general-purpose themes or style scripting;
 - content-triggered external actions;
-- multiple configured physical displays;
+- independent presentation layouts for individual display backends;
 - interactive content editing.
 
 These capabilities may be evaluated for later releases according to the roadmap.

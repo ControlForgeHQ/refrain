@@ -80,7 +80,14 @@ The first release should be useful in normal household operation without dependi
 - Preserve the primary quotation's positioning across reveal stages.
 - Reserve layout space for information revealed later.
 - Support predominantly dark text on a paper-white background, with optional restrained color accents.
-- Handle content that cannot fit the layout without silent truncation.
+- Provide a small bundled collection of subtle background images, including paper-like textures.
+- Allow user-supplied background images, a configurable default background pool, and explicit content-entry background preferences.
+- Provide a small bundled collection of restrained decorative overlays, including borders and flourishes.
+- Allow user-supplied decorations, a configurable default decoration pool, and explicit content-entry decoration preferences.
+- Allow decorations to define an appropriate literary presentation region, an optional preferred font, and an optional preferred background.
+- Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
+- Preserve selected visual resources and effective presentation geometry throughout the committed display day.
+- Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
 - Support optional automatic presentation of the information view for a configurable, bounded duration, enabled by default.
 - Allow the information view to be presented independently of the committed daily selection and its reveal progression.
@@ -107,7 +114,9 @@ The first release should be useful in normal household operation without dependi
 - Verify recovery of committed selections and prepared images after application restarts.
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
-- Validate physical display behavior on the target hardware.
+- Validate bundled and user-supplied background and decoration resources, selection precedence, and recovery behaviour.
+- Verify that decoration-defined presentation regions preserve complete literary content without overlap or clipping.
+- Validate physical display behaviour on the target hardware, including selected backgrounds, decorations, typography, and logos.
 - Validate simultaneous backend operation, independent updates, failure isolation, and recovery.
 - Document installation, configuration, content creation, and ordinary operation.
 
@@ -123,12 +132,16 @@ Version 0.1 does not include:
 - remote administration;
 - content synchronization between devices;
 - independent presentation layouts, resolutions, or reveal schedules for individual display backends;
-- multiple presentation themes;
+- multiple general-purpose presentation themes;
+- arbitrary decoration placement, drawing scripts, or layout templates;
+- automatic text/background contrast calculation;
 - a general plugin system;
 - online quotation retrieval;
 - animations or partial-refresh effects.
 
 The priority is correctness, unattended reliability, and a polished physical presentation.
+
+Background and decoration selection are limited visual-composition capabilities, not a commitment to a general theme engine.
 
 ---
 
@@ -271,13 +284,16 @@ Development should proceed in the following order:
 3. Implement and test content loading, quotation eligibility, and selection policy.
 4. Implement and test persistent histories, daily snapshots, and atomic selection commitment.
 5. Implement and test reveal scheduling and hardware-independent image preparation.
-6. Implement and test persisted presentation artifacts and recovery behavior.
-7. Integrate and validate the physical e-paper display.
-8. Establish reliable unattended operation on the target Raspberry Pi.
-9. Complete Version 0.1 validation, documentation, and release.
-10. Proceed to the companion web presentation.
-11. Evaluate later integrations and public publishing independently.
+6. Implement and test persisted presentation artifacts and recovery behaviour.
+7. Integrate the physical e-paper display and establish a functional hardware baseline.
+8. Implement and test configurable background libraries, pools, and content-entry preferences.
+9. Implement and test configurable decorative overlays, composition regions, and optional background preferences.
+10. Validate the completed graphical presentation on the physical e-paper display.
+11. Establish reliable unattended operation on the target Raspberry Pi.
+12. Complete Version 0.1 validation, documentation, and release.
+13. Proceed to the companion web presentation.
+14. Evaluate later integrations and public publishing independently.
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
 
-Version 0.1 is complete only when the required behavior has been demonstrated, substantive review findings have been resolved, and the physical display has been validated on the target hardware.
+Version 0.1 is complete only when the required behaviour has been demonstrated, substantive review findings have been resolved, and the complete physical presentation has been validated on the target hardware.
