@@ -28,7 +28,15 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-refrain = ["py.typed", "assets/fonts/**/*", "assets/branding/*", "display/vendor/waveshare/*.md"]
+refrain = [
+    "py.typed",
+    "assets/README.md",
+    "assets/fonts/**/*",
+    "assets/branding/*",
+    "assets/backgrounds/*.png",
+    "assets/decorations/*.png",
+    "display/vendor/waveshare/*.md",
+]
 
 [tool.setuptools.exclude-package-data]
 refrain = ["display/vendor/waveshare/DEV_Config_*.so"]
