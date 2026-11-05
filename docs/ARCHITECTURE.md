@@ -1588,6 +1588,20 @@ Clock adjustments are evaluated according to the display-day and reveal-progress
 
 The application must not rely on busy waiting to determine ordinary reveal times.
 
+### Accelerated demo operation
+
+The optional `--demo SECONDS` operating mode repeatedly selects quotations and presents each canonical reveal stage at an accelerated interval. It bypasses normal time-of-day scheduling and boundary observation without manufacturing clock transitions. The automatic startup information view is suppressed.
+
+The session determines its eligibility display date once from the configured timezone and day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
+
+Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each complete snapshot is committed before its canonical image set is prepared or recovered through the existing facilities. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
+
+The initial stage is requested as soon as it is ready. Each stage receives the requested minimum monotonic viewing interval beginning at its first successful backend acknowledgement. After the final stage's interval, the controller commits another selection. Failed preparation or publication does not complete a stage or authorize reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
+
+Operational state, prepared artifacts, and global history are isolated in fresh temporary session storage using their existing formats. Normal persistence locations are never read or modified, even if supplied on the command line. Committed resources remain authoritative within a quotation, and selection revisions and repetition history work normally within the session. Shutdown releases session resources; demo sessions are neither retained nor resumed. Loss of all display destinations terminates the session.
+
+Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/ENGINEERING.md`.
+
 ### Recovery
 
 Recovery is performed according to the stage at which an interruption occurred.

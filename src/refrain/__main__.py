@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import signal
 import sys
 from collections.abc import Sequence
 from threading import Event
 
-from .application import ApplicationError, run_application, run_startup
+from .application import ApplicationError, run_application, run_demo, run_startup
 
 _SERVING_BACKENDS = {"window", "image-server"}
 
@@ -26,12 +27,26 @@ def _hold_open(backend: str) -> None:
         pass
 
 
+def _demo_interval(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("demo interval must be a positive finite number of seconds") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("demo interval must be a positive finite number of seconds")
+    return seconds
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="refrain", description="Run Refrain continuously until interrupted.")
     parser.add_argument("--config", required=True, help="application configuration YAML file")
-    parser.add_argument("--state", required=True, help="persistent state file (created if absent)")
-    parser.add_argument("--artifacts", required=True, help="directory for prepared image artifacts")
-    parser.add_argument("--history", help="JSONL global-history file (default: global-history.jsonl beside state)")
+    parser.add_argument("--state", help="persistent state file (required except with --demo; ignored in demo mode)")
+    parser.add_argument(
+        "--artifacts", help="prepared image directory (required except with --demo; ignored in demo mode)"
+    )
+    parser.add_argument(
+        "--history", help="JSONL global-history file (default: global-history.jsonl beside state; ignored with --demo)"
+    )
     parser.add_argument(
         "--history-segment-size",
         type=int,
@@ -44,8 +59,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=20,
         help="maximum retained global-history segments including the active segment (default: 20)",
     )
-    parser.add_argument("--once", action="store_true", help="run one startup/presentation cycle without scheduling")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--once", action="store_true", help="run one startup/presentation cycle without scheduling")
+    modes.add_argument(
+        "--demo",
+        type=_demo_interval,
+        metavar="SECONDS",
+        help="cycle canonical reveal stages at a positive finite interval using temporary session storage",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.demo is None:
+        missing = [name for name in ("--state", "--artifacts") if getattr(arguments, name[2:]) is None]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
         if arguments.once:
@@ -66,15 +92,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                     previous_handlers[termination_signal] = signal.signal(
                         termination_signal, lambda signum, frame: shutdown.set()
                     )
-                run_application(
-                    arguments.config,
-                    arguments.state,
-                    arguments.artifacts,
-                    shutdown_event=shutdown,
-                    history_path=arguments.history,
-                    history_segment_size=arguments.history_segment_size,
-                    history_max_segments=arguments.history_max_segments,
-                )
+                if arguments.demo is not None:
+                    run_demo(
+                        arguments.config,
+                        arguments.demo,
+                        shutdown_event=shutdown,
+                        history_segment_size=arguments.history_segment_size,
+                        history_max_segments=arguments.history_max_segments,
+                    )
+                else:
+                    run_application(
+                        arguments.config,
+                        arguments.state,
+                        arguments.artifacts,
+                        shutdown_event=shutdown,
+                        history_path=arguments.history,
+                        history_segment_size=arguments.history_segment_size,
+                        history_max_segments=arguments.history_max_segments,
+                    )
             finally:
                 for termination_signal, handler in previous_handlers.items():
                     signal.signal(termination_signal, handler)

@@ -105,7 +105,7 @@ Decoration registration, selection, rendering, and decoration-driven font/backgr
 
 ## Running Refrain
 
-`python -m refrain` runs continuously, showing the startup information view for 60 seconds by default before presenting the current daily quotation. Set `information_view.duration` to `0` to disable it, or to an integer from `1` through `300` to choose another duration. The interval starts after the first display backend successfully publishes the view. Refrain then presents the latest required daily reveal and continues selecting quotations at observed display-day boundaries. All three locations are required and are never inferred from a user's home directory or installation layout:
+`python -m refrain` normally runs continuously, showing the startup information view for 60 seconds by default before presenting the current daily quotation. Set `information_view.duration` to `0` to disable it, or to an integer from `1` through `300` to choose another duration. The interval starts after the first display backend successfully publishes the view. Refrain then presents the latest required daily reveal and continues selecting quotations at observed display-day boundaries. Outside demo mode, configuration, state, and artifact locations are required and are never inferred from a user's home directory or installation layout:
 
 ```sh
 .venv/bin/python -m refrain \
@@ -129,6 +129,22 @@ The continuous runtime gives each configured backend its own worker, so a slow d
 Press Ctrl+C or send SIGTERM to stop. Shutdown interrupts scheduling and backend retry waits and waits up to 60 seconds total for workers to finish active updates. It does not interrupt an active update or close its backend concurrently; if an update remains blocked, the application logs the timeout and returns while the daemon worker retains its image and attempts cleanup if the operation later returns. Other backends are still closed without intentionally clearing retained e-paper content. Physical panel behavior still requires hardware validation.
 
 If a backend reports that its instance cannot safely recover (such as a closed desktop window or disabled Waveshare transport), the application releases and disables only that destination. Other configured destinations continue; if all become unavailable, the application exits with status 1. The committed selection remains available for restart.
+
+### Accelerated presentation demo
+
+To cycle through real quotation presentations without changing the system clock or production state:
+
+```powershell
+python -m refrain --config examples/config.yaml --demo 5
+```
+
+`--demo SECONDS` accepts positive finite integers or fractions (for example, `0.5`). It cannot be combined with `--once`. Demo mode uses the configured display backends and suppresses the startup information view regardless of its configured duration.
+
+Each quotation is selected and committed using normal eligibility, priority, repetition, font, and background rules. Its complete canonical image set is prepared or recovered, then presented from the initial stage immediately when ready. Simultaneously scheduled reveals share a stage, absent fields add no stages, and visibility remains cumulative. Each stage's minimum viewing interval begins at the first successful backend acknowledgement; preparation, initialization, and failed updates do not consume it. After the final interval, another quotation is selected. Slow backends may coalesce updates and do not hold up healthy destinations; physical refresh behavior remains backend-owned.
+
+The eligibility date is calculated once using the configured timezone and day start and stays fixed throughout the session, even across clock changes or display-day boundaries. Demo mode bypasses normal wall-clock scheduling, not selection policy.
+
+State, artifacts, and global history use fresh temporary session storage. `--state`, `--artifacts`, and `--history` are unnecessary and, if supplied, are ignored: their locations are neither read nor written. Repetition history and selection revisions remain effective within the session, but no demo state is resumed by a later invocation. Ctrl+C and SIGTERM stop progression, shut down workers, and remove temporary files. Recoverable failures retry without skipping stages or reselecting committed quotations; loss of every display destination exits with status 1.
 
 ### One-shot startup and diagnostics
 

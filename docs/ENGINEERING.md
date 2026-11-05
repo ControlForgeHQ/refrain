@@ -1166,6 +1166,20 @@ When available information cannot reliably distinguish a clock discontinuity, us
 
 Boundary observations held by `DisplayDayBoundaryObserver` are process-local. Its first observation after startup establishes a baseline and does not manufacture an event for an unobserved interruption.
 
+### Demo-session ownership and timing
+
+`run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Ignore production persistence paths in the CLI rather than resolving or opening them. Determine the initial display date through the existing timezone/day-start calculation once; do not create synthetic boundary observations or reevaluate wall time to drive demo stages.
+
+Reuse the application selection, resource resolution, snapshot commitment, reveal-progress persistence, image recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the committed snapshot without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
+
+Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement, then measure the viewing interval from `first_successful_publication_time()` using the same monotonic clock supplied to the coordinator. An unacknowledged stage cannot advance. Initialization, preparation, failed publications, and wall-clock adjustments must not consume or alter the interval. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
+
+Use the normal independent backend retries and increasing application retry delays from 1 to at most 60 seconds. Do not reset backends between stages or require all destinations to succeed. Wake progression and retry waits on shutdown or terminal loss of every backend, and report the latter as an actionable application error rather than continuing selection without a destination.
+
+Stop new work on Ctrl+C or SIGTERM. Close the publication coordinator before removing temporary storage, preserving its bounded worker shutdown and image-reference ownership. Attempt session cleanup even after fatal application errors; report cleanup failures without concealing the primary error or touching production files. Each invocation starts fresh and has no resumable session state. Suppress the startup information view in demo mode.
+
+Cover CLI validation and normal-mode requirements, canonical progression, fixed eligibility dates, repeated revisions and pool exhaustion, stable resource identifiers, isolation from production files, fresh sessions, cleanup, interrupted waits, and preparation/publication/storage recovery with deterministic hardware-independent tests. Use injectable clocks, controlled waits, and fake backends instead of real-time sleeps. Include independent healthy/slow or unavailable destinations and all-backend loss; retain ordinary scheduler, one-shot, persistence, and recovery regression coverage. These tests do not establish physical e-paper behavior.
+
 ## Logging and diagnostics
 
 ### Logging
