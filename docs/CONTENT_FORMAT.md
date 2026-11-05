@@ -679,6 +679,7 @@ Each key is a user-defined decoration identifier. Its value is a mapping contain
 |---|---|---|---|
 | `image` | String path | Yes | None |
 | `presentation_region` | Normalized rectangle mapping | No | Global presentation region |
+| `font` | Font identifier | No | No preference |
 | `background` | Background identifier or `"none"` | No | No preference |
 
 For example:
@@ -695,14 +696,15 @@ layout:
           width: 0.68
           height: 0.58
 
-      lower-flourish:
-        image: "decorations/LowerFlourish.png"
+      futuristic-corners:
+        image: "decorations/FuturisticCorners.png"
         presentation_region:
           x: 0.12
-          y: 0.11
+          y: 0.16
           width: 0.76
-          height: 0.54
-        background: "handmade-paper"
+          height: 0.60
+        font: "orbitron"
+        background: "hex-paper"
 ```
 
 When omitted, `layout.decorations.available` defaults to an empty mapping.
@@ -716,6 +718,8 @@ Decoration images must be readable, single-frame RGBA PNG images with dimensions
 Transparency is required so the underlying background can remain visible.
 
 The optional `presentation_region` must satisfy the validation rules defined for `layout.presentation_region`.
+
+The optional `font` must be a nonempty identifier referring to a usable registered font. An unavailable preferred font produces a warning and is treated as an absent preference without invalidating an otherwise usable decoration.
 
 The optional `background` must refer to a usable registered background or `"none"`. An unavailable preferred background produces a warning and is treated as an absent preference without invalidating an otherwise usable decoration.
 
@@ -752,11 +756,17 @@ Decorations have no repetition history or selection weights.
 
 ### Background and decoration resolution
 
-For each selected quotation, Refrain resolves the decoration before the background.
+For each selected quotation, Refrain resolves the decoration before resolving the font and background.
 
-An explicit content-entry decoration takes precedence over the default decoration pool. The value `"none"` suppresses decoration selection.
+An available explicit content-entry decoration takes precedence over the default decoration pool. The value `"none"` suppresses decoration selection.
 
 When no explicit decoration is available, Refrain selects from the effective default decoration pool.
+
+For fonts, precedence is:
+
+1. An available explicit content-entry font.
+2. The selected decoration's available preferred font.
+3. Automatic selection from the effective default font pool.
 
 For backgrounds, precedence is:
 
@@ -764,13 +774,17 @@ For backgrounds, precedence is:
 2. The selected decoration's available preferred background, including `"none"`.
 3. Automatic selection from the effective default background pool.
 
-An unavailable explicit content-entry preference produces a warning and falls back to the corresponding automatic-selection rules. It does not invalidate the otherwise valid entry.
+An unavailable explicit content-entry preference produces a warning and falls back to the next applicable selection level. It does not invalidate the otherwise valid entry.
 
-An absent decoration preference does not prevent an explicit content-entry background or an automatically selected background.
+An unavailable decoration font or background preference is ignored with a warning, without invalidating an otherwise usable decoration.
+
+An absent decoration preference does not prevent explicit content-entry resource selection or automatic selection from the corresponding default pool.
 
 The selected decoration determines the effective presentation region when it defines an override; otherwise the global presentation region applies.
 
-The final resource identifiers and effective presentation region are committed with the daily selection. No resource is reselected during reveal progression or restart recovery.
+The final font, background, and decoration identifiers and effective presentation region are committed with the daily selection.
+
+No resource is reselected during reveal progression or restart recovery. Image regeneration resolves the committed identifiers independently of the original content-entry and decoration preferences.
 
 The handling of missing resources during regeneration is defined in `docs/ARCHITECTURE.md`.
 
@@ -1013,7 +1027,7 @@ An unregistered font identifier is permitted and does not invalidate an otherwis
 
 This allows content libraries to be shared between installations that have different font collections.
 
-An absent `font` field means that no specific font preference is expressed.
+An absent `font` field means that no specific content-entry font preference is expressed. An available preferred font from the selected decoration applies when present; otherwise Refrain selects from the effective default font pool.
 
 An explicit empty string or invalid field type is a validation error.
 
@@ -1073,7 +1087,7 @@ An explicit `"none"` suppresses the default decoration pool and uses the global 
 
 An absent `decoration` field means automatic selection from the effective default decoration pool.
 
-A selected decoration may supply an effective presentation region and a preferred background. An explicit content-entry background preference always takes precedence over that preferred background.
+A selected decoration may supply an effective presentation region, a preferred font, and a preferred background. Explicit content-entry font and background preferences always take precedence over the corresponding decoration preferences.
 
 Unknown decoration identifiers are permitted without invalidating otherwise valid content entries. They produce a warning and use the default decoration pool.
 
@@ -1407,6 +1421,7 @@ Apply the following rules:
 - An unavailable or unregistered default-pool identifier produces a warning and is excluded from the effective default pool.
 - An unavailable or invalid user-registered background or decoration produces a warning and is excluded from its effective registry.
 - An unavailable or unregistered default background or decoration identifier produces a warning and is excluded from its effective default pool.
+- An unavailable optional font preference on an otherwise usable decoration is ignored with a warning.
 - A missing background or decoration pool defaults to `["none"]`.
 - A configured background or decoration pool with no usable members falls back to `["none"]` with a warning.
 - An invalid decoration presentation region excludes that decoration without invalidating unrelated resources.

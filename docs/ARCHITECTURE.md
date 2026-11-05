@@ -615,8 +615,8 @@ For each new daily selection:
 10. Retain candidates having the highest priority.
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
-13. Resolve the font using the entry's preference or the effective default pool.
-14. Resolve the decoration using the entry's preference or the effective default decoration pool.
+13. Resolve the decoration using the entry's preference or the effective default decoration pool.
+14. Resolve the font using the entry's preference, the selected decoration's font preference, or the effective default font pool, in that precedence order.
 15. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
 16. Resolve the effective presentation region from the selected decoration or the global presentation region.
 17. Prepare the complete daily snapshot.
@@ -633,7 +633,7 @@ Failure to record global history after commitment does not invalidate the commit
 
 The next selection revision is derived from authoritative operational state, never from global-history contents.
 
-The random results of an uncommitted selection, including font, decoration, and background selection, are not authoritative.
+The random results of an uncommitted selection, including decoration, font, and background selection, are not authoritative.
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
 
@@ -1185,11 +1185,15 @@ Unusable or invalid user font registrations are excluded from the effective regi
 
 A content entry may specify a preferred font, inherited by every quotation in that entry.
 
-When the preferred font is present in the effective registry, Refrain uses it for the selected quotation.
+A decoration may also specify a preferred font.
 
-When a content entry requests a font absent from the effective registry, Refrain retains the otherwise valid entry, logs an appropriate warning, and selects a font from the effective default pool.
+Font selection follows this precedence:
 
-Content entries that omit a font preference also use the effective default pool.
+1. Use an available explicit content-entry font preference.
+2. Otherwise, use an available font preference from the selected decoration.
+3. Otherwise, select from the effective default font pool.
+
+An unavailable preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning and proceeds to the next applicable preference.
 
 Each font in the effective default pool has equal selection probability.
 
@@ -1197,11 +1201,11 @@ The effective default pool must be nonempty when a new selection requires automa
 
 Font selection is independent for each daily selection. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
-The selected font identifier is resolved after quotation selection and before daily snapshot commitment.
+The selected decoration is resolved before font selection. The selected font identifier is resolved before daily snapshot commitment.
 
 The selected font identifier is recorded in the committed snapshot and global selection history. Font contents and font-content hashes are not persisted in operational state.
 
-Image preparation resolves the selected identifier using available font resources.
+Image preparation resolves the committed font identifier using available font resources. It does not reconsider the original entry or decoration preferences.
 
 If the selected font is no longer available or usable during regeneration, Refrain uses an available bundled fallback font. Fallback selection is deterministic for a given set of available bundled fonts and is consistent across all stages prepared together.
 

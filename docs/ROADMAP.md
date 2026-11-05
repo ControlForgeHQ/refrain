@@ -84,7 +84,7 @@ The first release should be useful in normal household operation without dependi
 - Allow user-supplied background images, a configurable default background pool, and explicit content-entry background preferences.
 - Provide a small bundled collection of restrained decorative overlays, including borders and flourishes.
 - Allow user-supplied decorations, a configurable default decoration pool, and explicit content-entry decoration preferences.
-- Allow decorations to define an appropriate literary presentation region and an optional preferred background.
+- Allow decorations to define an appropriate literary presentation region, an optional preferred font, and an optional preferred background.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.
 - Handle content that cannot fit the effective layout without silent truncation.
