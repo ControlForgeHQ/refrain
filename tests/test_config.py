@@ -297,8 +297,10 @@ def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
-    assert config.default_fonts == ("libre-baskerville", "lora", "source-sans-3")
-    assert config.information_view_duration == 60
+    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
+    assert config.default_backgrounds == ("none", "aged-paper", "canvas", "cloth", "ethereal", "hex")
+    assert config.presentation_region.height == 0.70
+    assert config.information_view_duration == 5
 
 
 @pytest.mark.parametrize("duration", [0, 1, 60, 300])
