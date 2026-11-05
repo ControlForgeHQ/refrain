@@ -57,6 +57,7 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert entries[0].priority == 0
     assert entries[0].font is None
     assert entries[0].background is None
+    assert entries[0].decoration is None
     assert entries[0].presentation_style == "centered"
     assert entries[0].eligibility == (EligibilityRule(ordinary=True),)
     assert entries[0].reveal == RevealOverrides()
@@ -79,6 +80,31 @@ def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path
     assert len(pool.candidates) == 2
     assert all(candidate.entry.background == background for candidate in pool.candidates)
     assert "background" not in caplog.text
+
+
+@pytest.mark.parametrize("decoration", ["lower-flourish", "none", "unknown-decoration", "Custom Decoration"])
+def test_decoration_preferences_are_preserved_for_every_quotation(tmp_path: Path, decoration: str) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(decoration=decoration, quotations=["First quotation.", "Second quotation."]),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+    pool = build_eligible_quotation_pool((entry,), date(2026, 11, 5))
+
+    assert entry.decoration == decoration
+    assert len(pool.candidates) == 2
+    assert all(candidate.entry.decoration == decoration for candidate in pool.candidates)
+
+
+@pytest.mark.parametrize("decoration", ["", " ", "\t\n", None, 1, False, [], {}])
+def test_invalid_decoration_preferences_are_rejected(tmp_path: Path, decoration: object) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(decoration=decoration))
+
+    diagnostics = diagnostics_for(tmp_path)
+
+    assert any(": decoration:" in diagnostic for diagnostic in diagnostics)
+    assert any("nonempty, nonblank string" in diagnostic for diagnostic in diagnostics)
 
 
 @pytest.mark.parametrize("background", ["", " ", "\t\n", None, 1, False, [], {}])

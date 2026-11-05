@@ -484,7 +484,7 @@ Format version 4 contains:
 - `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. Background support commits `decoration_identifier` as `"none"`; decoration registration, selection, rendering, and decoration-driven resource or region preferences remain deferred. The effective presentation region is therefore the existing global `layout.presentation_region`.
+The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. The effective presentation region is stored in the existing `layout.presentation_region` representation. Format version 4 is retained; the snapshot does not contain resource bytes, paths, or image hashes.
 
 The snapshot does not contain font or image resource bytes, filesystem paths, or content digests.
 
@@ -752,7 +752,15 @@ Keep background composition outside the shared quotation renderer. Compose the c
 
 When regeneration cannot resolve or decode a committed background, report a warning and continue with paper-white. Do not reselect another background, mutate the committed identifier or effective layout, or invalidate an otherwise valid prepared image set merely because resources changed. Keep resource reads bounded and close decoded images when no longer needed.
 
-Wheel and source-distribution tests must verify all five bundled background PNGs and `assets/README.md`. Installed-package tests must open and decode a background through `importlib.resources`, not merely confirm its filename exists.
+### Decoration loading and composition
+
+Decoration identifiers, registration requirements, default-pool validation, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Load the five reserved bundled identifiers (`ethereal`, `hex`, `lower-flourish`, `simple-border`, and `top-bottom-borders`) through `importlib.resources`. Validate custom resources as readable, single-frame, 1600 × 1200 PNG images in RGBA mode.
+
+Resolve decoration, font, background, and effective region before committing the snapshot. Keep selection outside rendering. Compose the selected decoration over the already composed background and before literary rendering, once per preparation; use that complete composition for every reveal stage. A missing or unusable committed decoration is warned about and omitted during regeneration, without changing its identifier or the committed region. Do not recalculate geometry from current decoration metadata.
+
+`prepare_daily_images` and `recover_prepared_daily_images` accept the effective decoration registry independently of the background registry. Reuse valid prepared artifacts before resolving image resources, so registry or file changes do not invalidate a valid set.
+
+Wheel and source-distribution tests must verify all five bundled background PNGs, all five bundled decoration PNGs, and `assets/README.md`. Installed-package tests must open and decode both resource types through `importlib.resources`, not merely confirm their filenames exist.
 
 ### Keep presentation configuration focused
 
@@ -1337,7 +1345,7 @@ Test font configuration and selection behavior, including:
 
 Use deterministic random sources where required.
 
-Test background composition beneath literary content, RGBA transparency over paper-white, consistent backgrounds across reveal stages, plain output for `"none"`, and warning-based recovery for missing or unusable committed resources. Verify reuse of valid artifacts after background-resource changes and preservation of `background_identifier` and the fixed `"none"` decoration identifier.
+Test background and decoration layer ordering, RGBA transparency, consistent composition across reveal stages, and plain output for `"none"`. Verify warning-based recovery for missing or unusable committed resources, preservation of committed identifiers and effective geometry, and reuse of valid artifacts after resource changes.
 
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 

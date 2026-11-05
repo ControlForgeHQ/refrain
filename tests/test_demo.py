@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from threading import Event
 
 import pytest
+from PIL import Image
 
 import refrain.__main__ as cli
 import refrain.application as application
@@ -284,6 +285,45 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
         range(len(expected))
     )
     assert len(demo.selected) == 2 and len(demo.prepared) == 2
+    demo.assert_clean()
+
+
+def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
+    overlay = demo.root / "overlay.png"
+    Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)).save(overlay)
+    demo.config.write_text(
+        _CONFIG.replace(
+            '  backgrounds:\n    default: ["none", "canvas"]',
+            '  backgrounds:\n    default: ["none"]\n'
+            "  decorations:\n"
+            '    available: {demo-overlay: {image: "overlay.png", '
+            "presentation_region: {x: 0.2, y: 0.3, width: 0.6, height: 0.4}}}\n"
+            '    default: ["demo-overlay"]',
+        ),
+        encoding="utf-8",
+    )
+    demo.entry(metadata=False)
+    demo.clock.limit = 2
+    pixels = []
+
+    def inspect_prepared_stage(_coordinator, _identity):
+        if not pixels:
+            with demo.prepared[0][2].load_stage(0) as image:
+                pixels.append(image.getpixel((10, 10)))
+
+    demo.on_publish = inspect_prepared_stage
+
+    demo.run()
+
+    state, _, _ = demo.prepared[0]
+    assert state.snapshot.decoration_identifier == "demo-overlay"
+    assert dict(state.snapshot.layout["presentation_region"]) == {
+        "x": 0.2,
+        "y": 0.3,
+        "width": 0.6,
+        "height": 0.4,
+    }
+    assert pixels[0] == (227, 137, 147)
     demo.assert_clean()
 
 

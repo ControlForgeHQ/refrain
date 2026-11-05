@@ -57,6 +57,26 @@ layout:
     # available:
     #   handmade-paper: "backgrounds/HandmadePaper.png"
 
+  decorations:
+    # Bundled decorations are registered automatically. Use "none" for no overlay.
+    # Each member of the default pool is selected with equal probability.
+    default:
+      - "none"
+      - "ethereal"
+      - "hex"
+      - "lower-flourish"
+      - "simple-border"
+      - "top-bottom-borders"
+
+    # Optional custom transparent overlays must be readable, single-frame
+    # 1600 x 1200 RGBA PNGs. Relative paths resolve from this configuration file.
+    # available:
+    #   botanical-corners:
+    #     image: "decorations/BotanicalCorners.png"
+    #     presentation_region: {x: 0.16, y: 0.18, width: 0.68, height: 0.58}
+    #     font: "lora"
+    #     background: "aged-paper"
+
   text:
     min_font_size: 28
     max_font_size: 100

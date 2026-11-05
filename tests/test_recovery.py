@@ -151,6 +151,50 @@ def test_missing_committed_background_never_reselects_and_reuses_valid_images(
     assert not caplog.records
 
 
+def test_missing_committed_decoration_is_omitted_and_region_is_preserved(
+    committed_state, artifact_store, caplog
+) -> None:
+    state, _ = committed_state
+    region = {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}
+    snapshot = replace(
+        state.snapshot,
+        decoration_identifier="removed-decoration",
+        layout={**state.snapshot.layout, "presentation_region": region},
+    )
+    state = replace(state, snapshot=snapshot)
+
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, {})
+
+    with result.load_stage(0) as image:
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert state.snapshot.decoration_identifier == "removed-decoration"
+    assert dict(state.snapshot.layout["presentation_region"]) == region
+    assert "Committed decoration 'removed-decoration' is unavailable" in caplog.text
+
+
+def test_valid_prepared_images_are_reused_after_decoration_changes(
+    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, _ = committed_state
+    snapshot = replace(
+        state.snapshot,
+        decoration_identifier="custom-overlay",
+        layout={**state.snapshot.layout, "presentation_region": {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}},
+    )
+    state = replace(state, snapshot=snapshot)
+    images = prepare_daily_images(snapshot, _STAGES, _FONT_REGISTRY, {}, {})
+    try:
+        prepared = artifact_store.store(state.revision, snapshot, images)
+    finally:
+        for image in images:
+            image.close()
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args, **_kwargs: pytest.fail("unexpected rendering"))
+
+    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, {})
+
+    assert recovered == prepared
+
+
 def test_reuses_complete_artifacts_without_preparing_or_writing(
     committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:

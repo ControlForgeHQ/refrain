@@ -53,6 +53,13 @@ _BUNDLED_FONT_FILES = {
     "source-sans-3": ("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf"),
 }
 _BUNDLED_BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
+_BUNDLED_DECORATIONS = {
+    "ethereal": {"presentation_region": None, "font": None, "background": None},
+    "hex": {"presentation_region": None, "font": None, "background": None},
+    "lower-flourish": {"presentation_region": None, "font": None, "background": None},
+    "simple-border": {"presentation_region": None, "font": None, "background": None},
+    "top-bottom-borders": {"presentation_region": None, "font": None, "background": None},
+}
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,18 @@ class BackgroundResource:
     identifier: str
     path: Union[Path, Traversable]
     bundled: bool
+
+
+@dataclass(frozen=True)
+class DecorationResource:
+    """A validated bundled or user-registered decorative PNG and its preferences."""
+
+    identifier: str
+    path: Union[Path, Traversable]
+    bundled: bool
+    presentation_region: PresentationRegion | None = None
+    font: str | None = None
+    background: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +158,8 @@ class ApplicationConfiguration:
     information_view_duration: int = 60
     backgrounds: Mapping[str, BackgroundResource] = field(default_factory=lambda: MappingProxyType({}))
     default_backgrounds: tuple[str, ...] = ("none",)
+    decorations: Mapping[str, DecorationResource] = field(default_factory=lambda: MappingProxyType({}))
+    default_decorations: tuple[str, ...] = ("none",)
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -161,6 +182,45 @@ def _mapping(value: object, field: str, report: Callable[..., None]) -> dict[str
         report(field, "must be a mapping; the value is ignored")
         return {}
     return value
+
+
+def _parse_presentation_region(
+    value: object,
+    field: str,
+    report: Callable[..., None],
+    severity: int = logging.ERROR,
+) -> PresentationRegion | None:
+    if not isinstance(value, dict):
+        report(field, "must be a mapping", severity)
+        return None
+    _known_fields(value, {"x", "y", "width", "height"}, field, report)
+    values: dict[str, float] = {}
+    for coordinate in ("x", "y", "width", "height"):
+        coordinate_value = value.get(coordinate)
+        try:
+            finite = math.isfinite(coordinate_value)  # type: ignore[arg-type]
+        except (OverflowError, TypeError):
+            finite = False
+        if isinstance(coordinate_value, bool) or not isinstance(coordinate_value, (int, float)) or not finite:
+            report(f"{field}.{coordinate}", "is required and must be a finite number", severity)
+        else:
+            values[coordinate] = float(coordinate_value)
+    if len(values) != 4:
+        return None
+    x, y, width, height = (values[key] for key in ("x", "y", "width", "height"))
+    valid = True
+    for coordinate, condition, message in (
+        ("x", 0 <= x < 1, "must satisfy 0 <= x < 1"),
+        ("y", 0 <= y < 1, "must satisfy 0 <= y < 1"),
+        ("width", 0 < width <= 1, "must satisfy 0 < width <= 1"),
+        ("height", 0 < height <= 1, "must satisfy 0 < height <= 1"),
+        ("width", x + width <= 1, "x + width must not exceed 1"),
+        ("height", y + height <= 1, "y + height must not exceed 1"),
+    ):
+        if not condition:
+            report(f"{field}.{coordinate}", message, severity)
+            valid = False
+    return PresentationRegion(x=x, y=y, width=width, height=height) if valid else None
 
 
 def _parse_time(value: object, field: str, report: Callable[..., None], *, fallback: str | None = None) -> time | None:
@@ -221,6 +281,22 @@ def load_background_image(resource: BackgroundResource) -> Image.Image:
             return image.copy()
 
 
+def load_decoration_image(resource: DecorationResource) -> Image.Image:
+    """Revalidate a decoration and return a detached RGBA image owned by the caller."""
+    with resource.path.open("rb") as decoration_file:
+        with Image.open(decoration_file) as image:
+            if image.format != "PNG":
+                raise ValueError("decoration must be a PNG image")
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError("decoration must be a single-frame PNG image")
+            if image.size != (1600, 1200):
+                raise ValueError("decoration dimensions must be exactly 1600 × 1200 pixels")
+            if image.mode != "RGBA":
+                raise ValueError("decoration mode must be RGBA")
+            image.load()
+            return image.copy()
+
+
 def _register_background(
     resource: BackgroundResource, field: str, registry: dict[str, BackgroundResource], report: Callable[..., None]
 ) -> None:
@@ -229,6 +305,21 @@ def _register_background(
             pass
     except Exception as error:
         report(field, f"is excluded; it must be an existing, readable background PNG: {error}")
+    else:
+        registry[resource.identifier] = resource
+
+
+def _register_decoration(
+    resource: DecorationResource,
+    field: str,
+    registry: dict[str, DecorationResource],
+    report: Callable[..., None],
+) -> None:
+    try:
+        with load_decoration_image(resource):
+            pass
+    except Exception as error:
+        report(field, f"is excluded; it must be an existing, readable RGBA decoration PNG: {error}")
     else:
         registry[resource.identifier] = resource
 
@@ -418,38 +509,10 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     reveal = RevealSchedule(reveal_times["source"], reveal_times["attribution"])
 
     layout = _mapping(data.get("layout", {}), "layout", report)
-    _known_fields(layout, {"presentation_region", "fonts", "backgrounds", "text"}, "layout", report)
-    region_data = _mapping(layout.get("presentation_region", {}), "layout.presentation_region", report)
-    _known_fields(region_data, {"x", "y", "width", "height"}, "layout.presentation_region", report)
-    region_values: dict[str, float] = {}
-    for field in ("x", "y", "width", "height"):
-        value = region_data.get(field)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-            report(f"layout.presentation_region.{field}", "is required and must be a finite number", logging.ERROR)
-        else:
-            region_values[field] = float(value)
-    if len(region_values) == 4:
-        x, y, width, height = (
-            region_values["x"],
-            region_values["y"],
-            region_values["width"],
-            region_values["height"],
-        )
-        if not 0 <= x < 1:
-            report("layout.presentation_region.x", "must satisfy 0 <= x < 1", logging.ERROR)
-        if not 0 <= y < 1:
-            report("layout.presentation_region.y", "must satisfy 0 <= y < 1", logging.ERROR)
-        if not 0 < width <= 1:
-            report("layout.presentation_region.width", "must satisfy 0 < width <= 1", logging.ERROR)
-        if not 0 < height <= 1:
-            report("layout.presentation_region.height", "must satisfy 0 < height <= 1", logging.ERROR)
-        if x + width > 1:
-            report("layout.presentation_region.width", "x + width must not exceed 1", logging.ERROR)
-        if y + height > 1:
-            report("layout.presentation_region.height", "y + height must not exceed 1", logging.ERROR)
-        presentation_region = PresentationRegion(x=x, y=y, width=width, height=height)
-    else:
-        presentation_region = None
+    _known_fields(layout, {"presentation_region", "fonts", "backgrounds", "decorations", "text"}, "layout", report)
+    presentation_region = _parse_presentation_region(
+        layout.get("presentation_region", {}), "layout.presentation_region", report
+    )
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
     _known_fields(fonts_data, {"default", "available"}, "layout.fonts", report)
@@ -581,6 +644,126 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         else:
             report("layout.backgrounds.default", "has no usable members; using ['none']")
 
+    decorations_data = _mapping(layout.get("decorations", {}), "layout.decorations", report)
+    _known_fields(decorations_data, {"available", "default"}, "layout.decorations", report)
+    decoration_registry: dict[str, DecorationResource] = {}
+    for identifier, metadata in _BUNDLED_DECORATIONS.items():
+        resource = DecorationResource(
+            identifier=identifier,
+            path=package_root.joinpath("assets", "decorations", f"{identifier}.png"),
+            bundled=True,
+            **metadata,
+        )
+        _register_decoration(resource, f"layout.decorations.bundled.{identifier}", decoration_registry, report)
+
+    if "available" in decorations_data:
+        available_decorations = _mapping(decorations_data["available"], "layout.decorations.available", report)
+    else:
+        available_decorations = {}
+        use_default("layout.decorations.available", "an empty mapping")
+    for identifier, registration in available_decorations.items():
+        field_name = (
+            f"layout.decorations.available.{identifier}"
+            if isinstance(identifier, str)
+            else f"layout.decorations.available[{identifier!r}]"
+        )
+        if not isinstance(identifier, str) or not identifier.strip():
+            report(field_name, "decoration identifiers must be nonempty strings; this registration is excluded")
+            continue
+        if identifier == "none" or identifier in _BUNDLED_DECORATIONS:
+            report(field_name, f"identifier {identifier!r} is reserved; this registration is ignored")
+            continue
+        if not isinstance(registration, dict):
+            report(field_name, "must be a mapping; this registration is excluded")
+            continue
+        _known_fields(registration, {"image", "presentation_region", "font", "background"}, field_name, report)
+        image_value = registration.get("image")
+        if not isinstance(image_value, str) or not image_value.strip():
+            report(f"{field_name}.image", "is required and must be a nonempty file path; this registration is excluded")
+            continue
+        decoration_path = Path(image_value)
+        if not decoration_path.is_absolute():
+            decoration_path = file.parent / decoration_path
+
+        region = None
+        if "presentation_region" in registration:
+            region = _parse_presentation_region(
+                registration["presentation_region"],
+                f"{field_name}.presentation_region",
+                report,
+                logging.WARNING,
+            )
+            if region is None:
+                report(
+                    f"{field_name}.presentation_region",
+                    "is invalid; this decoration registration is excluded",
+                )
+                continue
+
+        preferred_font = registration.get("font")
+        if "font" in registration:
+            if not isinstance(preferred_font, str) or not preferred_font.strip():
+                report(f"{field_name}.font", "must be a nonempty font identifier; preference ignored")
+                preferred_font = None
+            elif preferred_font not in font_registry:
+                report(
+                    f"{field_name}.font",
+                    f"font identifier {preferred_font!r} is unavailable; preference ignored",
+                )
+                preferred_font = None
+
+        preferred_background = registration.get("background")
+        if "background" in registration:
+            if not isinstance(preferred_background, str) or not preferred_background.strip():
+                report(f"{field_name}.background", "must be a nonempty background identifier; preference ignored")
+                preferred_background = None
+            elif preferred_background != "none" and preferred_background not in background_registry:
+                report(
+                    f"{field_name}.background",
+                    f"background identifier {preferred_background!r} is unavailable; preference ignored",
+                )
+                preferred_background = None
+
+        resource = DecorationResource(
+            identifier=identifier,
+            path=decoration_path,
+            bundled=False,
+            presentation_region=region,
+            font=preferred_font,
+            background=preferred_background,
+        )
+        _register_decoration(resource, field_name, decoration_registry, report)
+
+    default_decorations = ("none",)
+    if "default" not in decorations_data:
+        use_default("layout.decorations.default", "['none']")
+    else:
+        decoration_default_value = decorations_data["default"]
+        effective_decorations: list[str] = []
+        seen_decorations: set[str] = set()
+        if not isinstance(decoration_default_value, list):
+            report("layout.decorations.default", "must be a nonempty sequence of decoration identifiers")
+        else:
+            for index, identifier in enumerate(decoration_default_value):
+                field_name = f"layout.decorations.default[{index}]"
+                if not isinstance(identifier, str) or not identifier.strip():
+                    report(field_name, "must be a nonempty decoration identifier; it is excluded")
+                    continue
+                if identifier in seen_decorations:
+                    continue
+                seen_decorations.add(identifier)
+                if identifier != "none" and identifier not in decoration_registry:
+                    report(
+                        field_name,
+                        f"decoration identifier {identifier!r} is unavailable; it is excluded",
+                    )
+                else:
+                    effective_decorations.append(identifier)
+        if effective_decorations:
+            default_decorations = tuple(effective_decorations)
+        else:
+            report("layout.decorations.default", "has no usable members; using ['none']")
+
     text_data = _mapping(layout.get("text", {}), "layout.text", report)
     _known_fields(text_data, {"min_font_size", "max_font_size"}, "layout.text", report)
     sizes: dict[str, int] = {}
@@ -615,4 +798,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         information_view_duration=information_view_duration,
         backgrounds=MappingProxyType(background_registry),
         default_backgrounds=default_backgrounds,
+        decorations=MappingProxyType(decoration_registry),
+        default_decorations=default_decorations,
     )

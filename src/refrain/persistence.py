@@ -143,8 +143,7 @@ class DailySnapshot:
             raise ValueError("quotation_identity must match the normalized quotation_text")
         _nonempty_string(self.font_identifier, "font_identifier")
         _nonempty_string(self.background_identifier, "background_identifier")
-        if self.decoration_identifier != "none":
-            raise ValueError("decoration_identifier must be 'none'; decorations are not yet supported")
+        _nonempty_string(self.decoration_identifier, "decoration_identifier")
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")
         for field in ("presentation_metadata", "reveal_schedule", "layout"):

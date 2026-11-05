@@ -331,16 +331,36 @@ def test_state_v4_excludes_global_history_and_font_contents(tmp_path: Path) -> N
     assert "sha256" in document and "sha256" not in document["state"]["snapshot"]
 
 
-def test_background_and_fixed_decoration_round_trip(tmp_path: Path) -> None:
+def test_format_four_persists_background_decoration_and_effective_region(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
-    snapshot = replace(make_snapshot("Persisted."), background_identifier="custom-paper")
+    snapshot = replace(
+        make_snapshot("Persisted."),
+        background_identifier="custom-paper",
+        decoration_identifier="lower-flourish",
+        layout={
+            **make_snapshot("Persisted.").layout,
+            "presentation_region": {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+        },
+    )
     committed = store.commit(make_proposal("Persisted."), snapshot)
     assert store.load() == committed
     assert store.load().snapshot.background_identifier == "custom-paper"
-    assert store.load().snapshot.decoration_identifier == "none"
+    assert store.load().snapshot.decoration_identifier == "lower-flourish"
+    assert dict(store.load().snapshot.layout["presentation_region"]) == {
+        "x": 0.2,
+        "y": 0.3,
+        "width": 0.6,
+        "height": 0.4,
+    }
     document = json.loads(store.path.read_text())
     assert document["state"]["snapshot"]["background_identifier"] == "custom-paper"
-    assert document["state"]["snapshot"]["decoration_identifier"] == "none"
+    assert document["state"]["snapshot"]["decoration_identifier"] == "lower-flourish"
+    assert document["state"]["snapshot"]["layout"]["presentation_region"] == {
+        "x": 0.2,
+        "y": 0.3,
+        "width": 0.6,
+        "height": 0.4,
+    }
 
 
 @pytest.mark.parametrize("field", ["background_identifier", "decoration_identifier"])
