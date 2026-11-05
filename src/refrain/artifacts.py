@@ -73,7 +73,6 @@ def _snapshot_digest(snapshot: DailySnapshot) -> str:
         "layout": _json_value(snapshot.layout),
         "scheduling": {
             "display_date": snapshot.display_date.isoformat(),
-            "timezone": snapshot.scheduling.timezone,
             "day_start": snapshot.scheduling.day_start,
         },
     }

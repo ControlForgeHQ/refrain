@@ -13,7 +13,6 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping, Union
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import yaml
 from PIL import Image, ImageFont
@@ -24,26 +23,6 @@ _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "infor
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
-_TIMEZONE_ABBREVIATIONS = {
-    "ADT",
-    "AKDT",
-    "AKST",
-    "AST",
-    "CDT",
-    "CST",
-    "EDT",
-    "EST",
-    "HDT",
-    "HST",
-    "MDT",
-    "MST",
-    "NDT",
-    "NST",
-    "PDT",
-    "PST",
-    "YST",
-}
-_NON_IANA_TIMEZONE_KEYS = {"localtime", "posixrules"}
 _LOGGER = logging.getLogger(__name__)
 _BUNDLED_FONT_FILES = {
     "alegreya": ("assets", "fonts", "alegreya", "Alegreya-Regular.ttf"),
@@ -115,7 +94,7 @@ class DecorationResource:
 
 @dataclass(frozen=True)
 class RevealSchedule:
-    """Validated global reveal times in the configured local timezone."""
+    """Validated global reveal times in the operating-system local timezone."""
 
     source: time
     attribution: time
@@ -146,7 +125,6 @@ class ApplicationConfiguration:
 
     file: Path
     display_backends: tuple[DisplayBackendConfiguration, ...]
-    timezone: ZoneInfo
     day_start: time
     content_directory: Path
     reveal: RevealSchedule
@@ -420,22 +398,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             display_backends.append(DisplayBackendConfiguration(backend_type, host, port))
 
     general = _mapping(data.get("general", {}), "general", report)
-    _known_fields(general, {"timezone", "day_start"}, "general", report)
-    timezone_value = general.get("timezone")
-    timezone: ZoneInfo | None = None
-    if not isinstance(timezone_value, str) or not timezone_value:
-        report("general.timezone", "is required and must be a valid IANA timezone identifier", logging.ERROR)
-    elif timezone_value in _TIMEZONE_ABBREVIATIONS:
-        report("general.timezone", "must be an IANA timezone identifier, not a timezone abbreviation", logging.ERROR)
-    elif timezone_value in _NON_IANA_TIMEZONE_KEYS:
-        report("general.timezone", "is not a portable IANA timezone identifier", logging.ERROR)
-    elif timezone_value not in available_timezones():
-        report("general.timezone", "is not a recognized IANA timezone identifier", logging.ERROR)
-    else:
-        try:
-            timezone = ZoneInfo(timezone_value)
-        except (ValueError, ZoneInfoNotFoundError) as error:
-            report("general.timezone", f"is not a valid IANA timezone identifier: {error}", logging.ERROR)
+    _known_fields(general, {"day_start"}, "general", report)
 
     if "day_start" not in general:
         use_default("general.day_start", "'06:00'")
@@ -780,13 +743,11 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     if fatal_diagnostics:
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
 
-    assert timezone is not None
     assert presentation_region is not None
     assert display_backends
     return ApplicationConfiguration(
         file=file,
         display_backends=tuple(display_backends),
-        timezone=timezone,
         day_start=day_start,
         content_directory=content_directory,
         reveal=reveal,

@@ -79,7 +79,7 @@ def make_snapshot(
             "min_font_size": 12,
             "max_font_size": 32,
         },
-        scheduling=SchedulingContext(display_date, "Etc/UTC", "06:00"),
+        scheduling=SchedulingContext(display_date, "06:00"),
     )
 
 
@@ -271,7 +271,7 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
         presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
         reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
         layout={"text_size": 42},
-        scheduling=SchedulingContext(date(2026, 10, 26), "America/New_York", "06:00"),
+        scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
     state_path = tmp_path / "state.json"
     PersistentStateStore(state_path).commit(proposal, snapshot)
@@ -320,18 +320,19 @@ def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -
         PersistentStateStore(state_path).load()
 
 
-def test_state_v4_excludes_global_history_and_font_contents(tmp_path: Path) -> None:
+def test_state_v5_excludes_timezone_global_history_and_font_contents(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    assert document["format_version"] == 4
+    assert document["format_version"] == 5
     assert "global_history" not in document["state"]
     assert document["state"]["snapshot"]["font_identifier"] == "test-font"
     assert "font" not in document["state"]["snapshot"]
+    assert set(document["state"]["snapshot"]["scheduling"]) == {"display_date", "day_start"}
     assert "sha256" in document and "sha256" not in document["state"]["snapshot"]
 
 
-def test_format_four_persists_background_decoration_and_effective_region(tmp_path: Path) -> None:
+def test_format_five_persists_background_decoration_and_effective_region(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     snapshot = replace(
         make_snapshot("Persisted."),
@@ -364,7 +365,7 @@ def test_format_four_persists_background_decoration_and_effective_region(tmp_pat
 
 
 @pytest.mark.parametrize("field", ["background_identifier", "decoration_identifier"])
-def test_format_four_requires_visual_resource_fields(tmp_path: Path, field: str) -> None:
+def test_format_five_requires_visual_resource_fields(tmp_path: Path, field: str) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Persisted.")
     document = json.loads(store.path.read_text())
@@ -379,7 +380,7 @@ def test_unsupported_development_versions_are_not_modified(tmp_path: Path, versi
     state_path = tmp_path / "state.json"
     original = json.dumps({"format_version": version, "state": {}, "sha256": "bad"}).encode()
     state_path.write_bytes(original)
-    with pytest.raises(UnsupportedStateVersionError, match="version 4 is required"):
+    with pytest.raises(UnsupportedStateVersionError, match="version 5 is required"):
         PersistentStateStore(state_path).load()
     assert state_path.read_bytes() == original
 
@@ -662,7 +663,7 @@ def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) ->
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Committed.")
     document = json.loads(store.path.read_bytes())
-    assert document["format_version"] == 4
+    assert document["format_version"] == 5
     document["format_version"] = 1
     document["state"]["snapshot"]["highest_reveal_stage"] = document["state"].pop("highest_reveal_stage")
     _write_document(store.path, document)
@@ -672,6 +673,20 @@ def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) ->
         store.load()
     with pytest.raises(UnsupportedStateVersionError, match="format version 1"):
         store.advance_reveal_progress(1, 1)
+    assert store.path.read_bytes() == contents
+
+
+def test_format_four_state_is_rejected_without_modifying_its_bytes(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Committed.")
+    document = json.loads(store.path.read_bytes())
+    document["format_version"] = 4
+    _write_document(store.path, document)
+    contents = store.path.read_bytes()
+
+    with pytest.raises(UnsupportedStateVersionError, match="version 5 is required"):
+        store.load()
+
     assert store.path.read_bytes() == contents
 
 

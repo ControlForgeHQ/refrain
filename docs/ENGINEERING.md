@@ -113,7 +113,7 @@ In particular:
 - use systemd for supervised service operation;
 - use standard process streams for application logging;
 - use the local filesystem for ordinary application storage;
-- use standard timezone facilities for local scheduling.
+- use the operating system's local-time facilities for local scheduling.
 
 Avoid creating a custom service manager, log daemon, database service, or scheduler without a demonstrated need.
 
@@ -477,14 +477,14 @@ The authoritative operational state is stored in one UTF-8 JSON file.
 
 Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload.
 
-Format version 4 contains:
+Format version 5 contains:
 
 - `revision`: the positive, monotonically increasing committed selection revision;
 - `snapshot`: the current committed daily snapshot;
 - `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. The effective presentation region is stored in the existing `layout.presentation_region` representation. Format version 4 is retained; the snapshot does not contain resource bytes, paths, or image hashes.
+The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 4 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
 
 The snapshot does not contain font or image resource bytes, filesystem paths, or content digests.
 
@@ -663,7 +663,7 @@ The suffix is a random filesystem transaction name, not a second snapshot or art
 
 The version 1 UTF-8 JSON manifest contains an `artifacts` object and its canonical JSON SHA-256 checksum. Metadata records `format_version`, `revision`, `snapshot_sha256`, the relative `image_directory`, `image_size`, `mode`, and an ordered `stages` array containing exact filenames and PNG-file SHA-256 digests.
 
-The snapshot fingerprint covers quotation text and identity, the selected font identifier, presentation metadata, reveal schedule, layout, and complete scheduling context. It excludes reveal progress, repetition history, and global history.
+The snapshot fingerprint covers quotation text and identity, the selected font identifier, presentation metadata, reveal schedule, layout, and the complete format-5 scheduling context (display date and day-start time). It excludes reveal progress, repetition history, and global history.
 
 The fingerprint does not include font-file contents or font-content hashes. Changes to installed font resources do not independently invalidate existing prepared images.
 
@@ -1140,11 +1140,15 @@ Verify physical Waveshare operation with another enabled backend on the target R
 
 ### Scheduling
 
-Use timezone-aware date and time operations.
+Use timezone-aware datetimes for absolute instants and monotonic clocks for durations.
 
-Use the configured IANA timezone for display-day and reveal calculations.
+Use operating-system local civil time for display-day and reveal calculations. Resolve future wall-time deadlines with operating-system local-time rules; a timezone-aware value returned by `datetime.now().astimezone()` may contain only the current offset and is not sufficient to resolve future dates.
+
+Keep local wall-time conversion isolated so tests can inject deterministic local-time rules without changing the process timezone.
 
 Avoid assumptions that a local day always contains 24 elapsed hours.
+
+Resolve ambiguous wall times to their first occurrence and nonexistent wall times to the first valid instant after the gap, including non-hour offset transitions.
 
 Do not use fixed-duration sleeps as a substitute for correct calendar-boundary calculations.
 
@@ -1176,7 +1180,7 @@ Boundary observations held by `DisplayDayBoundaryObserver` are process-local. It
 
 ### Demo-session ownership and timing
 
-`run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Ignore production persistence paths in the CLI rather than resolving or opening them. Determine the initial display date through the existing timezone/day-start calculation once; do not create synthetic boundary observations or reevaluate wall time to drive demo stages.
+`run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Ignore production persistence paths in the CLI rather than resolving or opening them. Determine the initial display date through the existing OS-local/day-start calculation once; do not create synthetic boundary observations or reevaluate wall time to drive demo stages.
 
 Reuse the application selection, resource resolution, snapshot commitment, reveal-progress persistence, image recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the committed snapshot without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
 

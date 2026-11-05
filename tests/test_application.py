@@ -46,7 +46,6 @@ from refrain.information_view import InformationViewPreparationError
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
 general:
-  timezone: "America/Toronto"
   day_start: "06:00"
 content:
   directory: "content"

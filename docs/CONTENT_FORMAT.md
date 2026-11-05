@@ -129,7 +129,6 @@ Content-entry-specific information must not be stored in application configurati
 
 ```yaml
 general:
-  timezone: "America/Toronto"
   day_start: "06:00"
 
 content:
@@ -300,12 +299,9 @@ The backend retains its current image representation in memory and requires no s
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `general.timezone` | String | Yes | None |
 | `general.day_start` | Time string | No | `"06:00"` |
 
-`timezone` must be a valid IANA timezone identifier, such as `"America/Toronto"`.
-
-Timezone abbreviations such as `"EST"` are not accepted as substitutes for IANA identifiers.
+The host operating system supplies the local timezone and daylight-saving rules for all configured scheduling times. A `general.timezone` field is unsupported and is reported as an unknown field.
 
 `day_start` specifies the local wall-clock time at which a new logical display day normally begins.
 
@@ -369,7 +365,7 @@ Directory organization does not influence content eligibility, priority, or sele
 | `reveal.source` | Time string | No | `"12:00"` |
 | `reveal.attribution` | Time string | No | `"18:00"` |
 
-The global reveal schedule establishes default local times for source and attribution.
+The global reveal schedule establishes default host-local times for source and attribution.
 
 The initial presentation stage, which reveals the quotation, occurs at `general.day_start`.
 

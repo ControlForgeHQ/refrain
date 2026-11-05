@@ -26,7 +26,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
     config_path.write_text(
         yaml.safe_dump(
             {
-                "general": {"timezone": "Etc/UTC"},
+                "general": {"day_start": "06:00"},
                 "content": {"directory": "content"},
                 "display": {"backends": [{"type": "window"}]},
                 "layout": {
@@ -89,7 +89,6 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
         },
         scheduling=SchedulingContext(
             date(2026, 10, 26),
-            config.timezone.key,
             config.day_start.strftime("%H:%M"),
         ),
     )

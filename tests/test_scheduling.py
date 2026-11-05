@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,13 +24,10 @@ from refrain import (
 from refrain.renderer import CompositionVisibility
 
 
-def make_configuration(
-    *, timezone_name: str = "America/New_York", day_start: str = "06:00"
-) -> ApplicationConfiguration:
+def make_configuration(*, day_start: str = "06:00") -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),
         display_backends=(DisplayBackendConfiguration("window"),),
-        timezone=ZoneInfo(timezone_name),
         day_start=time.fromisoformat(day_start),
         content_directory=Path("/content"),
         reveal=RevealSchedule(time(12), time(18)),
@@ -45,7 +42,6 @@ def make_configuration(
 def make_state(
     *,
     display_date: date = date(2026, 10, 26),
-    timezone_name: str = "America/New_York",
     day_start: str = "06:00",
     reveal_schedule: dict[str, str] | None = None,
     metadata: dict[str, str | None] | None = None,
@@ -61,7 +57,7 @@ def make_state(
         or {"presentation_style": "centered", "source": "Source", "attribution": "Author"},
         reveal_schedule=reveal_schedule or {"quotation": day_start, "source": "12:00", "attribution": "18:00"},
         layout={},
-        scheduling=SchedulingContext(display_date, timezone_name, day_start),
+        scheduling=SchedulingContext(display_date, day_start),
     )
     return PersistentState(
         revision=revision,
@@ -105,12 +101,50 @@ def test_initial_date_uses_calendar_arithmetic_across_dst(current_time: datetime
     assert decision.display_date == expected_date
 
 
-def test_initial_date_uses_configured_timezone_not_timestamp_timezone() -> None:
+def test_fall_back_second_occurrence_remains_on_display_date_after_first_boundary() -> None:
+    config = make_configuration(day_start="01:30")
+    current_time = datetime(2026, 11, 1, 1, 0, fold=1, tzinfo=ZoneInfo("America/New_York"))
+
+    decision = evaluate_scheduling(current_time, config, None)
+
+    assert decision.display_date == date(2026, 11, 1)
+
+
+def test_initial_date_uses_operating_system_local_timezone() -> None:
     current_time = datetime(2026, 10, 26, 9, 30, tzinfo=timezone.utc)
 
     decision = evaluate_scheduling(current_time, make_configuration(), None)
 
     assert decision.display_date == date(2026, 10, 25)
+
+
+@pytest.mark.parametrize(
+    ("offset", "current_time"),
+    [
+        (timedelta(hours=5, minutes=45), datetime(2026, 10, 26, 0, 15, tzinfo=timezone.utc)),
+        (timedelta(hours=-3, minutes=-30), datetime(2026, 10, 26, 9, 30, tzinfo=timezone.utc)),
+    ],
+)
+def test_initial_date_supports_non_hour_positive_and_negative_offsets(
+    set_local_timezone, offset: timedelta, current_time: datetime
+) -> None:
+    set_local_timezone(timezone(offset))
+
+    decision = evaluate_scheduling(current_time, make_configuration(), None)
+
+    assert decision.display_date == date(2026, 10, 26)
+
+
+def test_timezone_change_does_not_authorize_reselection(set_local_timezone) -> None:
+    state = make_state(highest_reveal_stage=1)
+    current_time = datetime(2026, 10, 26, 12, 30, tzinfo=timezone.utc)
+    set_local_timezone(timezone(timedelta(hours=5, minutes=45)))
+
+    decision = evaluate_scheduling(current_time, make_configuration(), state)
+
+    assert decision.action is SchedulingAction.ADVANCE_REVEAL
+    assert decision.action is not SchedulingAction.NEW_SELECTION
+    assert decision.required_reveal_stage == 2
 
 
 @pytest.mark.parametrize(

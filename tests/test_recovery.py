@@ -64,7 +64,7 @@ def committed_state(tmp_path: Path):
             "min_font_size": 12,
             "max_font_size": 32,
         },
-        scheduling=SchedulingContext(date(2026, 10, 26), "Etc/UTC", "06:00"),
+        scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
     quotation = Quotation(text, normalize_quotation(text))
     entry = ContentEntry(

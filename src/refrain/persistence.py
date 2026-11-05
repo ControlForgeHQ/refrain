@@ -19,7 +19,7 @@ from typing import Any
 from .content import normalize_quotation
 from .selection import SelectionProposal
 
-_FORMAT_VERSION = 4
+_FORMAT_VERSION = 5
 _DEFAULT_HISTORY_SEGMENT_SIZE = 1_048_576
 _DEFAULT_HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -111,13 +111,11 @@ class SchedulingContext:
     """Resolved scheduling inputs associated with one committed display date."""
 
     display_date: date
-    timezone: str
     day_start: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.display_date, date) or isinstance(self.display_date, datetime):
             raise ValueError("display_date must be a date")
-        _nonempty_string(self.timezone, "scheduling timezone")
         if not isinstance(self.day_start, str) or not _DAY_START.fullmatch(self.day_start):
             raise ValueError("day_start must be a valid HH:MM time")
 
@@ -487,11 +485,10 @@ def _decode_snapshot(value: object) -> DailySnapshot:
     scheduling_data = _require_mapping(
         data["scheduling"],
         "snapshot.scheduling",
-        {"display_date", "timezone", "day_start"},
+        {"display_date", "day_start"},
     )
     scheduling = SchedulingContext(
         display_date=_parse_date(scheduling_data["display_date"], "snapshot.scheduling.display_date"),
-        timezone=_nonempty_string(scheduling_data["timezone"], "snapshot.scheduling.timezone"),
         day_start=scheduling_data["day_start"],
     )
     return DailySnapshot(
@@ -514,7 +511,7 @@ def _decode_document(value: object) -> PersistentState:
         raise StateRecoveryError("persistent-state format_version must be an integer")
     if version != _FORMAT_VERSION:
         raise UnsupportedStateVersionError(
-            f"unsupported persistent-state format version {version}; version 4 is required. "
+            f"unsupported persistent-state format version {version}; version 5 is required. "
             "Archive or remove this development state file before starting Refrain; it was not modified."
         )
     payload = document["state"]
@@ -571,7 +568,6 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
             "layout": _thaw_json(snapshot.layout),
             "scheduling": {
                 "display_date": snapshot.display_date.isoformat(),
-                "timezone": snapshot.scheduling.timezone,
                 "day_start": snapshot.scheduling.day_start,
             },
         },

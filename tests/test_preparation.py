@@ -58,7 +58,7 @@ def make_snapshot(
         presentation_metadata=metadata,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout=_LAYOUT if layout is None else layout,
-        scheduling=SchedulingContext(date(2026, 10, 26), "Etc/UTC", "06:00"),
+        scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
 
 

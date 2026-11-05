@@ -39,7 +39,7 @@ def snapshot() -> DailySnapshot:
         presentation_metadata={"source": "Collection", "attribution": "Author", "presentation_style": "centered"},
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout={"image_size": (32, 24), "nested": {"values": [1, True, None]}},
-        scheduling=SchedulingContext(date(2026, 10, 26), "Etc/UTC", "06:00"),
+        scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
 
 
@@ -111,8 +111,8 @@ def test_revisions_have_distinct_locations(store, snapshot, images) -> None:
         {"presentation_metadata": {"source": "Changed"}},
         {"reveal_schedule": {"quotation": "07:00"}},
         {"layout": {"image_size": (32, 24), "other": 1}},
-        {"scheduling": SchedulingContext(date(2026, 10, 27), "Etc/UTC", "06:00")},
-        {"scheduling": SchedulingContext(date(2026, 10, 26), "Europe/London", "07:00")},
+        {"scheduling": SchedulingContext(date(2026, 10, 27), "06:00")},
+        {"scheduling": SchedulingContext(date(2026, 10, 26), "07:00")},
     ],
 )
 def test_same_revision_does_not_override_snapshot_association(store, snapshot, images, changes) -> None:

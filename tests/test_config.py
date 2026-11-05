@@ -25,7 +25,7 @@ from refrain import (
 
 def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
-        "general": {"timezone": "America/Toronto"},
+        "general": {},
         "content": {"directory": "content"},
         "display": {"backends": [{"type": "window"}]},
         "layout": {
@@ -432,7 +432,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
 
     config = load_application_config(config_path)
 
-    assert config.timezone.key == "America/Toronto"
+    assert not hasattr(config, "timezone")
     assert [backend.type for backend in config.display_backends] == ["window"]
     assert config.day_start == time(6)
     assert config.content_directory == tmp_path / "content"
@@ -745,10 +745,10 @@ def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, ca
     )
     config = load_application_config(write_config(tmp_path / "config.yaml", config_data))
 
-    assert config.timezone.key == "UTC"
     assert config.default_fonts == ("lora",)
     assert 1 not in config.fonts
     assert "general[1]" in caplog.text
+    assert "general.timezone" in caplog.text
     assert "layout.fonts.available[1]" in caplog.text
     assert "ignored" in caplog.text
 
@@ -815,11 +815,6 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
 @pytest.mark.parametrize(
     ("data", "expected_field"),
     [
-        ({"general": {}}, "general.timezone"),
-        (configuration_data(general={"timezone": True}), "general.timezone"),
-        (configuration_data(general={"timezone": "Not/A_Zone"}), "general.timezone"),
-        (configuration_data(general={"timezone": "localtime"}), "general.timezone"),
-        (configuration_data(general={"timezone": "EST"}), "general.timezone"),
         (
             configuration_data(
                 layout={
@@ -885,6 +880,7 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
     assert config.reveal.source == time(12)
     assert "using documented defaults" in caplog.text
     assert "general.day_start" in caplog.text
+    assert "general.timezone" in caplog.text
     assert "reveal.quotation" in caplog.text
     assert "is not a supported configuration field; it is ignored" in caplog.text
     assert "reveal.source" in caplog.text

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from zoneinfo import ZoneInfo
@@ -27,13 +27,10 @@ from refrain import (
 )
 
 
-def make_configuration(
-    *, timezone_name: str = "America/New_York", day_start: str = "06:00"
-) -> ApplicationConfiguration:
+def make_configuration(*, day_start: str = "06:00") -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),
         display_backends=(DisplayBackendConfiguration("window"),),
-        timezone=ZoneInfo(timezone_name),
         day_start=time.fromisoformat(day_start),
         content_directory=Path("/content"),
         reveal=RevealSchedule(time(12), time(18)),
@@ -51,7 +48,6 @@ def make_state(
     day_start: str = "06:00",
     reveal_schedule: dict[str, str] | None = None,
     highest_reveal_stage: int = 0,
-    timezone_name: str = "America/New_York",
 ) -> PersistentState:
     text = "A committed quotation."
     snapshot = DailySnapshot(
@@ -61,7 +57,7 @@ def make_state(
         presentation_metadata={"presentation_style": "centered", "source": "Source", "attribution": "Author"},
         reveal_schedule=reveal_schedule or {"quotation": day_start, "source": "12:00", "attribution": "18:00"},
         layout={},
-        scheduling=SchedulingContext(display_date, timezone_name, day_start),
+        scheduling=SchedulingContext(display_date, day_start),
     )
     return PersistentState(
         revision=4,
@@ -185,6 +181,16 @@ def test_first_observation_after_startup_does_not_infer_a_historical_boundary() 
     assert observer.observe(datetime(2026, 10, 27, 8, 0, tzinfo=ZoneInfo("America/New_York")), 100.0, 4) is None
 
 
+def test_host_timezone_change_does_not_create_a_display_boundary(set_local_timezone) -> None:
+    configuration = make_configuration(day_start="00:00")
+    observer = DisplayDayBoundaryObserver(configuration)
+    observer.observe(datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc), 100.0, 4)
+    set_local_timezone(timezone(timedelta(hours=14)))
+
+    assert observer.observe(datetime(2026, 10, 26, 10, 1, tzinfo=timezone.utc), 160.0, 4) is None
+    assert observer.observe(datetime(2026, 10, 26, 10, 2, tzinfo=timezone.utc), 220.0, 4) is None
+
+
 @pytest.mark.parametrize(
     ("before", "after", "expected"),
     [
@@ -231,6 +237,14 @@ def test_observer_does_not_duplicate_a_fall_back_ambiguous_day_start() -> None:
     assert second_occurrence is None
 
 
+def test_restart_during_second_fold_does_not_recognize_ambiguous_boundary_again() -> None:
+    observer = DisplayDayBoundaryObserver(make_configuration(day_start="01:30"))
+    zone = ZoneInfo("America/New_York")
+
+    assert observer.observe(datetime(2026, 11, 1, 1, 0, fold=1, tzinfo=zone), 100.0, 5) is None
+    assert observer.observe(datetime(2026, 11, 1, 1, 31, fold=1, tzinfo=zone), 1960.0, 5) is None
+
+
 def test_next_deadline_uses_committed_reveal_schedule_before_day_boundary() -> None:
     zone = ZoneInfo("America/New_York")
     state = make_state()
@@ -257,17 +271,16 @@ def test_missed_reveal_time_is_due_immediately_and_simultaneous_events_share_dea
     assert simultaneous == datetime(2026, 10, 26, 12, 0, tzinfo=zone)
 
 
-def test_reveal_deadline_uses_snapshot_timezone_and_returns_configured_timezone() -> None:
+def test_reveal_deadline_uses_operating_system_local_timezone_and_returns_utc() -> None:
     zone = ZoneInfo("America/New_York")
     state = make_state(
-        timezone_name="UTC",
         highest_reveal_stage=1,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
     )
 
     deadline = next_scheduling_deadline(datetime(2026, 10, 26, 10, 0, tzinfo=zone), make_configuration(), state)
 
-    assert deadline == datetime(2026, 10, 26, 14, 0, tzinfo=zone)
+    assert deadline == datetime(2026, 10, 26, 22, 0, tzinfo=timezone.utc)
 
 
 def test_next_deadline_resolves_day_start_across_dst_gap_and_fold() -> None:
@@ -291,9 +304,71 @@ def test_next_deadline_resolves_day_start_across_dst_gap_and_fold() -> None:
         datetime(2026, 11, 1, 1, 15, fold=1, tzinfo=ZoneInfo("America/New_York")), fall_config, fall_state
     )
 
-    assert spring_deadline == datetime(2026, 3, 8, 3, 0, tzinfo=ZoneInfo("America/New_York"))
-    assert fall_deadline == datetime(2026, 11, 1, 1, 30, fold=0, tzinfo=ZoneInfo("America/New_York"))
-    assert second_fold_deadline == datetime(2026, 11, 2, 1, 30, tzinfo=ZoneInfo("America/New_York"))
+    assert spring_deadline == datetime(2026, 3, 8, 7, 0, tzinfo=timezone.utc)
+    assert fall_deadline == datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)
+    assert second_fold_deadline == datetime(2026, 11, 2, 6, 30, tzinfo=timezone.utc)
+
+
+def test_nonexistent_reveal_time_becomes_due_at_first_valid_local_instant() -> None:
+    state = make_state(
+        display_date=date(2026, 3, 8),
+        day_start="01:00",
+        reveal_schedule={"quotation": "01:00", "source": "02:30", "attribution": "18:00"},
+    )
+    before_gap = datetime(2026, 3, 8, 1, 45, tzinfo=ZoneInfo("America/New_York"))
+
+    deadline = next_scheduling_deadline(before_gap, make_configuration(day_start="01:00"), state)
+    due = evaluate_scheduling(
+        datetime(2026, 3, 8, 7, 0, tzinfo=timezone.utc),
+        make_configuration(day_start="01:00"),
+        state,
+    )
+
+    assert deadline == datetime(2026, 3, 8, 7, 0, tzinfo=timezone.utc)
+    assert due.action is SchedulingAction.ADVANCE_REVEAL
+    assert due.required_reveal_stage == 1
+
+
+def test_ambiguous_reveal_time_uses_first_occurrence_and_never_regresses() -> None:
+    state = make_state(
+        display_date=date(2026, 11, 1),
+        day_start="00:30",
+        reveal_schedule={"quotation": "00:30", "source": "01:30", "attribution": "02:00"},
+    )
+    before_first_occurrence = datetime(2026, 11, 1, 1, 25, fold=0, tzinfo=ZoneInfo("America/New_York"))
+
+    deadline = next_scheduling_deadline(before_first_occurrence, make_configuration(day_start="00:30"), state)
+    first_occurrence = evaluate_scheduling(
+        datetime(2026, 11, 1, 5, 35, tzinfo=timezone.utc), make_configuration(day_start="00:30"), state
+    )
+    after_fallback = evaluate_scheduling(
+        datetime(2026, 11, 1, 6, 10, tzinfo=timezone.utc),
+        make_configuration(day_start="00:30"),
+        replace(state, highest_reveal_stage=1),
+    )
+
+    assert deadline == datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)
+    assert first_occurrence.required_reveal_stage == 1
+    assert after_fallback.required_reveal_stage == 1
+    assert after_fallback.action is SchedulingAction.NO_ACTION
+
+
+def test_half_hour_dst_gap_resolves_without_assuming_hour_transitions(set_local_timezone) -> None:
+    zone = ZoneInfo("Australia/Lord_Howe")
+    set_local_timezone(zone)
+    state = make_state(
+        display_date=date(2026, 10, 4),
+        day_start="01:00",
+        reveal_schedule={"quotation": "01:00", "source": "02:15", "attribution": "18:00"},
+    )
+
+    deadline = next_scheduling_deadline(
+        datetime(2026, 10, 4, 1, 45, tzinfo=zone),
+        make_configuration(day_start="01:00"),
+        state,
+    )
+
+    assert deadline == datetime(2026, 10, 3, 15, 30, tzinfo=timezone.utc)
 
 
 class FakeWaitEvent:
