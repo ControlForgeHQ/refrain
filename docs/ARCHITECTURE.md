@@ -125,7 +125,7 @@ The runtime should avoid unnecessary memory use and background processing, parti
 
 **Daily Selection:** The individual quotation assigned to the current display day.
 
-**Daily Snapshot:** A persistent copy of the selected quotation and committed presentation settings sufficient to prepare its presentation independently of the original content entry. Font resources are resolved separately.
+**Daily Snapshot:** A persistent copy of the selected quotation and committed presentation settings sufficient to prepare its presentation independently of the original content entry. Font, background, and decoration resources are resolved separately.
 
 **Selection Commitment:** The successful durable recording of a daily snapshot, updated repetition history, selection revision, and associated operational context as one consistent authoritative state.
 
@@ -1009,7 +1009,7 @@ Application configuration defines a default selection pool for each resource typ
 
 An omitted resource configuration preserves the plain paper-white, undecorated presentation.
 
-Background and decoration selection occurs after quotation selection and before committing the daily snapshot.
+Decoration, font, and background selection occurs after quotation selection and before committing the daily snapshot.
 
 For each selected quotation, Refrain resolves the decoration first:
 
@@ -1017,7 +1017,15 @@ For each selected quotation, Refrain resolves the decoration first:
 2. An explicit decoration value of `"none"` suppresses decoration selection.
 3. Otherwise, select from the effective default decoration pool.
 
-Refrain then resolves the background:
+The selected decoration may provide a preferred font, a preferred background, and an effective presentation-region override.
+
+Font selection follows this precedence:
+
+1. Use the content entry's explicit font when available.
+2. Otherwise, use the selected decoration's preferred font when available.
+3. Otherwise, select from the effective default font pool.
+
+Background selection follows this precedence:
 
 1. Use the content entry's explicit background when available.
 2. An explicit background value of `"none"` suppresses all background selection, including a decoration's preferred background.
@@ -1026,13 +1034,15 @@ Refrain then resolves the background:
 
 A decoration may explicitly prefer `"none"` as its background. This suppresses automatic background selection unless the content entry supplies its own background preference.
 
-When a requested resource is unavailable, Refrain retains an otherwise valid content entry and follows the corresponding default-pool selection rules, with an appropriate diagnostic. Invalid decoration registrations must not make unrelated backgrounds or decorations unavailable.
+When a requested resource is unavailable, Refrain retains an otherwise valid content entry and proceeds to the next applicable preference, with an appropriate diagnostic.
 
-Each effective default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
+Invalid decoration registrations must not make unrelated fonts, backgrounds, or decorations unavailable.
 
-The selected background identifier, decoration identifier, and effective presentation region are committed with the daily presentation. They are not part of quotation identity or repetition history.
+Each effective background and decoration default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
 
-Both resource selections remain fixed throughout the committed display day, including after restarts.
+The selected font, background, and decoration identifiers and effective presentation region are committed with the daily presentation. They are not part of quotation identity or repetition history.
+
+These selections remain fixed throughout the committed display day, including after restarts.
 
 The registries, valid identifiers, image requirements, pool configuration, and content-entry overrides are specified in `docs/CONTENT_FORMAT.md`.
 
@@ -1513,7 +1523,7 @@ Normal startup performs the following logical operations:
 4. Load and validate content sources when a new selection is required, constructing an effective library from accepted entries.
 5. Perform and commit a new selection when required and when a usable effective content library is available.
 6. Verify that all required reveal-stage images are available and valid for the committed selection.
-7. Prepare or recover any missing presentation artifacts using available font resources.
+7. Prepare or recover any missing presentation artifacts using available presentation resources and the committed snapshot's resolved layout.
 8. Initialize configured display backends independently.
 9. If automatic information-view presentation is enabled, prepare and request publication of the information view.
 10. Observe the configured information-view duration and transition to daily presentation when it expires, or proceed directly when automatic presentation is disabled or cannot be completed.

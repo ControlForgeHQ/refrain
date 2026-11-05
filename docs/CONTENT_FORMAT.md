@@ -655,6 +655,7 @@ Each decoration may define:
 
 - an image resource;
 - an effective presentation-region override;
+- a preferred font identifier;
 - a preferred background identifier, including `"none"`.
 
 The reserved identifier `"none"` represents no decoration. It is always available and cannot be registered or overridden.
@@ -663,7 +664,7 @@ The reserved identifier `"none"` represents no decoration. It is always availabl
 
 Refrain includes a small collection of restrained graphical decorations such as borders, corner ornaments, and flourishes.
 
-Each bundled decoration has a stable identifier and may include its own presentation-region and background preferences.
+Each bundled decoration has a stable identifier and may include its own presentation-region, font, and background preferences.
 
 The exact bundled identifiers and their associated metadata are documented alongside the distributed assets when introduced.
 
