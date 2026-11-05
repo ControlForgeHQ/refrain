@@ -151,6 +151,77 @@ def test_missing_committed_background_never_reselects_and_reuses_valid_images(
     assert not caplog.records
 
 
+def test_missing_committed_decoration_is_omitted_and_region_is_preserved(
+    committed_state, artifact_store, caplog
+) -> None:
+    state, _ = committed_state
+    region = {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}
+    snapshot = replace(
+        state.snapshot,
+        decoration_identifier="removed-decoration",
+        layout={**state.snapshot.layout, "presentation_region": region},
+    )
+    state = replace(state, snapshot=snapshot)
+
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, {})
+
+    with result.load_stage(0) as image:
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert state.snapshot.decoration_identifier == "removed-decoration"
+    assert dict(state.snapshot.layout["presentation_region"]) == region
+    assert "Committed decoration 'removed-decoration' is unavailable" in caplog.text
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"decoration_registry": None}])
+@pytest.mark.parametrize("prepared", [False, True])
+def test_selected_decoration_requires_registry_before_reuse(
+    committed_state, artifact_store, monkeypatch, caplog, kwargs, prepared
+) -> None:
+    state, state_path = committed_state
+    snapshot = replace(state.snapshot, decoration_identifier="removed-decoration")
+    state = replace(state, snapshot=snapshot)
+    state_bytes = state_path.read_bytes()
+    if prepared:
+        images = prepare_daily_images(state.snapshot, _STAGES, _FONT_REGISTRY, {}, {})
+        try:
+            artifact_store.store(state.revision, state.snapshot, images)
+        finally:
+            for image in images:
+                image.close()
+    caplog.clear()
+    monkeypatch.setattr(PreparedImageArtifactStore, "load", lambda *_args, **_kwargs: pytest.fail("unexpected load"))
+
+    with pytest.raises(DailyImagePreparationError, match="decoration_registry must be supplied"):
+        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, **kwargs)
+
+    assert state.snapshot.decoration_identifier == "removed-decoration"
+    assert state_path.read_bytes() == state_bytes
+    assert not caplog.records
+
+
+def test_valid_prepared_images_are_reused_after_decoration_changes(
+    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, _ = committed_state
+    snapshot = replace(
+        state.snapshot,
+        decoration_identifier="custom-overlay",
+        layout={**state.snapshot.layout, "presentation_region": {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}},
+    )
+    state = replace(state, snapshot=snapshot)
+    images = prepare_daily_images(snapshot, _STAGES, _FONT_REGISTRY, {}, {})
+    try:
+        prepared = artifact_store.store(state.revision, snapshot, images)
+    finally:
+        for image in images:
+            image.close()
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args, **_kwargs: pytest.fail("unexpected rendering"))
+
+    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, {})
+
+    assert recovered == prepared
+
+
 def test_reuses_complete_artifacts_without_preparing_or_writing(
     committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:

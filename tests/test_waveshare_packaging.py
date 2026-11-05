@@ -11,6 +11,7 @@ from zipfile import ZipFile
 _ROOT = Path(__file__).parent.parent
 _LIBRARIES = {f"DEV_Config_{bits}_{variant}.so" for bits in ("32", "64") for variant in ("b", "w")}
 _BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
+_DECORATIONS = ("ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders")
 
 
 def _copy_build_tree(project: Path) -> Path:
@@ -117,6 +118,8 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
         assert any(name.endswith("assets/README.md") for name in names)
         for identifier in _BACKGROUNDS:
             assert any(name.endswith(f"assets/backgrounds/{identifier}.png") for name in names)
+        for identifier in _DECORATIONS:
+            assert any(name.endswith(f"assets/decorations/{identifier}.png") for name in names)
 
     installed = tmp_path / "installed"
     subprocess.run(
@@ -143,6 +146,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
             (
                 "from importlib.resources import files; "
                 "from PIL import Image; "
+                "from refrain import DecorationResource, load_decoration_image; "
                 "root=files('refrain'); "
                 "assert root.joinpath('assets','branding','controlforge-logo.png').is_file(); "
                 "assert root.joinpath('assets','fonts','orbitron','Orbitron-Regular.ttf').is_file(); "
@@ -158,7 +162,13 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "image.load(); "
                 "assert isinstance(image.getpixel((0,0)),tuple); "
                 "image.close(); "
-                "stream.close()"
+                "stream.close(); "
+                "identifiers=('ethereal','hex','lower-flourish','simple-border','top-bottom-borders'); "
+                "resources=[DecorationResource(name,root.joinpath('assets','decorations',name+'.png'),True) "
+                "for name in identifiers]; "
+                "images=[load_decoration_image(resource) for resource in resources]; "
+                "assert all(image.mode == 'RGBA' and image.size == (1600,1200) for image in images); "
+                "[image.close() for image in images]"
             ),
         ],
         cwd=tmp_path,

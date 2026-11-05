@@ -168,6 +168,115 @@ def test_background_pool_selects_distinct_usable_members(workspace: Workspace) -
     assert application._resolve_background(configuration, None, RecordingChooser()) == "cloth"
 
 
+def test_decoration_preferences_resolve_before_font_background_and_region(workspace: Workspace) -> None:
+    overlay = workspace.root / "overlay.png"
+    Image.new("RGBA", (1600, 1200), (1, 2, 3, 128)).save(overlay)
+    workspace.config.write_text(
+        _CONFIG.replace(
+            "  fonts:",
+            '  backgrounds: {default: ["canvas"]}\n'
+            "  decorations:\n"
+            "    available:\n"
+            '      custom: {image: "overlay.png", font: "source-sans-3", background: "ethereal", '
+            "presentation_region: {x: 0.12, y: 0.18, width: 0.7, height: 0.6}}\n"
+            '    default: ["none"]\n'
+            "  fonts:",
+        )
+    )
+    ordinary(workspace, extra='decoration: "custom"\n')
+    configuration = application.load_application_config(workspace.config)
+
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+
+    assert snapshot.decoration_identifier == "custom"
+    assert snapshot.font_identifier == "source-sans-3"
+    assert snapshot.background_identifier == "ethereal"
+    assert dict(snapshot.layout["presentation_region"]) == {
+        "x": 0.12,
+        "y": 0.18,
+        "width": 0.7,
+        "height": 0.6,
+    }
+
+
+def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
+    overlay = workspace.root / "overlay.png"
+    Image.new("RGBA", (1600, 1200)).save(overlay)
+    workspace.config.write_text(
+        _CONFIG.replace(
+            "  fonts:",
+            '  backgrounds: {default: ["canvas"]}\n'
+            "  decorations:\n"
+            '    available: {custom: {image: "overlay.png", font: "source-sans-3", background: "ethereal", '
+            "presentation_region: {x: 0.12, y: 0.18, width: 0.7, height: 0.6}}}\n"
+            '    default: ["custom"]\n'
+            "  fonts:",
+        )
+    )
+    ordinary(workspace, extra='decoration: "none"\nfont: "lora"\nbackground: "none"\n')
+    configuration = application.load_application_config(workspace.config)
+
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+
+    assert snapshot.decoration_identifier == "none"
+    assert snapshot.font_identifier == "lora"
+    assert snapshot.background_identifier == "none"
+    assert dict(snapshot.layout["presentation_region"]) == {
+        "x": 0.1,
+        "y": 0.15,
+        "width": 0.8,
+        "height": 0.55,
+    }
+
+
+def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace, caplog) -> None:
+    workspace.config.write_text(_CONFIG.replace("  fonts:", '  decorations: {default: ["hex"]}\n  fonts:'))
+    ordinary(workspace, extra='decoration: "not-registered"\n')
+
+    configuration = application.load_application_config(workspace.config)
+
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+
+    assert snapshot.decoration_identifier == "hex"
+    assert "Requested decoration 'not-registered'" in caplog.text
+
+
+def test_normal_runtime_recovers_missing_decoration_without_reselection(workspace: Workspace, caplog) -> None:
+    overlay = workspace.root / "overlay.png"
+    Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)).save(overlay)
+    workspace.config.write_text(
+        _CONFIG.replace(
+            "  fonts:",
+            "  decorations:\n"
+            '    available: {custom: {image: "overlay.png", '
+            "presentation_region: {x: 0.2, y: 0.3, width: 0.6, height: 0.4}}}\n"
+            '    default: ["custom"]\n'
+            "  fonts:",
+        )
+    )
+    ordinary(workspace)
+    first, first_display = workspace.run(at(10, 7))
+    snapshot = first.state.snapshot
+    assert snapshot.decoration_identifier == "custom"
+    assert dict(snapshot.layout["presentation_region"]) == {
+        "x": 0.2,
+        "y": 0.3,
+        "width": 0.6,
+        "height": 0.4,
+    }
+    assert first_display.images[-1].getpixel((10, 10)) == (227, 137, 147)
+
+    overlay.unlink()
+    for artifact in png_files(workspace.artifacts):
+        artifact.unlink()
+    second, second_display = workspace.run(at(10, 7))
+
+    assert second.state == first.state
+    assert dict(second.state.snapshot.layout["presentation_region"]) == dict(snapshot.layout["presentation_region"])
+    assert second_display.images[-1].getpixel((10, 10)) == (255, 255, 255)
+    assert "Committed decoration 'custom' is unavailable" in caplog.text
+
+
 def test_committed_background_survives_restart_config_changes_and_resource_loss(workspace: Workspace, caplog) -> None:
     path = workspace.root / "paper.png"
     with Image.new("RGB", (1600, 1200), (100, 140, 180)) as image:

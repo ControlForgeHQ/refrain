@@ -9,7 +9,7 @@ from .artifacts import (
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
-from .config import BackgroundResource, FontResource
+from .config import BackgroundResource, DecorationResource, FontResource
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -21,6 +21,7 @@ def recover_prepared_daily_images(
     stages: Sequence[CompositionVisibility],
     font_registry: Mapping[str, FontResource],
     background_registry: Mapping[str, BackgroundResource] | None = None,
+    decoration_registry: Mapping[str, DecorationResource] | None = None,
 ) -> PreparedImageArtifactSet:
     """Reuse or regenerate the complete images for an existing committed selection.
 
@@ -29,7 +30,8 @@ def recover_prepared_daily_images(
     Generated images remain caller-owned until publication and are closed here,
     whether publication succeeds or fails. The committed state is never modified.
     A background registry is required unless the committed background is ``"none"``,
-    including when prepared images can be reused.
+    including when prepared images can be reused. Missing committed decorations are
+    omitted during regeneration without changing the saved presentation region.
     """
     if not isinstance(state, PersistentState):
         raise TypeError("state must be a PersistentState")
@@ -42,6 +44,10 @@ def recover_prepared_daily_images(
     if background_registry is None and state.snapshot.background_identifier != "none":
         raise DailyImagePreparationError(
             "background_registry must be supplied when the committed background identifier is not 'none'"
+        )
+    if decoration_registry is None and state.snapshot.decoration_identifier != "none":
+        raise DailyImagePreparationError(
+            "decoration_registry must be supplied when the committed decoration identifier is not 'none'"
         )
 
     ordered_stages = tuple(stages)
@@ -63,7 +69,12 @@ def recover_prepared_daily_images(
     if existing is not None:
         return existing
 
-    images = prepare_daily_images(state.snapshot, ordered_stages, font_registry, background_registry)
+    if decoration_registry is None:
+        images = prepare_daily_images(state.snapshot, ordered_stages, font_registry, background_registry)
+    else:
+        images = prepare_daily_images(
+            state.snapshot, ordered_stages, font_registry, background_registry, decoration_registry
+        )
     try:
         return artifact_store.store(state.revision, state.snapshot, images)
     finally:

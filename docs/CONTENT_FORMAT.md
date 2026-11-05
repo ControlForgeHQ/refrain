@@ -662,11 +662,17 @@ The reserved identifier `"none"` represents no decoration. It is always availabl
 
 #### Bundled decorations
 
-Refrain includes a small collection of restrained graphical decorations such as borders, corner ornaments, and flourishes.
+Refrain automatically registers the following bundled overlays:
 
-Each bundled decoration has a stable identifier and may include its own presentation-region, font, and background preferences.
+| Identifier | Image |
+|---|---|
+| `ethereal` | `ethereal.png` |
+| `hex` | `hex.png` |
+| `lower-flourish` | `lower-flourish.png` |
+| `simple-border` | `simple-border.png` |
+| `top-bottom-borders` | `top-bottom-borders.png` |
 
-The exact bundled identifiers and their associated metadata are documented alongside the distributed assets when introduced.
+The bundled identifiers are reserved and stable. The bundled collection currently has no composition metadata; no font, background, or presentation-region preferences are implied by an image's appearance.
 
 Bundled decorations are registered automatically and remain available independently of the default decoration pool.
 

@@ -21,6 +21,7 @@ from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
     BackgroundResource,
+    DecorationResource,
     DisplayBackendConfiguration,
     FontResource,
     load_application_config,
@@ -135,6 +136,14 @@ def _resolve_background(configuration: ApplicationConfiguration, preferred: str 
     return chooser.choice(configuration.default_backgrounds)
 
 
+def _resolve_decoration(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
+    if preferred == "none" or preferred in configuration.decorations:
+        return preferred
+    if preferred is not None:
+        _LOGGER.warning("Requested decoration %r is not available; using the default decoration pool", preferred)
+    return chooser.choice(configuration.default_decorations)
+
+
 def _select_snapshot(
     configuration: ApplicationConfiguration,
     display_date,
@@ -169,14 +178,38 @@ def _select_snapshot(
         metadata["source"] = entry.source
     if entry.attribution is not None:
         metadata["attribution"] = entry.attribution
-    region = configuration.presentation_region
+    decoration_identifier = _resolve_decoration(configuration, entry.decoration, chooser)
+    decoration = configuration.decorations.get(decoration_identifier)
+    font_preference = entry.font
+    if font_preference is not None and font_preference not in configuration.fonts:
+        _LOGGER.warning("Requested font %r is not available; checking decoration preference", font_preference)
+        font_preference = None
+    if font_preference is None and decoration is not None:
+        font_preference = decoration.font
+    background_preference = entry.background
+    if (
+        background_preference is not None
+        and background_preference != "none"
+        and background_preference not in configuration.backgrounds
+    ):
+        _LOGGER.warning(
+            "Requested background %r is not available; checking decoration preference", background_preference
+        )
+        background_preference = None
+    if background_preference is None and decoration is not None:
+        background_preference = decoration.background
+    region = (
+        configuration.presentation_region
+        if decoration is None
+        else (decoration.presentation_region or configuration.presentation_region)
+    )
     try:
         snapshot = DailySnapshot(
             quotation_text=candidate.text,
             quotation_identity=candidate.identity,
-            font_identifier=_resolve_font(configuration, entry.font, chooser),
-            background_identifier=_resolve_background(configuration, entry.background, chooser),
-            decoration_identifier="none",
+            font_identifier=_resolve_font(configuration, font_preference, chooser),
+            background_identifier=_resolve_background(configuration, background_preference, chooser),
+            decoration_identifier=decoration_identifier,
             presentation_metadata=metadata,
             reveal_schedule={
                 "quotation": configuration.day_start.strftime("%H:%M"),
@@ -270,6 +303,7 @@ def _recover_images(
     artifact_store: PreparedImageArtifactStore,
     font_registry: Mapping[str, FontResource],
     background_registry: Mapping[str, BackgroundResource] | None = None,
+    decoration_registry: Mapping[str, DecorationResource] | None = None,
 ) -> PreparedImageArtifactSet:
     try:
         return recover_prepared_daily_images(
@@ -278,6 +312,7 @@ def _recover_images(
             resolve_reveal_stages(state.snapshot),
             font_registry,
             background_registry,
+            decoration_registry,
         )
     except DailyImagePreparationError as error:
         raise _RetryableApplicationError(f"cannot prepare daily images: {error}") from error
@@ -360,7 +395,13 @@ def run_startup(
 
     if stage > state.highest_reveal_stage:
         state = _persist_reveal_progress(store, state, stage)
-    artifacts = _recover_images(state, artifact_store, configuration.fonts, configuration.backgrounds)
+    artifacts = _recover_images(
+        state,
+        artifact_store,
+        configuration.fonts,
+        configuration.backgrounds,
+        configuration.decorations,
+    )
     coordinator = DisplayPublicationCoordinator(
         configuration.display_backends,
         backend_factory,
@@ -508,7 +549,13 @@ def run_application(
                             and desired_identity[0] != state.revision
                         ):
                             coordinator.clear_desired()
-                    artifacts = _recover_images(state, artifact_store, configuration.fonts, configuration.backgrounds)
+                    artifacts = _recover_images(
+                        state,
+                        artifact_store,
+                        configuration.fonts,
+                        configuration.backgrounds,
+                        configuration.decorations,
+                    )
                     artifact_revision = state.revision
                     try:
                         artifact_store.cleanup(state.revision)
@@ -710,7 +757,13 @@ def run_demo(
                     continue
                 assert state is not None
                 if artifacts is None:
-                    artifacts = _recover_images(state, artifact_store, configuration.fonts, configuration.backgrounds)
+                    artifacts = _recover_images(
+                        state,
+                        artifact_store,
+                        configuration.fonts,
+                        configuration.backgrounds,
+                        configuration.decorations,
+                    )
                     try:
                         artifact_store.cleanup(state.revision)
                     except ArtifactStoreError as error:

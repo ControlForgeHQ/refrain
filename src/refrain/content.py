@@ -24,6 +24,7 @@ _ENTRY_FIELDS = {
     "priority",
     "font",
     "background",
+    "decoration",
     "presentation_style",
     "eligibility",
     "reveal",
@@ -101,6 +102,7 @@ class ContentEntry:
     file: Optional[Path] = None
     presentation_style: str = "centered"
     background: Optional[str] = None
+    decoration: Optional[str] = None
 
 
 def normalize_quotation(text: str) -> str:
@@ -281,6 +283,10 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
     if "background" in data and (not isinstance(background, str) or not background.strip()):
         _diagnose(diagnostics, file, "background", "must be a nonempty, nonblank string when supplied")
 
+    decoration = data.get("decoration")
+    if "decoration" in data and (not isinstance(decoration, str) or not decoration.strip()):
+        _diagnose(diagnostics, file, "decoration", "must be a nonempty, nonblank string when supplied")
+
     priority = data.get("priority", 0)
     if isinstance(priority, bool) or not isinstance(priority, int):
         _diagnose(diagnostics, file, "priority", "must be a signed integer (booleans are not valid priorities)")
@@ -310,6 +316,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         reveal=reveal,  # type: ignore[arg-type]
         file=file,
         background=background,  # type: ignore[arg-type]
+        decoration=decoration,  # type: ignore[arg-type]
     )
 
 

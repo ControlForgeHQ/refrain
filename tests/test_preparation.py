@@ -18,7 +18,7 @@ from refrain import (
     prepare_daily_images,
     resolve_reveal_stages,
 )
-from refrain.config import BackgroundResource
+from refrain.config import BackgroundResource, DecorationResource
 
 _IMAGE_SIZE = (320, 240)
 _LAYOUT = {
@@ -158,6 +158,71 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
     finally:
         for image in images:
             image.close()
+
+
+def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_path: Path) -> None:
+    background_path = tmp_path / "paper.png"
+    decoration_path = tmp_path / "overlay.png"
+    with Image.new("RGB", (1600, 1200), (80, 120, 160)) as background:
+        background.save(background_path)
+    with Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)) as decoration:
+        decoration.putpixel((0, 0), (200, 20, 40, 0))
+        decoration.save(decoration_path)
+    snapshot = replace(
+        make_snapshot(
+            "lora",
+            source=None,
+            attribution=None,
+            layout={**_LAYOUT, "image_size": (1600, 1200)},
+        ),
+        background_identifier="paper",
+        decoration_identifier="overlay",
+    )
+
+    images = prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(),),
+        _FONT_REGISTRY,
+        {"paper": BackgroundResource("paper", background_path, False)},
+        {"overlay": DecorationResource("overlay", decoration_path, False)},
+    )
+    try:
+        image = images[0]
+        assert image.mode == "RGB"
+        assert image.getpixel((0, 0)) == (80, 120, 160)
+        assert image.getpixel((10, 10)) == (140, 70, 100)
+    finally:
+        for image in images:
+            image.close()
+
+
+def test_missing_committed_decoration_is_omitted_without_changing_snapshot(tmp_path: Path, caplog) -> None:
+    region = {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}
+    snapshot = replace(
+        make_snapshot("lora"),
+        decoration_identifier="removed-decoration",
+        layout={**_LAYOUT, "presentation_region": region},
+    )
+
+    images = prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY, {}, {})
+    try:
+        assert images[0].getpixel((0, 0)) == (255, 255, 255)
+        assert snapshot.decoration_identifier == "removed-decoration"
+        assert dict(snapshot.layout["presentation_region"]) == region
+        assert "Committed decoration 'removed-decoration' is unavailable" in caplog.text
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"decoration_registry": None}])
+def test_selected_decoration_requires_registry(kwargs, caplog) -> None:
+    snapshot = replace(make_snapshot("lora"), decoration_identifier="overlay")
+
+    with pytest.raises(DailyImagePreparationError, match="decoration_registry must be supplied"):
+        prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, {}, **kwargs)
+
+    assert not caplog.records
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])

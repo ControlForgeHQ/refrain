@@ -12,7 +12,15 @@ import pytest
 import yaml
 from PIL import Image
 
-from refrain import ApplicationConfigurationError, BackgroundResource, load_application_config, load_background_image
+from refrain import (
+    ApplicationConfigurationError,
+    BackgroundResource,
+    DecorationResource,
+    PresentationRegion,
+    load_application_config,
+    load_background_image,
+    load_decoration_image,
+)
 
 
 def configuration_data(**overrides: object) -> dict[str, object]:
@@ -46,6 +54,12 @@ def diagnostic_fields(path: Path) -> tuple[str, ...]:
 def background_configuration(**settings: object) -> dict[str, object]:
     data = configuration_data()
     data["layout"]["backgrounds"] = settings
+    return data
+
+
+def decoration_configuration(**settings: object) -> dict[str, object]:
+    data = configuration_data()
+    data["layout"]["decorations"] = settings
     return data
 
 
@@ -244,6 +258,162 @@ def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch
     assert "background read denied" in caplog.text
 
 
+def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
+
+    identifiers = {"ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"}
+    assert set(config.decorations) == identifiers
+    assert config.default_decorations == ("none",)
+    assert "none" not in config.decorations
+    assert all(resource.bundled for resource in config.decorations.values())
+    assert all(
+        resource.font is None and resource.background is None and resource.presentation_region is None
+        for resource in config.decorations.values()
+    )
+    assert not any(record.levelno >= 30 and "decoration" in record.message for record in caplog.records)
+    for identifier, resource in config.decorations.items():
+        assert resource.identifier == identifier
+        assert resource.path.name == f"{identifier}.png"
+        with load_decoration_image(resource) as image:
+            assert image.size == (1600, 1200)
+            assert image.mode == "RGBA"
+    with pytest.raises(TypeError):
+        config.decorations["other"] = config.decorations["hex"]
+
+
+@pytest.mark.parametrize("absolute", [True, False])
+def test_custom_decoration_path_and_metadata(tmp_path: Path, absolute: bool) -> None:
+    path = tmp_path / "flourish.png"
+    Image.new("RGBA", (1600, 1200), (12, 34, 56, 128)).save(path)
+    data = decoration_configuration(
+        available={
+            "custom-flourish": {
+                "image": str(path) if absolute else path.name,
+                "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6},
+                "font": "lora",
+                "background": "none",
+            }
+        },
+        default=["custom-flourish"],
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.decorations["custom-flourish"] == DecorationResource(
+        "custom-flourish",
+        path,
+        False,
+        PresentationRegion(0.1, 0.2, 0.7, 0.6),
+        "lora",
+        "none",
+    )
+    assert config.default_decorations == ("custom-flourish",)
+
+
+@pytest.mark.parametrize("kind", ["rgb", "size", "animation", "corrupt", "missing"])
+def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
+    bad_path = tmp_path / "bad.png"
+    good_path = tmp_path / "good.png"
+    Image.new("RGBA", (1600, 1200)).save(good_path)
+    if kind == "rgb":
+        Image.new("RGB", (1600, 1200)).save(bad_path)
+    elif kind == "size":
+        Image.new("RGBA", (1200, 1600)).save(bad_path)
+    elif kind == "animation":
+        Image.new("RGBA", (1600, 1200)).save(
+            bad_path, save_all=True, append_images=[Image.new("RGBA", (1600, 1200), "red")], duration=100
+        )
+    elif kind == "corrupt":
+        bad_path.write_bytes(b"not an image")
+    data = decoration_configuration(
+        available={
+            "bad": {"image": "missing.png" if kind == "missing" else bad_path.name},
+            "good": {"image": "good.png"},
+        },
+        default=["bad", "good"],
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert "bad" not in config.decorations
+    assert "good" in config.decorations
+    assert config.default_decorations == ("good",)
+    assert "layout.decorations.available.bad" in caplog.text
+    assert "excluded" in caplog.text
+
+
+def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, caplog) -> None:
+    Image.new("RGBA", (1600, 1200)).save(tmp_path / "overlay.png")
+    data = decoration_configuration(
+        available={
+            "bad-region": {
+                "image": "overlay.png",
+                "presentation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
+            },
+            "valid": {"image": "overlay.png"},
+        },
+        default=["bad-region", "valid"],
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert set(config.decorations) == {
+        "ethereal",
+        "hex",
+        "lower-flourish",
+        "simple-border",
+        "top-bottom-borders",
+        "valid",
+    }
+    assert config.default_decorations == ("valid",)
+    assert "layout.decorations.available.bad-region.presentation_region" in caplog.text
+
+
+def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(tmp_path: Path, caplog) -> None:
+    Image.new("RGBA", (1600, 1200)).save(tmp_path / "overlay.png")
+    data = decoration_configuration(
+        available={"usable": {"image": "overlay.png", "font": "missing-font", "background": "missing-paper"}}
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.decorations["usable"].font is None
+    assert config.decorations["usable"].background is None
+    assert "usable" in config.decorations
+    assert "missing-font" in caplog.text and "missing-paper" in caplog.text
+
+
+def test_default_decoration_pool_deduplicates_and_falls_back_to_none(tmp_path: Path, caplog) -> None:
+    data = decoration_configuration(default=["hex", "none", "hex", "missing", None])
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_decorations == ("hex", "none")
+    assert "decoration identifier 'missing' is unavailable" in caplog.text
+    empty = load_application_config(
+        write_config(tmp_path / "empty.yaml", decoration_configuration(default=["missing", None]))
+    )
+    assert empty.default_decorations == ("none",)
+    assert "has no usable members; using ['none']" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "identifier", ["none", "ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"]
+)
+def test_reserved_decoration_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            decoration_configuration(available={identifier: {"image": "missing.png"}}),
+        )
+    )
+
+    if identifier == "none":
+        assert identifier not in config.decorations
+    else:
+        assert config.decorations[identifier].bundled
+    assert "reserved" in caplog.text
+
+
 def test_configuration_background_defaults_support_legacy_direct_construction(tmp_path: Path) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
     legacy_values = dict(vars(config))
@@ -299,6 +469,14 @@ def test_representative_configuration_example_loads() -> None:
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
     assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
     assert config.default_backgrounds == ("none", "aged-paper", "canvas", "cloth", "ethereal", "hex")
+    assert config.default_decorations == (
+        "none",
+        "ethereal",
+        "hex",
+        "lower-flourish",
+        "simple-border",
+        "top-bottom-borders",
+    )
     assert config.presentation_region.height == 0.70
     assert config.information_view_duration == 5
 

@@ -8,7 +8,14 @@ from collections.abc import Mapping, Sequence
 
 from PIL import Image, ImageFont
 
-from .config import BackgroundResource, FontResource, PresentationRegion, load_background_image
+from .config import (
+    BackgroundResource,
+    DecorationResource,
+    FontResource,
+    PresentationRegion,
+    load_background_image,
+    load_decoration_image,
+)
 from .persistence import DailySnapshot, ResolvedFont
 from .renderer import (
     CompositionVisibility,
@@ -113,6 +120,31 @@ def _generate_daily_background(
     return base
 
 
+def _apply_daily_decoration(
+    background: Image.Image,
+    identifier: str,
+    registry: Mapping[str, DecorationResource],
+) -> Image.Image:
+    if identifier == "none":
+        return background
+    resource = registry.get(identifier)
+    if resource is None:
+        _LOGGER.warning("Committed decoration %r is unavailable; omitting the overlay", identifier)
+        return background
+    try:
+        with load_decoration_image(resource) as image:
+            if image.size != background.size:
+                raise ValueError("decoration dimensions do not match the committed image size")
+            background.paste(image, (0, 0), image)
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+        _LOGGER.warning(
+            "Committed decoration %r is unavailable or unusable; omitting the overlay: %s",
+            identifier,
+            error,
+        )
+    return background
+
+
 def _read_font(resource: FontResource) -> ResolvedFont:
     with resource.path.open("rb") as font_file:
         font = ResolvedFont(resource.identifier, font_file.read())
@@ -155,6 +187,7 @@ def prepare_daily_images(
     stages: Sequence[CompositionVisibility],
     font_registry: Mapping[str, FontResource],
     background_registry: Mapping[str, BackgroundResource] | None = None,
+    decoration_registry: Mapping[str, DecorationResource] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -175,6 +208,12 @@ def prepare_daily_images(
         )
     if background_registry is not None and not isinstance(background_registry, Mapping):
         raise DailyImagePreparationError("background_registry must be a mapping of identifiers to background resources")
+    if decoration_registry is None and snapshot.decoration_identifier != "none":
+        raise DailyImagePreparationError(
+            "decoration_registry must be supplied when the committed decoration identifier is not 'none'"
+        )
+    if decoration_registry is not None and not isinstance(decoration_registry, Mapping):
+        raise DailyImagePreparationError("decoration_registry must be a mapping of identifiers to decoration resources")
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
     font = _resolve_font(snapshot, font_registry)
@@ -191,6 +230,11 @@ def prepare_daily_images(
         )
         background = _generate_daily_background(
             image_size, snapshot.background_identifier, {} if background_registry is None else background_registry
+        )
+        background = _apply_daily_decoration(
+            background,
+            snapshot.decoration_identifier,
+            {} if decoration_registry is None else decoration_registry,
         )
         try:
             return render_reveal_stages(
