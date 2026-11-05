@@ -461,11 +461,11 @@ Recovery behavior must be covered by automated tests using controlled failures a
 
 Persistent operational state uses an explicitly versioned representation.
 
-Version 4 is the supported format for the visual-resource snapshot.
+Format version 5 is the supported operational-state format.
 
-Versions 1, 2, and 3 are unsupported. They must produce a clear, actionable compatibility error without modifying the existing file.
+Formats 1 through 4 are unsupported development formats. They must produce a clear, actionable compatibility error without modifying the existing file.
 
-No migration implementation is required for these pre-release development formats.
+No migration implementation is provided for these pre-release development formats.
 
 Existing development state may be explicitly archived or deleted before starting the revised application.
 
@@ -485,8 +485,6 @@ Format version 5 contains:
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
 The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 4 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
-
-The snapshot does not contain font or image resource bytes, filesystem paths, or content digests.
 
 Global selection history is not included in the operational-state document.
 
