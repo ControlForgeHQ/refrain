@@ -8,11 +8,15 @@ import math
 import signal
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from threading import Event
 
 from .application import ApplicationError, run_application, run_demo, run_startup
+from .installation import InitializationError, initialize_installation
+from .paths import ApplicationPathError, resolve_application_paths
 
 _SERVING_BACKENDS = {"window", "image-server"}
+_LOGGER = logging.getLogger(__name__)
 
 
 def _hold_open(backend: str) -> None:
@@ -39,11 +43,9 @@ def _demo_interval(value: str) -> float:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="refrain", description="Run Refrain continuously until interrupted.")
-    parser.add_argument("--config", required=True, help="application configuration YAML file")
-    parser.add_argument("--state", help="persistent state file (required except with --demo; ignored in demo mode)")
-    parser.add_argument(
-        "--artifacts", help="prepared image directory (required except with --demo; ignored in demo mode)"
-    )
+    parser.add_argument("--config", help="application configuration YAML file")
+    parser.add_argument("--state", help="persistent state file (ignored in demo mode)")
+    parser.add_argument("--artifacts", help="prepared image directory (ignored in demo mode)")
     parser.add_argument(
         "--history", help="JSONL global-history file (default: global-history.jsonl beside state; ignored with --demo)"
     )
@@ -67,19 +69,66 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SECONDS",
         help="cycle canonical reveal stages at a positive finite interval using temporary session storage",
     )
+    modes.add_argument(
+        "--initialize",
+        action="store_true",
+        help="install the packaged default configuration and sample content, then exit",
+    )
     arguments = parser.parse_args(argv)
-    if arguments.demo is None:
-        missing = [name for name in ("--state", "--artifacts") if getattr(arguments, name[2:]) is None]
-        if missing:
-            parser.error(f"the following arguments are required: {', '.join(missing)}")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
+        if arguments.initialize:
+            overrides = [
+                f"--{name}"
+                for name in ("config", "state", "artifacts", "history")
+                if getattr(arguments, name) is not None
+            ]
+            if overrides:
+                parser.error("--initialize cannot be combined with path overrides: " + ", ".join(overrides))
+            paths = resolve_application_paths()
+            print("Initializing Refrain using the platform-standard per-user locations")
+            initialize_installation(paths, progress=print)
+            print("Initialization complete.")
+            return 0
+
+        paths = resolve_application_paths()
+        config_path = arguments.config if arguments.config is not None else paths.config_file
+        config_absolute = Path(config_path).absolute()
+        if arguments.demo is None:
+            state_path = arguments.state if arguments.state is not None else paths.state_file
+            artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
+            history_path = arguments.history
+            effective_history = (
+                Path(history_path).absolute()
+                if history_path is not None
+                else Path(state_path).absolute().with_name("global-history.jsonl")
+            )
+            _LOGGER.info("Effective configuration path: %s", config_absolute)
+            _LOGGER.info("Effective state path: %s", Path(state_path).absolute())
+            _LOGGER.info("Effective artifacts path: %s", Path(artifacts_path).absolute())
+            _LOGGER.info("Effective history path: %s", effective_history)
+        else:
+            state_path = artifacts_path = history_path = None
+            _LOGGER.info(
+                "Effective configuration path: %s; demo persistence uses isolated temporary storage",
+                config_absolute,
+            )
+
+        if not config_absolute.exists():
+            print(
+                f"refrain: configuration file does not exist: {config_absolute}\n"
+                "Initialize the standard per-user configuration with `python -m refrain --initialize`, "
+                "or provide an existing file with --config.",
+                file=sys.stderr,
+            )
+            return 1
+
         if arguments.once:
             result = run_startup(
-                arguments.config,
-                arguments.state,
-                arguments.artifacts,
-                history_path=arguments.history,
+                config_path,
+                state_path,
+                artifacts_path,
+                history_path=history_path,
                 history_segment_size=arguments.history_segment_size,
                 history_max_segments=arguments.history_max_segments,
                 keep_open=_hold_open,
@@ -94,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 if arguments.demo is not None:
                     run_demo(
-                        arguments.config,
+                        config_path,
                         arguments.demo,
                         shutdown_event=shutdown,
                         history_segment_size=arguments.history_segment_size,
@@ -102,11 +151,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 else:
                     run_application(
-                        arguments.config,
-                        arguments.state,
-                        arguments.artifacts,
+                        config_path,
+                        state_path,
+                        artifacts_path,
                         shutdown_event=shutdown,
-                        history_path=arguments.history,
+                        history_path=history_path,
                         history_segment_size=arguments.history_segment_size,
                         history_max_segments=arguments.history_max_segments,
                     )
@@ -114,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for termination_signal, handler in previous_handlers.items():
                     signal.signal(termination_signal, handler)
             return 0
-    except ApplicationError as error:
+    except (ApplicationError, ApplicationPathError, InitializationError) as error:
         print(f"refrain: {error}", file=sys.stderr)
         return 1
     snapshot = result.state.snapshot

@@ -1517,6 +1517,18 @@ Network clients are responsible for retaining their displayed content during tem
 
 ## Application lifecycle
 
+### Application paths and initialization
+
+The command-line entry point resolves omitted paths to platform-standard per-user locations independently of the current working directory. Explicit configuration, state, artifact, and history paths override their corresponding defaults; an omitted history path is placed beside the effective state file. The entry point passes these effective locations to the existing application and storage components, which do not infer home-directory paths.
+
+Normal startup requires the selected configuration file to exist. It does not substitute the packaged default configuration, create an installation directory structure, or copy sample content. Relative content and user-resource paths continue to resolve from the selected configuration file.
+
+The explicit `--initialize` operation installs the packaged configuration and sample content only at standard per-user destinations. It checks all Refrain-owned destinations before writing, refuses any existing file, directory, or link, and creates files without replacing destinations that appear after preflight. It does not create initial operational-state or history files, and it does not start selection, preparation, or display lifecycle operations.
+
+Configuration and content remain user-owned inputs. Operational state and global history remain authoritative and historical persistence respectively; prepared artifacts remain derived output. Runtime creation of those persistence and artifact files remains owned by their existing components.
+
+The platform-specific locations and command-line usage are documented in the [README](../README.md#running-refrain).
+
 ### Startup
 
 Normal startup performs the following logical operations:

@@ -8,6 +8,7 @@ from pathlib import Path
 from random import Random
 from tempfile import TemporaryDirectory
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -200,9 +201,12 @@ def demo(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("value", ["5", "0.125"])
-def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, value):
+def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, tmp_path, value):
     calls = []
     handlers = {}
+    config = tmp_path / "config.yaml"
+    config.write_text(_CONFIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
 
     def install(signum, handler):
         previous = handlers.get(signum, signal.SIG_DFL)
@@ -218,8 +222,8 @@ def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, value)
     monkeypatch.setattr(cli, "run_demo", run)
     monkeypatch.setattr(cli, "run_application", DemoWorkspace.forbidden)
     monkeypatch.setattr(cli, "run_startup", DemoWorkspace.forbidden)
-    assert cli.main(["--config", "config.yaml", "--demo", value]) == 0
-    assert calls[0][:2] == ("config.yaml", float(value))
+    assert cli.main(["--config", config.name, "--demo", value]) == 0
+    assert calls[0][:2] == (config.name, float(value))
     assert set(calls[0][2]) == {"shutdown_event", "history_segment_size", "history_max_segments"}
     assert handlers == {signal.SIGINT: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
 
@@ -241,16 +245,29 @@ def test_cli_once_excludes_demo(capsys):
 
 
 @pytest.mark.parametrize("mode", [[], ["--once"]])
-@pytest.mark.parametrize("paths", [[], ["--state", "state.json"], ["--artifacts", "images"]])
-def test_normal_cli_still_requires_state_and_artifacts(capsys, mode, paths):
-    with pytest.raises(SystemExit) as error:
-        cli.main(["--config", "config.yaml", *mode, *paths])
-    assert error.value.code == 2
-    diagnostic = capsys.readouterr().err
-    assert "arguments are required" in diagnostic
-    for name in ("--state", "--artifacts"):
-        if name not in paths:
-            assert name in diagnostic
+def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, tmp_path, monkeypatch):
+    config = tmp_path / "config.yaml"
+    config.write_text(_CONFIG, encoding="utf-8")
+    state = tmp_path / "state" / "state.json"
+    artifacts = tmp_path / "cache" / "artifacts"
+    paths = SimpleNamespace(config_file=config, state_file=state, artifacts_directory=artifacts)
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
+    calls = []
+
+    def run(config_file, state_file, artifact_root, **kwargs):
+        calls.append((config_file, state_file, artifact_root, kwargs))
+        return SimpleNamespace(
+            state=SimpleNamespace(revision=1, snapshot=SimpleNamespace(display_date=date(2026, 3, 10))),
+            selected_initial_quotation=True,
+            presented_stage=0,
+        )
+
+    monkeypatch.setattr(cli, "run_application", run)
+    monkeypatch.setattr(cli, "run_startup", run)
+    assert cli.main(mode) == 0
+    assert calls[0][:3] == (config, state, artifacts)
+    assert calls[0][3]["history_path"] is None
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
