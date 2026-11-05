@@ -6,6 +6,7 @@ from .application import (
     StartupResult,
     present_prepared_stage,
     run_application,
+    run_demo,
     run_startup,
 )
 from .artifacts import (
@@ -90,6 +91,7 @@ __all__ = [
     "StartupResult",
     "present_prepared_stage",
     "run_application",
+    "run_demo",
     "run_startup",
     "ArtifactAccessError",
     "ArtifactCleanupError",

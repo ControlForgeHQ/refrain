@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 import re
 import time
@@ -10,6 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event
 
 from PIL import Image
@@ -633,6 +635,145 @@ def run_application(
         raise ApplicationError("all configured display destinations are unavailable")
 
 
+def run_demo(
+    config_file: str | Path,
+    interval: float,
+    *,
+    shutdown_event: Event | None = None,
+    random_source: random.Random | None = None,
+    history_segment_size: int = 1_048_576,
+    history_max_segments: int = 20,
+    backend_factory: BackendFactory = _default_backend_factory,
+    wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], bool] | None = None,
+) -> None:
+    """Cycle canonical stages using fresh session storage and a fixed eligibility date.
+
+    Viewing durations start at the coordinator's first successful acknowledgement.
+    Tests may supply clocks and an interruptible wait; by default waits use the
+    shutdown event, which also wakes when every display destination is lost.
+    """
+    if not math.isfinite(interval) or interval <= 0:
+        raise ApplicationError("demo interval must be a positive finite number of seconds")
+    configuration = _load_configuration(config_file)
+    try:
+        session = TemporaryDirectory(prefix="refrain-demo-")
+    except OSError as error:
+        raise ApplicationError(f"cannot create temporary demo storage: {error}") from error
+    shutdown = shutdown_event if shutdown_event is not None else Event()
+    pause = shutdown.wait if wait is None else wait
+    chooser = random_source if random_source is not None else random.Random()
+    coordinator: DisplayPublicationCoordinator | None = None
+    _LOGGER.info("Starting demo presentation with a %s-second stage interval", interval)
+    try:
+        root = Path(session.name)
+        store = PersistentStateStore(root / "state.json")
+        try:
+            history_store = _create_history_store(store.path, None, history_segment_size, history_max_segments)
+        except ValueError as error:
+            raise ApplicationError(f"invalid demo history retention: {error}") from error
+        artifact_store = PreparedImageArtifactStore(root / "artifacts")
+        try:
+            display_date = evaluate_scheduling(wall_clock(), configuration, None).display_date
+        except SchedulingEvaluationError as error:
+            raise ApplicationError(f"cannot determine demo display date: {error}") from error
+        assert display_date is not None
+        coordinator = DisplayPublicationCoordinator(
+            configuration.display_backends,
+            backend_factory,
+            all_unavailable_event=shutdown,
+            monotonic_clock=monotonic_clock,
+        )
+        state: PersistentState | None = None
+        pending_selection: tuple[SelectionProposal, DailySnapshot] | None = None
+        selecting = True
+        artifacts: PreparedImageArtifactSet | None = None
+        stage = 0
+        retry_delay = 1.0
+        last_failure: str | None = None
+        while not shutdown.is_set():
+            try:
+                if coordinator.all_unavailable:
+                    raise ApplicationError("all configured display destinations are unavailable")
+                if selecting:
+                    if pending_selection is None:
+                        state = _reload(store)
+                        pending_selection = _select_snapshot(configuration, display_date, chooser, state)
+                    state = _commit_selection(store, *pending_selection)
+                    pending_selection = None
+                    selecting = False
+                    stage = 0
+                    artifacts = None
+                    _record_selection_history(history_store, state)
+                    _LOGGER.info("Committed demo selection %s for %s", state.revision, display_date)
+                    continue
+                assert state is not None
+                if artifacts is None:
+                    artifacts = _recover_images(state, artifact_store, configuration.fonts, configuration.backgrounds)
+                    try:
+                        artifact_store.cleanup(state.revision)
+                    except ArtifactStoreError as error:
+                        _LOGGER.warning("Cannot clean obsolete demo images: %s", error)
+                    continue
+                if stage > state.highest_reveal_stage:
+                    state = _persist_reveal_progress(store, state, stage)
+                identity = (state.revision, stage)
+                if coordinator.desired_identity != identity:
+                    try:
+                        image = artifacts.load_stage(stage)
+                    except ArtifactStoreError as error:
+                        artifacts = None
+                        raise _RetryableApplicationError(
+                            f"cannot load prepared demo image for stage {stage}: {error}"
+                        ) from error
+                    coordinator.publish(identity, image)
+                if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
+                    continue
+                acknowledged_at = coordinator.first_successful_publication_time(identity)
+                assert acknowledged_at is not None
+                if last_failure is not None:
+                    _LOGGER.info("Demo operation recovered")
+                    last_failure = None
+                retry_delay = 1.0
+                while not shutdown.is_set():
+                    remaining = interval - (monotonic_clock() - acknowledged_at)
+                    if remaining <= 0:
+                        break
+                    pause(min(remaining, 60.0))
+                if shutdown.is_set():
+                    break
+                if stage + 1 < len(resolve_reveal_stages(state.snapshot)):
+                    stage += 1
+                else:
+                    selecting = True
+            except (_RetryableApplicationError, NoEligibleQuotationError, StateRecoveryError) as error:
+                if isinstance(error, StateRecoveryError) and not isinstance(error.__cause__, OSError):
+                    raise ApplicationError(f"cannot recover demo state: {error}") from error
+                message = str(error)
+                if message != last_failure:
+                    _LOGGER.warning("Demo operation failed; retrying: %s", message)
+                    last_failure = message
+                retry_at = monotonic_clock() + retry_delay
+                while not shutdown.is_set():
+                    remaining = retry_at - monotonic_clock()
+                    if remaining <= 0 or pause(remaining):
+                        break
+                retry_delay = min(60.0, retry_delay * 2)
+    finally:
+        try:
+            if coordinator is not None:
+                coordinator.close()
+        finally:
+            try:
+                session.cleanup()
+            except OSError as error:
+                _LOGGER.warning("Cannot remove temporary demo storage: %s", error)
+            _LOGGER.info("Demo presentation stopped")
+    if coordinator is not None and coordinator.all_unavailable:
+        raise ApplicationError("all configured display destinations are unavailable")
+
+
 __all__ = [
     "ApplicationError",
     "NoEligibleQuotationError",
@@ -640,4 +781,5 @@ __all__ = [
     "present_prepared_stage",
     "run_startup",
     "run_application",
+    "run_demo",
 ]
