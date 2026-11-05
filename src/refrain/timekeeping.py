@@ -149,7 +149,9 @@ class DisplayDayBoundaryObserver:
         try:
             local_wall = local_time.local_wall_time(current_utc)
         except (OverflowError, OSError, ValueError) as error:
-            raise SchedulingEvaluationError("current_time cannot be converted to operating-system local time") from error
+            raise SchedulingEvaluationError(
+                "current_time cannot be converted to operating-system local time"
+            ) from error
         previous_wall_utc = self._previous_wall_utc
         previous_local_wall = self._previous_local_wall
         previous_monotonic = self._previous_monotonic
