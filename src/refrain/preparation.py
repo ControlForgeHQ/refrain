@@ -160,7 +160,8 @@ def prepare_daily_images(
 
     Presentation values come from ``snapshot``; its font identifier is resolved
     through the effective registry. Stages are validated by the shared renderer
-    and are never inferred from the clock.
+    and are never inferred from the clock. A background registry is required
+    unless the committed background identifier is ``"none"``.
     """
     if not isinstance(snapshot, DailySnapshot):
         raise DailyImagePreparationError("snapshot must be a DailySnapshot")
@@ -168,6 +169,10 @@ def prepare_daily_images(
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
     if not isinstance(font_registry, Mapping):
         raise DailyImagePreparationError("font_registry must be a mapping of font identifiers to font resources")
+    if background_registry is None and snapshot.background_identifier != "none":
+        raise DailyImagePreparationError(
+            "background_registry must be supplied when the committed background identifier is not 'none'"
+        )
     if background_registry is not None and not isinstance(background_registry, Mapping):
         raise DailyImagePreparationError("background_registry must be a mapping of identifiers to background resources")
 

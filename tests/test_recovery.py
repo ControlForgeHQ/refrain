@@ -101,6 +101,30 @@ def _assert_images_closed(images: tuple[Image.Image, ...]) -> None:
             image.getpixel((0, 0))
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])
+@pytest.mark.parametrize("prepared", [False, True])
+def test_selected_background_requires_registry_before_reuse(
+    committed_state, artifact_store, monkeypatch, caplog, kwargs, prepared
+) -> None:
+    state, state_path = committed_state
+    state = replace(state, snapshot=replace(state.snapshot, background_identifier="paper"))
+    state_bytes = state_path.read_bytes()
+    if prepared:
+        images = prepare_daily_images(state.snapshot, _STAGES, _FONT_REGISTRY, {})
+        try:
+            artifact_store.store(state.revision, state.snapshot, images)
+        finally:
+            for image in images:
+                image.close()
+    caplog.clear()
+    monkeypatch.setattr(PreparedImageArtifactStore, "load", lambda *_args, **_kwargs: pytest.fail("unexpected load"))
+    with pytest.raises(DailyImagePreparationError, match="background_registry must be supplied"):
+        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, **kwargs)
+    assert state.snapshot.background_identifier == "paper"
+    assert state_path.read_bytes() == state_bytes
+    assert not caplog.records
+
+
 def test_missing_committed_background_never_reselects_and_reuses_valid_images(
     committed_state, artifact_store, tmp_path: Path, caplog
 ) -> None:

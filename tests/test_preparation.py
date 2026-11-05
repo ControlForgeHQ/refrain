@@ -160,6 +160,25 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
             image.close()
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])
+def test_selected_background_requires_registry(kwargs, caplog) -> None:
+    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
+    with pytest.raises(DailyImagePreparationError, match="background_registry must be supplied"):
+        prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, **kwargs)
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}, {"background_registry": {}}])
+def test_none_background_allows_omitted_or_empty_registry(kwargs) -> None:
+    snapshot = make_snapshot("lora")
+    images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, **kwargs)
+    try:
+        assert all(image.getpixel((0, 0)) == (255, 255, 255) for image in images)
+    finally:
+        for image in images:
+            image.close()
+
+
 @pytest.mark.parametrize("damage", ["missing-id", "missing-file", "invalid-file"])
 def test_unusable_committed_background_warns_and_uses_white(tmp_path: Path, caplog, damage: str) -> None:
     path = tmp_path / "missing.png"
