@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from typing import Mapping
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import local_time
 from .config import ApplicationConfiguration
 from .persistence import DailySnapshot, PersistentState
 from .renderer import CompositionVisibility
@@ -57,15 +57,17 @@ class SchedulingDecision:
     required_reveal_stage: int | None = None
 
 
-def _local_display_date(current_time: datetime, timezone: ZoneInfo, day_start: time) -> date:
+def _local_display_date(current_time: datetime, day_start: time) -> date:
     try:
-        local_time = current_time.astimezone(timezone)
+        current_utc = current_time.astimezone(timezone.utc)
+        wall_time = local_time.local_wall_time(current_utc)
+        boundary = local_time.resolve_local_time(wall_time.date(), day_start)
     except (OverflowError, OSError, ValueError) as error:
-        raise SchedulingEvaluationError("current_time cannot be converted to the configured timezone") from error
-    if local_time.timetz().replace(tzinfo=None) >= day_start:
-        return local_time.date()
+        raise SchedulingEvaluationError("current_time cannot be converted to operating-system local time") from error
+    if current_utc >= boundary:
+        return wall_time.date()
     try:
-        return local_time.date() - timedelta(days=1)
+        return wall_time.date() - timedelta(days=1)
     except OverflowError as error:
         raise SchedulingEvaluationError("cannot calculate the initial display date") from error
 
@@ -128,29 +130,28 @@ def resolve_reveal_stages(snapshot: DailySnapshot) -> tuple[CompositionVisibilit
 
 def _required_stage(state: PersistentState, current_time: datetime) -> int:
     snapshot = state.snapshot
-    try:
-        timezone = ZoneInfo(snapshot.scheduling.timezone)
-    except (TypeError, ValueError, ZoneInfoNotFoundError) as error:
-        raise SchedulingEvaluationError("snapshot scheduling timezone must be a valid IANA timezone") from error
-
     event_times, stages = _resolve_reveal_stages(snapshot)
     try:
-        local_time = current_time.astimezone(timezone)
+        current_utc = current_time.astimezone(timezone.utc)
+        wall_time = local_time.local_wall_time(current_utc)
     except (OverflowError, OSError, ValueError) as error:
-        raise SchedulingEvaluationError("current_time cannot be converted to the snapshot timezone") from error
-    if local_time.date() > snapshot.display_date:
+        raise SchedulingEvaluationError("current_time cannot be converted to operating-system local time") from error
+    if wall_time.date() > snapshot.display_date:
         clock_stage = len(stages) - 1
-    elif local_time.date() < snapshot.display_date:
+    elif wall_time.date() < snapshot.display_date:
         clock_stage = 0
     else:
-        clock_stage = max(
-            (
-                index
-                for index, event_time in enumerate(event_times)
-                if event_time <= local_time.timetz().replace(tzinfo=None)
-            ),
-            default=0,
-        )
+        try:
+            clock_stage = max(
+                (
+                    index
+                    for index, event_time in enumerate(event_times)
+                    if local_time.resolve_local_time(snapshot.display_date, event_time) <= current_utc
+                ),
+                default=0,
+            )
+        except (OverflowError, OSError, ValueError) as error:
+            raise SchedulingEvaluationError("cannot resolve a local reveal deadline") from error
 
     highest_stage = state.highest_reveal_stage
     if type(highest_stage) is not int or highest_stage < 0:
@@ -183,8 +184,6 @@ def evaluate_scheduling(
         raise SchedulingEvaluationError("current_time must be timezone-aware") from error
     if not isinstance(configuration, ApplicationConfiguration):
         raise SchedulingEvaluationError("configuration must be an ApplicationConfiguration")
-    if not isinstance(configuration.timezone, ZoneInfo):
-        raise SchedulingEvaluationError("configuration timezone must be a valid IANA timezone")
     if (
         not isinstance(configuration.day_start, time)
         or configuration.day_start.tzinfo is not None
@@ -200,7 +199,7 @@ def evaluate_scheduling(
         raise SchedulingEvaluationError("observed_boundary must be a DisplayDayBoundary or None")
 
     if state is None:
-        display_date = _local_display_date(current_time, configuration.timezone, configuration.day_start)
+        display_date = _local_display_date(current_time, configuration.day_start)
         return SchedulingDecision(SchedulingAction.INITIAL_SELECTION, display_date=display_date)
 
     if observed_boundary is not None and observed_boundary.state_revision == state.revision:

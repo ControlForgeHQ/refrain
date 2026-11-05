@@ -379,11 +379,15 @@ Detailed content validation rules and diagnostic severity are defined in `docs/C
 
 ### Local time
 
-Refrain uses an explicitly configured IANA timezone.
+The host operating system is the sole authority for local timezone and daylight-saving rules. Refrain does not configure or persist a timezone identifier.
 
-All display-day and reveal calculations use timezone-aware local time.
+Display-day and reveal schedules use host-local civil time. Absolute event timestamps remain timezone-aware, and durations use monotonic elapsed time.
 
 The application must not assume that every local calendar day contains exactly 24 elapsed hours.
+
+An ambiguous scheduled wall time resolves to its first occurrence. A nonexistent scheduled wall time resolves to the first valid local instant after the gap. These rules apply to both reveal deadlines and display-day boundaries, including transitions whose offset changes are not whole hours.
+
+Changing the host timezone is an operating-system operation. Refrain does not need to adapt its scheduling while running; restarting afterward is acceptable. If local-time rules change during observation, that change resets the boundary observer's baseline rather than creating a boundary. A timezone change alone does not invalidate a committed selection or reduce reveal progress.
 
 Clock changes must be handled according to the established display-day transition and reveal-progression policies.
 
@@ -446,7 +450,7 @@ When execution resumes after an interruption that spans a forward display-day tr
 
 The implementation must distinguish these conditions using the available persisted scheduling context. Clock discontinuities that cannot be distinguished reliably after an interruption must be handled conservatively rather than silently discarding a valid committed selection.
 
-The current persistent contract records the active selection's display date, timezone, and day-start time, but does not record an observed boundary or clock history. After an interruption, a current timestamp and that context cannot prove whether a transition occurred, how many boundaries were crossed, or whether a clock adjustment caused the date mismatch. Startup evaluation therefore preserves the committed selection unless the runtime supplies a recognized boundary observation. Complete recovery across arbitrary interruptions requires additional boundary observation or persisted scheduling context; this issue does not add a history store or change the persistent format.
+The current persistent contract records the active selection's display date and day-start time, but does not record an observed boundary or clock history. After an interruption, a current timestamp and that context cannot prove whether a transition occurred, how many boundaries were crossed, or whether a clock adjustment caused the date mismatch. Startup evaluation therefore preserves the committed selection unless the runtime supplies a recognized boundary observation. Complete recovery across arbitrary interruptions requires additional boundary observation or persisted scheduling context; this issue does not add a history store.
 
 ## Content eligibility and selection
 
@@ -932,7 +936,7 @@ The hardware-independent scheduling evaluator determines whether an initial or t
 
 The public interface is `refrain.evaluate_scheduling(current_time, configuration, state, observed_boundary=None)`. It returns an immutable `SchedulingDecision` whose `SchedulingAction` is `INITIAL_SELECTION`, `NEW_SELECTION`, `ADVANCE_REVEAL`, or `NO_ACTION`. Initial and transition-driven selections include `display_date`; decisions for a committed selection include `required_reveal_stage`. Invalid or insufficient inputs raise `SchedulingEvaluationError` rather than producing a guessed transition.
 
-Without a committed selection, the evaluator calculates the initial display date in the configured IANA timezone. With a committed selection, a difference between the current date and the snapshot's display date does not authorize reselection. A `DisplayDayBoundary(display_date, state_revision)` observation identifies the resulting display date and the selection revision active when it was observed; after that revision is replaced, the observation is stale. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
+Without a committed selection, the evaluator calculates the initial display date using host-local civil time. With a committed selection, a difference between the current date and the snapshot's display date does not authorize reselection. A `DisplayDayBoundary(display_date, state_revision)` observation identifies the resulting display date and the selection revision active when it was observed; after that revision is replaced, the observation is stale. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
 
 `refrain.resolve_reveal_stages(snapshot)` returns the canonical ordered `CompositionVisibility` sequence for a committed snapshot. The coordinator must pass this same sequence to image preparation and recovery; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
 
@@ -940,7 +944,7 @@ Without a committed selection, the evaluator calculates the initial display date
 
 `refrain.next_scheduling_deadline(current_time, configuration, state)` returns the next applicable committed reveal time or configured display-day boundary. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; observation and waiting do not select content, mutate persistent state, prepare images, or operate a display.
 
-The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by the snapshot's resolved schedule in its recorded timezone and the persisted highest stage. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by the snapshot's resolved schedule in host-local time and the persisted highest stage. The format-5 scheduling context contains only the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
 
 The coordinator presents the corresponding prepared image when a reveal advancement is required. Scheduling evaluation does not determine whether an image was successfully presented.
 
@@ -1592,7 +1596,7 @@ The application must not rely on busy waiting to determine ordinary reveal times
 
 The optional `--demo SECONDS` operating mode repeatedly selects quotations and presents each canonical reveal stage at an accelerated interval. It bypasses normal time-of-day scheduling and boundary observation without manufacturing clock transitions. The automatic startup information view is suppressed.
 
-The session determines its eligibility display date once from the configured timezone and day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
+The session determines its eligibility display date once from host-local time and the configured day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
 
 Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each complete snapshot is committed before its canonical image set is prepared or recovered through the existing facilities. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
 

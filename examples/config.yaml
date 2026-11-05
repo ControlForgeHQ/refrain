@@ -1,5 +1,4 @@
 general:
-  timezone: "America/Toronto"
   day_start: "06:00"
 
 content:

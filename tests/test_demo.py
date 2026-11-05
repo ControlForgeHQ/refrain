@@ -22,7 +22,6 @@ from refrain.preparation import DailyImagePreparationError
 
 _CONFIG = """\
 general:
-  timezone: "America/Toronto"
   day_start: "06:00"
 content:
   directory: "content"

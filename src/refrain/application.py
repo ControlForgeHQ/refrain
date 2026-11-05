@@ -224,7 +224,6 @@ def _select_snapshot(
             },
             scheduling=SchedulingContext(
                 display_date,
-                str(configuration.timezone),
                 configuration.day_start.strftime("%H:%M"),
             ),
         )

@@ -7,8 +7,8 @@ import time as time_module
 from datetime import date, datetime, time, timedelta, timezone
 from threading import Event
 from typing import Callable
-from zoneinfo import ZoneInfo
 
+from . import local_time
 from .config import ApplicationConfiguration
 from .persistence import PersistentState
 from .scheduling import (
@@ -39,8 +39,6 @@ def _validate_timekeeping_inputs(current_time: datetime, configuration: Applicat
 def _validate_configuration(configuration: ApplicationConfiguration) -> None:
     if not isinstance(configuration, ApplicationConfiguration):
         raise SchedulingEvaluationError("configuration must be an ApplicationConfiguration")
-    if not isinstance(configuration.timezone, ZoneInfo):
-        raise SchedulingEvaluationError("configuration timezone must be a valid IANA timezone")
     if (
         not isinstance(configuration.day_start, time)
         or configuration.day_start.tzinfo is not None
@@ -50,26 +48,12 @@ def _validate_configuration(configuration: ApplicationConfiguration) -> None:
         raise SchedulingEvaluationError("configuration day_start must be a valid HH:MM local time")
 
 
-def _local_datetime(day: date, local_time: time, zone: ZoneInfo) -> datetime:
-    """Resolve a wall time to its first occurrence or first valid time after a gap."""
-    wall_time = datetime.combine(day, local_time)
-
-    def exact_candidates(value: datetime) -> list[datetime]:
-        candidates = [value.replace(tzinfo=zone, fold=fold) for fold in (0, 1)]
-        return [
-            candidate
-            for candidate in candidates
-            if candidate.astimezone(timezone.utc).astimezone(zone).replace(tzinfo=None) == value
-        ]
-
-    exact = exact_candidates(wall_time)
-    if exact:
-        return min(exact, key=lambda candidate: candidate.astimezone(timezone.utc))
-    for minute in range(1, 2881):
-        after_gap = exact_candidates(wall_time + timedelta(minutes=minute))
-        if after_gap:
-            return min(after_gap, key=lambda candidate: candidate.astimezone(timezone.utc))
-    raise SchedulingEvaluationError(f"cannot resolve local scheduling time {wall_time!s} in {zone.key}")
+def _local_datetime(day: date, wall_time: time) -> datetime:
+    """Resolve a local wall time to its first occurrence or first valid time after a gap."""
+    try:
+        return local_time.resolve_local_time(day, wall_time)
+    except (OverflowError, OSError, ValueError) as error:
+        raise SchedulingEvaluationError(f"cannot resolve local scheduling time {day} {wall_time}") from error
 
 
 def next_scheduling_deadline(
@@ -79,25 +63,25 @@ def next_scheduling_deadline(
 ) -> datetime:
     """Return the next reveal or configured display-day deadline.
 
-    The returned instant is timezone-aware in the configured timezone. Reveal
-    times come from the committed snapshot; the next boundary comes from the
-    active application configuration. If selection or reveal work is already
-    due, the supplied current time is returned for immediate evaluation.
+    The returned instant is UTC-aware. Reveal times come from the committed
+    snapshot; the next boundary comes from the active application configuration.
+    If selection or reveal work is already due, current time is returned for
+    immediate evaluation.
     """
     current_utc = _validate_timekeeping_inputs(current_time, configuration)
     if state is None:
-        return current_utc.astimezone(configuration.timezone)
+        return current_utc
     try:
-        display_date = _local_display_date(current_utc, configuration.timezone, configuration.day_start)
+        display_date = _local_display_date(current_utc, configuration.day_start)
         boundary_date = display_date + timedelta(days=1)
     except (OverflowError, OSError, ValueError) as error:
         raise SchedulingEvaluationError("cannot calculate the next display-day boundary") from error
 
     try:
-        boundary_deadline = _local_datetime(boundary_date, configuration.day_start, configuration.timezone)
-        while boundary_deadline.astimezone(timezone.utc) <= current_utc:
+        boundary_deadline = _local_datetime(boundary_date, configuration.day_start)
+        while boundary_deadline <= current_utc:
             boundary_date += timedelta(days=1)
-            boundary_deadline = _local_datetime(boundary_date, configuration.day_start, configuration.timezone)
+            boundary_deadline = _local_datetime(boundary_date, configuration.day_start)
     except (OverflowError, OSError, ValueError) as error:
         raise SchedulingEvaluationError("cannot calculate the next display-day boundary") from error
     deadlines = [boundary_deadline]
@@ -106,20 +90,19 @@ def next_scheduling_deadline(
             raise SchedulingEvaluationError("state must be a PersistentState or None")
         required_stage = _required_stage(state, current_utc)
         if required_stage > state.highest_reveal_stage:
-            return current_utc.astimezone(configuration.timezone)
-        snapshot_timezone = ZoneInfo(state.snapshot.scheduling.timezone)
+            return current_utc
         event_times, _ = _resolve_reveal_stages(state.snapshot)
         try:
             for stage_index, event_time in enumerate(event_times):
                 if stage_index <= state.highest_reveal_stage:
                     continue
-                reveal_deadline = _local_datetime(state.snapshot.display_date, event_time, snapshot_timezone)
-                if reveal_deadline.astimezone(timezone.utc) > current_utc:
+                reveal_deadline = _local_datetime(state.snapshot.display_date, event_time)
+                if reveal_deadline > current_utc:
                     deadlines.append(reveal_deadline)
         except (OverflowError, OSError, ValueError) as error:
             raise SchedulingEvaluationError("cannot calculate the next reveal deadline") from error
 
-    return min(deadlines, key=lambda deadline: deadline.astimezone(timezone.utc)).astimezone(configuration.timezone)
+    return min(deadlines)
 
 
 class DisplayDayBoundaryObserver:
@@ -136,6 +119,7 @@ class DisplayDayBoundaryObserver:
         _validate_configuration(configuration)
         self._configuration = configuration
         self._previous_wall_utc: datetime | None = None
+        self._previous_local_wall: datetime | None = None
         self._previous_monotonic: float | None = None
         self._previous_display_date: date | None = None
         self._pending_boundary: DisplayDayBoundary | None = None
@@ -161,12 +145,24 @@ class DisplayDayBoundaryObserver:
         if state_revision is not None and (type(state_revision) is not int or state_revision < 0):
             raise ValueError("state_revision must be a nonnegative integer or None")
 
-        display_date = _local_display_date(current_utc, self._configuration.timezone, self._configuration.day_start)
+        display_date = _local_display_date(current_utc, self._configuration.day_start)
+        try:
+            local_wall = local_time.local_wall_time(current_utc)
+        except (OverflowError, OSError, ValueError) as error:
+            raise SchedulingEvaluationError(
+                "current_time cannot be converted to operating-system local time"
+            ) from error
         previous_wall_utc = self._previous_wall_utc
+        previous_local_wall = self._previous_local_wall
         previous_monotonic = self._previous_monotonic
         previous_display_date = self._previous_display_date
-        if previous_wall_utc is None or previous_monotonic is None or previous_display_date is None:
-            self._record(current_utc, monotonic_time, display_date)
+        if (
+            previous_wall_utc is None
+            or previous_local_wall is None
+            or previous_monotonic is None
+            or previous_display_date is None
+        ):
+            self._record(current_utc, local_wall, monotonic_time, display_date)
             return None
 
         elapsed_monotonic = monotonic_time - previous_monotonic
@@ -174,12 +170,14 @@ class DisplayDayBoundaryObserver:
             raise ValueError("monotonic_time must not move backward")
         elapsed_wall = (current_utc - previous_wall_utc).total_seconds()
         backward_adjustment = elapsed_wall < elapsed_monotonic - _CLOCK_ADJUSTMENT_TOLERANCE
-        self._record(current_utc, monotonic_time, display_date)
+        local_rules_changed = local_time.local_wall_time(previous_wall_utc) != previous_local_wall
+        self._record(current_utc, local_wall, monotonic_time, display_date)
 
         if self._pending_boundary is not None:
             if self._pending_boundary.state_revision == state_revision:
                 if (
-                    not backward_adjustment
+                    not local_rules_changed
+                    and not backward_adjustment
                     and display_date > previous_display_date
                     and display_date > self._pending_boundary.display_date
                 ):
@@ -188,7 +186,7 @@ class DisplayDayBoundaryObserver:
             self._last_boundary_date = self._pending_boundary.display_date
             self._pending_boundary = None
 
-        if backward_adjustment:
+        if backward_adjustment or local_rules_changed:
             self._last_boundary_date = None
             return None
         if state_revision is None or display_date <= previous_display_date:
@@ -199,8 +197,9 @@ class DisplayDayBoundaryObserver:
         self._pending_boundary = DisplayDayBoundary(display_date, state_revision)
         return self._pending_boundary
 
-    def _record(self, wall_utc: datetime, monotonic: float, display_date: date) -> None:
+    def _record(self, wall_utc: datetime, local_wall: datetime, monotonic: float, display_date: date) -> None:
         self._previous_wall_utc = wall_utc
+        self._previous_local_wall = local_wall
         self._previous_monotonic = monotonic
         self._previous_display_date = display_date
 

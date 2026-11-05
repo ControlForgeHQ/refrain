@@ -42,7 +42,7 @@ The first release should be useful in normal household operation without dependi
 ### Daily content selection
 
 - Select one eligible quotation per logical display day.
-- Support a configurable timezone and display-day start time.
+- Use the host operating system's local timezone with a configurable display-day start time.
 - Support ordinary and date-specific eligibility with absolute specificity precedence.
 - Apply repetition avoidance before priority-based selection.
 - Select randomly among equally eligible, highest-priority quotations.
