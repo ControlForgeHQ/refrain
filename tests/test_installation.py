@@ -364,8 +364,10 @@ def test_symlink_destination_is_a_conflict(tmp_path: Path, symlink_or_skip) -> N
     unrelated.mkdir()
     symlink_or_skip(paths.cache_directory, unrelated, directory=True)
 
-    with pytest.raises(InitializationError, match=str(paths.cache_directory)):
+    with pytest.raises(InitializationError) as error:
         initialize_installation(paths)
+
+    assert str(paths.cache_directory) in str(error.value)
     assert list(unrelated.iterdir()) == []
     assert not paths.config_directory.exists()
 
