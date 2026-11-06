@@ -59,6 +59,52 @@ def test_discovers_standalone_and_packaged_backgrounds_without_changing_pool(tmp
     assert config.backgrounds["forest"].path == package / "forest.png"
 
 
+def test_image_discovery_checks_metadata_without_decoding_or_copying(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "assets"
+    _write_png(root / "backgrounds" / "paper.png")
+    _write_png(root / "decorations" / "border" / "border.png", "RGBA")
+    _write_manifest(
+        root / "decorations" / "border",
+        "decoration.yaml",
+        {"format": 1, "id": "border", "image": "border.png"},
+    )
+
+    def reject_decode_or_copy(*args, **kwargs):
+        raise AssertionError("discovery must not decode or copy source image pixels")
+
+    monkeypatch.setattr(Image.Image, "load", reject_decode_or_copy)
+    monkeypatch.setattr(Image.Image, "copy", reject_decode_or_copy)
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "paper" in config.backgrounds
+    assert "border" in config.decorations
+
+
+def test_image_loaders_do_not_copy_decoded_source_images(tmp_path: Path, monkeypatch) -> None:
+    from refrain.config import (
+        BackgroundResource,
+        DecorationResource,
+        load_background_image,
+        load_decoration_image,
+    )
+
+    background_path = _write_png(tmp_path / "paper.png")
+    decoration_path = _write_png(tmp_path / "border.png", "RGBA")
+
+    def reject_copy(*args, **kwargs):
+        raise AssertionError("image loading must not copy the full-resolution source")
+
+    monkeypatch.setattr(Image.Image, "copy", reject_copy)
+
+    with load_background_image(BackgroundResource("paper", background_path, False)) as image:
+        assert image.size == (19, 13)
+        assert image.mode == "RGB"
+    with load_decoration_image(DecorationResource("border", decoration_path, False)) as image:
+        assert image.size == (19, 13)
+        assert image.mode == "RGBA"
+
+
 def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) -> None:
     font_dir = tmp_path / "assets" / "fonts" / "literary"
     font_dir.mkdir(parents=True)
@@ -101,6 +147,48 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
     assert config.default_decorations == ("none",)
     assert "font preference 'missing-font' is unavailable" in caplog.text
     assert "background preference 'missing-background' is unavailable" in caplog.text
+
+
+def test_invalid_optional_font_faces_do_not_exclude_a_bundle(tmp_path: Path, caplog) -> None:
+    package = tmp_path / "assets" / "fonts" / "literary"
+    package.mkdir(parents=True)
+    shutil.copyfile(_BUNDLED_LORA, package / "Regular.ttf")
+    (package / "Broken.ttf").write_bytes(b"not a font")
+    _write_manifest(
+        package,
+        "font.yaml",
+        {
+            "format": 1,
+            "id": "literary",
+            "faces": {
+                "regular": "Regular.ttf",
+                "missing": "Missing.ttf",
+                "broken": "Broken.ttf",
+            },
+        },
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert set(config.fonts["literary"].faces) == {"regular"}
+    assert "literary" in config.fonts
+    assert "this face is excluded" in caplog.text
+
+
+def test_invalid_regular_font_face_excludes_its_bundle(tmp_path: Path, caplog) -> None:
+    package = tmp_path / "assets" / "fonts" / "unusable"
+    (package / "Regular.ttf").parent.mkdir(parents=True)
+    (package / "Regular.ttf").write_bytes(b"not a font")
+    _write_manifest(
+        package,
+        "font.yaml",
+        {"format": 1, "id": "unusable", "faces": {"regular": "Regular.ttf"}},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "unusable" not in config.fonts
+    assert "a usable regular face is required" in caplog.text
 
 
 def test_all_duplicate_custom_identifiers_are_excluded_and_bundled_ids_are_reserved(tmp_path: Path, caplog) -> None:
@@ -148,7 +236,10 @@ def test_manifest_symlink_cannot_escape_its_package(tmp_path: Path, caplog) -> N
     outside = _write_png(tmp_path / "outside.png")
     package = tmp_path / "assets" / "backgrounds" / "linked"
     package.mkdir(parents=True)
-    (package / "escape.png").symlink_to(outside)
+    try:
+        (package / "escape.png").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
     _write_manifest(package, "background.yaml", {"format": 1, "id": "linked", "image": "escape.png"})
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))

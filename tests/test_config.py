@@ -397,7 +397,7 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
         "valid",
     }
     assert config.default_decorations == ("valid",)
-    assert "bad-region/decoration.yaml.presentation_region" in caplog.text
+    assert "bad-region/decoration.yaml.presentation_region" in caplog.text.replace("\\", "/")
 
 
 def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(tmp_path: Path, caplog) -> None:
@@ -804,7 +804,7 @@ def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog) -> None
     )
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
     assert "extra" not in config.fonts
-    assert "within its asset package" in caplog.text
+    assert "resource path must be relative" in caplog.text
 
 
 def test_mixed_discovered_font_bundles_keep_only_usable_fonts(tmp_path: Path, caplog) -> None:

@@ -220,13 +220,15 @@ def _valid_image_server_host(value: object) -> bool:
 
 
 def load_background_image(resource: BackgroundResource) -> Image.Image:
-    """Revalidate a resource and return a detached RGB/RGBA image owned by the caller.
+    """Revalidate and return a fully decoded RGB/RGBA image owned by the caller.
 
     Unreadable resources raise their loading exception; unsupported images raise
     ``ValueError``. No image is cached, so regeneration checks the current resource.
+    The decoded image is returned directly to avoid a second full-resolution copy.
     """
     with resource.path.open("rb") as background_file:
-        with Image.open(background_file) as image:
+        image = Image.open(background_file)
+        try:
             if image.format != "PNG":
                 raise ValueError("background must be a PNG image")
             if getattr(image, "n_frames", 1) != 1:
@@ -234,13 +236,17 @@ def load_background_image(resource: BackgroundResource) -> Image.Image:
             if image.mode not in {"RGB", "RGBA"}:
                 raise ValueError("background mode must be RGB or RGBA")
             image.load()
-            return image.copy()
+        except Exception:
+            image.close()
+            raise
+        return image
 
 
 def load_decoration_image(resource: DecorationResource) -> Image.Image:
-    """Revalidate a decoration and return a detached RGBA image owned by the caller."""
+    """Revalidate and return a fully decoded RGBA image owned by the caller."""
     with resource.path.open("rb") as decoration_file:
-        with Image.open(decoration_file) as image:
+        image = Image.open(decoration_file)
+        try:
             if image.format != "PNG":
                 raise ValueError("decoration must be a PNG image")
             if getattr(image, "n_frames", 1) != 1:
@@ -248,7 +254,10 @@ def load_decoration_image(resource: DecorationResource) -> Image.Image:
             if image.mode != "RGBA":
                 raise ValueError("decoration mode must be RGBA")
             image.load()
-            return image.copy()
+        except Exception:
+            image.close()
+            raise
+        return image
 
 
 def load_application_config(config_file: Union[str, Path]) -> ApplicationConfiguration:

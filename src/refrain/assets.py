@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TypeVar
 
 import yaml
-from PIL import ImageFont
+from PIL import Image, ImageFont
 
 from ._yaml import load_yaml
 
@@ -79,7 +79,9 @@ def _manifest_path(package: AssetPath, value: object, formats: set[str]) -> Asse
         raise ValueError("resource path must be a nonempty relative path")
     posix_path = PurePosixPath(value)
     windows_path = PureWindowsPath(value)
-    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive or ".." in posix_path.parts:
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
+        raise ValueError("resource path must be relative")
+    if ".." in posix_path.parts:
         raise ValueError("resource path must remain within its asset package")
     if posix_path.suffix.lower() not in formats or not posix_path.parts:
         raise ValueError(f"resource path must use one of: {', '.join(sorted(formats))}")
@@ -144,6 +146,23 @@ def _font_validation_error(path: AssetPath) -> str | None:
     except Exception as error:
         return str(error)
     return None
+
+
+def _validate_image_metadata(path: AssetPath, category: str) -> None:
+    image_kind = category.removesuffix("s")
+    with path.open("rb") as stream:
+        with Image.open(stream) as image:
+            if image.format != "PNG":
+                raise ValueError(f"{image_kind} must be a PNG image")
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError(f"{image_kind} must be a single-frame PNG image")
+            if image_kind == "background" and image.mode not in {"RGB", "RGBA"}:
+                raise ValueError("background mode must be RGB or RGBA")
+            if image_kind == "decoration" and image.mode != "RGBA":
+                raise ValueError("decoration mode must be RGBA")
+            if image.width <= 0 or image.height <= 0:
+                raise ValueError(f"{image_kind} dimensions must be positive")
+            image.verify()
 
 
 def _validate_candidate(
@@ -212,7 +231,7 @@ def discover_backgrounds(
     reserved: set[str],
     report: Report,
 ) -> dict[str, object]:
-    from .config import BackgroundResource, load_background_image
+    from .config import BackgroundResource
 
     candidates: list[tuple[str, BackgroundResource, bool, str]] = []
 
@@ -235,7 +254,6 @@ def discover_backgrounds(
                         candidates,
                         str(manifest),
                         report,
-                        load_background_image,
                         "background",
                     )
                 return
@@ -255,7 +273,6 @@ def discover_backgrounds(
                         candidates,
                         str(child),
                         report,
-                        load_background_image,
                         "background",
                     )
 
@@ -275,7 +292,6 @@ def _validate_image_candidate(
     candidates: list[tuple[str, _T, bool, str]],
     location: str,
     report: Report,
-    loader: Callable[[_T], object],
     category: str,
 ) -> None:
     field = f"assets.{category}.{identifier}"
@@ -288,8 +304,7 @@ def _validate_image_candidate(
         )
         return
     try:
-        with loader(resource):  # type: ignore[arg-type]
-            pass
+        _validate_image_metadata(resource.path, category)  # type: ignore[attr-defined]
     except Exception as error:
         report(field, f"asset at {location} is unreadable or invalid and is excluded: {error}", logging.WARNING)
         return
@@ -305,7 +320,7 @@ def discover_decorations(
     report: Report,
     parse_region: Callable[..., object],
 ) -> dict[str, object]:
-    from .config import DecorationResource, load_decoration_image
+    from .config import DecorationResource
 
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
@@ -364,7 +379,6 @@ def discover_decorations(
                 candidates,
                 field,
                 report,
-                load_decoration_image,
                 "decorations",
             )
     return _register_candidates(candidates, reserved, "decorations", report)
@@ -411,30 +425,37 @@ def discover_fonts(
                 report(f"{field}.faces.regular", "a usable regular face is required; bundle excluded", logging.WARNING)
                 continue
             face_paths: dict[str, AssetPath] = {}
-            invalid = False
+            invalid_structure = False
             for face, face_value in sorted(faces.items(), key=lambda pair: str(pair[0])):
                 face_field = f"{field}.faces.{face}"
                 if not valid_identifier(face):
                     report(
                         face_field, "face name must be a nonempty ASCII identifier; bundle excluded", logging.WARNING
                     )
-                    invalid = True
-                    continue
+                    invalid_structure = True
+            if invalid_structure:
+                continue
+            invalid_regular = False
+            for face, face_value in sorted(faces.items(), key=lambda pair: str(pair[0])):
+                face_field = f"{field}.faces.{face}"
                 try:
                     face_path = _manifest_path(package, face_value, {".ttf", ".otf"})
                 except (OSError, ValueError) as error:
-                    report(face_field, f"font path is invalid: {error}", logging.WARNING)
-                    invalid = True
+                    report(face_field, f"font path is invalid and this face is excluded: {error}", logging.WARNING)
+                    invalid_regular |= face == "regular"
                     continue
                 font_error = _font_validation_error(face_path)
                 if font_error is not None:
                     report(
-                        face_field, f"font file is unreadable or unsupported by Pillow: {font_error}", logging.WARNING
+                        face_field,
+                        f"font file is unreadable or unsupported by Pillow and this face is excluded: {font_error}",
+                        logging.WARNING,
                     )
-                    invalid = True
+                    invalid_regular |= face == "regular"
                     continue
                 face_paths[face] = face_path
-            if invalid or "regular" not in face_paths:
+            if invalid_regular or "regular" not in face_paths:
+                report(f"{field}.faces.regular", "a usable regular face is required; bundle excluded", logging.WARNING)
                 continue
             resource = FontResource(
                 identifier=identifier,

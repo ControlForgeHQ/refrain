@@ -477,7 +477,7 @@ faces:
   handwritten: Handwriting-Regular.otf
 ```
 
-`format` must be the integer `1`. `id` and face names must begin with an ASCII letter or digit and contain only ASCII letters, digits, hyphens, and underscores. `faces` is a nonempty mapping of face names to supported `.ttf` or `.otf` files and must contain a usable `regular` face. Files within a bundle need not belong to one typographic family. Face paths are relative to the manifest directory.
+`format` must be the integer `1`. `id` and face names must begin with an ASCII letter or digit and contain only ASCII letters, digits, hyphens, and underscores. `faces` is a nonempty mapping of face names to supported `.ttf` or `.otf` files and must contain a usable `regular` face. An unusable optional face produces a warning and is excluded individually; an unusable `regular` face excludes the bundle. Invalid face names or other structurally invalid manifest data exclude the bundle. Files within a bundle need not belong to one typographic family. Face paths are relative to the manifest directory.
 
 Use safe YAML loading. Unknown manifest fields produce warnings and are ignored. Invalid manifest data, unsupported versions/formats, missing or unreadable resources, absolute paths, parent traversal, and references escaping the package (including symlink escapes) exclude the affected bundle without affecting unrelated resources. Bundled font directories retain their license and copyright files.
 
