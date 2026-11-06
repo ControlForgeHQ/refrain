@@ -349,7 +349,7 @@ def test_destination_appearing_after_preflight_is_not_overwritten(
     assert not paths.state_directory.exists()
 
 
-def test_partial_initialization_failure_reports_created_data_without_rollback(
+def test_partial_sample_installation_is_detected_and_completed_on_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = _paths(tmp_path)
@@ -358,14 +358,22 @@ def test_partial_initialization_failure_reports_created_data_without_rollback(
     shared_data.write_text("preserve", encoding="utf-8")
     original_create_file = installation._create_file
 
-    def fail_on_sample(path: Path, contents: bytes, created: list[Path], owned_directories: set[Path]) -> None:
-        if path.parent == paths.content_directory:
-            raise OSError("disk full")
+    sample_writes = 0
+
+    def fail_after_one_sample(path: Path, contents: bytes, created: list[Path], owned_directories: set[Path]) -> None:
+        nonlocal sample_writes
+        if path.parent == paths.content_directory and path.name != installation._SAMPLE_INSTALL_MARKER:
+            sample_writes += 1
+            if sample_writes == 2:
+                raise OSError("disk full")
         original_create_file(path, contents, created, owned_directories)
 
-    monkeypatch.setattr(installation, "_create_file", fail_on_sample)
+    monkeypatch.setattr(installation, "_create_file", fail_after_one_sample)
     with pytest.raises(InitializationError, match="Created destinations that remain in place") as error:
         initialize_installation(paths)
+    installed_samples = [path for path in paths.content_directory.glob("*.yaml") if path.is_file()]
+    assert len(installed_samples) == 1
+    assert installation._SAMPLE_INSTALL_MARKER in {path.name for path in paths.content_directory.iterdir()}
     assert paths.config_file.is_file()
     assert str(paths.config_file) in str(error.value)
     assert paths.content_directory.is_dir()
@@ -373,7 +381,67 @@ def test_partial_initialization_failure_reports_created_data_without_rollback(
 
     monkeypatch.setattr(installation, "_create_file", original_create_file)
     initialize_installation(paths)
-    assert load_content_library(paths.content_directory)
+
+    package_content = Path(installation.__file__).parent / "sample_content"
+    assert {
+        path.relative_to(package_content).as_posix(): path.read_bytes()
+        for path in package_content.rglob("*")
+        if path.is_file()
+    } == {
+        path.relative_to(paths.content_directory).as_posix(): path.read_bytes()
+        for path in paths.content_directory.rglob("*")
+        if path.is_file()
+    }
+    assert installation._SAMPLE_INSTALL_MARKER not in {path.name for path in paths.content_directory.iterdir()}
+    assert shared_data.read_text(encoding="utf-8") == "preserve"
+
+
+def test_arbitrary_nonempty_content_directory_is_not_treated_as_partial_install(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    paths.content_directory.mkdir(parents=True)
+    user_file = paths.content_directory / "custom.yaml"
+    user_file.write_text("user content", encoding="utf-8")
+    before = user_file.read_bytes()
+
+    reports: list[str] = []
+    initialize_installation(paths, progress=reports.append)
+
+    assert user_file.read_bytes() == before
+    assert not (paths.content_directory / installation._SAMPLE_INSTALL_MARKER).exists()
+    assert any("nonempty content directory preserved" in message for message in reports)
+
+
+def test_invalid_sample_install_marker_requires_manual_intervention(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.content_directory.mkdir(parents=True)
+    marker = paths.content_directory / installation._SAMPLE_INSTALL_MARKER
+    marker.write_text("not a valid install marker", encoding="utf-8")
+
+    with pytest.raises(InitializationError, match="inspect the files manually"):
+        initialize_installation(paths)
+
+    assert marker.read_text(encoding="utf-8") == "not a valid install marker"
+    assert not paths.config_file.exists()
+
+
+def test_partial_initialization_failure_reports_created_data_without_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    original_create_file = installation._create_file
+
+    def fail_on_config(path: Path, contents: bytes, created: list[Path], owned_directories: set[Path]) -> None:
+        if path == paths.config_file:
+            raise OSError("disk full")
+        original_create_file(path, contents, created, owned_directories)
+
+    monkeypatch.setattr(installation, "_create_file", fail_on_config)
+    with pytest.raises(InitializationError, match="Created destinations that remain in place") as error:
+        initialize_installation(paths)
+    assert str(paths.config_file) not in str(error.value)
+    assert paths.content_directory.is_dir()
 
 
 def test_repeated_initialization_succeeds_without_modifying_installed_files(tmp_path: Path) -> None:

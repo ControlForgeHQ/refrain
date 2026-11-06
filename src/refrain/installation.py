@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import stat
@@ -24,6 +26,9 @@ class InstallationOperationError(Exception):
     """Raised when a standard installation operation cannot safely complete."""
 
 
+_SAMPLE_INSTALL_MARKER = ".refrain-initialize-samples.json"
+
+
 def _packaged_resources() -> tuple[bytes, dict[PurePosixPath, bytes]]:
     try:
         package = files("refrain")
@@ -44,6 +49,10 @@ def _packaged_resources() -> tuple[bytes, dict[PurePosixPath, bytes]]:
         collect(content, PurePosixPath())
         if not entries:
             raise InitializationError("the packaged sample content library is empty")
+        if PurePosixPath(_SAMPLE_INSTALL_MARKER) in entries:
+            raise InitializationError(
+                f"the packaged sample library uses the reserved filename {_SAMPLE_INSTALL_MARKER}"
+            )
         return configuration, entries
     except InitializationError:
         raise
@@ -121,6 +130,51 @@ def _content_is_empty(directory: Path) -> bool:
         raise InitializationError(f"cannot inspect content directory {directory}: {error}") from error
 
 
+def _sample_install_manifest(content_entries: dict[PurePosixPath, bytes]) -> bytes:
+    manifest = {
+        "format": 1,
+        "files": {
+            relative.as_posix(): hashlib.sha256(contents).hexdigest()
+            for relative, contents in sorted(content_entries.items(), key=lambda item: str(item[0]))
+        },
+    }
+    return (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _resume_sample_installation(content_directory: Path, content_entries: dict[PurePosixPath, bytes]) -> bool:
+    marker = content_directory / _SAMPLE_INSTALL_MARKER
+    if not _inspect_file(marker):
+        return False
+    try:
+        marker_contents = marker.read_bytes()
+    except OSError as error:
+        raise InitializationError(f"cannot read interrupted sample-install marker {marker}: {error}") from error
+    if marker_contents != _sample_install_manifest(content_entries):
+        raise InitializationError(
+            f"cannot establish ownership of the nonempty content directory {content_directory}; "
+            f"the sample-install marker {marker} is invalid or does not match the packaged samples. "
+            "Preserve or inspect the files manually before retrying."
+        )
+
+    for relative, contents in content_entries.items():
+        target = content_directory.joinpath(*relative.parts)
+        try:
+            parent = content_directory
+            for component in relative.parts[:-1]:
+                parent = parent / component
+                _inspect_directory(parent)
+            if _inspect_file(target) and target.read_bytes() != contents:
+                raise InitializationError(
+                    f"cannot safely resume sample installation because existing content differs from "
+                    f"the packaged sample: {target}. Preserve or inspect the files manually."
+                )
+        except InstallationOperationError as error:
+            raise InitializationError(f"cannot safely resume sample installation: {error}") from error
+        except OSError as error:
+            raise InitializationError(f"cannot inspect sample destination {target}: {error}") from error
+    return True
+
+
 def _create_directory(path: Path, created: list[Path], owned_directories: set[Path]) -> None:
     try:
         path.lstat()
@@ -176,7 +230,14 @@ def initialize_installation(
         _inspect_file(Path(paths.state_file))
         _inspect_file(Path(paths.history_file))
         content_directory = Path(paths.content_directory)
-        install_samples = content_directory not in existing_directories or _content_is_empty(content_directory)
+        resume_samples = (
+            _resume_sample_installation(content_directory, content_entries)
+            if content_directory in existing_directories
+            else False
+        )
+        install_samples = (
+            resume_samples or content_directory not in existing_directories or _content_is_empty(content_directory)
+        )
     except InstallationOperationError as error:
         raise InitializationError(f"initialization cannot safely use the installation paths: {error}") from error
 
@@ -202,11 +263,30 @@ def initialize_installation(
         if not configuration_exists:
             _create_file(Path(paths.config_file), configuration, created, owned_directories)
         if install_samples:
+            marker = content_directory / _SAMPLE_INSTALL_MARKER
+            if not resume_samples:
+                _create_file(marker, _sample_install_manifest(content_entries), created, owned_directories)
             for directory in sorted(content_directories, key=lambda value: (len(value.parts), str(value))):
                 if directory != content_directory:
                     _create_directory(directory, created, owned_directories)
             for relative, contents in sorted(content_entries.items(), key=lambda item: str(item[0])):
-                _create_file(content_directory.joinpath(*relative.parts), contents, created, owned_directories)
+                target = content_directory.joinpath(*relative.parts)
+                try:
+                    target_exists = _inspect_file(target)
+                except InstallationOperationError as error:
+                    raise OSError(f"cannot safely use sample destination {target}: {error}") from error
+                if target_exists:
+                    try:
+                        matches_packaged_sample = target.read_bytes() == contents
+                    except OSError as error:
+                        raise OSError(f"cannot read sample destination {target}: {error}") from error
+                    if not matches_packaged_sample:
+                        raise FileExistsError(f"sample destination contains different content: {target}")
+                else:
+                    _create_file(target, contents, created, owned_directories)
+            marker.unlink()
+            if marker in created:
+                created.remove(marker)
         _create_directory(Path(paths.state_directory), created, owned_directories)
         _create_directory(Path(paths.artifacts_directory), created, owned_directories)
     except OSError as error:
