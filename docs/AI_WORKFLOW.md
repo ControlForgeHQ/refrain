@@ -208,11 +208,19 @@ Verify that the revised implementation addresses the finding.
 
 Automated regression validation is part of implementation.
 
+The repository's CI workflow provides the standard automated checks defined in `docs/ENGINEERING.md`. Implementation agents must examine the results of all required CI jobs and address failures before reporting an implementation as fully validated.
+
+When CI reports a failure, the implementation agent must investigate and correct the problem within the existing pull request. A locally passing test suite does not override a failing CI result.
+
+After updating a pull request, agents must inspect the checks associated with the updated PR head. Results from an earlier commit do not establish that the revised implementation passes validation.
+
+Implementation agents must distinguish between validation performed in their own environment and validation performed by GitHub Actions. Reports must identify failed, pending, cancelled, or unavailable required checks rather than treating them as successful.
+
+Reviewers may rely on successful required CI checks for routine linting, formatting, and hardware-independent regression testing without repeating those checks locally. Review still requires independent assessment of the implementation, test coverage, architecture, security, and issue acceptance criteria.
+
 Manual and physical hardware validation may be completed during review when the implementation environment cannot perform it.
 
-Refrain's hardware-independent components should be testable without a Raspberry Pi or e-paper display.
-
-Hardware-dependent changes require appropriate validation on the supported target hardware before they can be considered fully verified.
+Refrain's hardware-independent components should be testable without a Raspberry Pi or e-paper display. Hardware-dependent changes require appropriate validation on the supported target hardware before they can be considered fully verified.
 
 When hardware validation materially increases confidence in a change, record the results in the PR discussion.
 

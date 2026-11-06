@@ -207,13 +207,32 @@ Avoid language features or third-party packages that unnecessarily exclude suppo
 
 The project's minimum supported Python version must be established in the project metadata once implementation begins.
 
+#
 ### Cross-platform development and testing
 
-Hardware-independent components should use platform-neutral Python interfaces and avoid unnecessary operating-system-specific assumptions. Use `pathlib.Path` or other standard path APIs rather than constructing filesystem paths with hard-coded separators.
+Refrain's hardware-independent components must remain compatible with Linux and Windows development environments. Prefer platform-neutral Python interfaces and avoid unnecessary operating-system-specific assumptions.
 
-Tests should compare paths using native `Path` values or strings derived from them, not assume a particular separator in diagnostics. When testing intentionally platform-specific behavior, make the platform assumption explicit and keep that coverage scoped to the affected behavior.
+The repository's GitHub Actions CI workflow provides the standard automated validation for pull requests and changes to the default branch. It must run:
 
-Run hardware-independent tests on the development platforms available and record the operating system and Python version. Passing tests on a non-Linux system does not establish that full application deployment or hardware-specific behavior is supported or validated there.
+- Ruff lint checks and Black formatting checks;
+- the complete hardware-independent pytest suite on Linux;
+- the same pytest suite on Windows.
+
+Use the project's supported Python version and declared development dependencies. CI must not require Raspberry Pi hardware, GPIO or SPI libraries, or other hardware-specific dependencies to run the hardware-independent tests.
+
+Tests must not assume a particular filesystem path separator, directory layout, user privilege level, or operating-system-specific error message. Compare paths using native `pathlib.Path` values where practical. Assertions involving diagnostic output must remain portable without weakening the behavior they verify.
+
+Tests requiring capabilities that are not universally available, such as symbolic-link creation on Windows, must detect unavailable capabilities and skip only the affected tests with an explanatory reason. Genuine behavioral, security, or validation failures must not be suppressed.
+
+Platform-specific tests may be conditional when their subject is inherently platform-specific. Hardware-independent functionality must not be excluded from a platform's test suite merely to obtain passing results.
+
+All required CI checks must pass before a pull request is considered fully validated. A failure on either platform requires investigation and correction. A passing result on one platform does not establish compatibility with the other.
+
+When required CI checks cannot run or complete, record the limitation explicitly. Pending, skipped, cancelled, or unavailable checks must not be represented as passing validation.
+
+Local automated testing remains useful for development and investigation, but contributors are not required to duplicate successful CI checks manually unless additional validation is necessary.
+
+Passing hardware-independent CI checks does not establish correct operation on Raspberry Pi hardware or a physical e-paper display. Hardware-dependent changes require separate validation appropriate to the affected functionality.
 
 ### Coding style
 
