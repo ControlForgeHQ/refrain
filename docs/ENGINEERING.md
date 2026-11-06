@@ -1306,7 +1306,7 @@ Do not rely on statistical luck to make unit tests pass.
 
 Use temporary directories and isolated test state.
 
-Test path selection with injected platform and environment information. Exercise initialization conflicts, links, exclusive file creation, race-time destinations, and partial failures using temporary locations; do not use developer application-data directories.
+Test path selection with injected platform and environment information. Exercise repeatable initialization, existing user data, links, exclusive file creation, race-time destinations, partial failures, reset, purge, confirmation, and deletion boundaries using temporary locations; do not use developer application-data directories.
 
 Test persistence failure at meaningful boundaries, including failures before and after commitment.
 
@@ -1416,7 +1416,11 @@ Deployment instructions must identify the supported operating system, system dep
 
 Installation must not depend on the developer's local directory structure.
 
-Initialization must be create-only and noninteractive. Inspect all Refrain-owned destinations before modifying them; any existing destination is a conflict, and no existing user data may be overwritten, removed, or rolled back. Use exclusive creation after preflight, report every conflict, and preserve/report any partial installation on filesystem failure.
+Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, install samples only into a missing or empty standard content directory, and leave nonempty content uninspected and untouched. Reuse state and cache directories without modifying existing state, history, or artifact files. Refuse links or unexpected objects that redirect or block safe access. Use exclusive file creation; on failure, report created destinations and leave them in place so a later initialization can retry.
+
+Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Reject runtime path overrides rather than treating them as deletion targets. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configuration values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
+
+Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, user resources, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents. Both operations are intended for use while the application is stopped. Do not claim protection against arbitrary concurrent hostile filesystem mutation or add cross-process locking without an approved requirement.
 
 ### Service management
 

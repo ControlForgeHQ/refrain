@@ -144,9 +144,9 @@ Install the Refrain wheel in the Python environment that will run it, then initi
 .venv/bin/python -m refrain
 ```
 
-Initialization copies the packaged `config.default.yaml` to `config.yaml` and installs the packaged sample quotation library. The installed configuration is editable and remains authoritative; application upgrades do not replace it or synchronize sample content. `examples/config.yaml` remains a development-oriented example and is not used by application startup.
+Initialization copies the packaged `config.default.yaml` to `config.yaml` only when the file is absent, and installs the packaged sample quotation library only when the standard content directory is missing or empty. Existing configuration is preserved byte-for-byte. Existing nonempty content, including directories with hidden or non-YAML entries, is preserved without installing samples or validating the library. The installed configuration is editable and remains authoritative; application upgrades do not replace it or synchronize sample content. `examples/config.yaml` remains a development-oriented example and is not used by application startup.
 
-Initialization is noninteractive and create-only. It refuses to proceed if any Refrain-owned configuration, content, state, or artifact destination already exists, including an empty directory or a link. It reports every detected conflict and makes no changes when preflight finds one. Inspect, move, or remove conflicting data manually before retrying; Refrain never provides a force, overwrite, reset, or cleanup option. A filesystem failure after creation begins may leave a partial installation, which is reported and never destructively rolled back. Initialization does not create state or history files and does not start display backends or select content.
+Initialization is noninteractive and repeatable. It reuses existing real configuration, content, state, and cache directories without modifying existing files. Unexpected files or filesystem links that prevent safe access are reported before installation writes begin. New files are created exclusively, and a failure after creation begins leaves and reports partial results for a later safe retry. Initialization does not create state or history files and does not start display backends or select content.
 
 ### Standard per-user locations
 
@@ -163,6 +163,28 @@ On Linux, absolute `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` val
 No system-wide paths are selected automatically when running as root. System deployments should configure explicit paths and service permissions.
 
 Normal operation does not generate a missing configuration or install sample content. If the selected configuration file is absent, Refrain reports its expected path and suggests `python -m refrain --initialize`. It never falls back to the packaged configuration. Relative content, font, background, and decoration paths remain relative to the selected configuration file.
+
+If `content.directory` is omitted, the content library defaults to `content/` alongside the selected configuration file. An explicit relative path uses that same configuration-relative base; an absolute path remains absolute.
+
+### Reset and purge
+
+Perform reset and purge only while Refrain is stopped. Both operations manage standard per-user locations only and reject `--config`, `--state`, `--artifacts`, and `--history` overrides. They do not load configuration or start selection, preparation, display backends, or normal application startup.
+
+Reset removes runtime-generated state, the active and rotated global-history files, and generated cache contents. It preserves configuration, the standard content library, user resources, and the standard directory structure. The next normal startup selects and commits a quotation as an initial selection and regenerates required artifacts.
+
+```sh
+.venv/bin/python -m refrain --reset
+```
+
+The command displays the affected paths and requires an interactive terminal. Type exactly `RESET` to proceed. Any other input, EOF, or unavailable terminal cancels the operation without filesystem changes.
+
+Purge permanently removes the complete Refrain installation from standard per-user configuration, operational, and cache locations, including configuration, content, and user-provided files within those locations. It leaves shared parent directories intact and does not follow configuration references to external content or resources.
+
+```sh
+.venv/bin/python -m refrain --purge
+```
+
+The command displays all standard Refrain-owned locations and requires an interactive terminal. Type exactly `PURGE REFRAIN` to proceed. Any other input, EOF, or unavailable terminal cancels the operation without filesystem changes. After a successful purge, normal startup reports the missing configuration and suggests `--initialize`.
 
 ### Continuous and one-shot operation
 

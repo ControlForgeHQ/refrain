@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import signal
 from datetime import date
 from pathlib import Path, PureWindowsPath
@@ -11,7 +12,14 @@ import refrain.__main__ as cli
 import refrain.installation as installation
 from refrain.config import load_application_config
 from refrain.content import load_content_library
-from refrain.installation import InitializationError, initialize_installation
+from refrain.installation import (
+    InitializationError,
+    InstallationOperationError,
+    confirm_operation,
+    initialize_installation,
+    purge_installation,
+    reset_installation,
+)
 from refrain.paths import ApplicationPathError, ApplicationPaths, resolve_application_paths
 
 
@@ -149,6 +157,7 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     created = initialize_installation(paths, progress=reports.append)
 
     assert paths.config_file.read_bytes() == (Path(installation.__file__).parent / "config.default.yaml").read_bytes()
+    assert "\ncontent:\n" not in paths.config_file.read_text(encoding="utf-8")
     config = load_application_config(paths.config_file)
     assert config.content_directory == paths.content_directory
     assert [(backend.type, backend.host, backend.port) for backend in config.display_backends] == [
@@ -191,65 +200,90 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     assert paths.artifacts_directory in created
 
 
-@pytest.mark.parametrize(
-    "destination",
-    ["config_directory", "content_directory", "state_directory", "cache_directory", "artifacts_directory"],
-)
-def test_existing_empty_installation_destinations_are_conflicts(tmp_path: Path, destination: str) -> None:
+def test_existing_empty_configuration_and_content_directories_are_reused(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
-    target = Path(getattr(paths, destination))
-    target.mkdir(parents=True)
-    sentinel = target / "untouched" if target.is_dir() else target
-    if sentinel != target:
-        sentinel.write_text("user data", encoding="utf-8")
+    paths.config_directory.mkdir(parents=True)
+    paths.content_directory.mkdir()
 
-    with pytest.raises(InitializationError, match="Inspect, move, or remove") as error:
-        initialize_installation(paths)
+    initialize_installation(paths)
 
-    assert str(target) in str(error.value)
-    assert sentinel.exists() if sentinel != target else target.is_dir()
+    assert paths.config_file.is_file()
+    assert load_content_library(paths.content_directory)
     assert not paths.state_file.exists()
     assert not paths.history_file.exists()
 
 
-def test_preflight_reports_all_conflicts_and_makes_no_other_writes(tmp_path: Path) -> None:
+def test_existing_configuration_is_preserved_byte_for_byte(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
-    for path in (
-        paths.config_directory,
-        paths.config_file,
-        paths.content_directory,
-        paths.operational_directory,
-        paths.state_directory,
-        paths.state_file,
-        paths.history_file,
-        paths.cache_directory,
-        paths.artifacts_directory,
-    ):
-        if path.suffix:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(path.name, encoding="utf-8")
-        else:
-            path.mkdir(parents=True, exist_ok=True)
+    paths.config_directory.mkdir(parents=True)
+    original = b"\xffuser configuration\r\n"
+    paths.config_file.write_bytes(original)
+    reports: list[str] = []
 
-    before = {path: path.read_bytes() for path in (paths.config_file, paths.state_file, paths.history_file)}
+    initialize_installation(paths, progress=reports.append)
+
+    assert paths.config_file.read_bytes() == original
+    assert any("configuration preserved" in message for message in reports)
+
+
+@pytest.mark.parametrize("entry_name", ["custom.yaml", ".hidden", "subdirectory"])
+def test_nonempty_content_directory_is_preserved_without_samples(tmp_path: Path, entry_name: str) -> None:
+    paths = _paths(tmp_path)
+    paths.content_directory.mkdir(parents=True)
+    entry = paths.content_directory / entry_name
+    if entry_name == "subdirectory":
+        entry.mkdir()
+        (entry / "data").write_bytes(b"keep")
+    else:
+        entry.write_bytes(b"keep")
+    before = {
+        path.relative_to(paths.content_directory): path.read_bytes()
+        for path in paths.content_directory.rglob("*")
+        if path.is_file()
+    }
+
+    reports: list[str] = []
+    initialize_installation(paths, progress=reports.append)
+
+    assert {
+        path.relative_to(paths.content_directory): path.read_bytes()
+        for path in paths.content_directory.rglob("*")
+        if path.is_file()
+    } == before
+    assert any("nonempty content directory preserved" in message for message in reports)
+
+
+def test_existing_state_history_and_artifact_files_are_preserved(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.state_directory.mkdir(parents=True)
+    paths.artifacts_directory.mkdir(parents=True)
+    expected = {
+        paths.state_file: b"state",
+        paths.history_file: b"history",
+        paths.state_directory / "global-history.2.jsonl": b"rotated history",
+        paths.artifacts_directory / "stage.png": b"prepared image",
+    }
+    for path, contents in expected.items():
+        path.write_bytes(contents)
+
+    initialize_installation(paths)
+
+    assert {path: path.read_bytes() for path in expected} == expected
+
+
+def test_preflight_rejects_unexpected_objects_before_writing(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    paths.config_file.mkdir()
+    paths.content_directory.parent.mkdir(parents=True, exist_ok=True)
+    paths.content_directory.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+
     with pytest.raises(InitializationError) as error:
         initialize_installation(paths)
 
-    assert all(
-        str(path) in str(error.value)
-        for path in (
-            paths.config_directory,
-            paths.config_file,
-            paths.content_directory,
-            paths.operational_directory,
-            paths.state_directory,
-            paths.state_file,
-            paths.history_file,
-            paths.cache_directory,
-            paths.artifacts_directory,
-        )
-    )
-    assert {path: path.read_bytes() for path in before} == before
+    assert str(paths.content_directory) in str(error.value)
+    assert not paths.state_directory.exists()
+    assert not paths.cache_directory.exists()
 
 
 def test_preflight_reports_a_non_directory_ancestor_before_creating_anything(tmp_path: Path) -> None:
@@ -337,16 +371,175 @@ def test_partial_initialization_failure_reports_created_data_without_rollback(
     assert paths.content_directory.is_dir()
     assert shared_data.read_text(encoding="utf-8") == "preserve"
 
+    monkeypatch.setattr(installation, "_create_file", original_create_file)
+    initialize_installation(paths)
+    assert load_content_library(paths.content_directory)
 
-def test_repeated_initialization_fails_without_modifying_installed_files(tmp_path: Path) -> None:
+
+def test_repeated_initialization_succeeds_without_modifying_installed_files(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     initialize_installation(paths)
-    before = {path: path.read_bytes() for path in (paths.config_file, *paths.content_directory.glob("*.yaml"))}
+    before = {
+        path.relative_to(paths.config_directory): path.read_bytes()
+        for path in paths.config_directory.rglob("*")
+        if path.is_file()
+    }
 
-    with pytest.raises(InitializationError):
-        initialize_installation(paths)
+    initialize_installation(paths)
 
-    assert {path: path.read_bytes() for path in before} == before
+    assert {
+        path.relative_to(paths.config_directory): path.read_bytes()
+        for path in paths.config_directory.rglob("*")
+        if path.is_file()
+    } == before
+
+
+class _TerminalInput(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class _TerminalOutput(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"), [("RESET\n", True), ("reset\n", False), ("yes\n", False), ("", False)]
+)
+def test_confirmation_requires_exact_typed_value(response: str, expected: bool) -> None:
+    output = _TerminalOutput()
+
+    confirmed = confirm_operation(
+        "RESET",
+        "Reset explanation",
+        (Path("/standard/state.json"),),
+        input_stream=_TerminalInput(response),
+        output_stream=output,
+    )
+
+    assert confirmed is expected
+    assert "/standard/state.json" in output.getvalue()
+    if not expected:
+        assert "cancelled" in output.getvalue()
+
+
+def test_confirmation_without_interactive_terminal_does_not_read_input() -> None:
+    input_stream = io.StringIO("RESET\n")
+    output = io.StringIO()
+
+    assert not confirm_operation(
+        "RESET",
+        "Reset explanation",
+        (),
+        input_stream=input_stream,
+        output_stream=output,
+    )
+    assert "interactive terminal is required" in output.getvalue()
+
+
+def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    paths.state_directory.mkdir(parents=True)
+    paths.artifacts_directory.mkdir(parents=True)
+    config = paths.config_file
+    content = paths.content_directory / "entry.yaml"
+    content.parent.mkdir()
+    config.write_text("custom configuration", encoding="utf-8")
+    content.write_text("custom content", encoding="utf-8")
+    resource = paths.config_directory / "user-font.ttf"
+    resource.write_bytes(b"font")
+    for path in (
+        paths.state_file,
+        paths.history_file,
+        paths.state_directory / "global-history.1.jsonl",
+        paths.artifacts_directory / "revision-1" / "stage.png",
+        paths.cache_directory / "generated.tmp",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("runtime data", encoding="utf-8")
+
+    reset_installation(paths)
+
+    assert config.read_text(encoding="utf-8") == "custom configuration"
+    assert content.read_text(encoding="utf-8") == "custom content"
+    assert resource.read_bytes() == b"font"
+    assert not paths.state_file.exists()
+    assert not paths.history_file.exists()
+    assert not (paths.state_directory / "global-history.1.jsonl").exists()
+    assert list(paths.artifacts_directory.iterdir()) == []
+    assert not (paths.cache_directory / "generated.tmp").exists()
+    assert paths.state_directory.is_dir()
+    assert paths.artifacts_directory.is_dir()
+
+
+def test_reset_is_idempotent_and_does_not_follow_artifact_links(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.artifacts_directory.mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "keep").write_text("outside", encoding="utf-8")
+    (paths.artifacts_directory / "linked").symlink_to(external, target_is_directory=True)
+
+    reset_installation(paths)
+    reset_installation(paths)
+
+    assert list(paths.artifacts_directory.iterdir()) == []
+    assert (external / "keep").read_text(encoding="utf-8") == "outside"
+
+
+def test_reset_rejects_linked_standard_runtime_root(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    paths.artifacts_directory.parent.mkdir(parents=True)
+    paths.artifacts_directory.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(InstallationOperationError, match="filesystem link"):
+        reset_installation(paths)
+    assert not paths.state_directory.exists()
+    assert list(external.iterdir()) == []
+
+
+def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_links(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    paths.state_directory.mkdir(parents=True)
+    paths.cache_directory.mkdir(parents=True)
+    (paths.config_directory / "config.yaml").write_text("content: {directory: /external}", encoding="utf-8")
+    (paths.config_directory / "content").mkdir()
+    (paths.config_directory / "content" / "entry.yaml").write_text("user content", encoding="utf-8")
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "keep").write_text("outside", encoding="utf-8")
+    (paths.config_directory / "linked").symlink_to(external, target_is_directory=True)
+
+    removed = purge_installation(paths)
+
+    assert set(removed) == {paths.config_directory, paths.state_directory, paths.cache_directory}
+    assert not paths.config_directory.exists()
+    assert not paths.state_directory.exists()
+    assert not paths.cache_directory.exists()
+    assert paths.config_directory.parent.is_dir()
+    assert paths.state_directory.parent.is_dir()
+    assert paths.cache_directory.parent.is_dir()
+    assert (external / "keep").read_text(encoding="utf-8") == "outside"
+    assert purge_installation(paths) == removed
+
+
+def test_purge_refuses_linked_installation_root(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "keep").write_text("outside", encoding="utf-8")
+    paths.config_directory.parent.mkdir(parents=True)
+    paths.config_directory.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(InstallationOperationError, match="filesystem link"):
+        purge_installation(paths)
+
+    assert (external / "keep").read_text(encoding="utf-8") == "outside"
 
 
 def _install_cli_paths(monkeypatch: pytest.MonkeyPatch, paths: ApplicationPaths) -> None:
@@ -456,27 +649,38 @@ def test_explicit_missing_configuration_does_not_fall_back_to_installed_default(
 
 
 @pytest.mark.parametrize(
-    "override",
+    "operation,override",
     [
-        ["--config", "custom.yaml"],
-        ["--state", "state.json"],
-        ["--artifacts", "images"],
-        ["--history", "history.jsonl"],
+        ("--initialize", ["--config", "custom.yaml"]),
+        ("--initialize", ["--state", "state.json"]),
+        ("--initialize", ["--artifacts", "images"]),
+        ("--initialize", ["--history", "history.jsonl"]),
+        ("--reset", ["--config", "custom.yaml"]),
+        ("--reset", ["--state", "state.json"]),
+        ("--reset", ["--artifacts", "images"]),
+        ("--reset", ["--history", "history.jsonl"]),
+        ("--purge", ["--config", "custom.yaml"]),
+        ("--purge", ["--state", "state.json"]),
+        ("--purge", ["--artifacts", "images"]),
+        ("--purge", ["--history", "history.jsonl"]),
     ],
 )
-def test_initialize_rejects_all_path_overrides(override: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+def test_administrative_operations_reject_all_path_overrides(
+    operation: str, override: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
     with pytest.raises(SystemExit) as error:
-        cli.main(["--initialize", *override])
+        cli.main([operation, *override])
     assert error.value.code == 2
     assert "cannot be combined with path overrides" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("mode", [["--once"], ["--demo", "5"]])
-def test_initialize_is_mutually_exclusive_with_runtime_modes(
-    mode: list[str], capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
+def test_administrative_operations_are_mutually_exclusive_with_runtime_modes(
+    operation: str, mode: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        cli.main(["--initialize", *mode])
+        cli.main([operation, *mode])
     assert error.value.code == 2
     assert "not allowed with argument" in capsys.readouterr().err
 
@@ -497,3 +701,52 @@ def test_initialize_cli_exits_without_starting_application(
     assert str(paths.content_directory) in output
     assert str(paths.state_directory) in output
     assert str(paths.artifacts_directory) in output
+
+
+@pytest.mark.parametrize("operation", ["--reset", "--purge"])
+def test_destructive_cli_operations_require_confirmation_before_work(
+    operation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    paths.config_file.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
+    monkeypatch.setattr(cli, "run_startup", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
+    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
+    monkeypatch.setattr(cli, "reset_installation", lambda *args: pytest.fail("reset ran before confirmation"))
+    monkeypatch.setattr(cli, "purge_installation", lambda *args: pytest.fail("purge ran before confirmation"))
+
+    assert cli.main([operation]) == 1
+    assert paths.config_file.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.parametrize(
+    "operation,method",
+    [("--reset", "reset_installation"), ("--purge", "purge_installation")],
+)
+def test_destructive_cli_operations_exit_without_starting_application(
+    operation: str,
+    method: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: True)
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        method,
+        lambda *args: calls.append(args) or (() if method == "purge_installation" else None),
+    )
+    monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
+    monkeypatch.setattr(cli, "run_startup", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
+    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
+
+    assert cli.main([operation]) == 0
+    assert calls == [(paths,)]

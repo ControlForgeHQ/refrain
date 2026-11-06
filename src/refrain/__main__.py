@@ -12,7 +12,14 @@ from pathlib import Path
 from threading import Event
 
 from .application import ApplicationError, run_application, run_demo, run_startup
-from .installation import InitializationError, initialize_installation
+from .installation import (
+    InitializationError,
+    InstallationOperationError,
+    confirm_operation,
+    initialize_installation,
+    purge_installation,
+    reset_installation,
+)
 from .paths import ApplicationPathError, resolve_application_paths
 
 _SERVING_BACKENDS = {"window", "image-server"}
@@ -72,7 +79,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     modes.add_argument(
         "--initialize",
         action="store_true",
-        help="install the packaged default configuration and sample content, then exit",
+        help="create missing standard installation resources without replacing existing data, then exit",
+    )
+    modes.add_argument(
+        "--reset", action="store_true", help="remove standard runtime state and generated cache, then exit"
+    )
+    modes.add_argument(
+        "--purge", action="store_true", help="remove the complete standard per-user installation, then exit"
     )
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -89,6 +102,60 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Initializing Refrain using the platform-standard per-user locations")
             initialize_installation(paths, progress=print)
             print("Initialization complete.")
+            return 0
+
+        if arguments.reset or arguments.purge:
+            overrides = [
+                f"--{name}"
+                for name in ("config", "state", "artifacts", "history")
+                if getattr(arguments, name) is not None
+            ]
+            operation = "--reset" if arguments.reset else "--purge"
+            if overrides:
+                parser.error(f"{operation} cannot be combined with path overrides: " + ", ".join(overrides))
+            paths = resolve_application_paths()
+            if arguments.reset:
+                confirmed = confirm_operation(
+                    "RESET",
+                    "This removes operational state, global history, and generated cache data. "
+                    "Configuration and content are preserved.",
+                    (
+                        Path(paths.state_file),
+                        Path(paths.history_file),
+                        Path(paths.state_directory),
+                        Path(paths.cache_directory),
+                        Path(paths.artifacts_directory),
+                    ),
+                )
+                if not confirmed:
+                    return 1
+                reset_installation(paths)
+                print("Reset complete.")
+            else:
+                confirmed = confirm_operation(
+                    "PURGE REFRAIN",
+                    "WARNING: this permanently removes configuration, content, and user-provided files "
+                    "within the standard Refrain locations.",
+                    tuple(
+                        dict.fromkeys(
+                            Path(path)
+                            for path in (
+                                paths.config_directory,
+                                paths.content_directory,
+                                paths.operational_directory,
+                                paths.state_directory,
+                                paths.cache_directory,
+                                paths.artifacts_directory,
+                            )
+                        )
+                    ),
+                )
+                if not confirmed:
+                    return 1
+                removed = purge_installation(paths)
+                for path in removed:
+                    print(f"Removed: {path}")
+                print("Purge complete.")
             return 0
 
         paths = resolve_application_paths()
@@ -163,7 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for termination_signal, handler in previous_handlers.items():
                     signal.signal(termination_signal, handler)
             return 0
-    except (ApplicationError, ApplicationPathError, InitializationError) as error:
+    except (ApplicationError, ApplicationPathError, InitializationError, InstallationOperationError) as error:
         print(f"refrain: {error}", file=sys.stderr)
         return 1
     snapshot = result.state.snapshot

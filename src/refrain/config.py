@@ -414,8 +414,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     content = _mapping(data.get("content", {}), "content", report)
     _known_fields(content, {"directory"}, "content", report)
     directory_value = content.get("directory", "content")
-    if "directory" not in content:
-        use_default("content.directory", "'content'")
     if not isinstance(directory_value, str) or not directory_value:
         report("content.directory", "must be a nonempty path string; using the documented default 'content'")
         directory_value = "content"

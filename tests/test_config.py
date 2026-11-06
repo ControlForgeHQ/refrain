@@ -463,6 +463,20 @@ def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> 
     assert config.content_directory == tmp_path / "content"
 
 
+def test_omitted_content_directory_uses_default_without_information_diagnostic(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    data = configuration_data()
+    data["content"] = {}
+    config_path = write_config(tmp_path / "config.yaml", data)
+    caplog.set_level("INFO")
+
+    config = load_application_config(config_path)
+
+    assert config.content_directory == tmp_path / "content"
+    assert not any("content.directory" in record.message for record in caplog.records)
+
+
 def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 
