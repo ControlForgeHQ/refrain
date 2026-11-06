@@ -86,7 +86,7 @@ The first release should be useful in normal household operation without dependi
 - Discover bundled and user-supplied decoration packages, use a configurable default decoration pool, and support explicit content-entry decoration preferences.
 - Allow decorations to define an appropriate literary presentation region, an optional preferred font, and an optional preferred background.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
-- Load self-contained manifest-based font bundles and compose source images with aspect-preserving background cover and decoration contain scaling.
+- Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.

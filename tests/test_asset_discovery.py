@@ -117,6 +117,7 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
             "format": 1,
             "id": "literary",
             "faces": {"regular": "Regular.ttf", "handwritten": "Script.otf"},
+            "font_faces": {"quotation": "handwritten", "attribution": "italic"},
         },
     )
     decoration_dir = tmp_path / "assets" / "decorations" / "botanical"
@@ -131,22 +132,67 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
             "presentation_region": {"x": 0.12, "y": 0.16, "width": 0.76, "height": 0.68},
             "font": "missing-font",
             "background": "missing-background",
+            "font_faces": {"source": "handwritten"},
         },
     )
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
 
     assert set(config.fonts["literary"].faces) == {"regular", "handwritten"}
+    assert dict(config.fonts["literary"].font_faces) == {"quotation": "handwritten", "attribution": "italic"}
     assert config.fonts["literary"].path == font_dir / "Regular.ttf"
     decoration = config.decorations["botanical-border"]
     assert decoration.presentation_region is not None
     assert decoration.presentation_region.x == 0.12
     assert decoration.font is None
     assert decoration.background is None
+    assert dict(decoration.font_faces) == {"source": "handwritten"}
     assert config.default_fonts == ("lora",)
     assert config.default_decorations == ("none",)
     assert "font preference 'missing-font' is unavailable" in caplog.text
     assert "background preference 'missing-background' is unavailable" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "font_faces",
+    [None, [], "bad", {"byline": "italic"}, {"source": None}, {"quotation": ""}, {"source": "bad face"}],
+)
+def test_invalid_role_face_preferences_do_not_exclude_font_or_decoration(
+    tmp_path: Path, caplog, font_faces: object
+) -> None:
+    font_dir = tmp_path / "assets" / "fonts" / "literary"
+    font_dir.mkdir(parents=True)
+    shutil.copyfile(_BUNDLED_LORA, font_dir / "Regular.ttf")
+    _write_manifest(
+        font_dir,
+        "font.yaml",
+        {
+            "format": 1,
+            "id": "literary",
+            "faces": {"regular": "Regular.ttf"},
+            "font_faces": font_faces,
+        },
+    )
+    decoration_dir = tmp_path / "assets" / "decorations" / "border"
+    _write_png(decoration_dir / "border.png", "RGBA")
+    _write_manifest(
+        decoration_dir,
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "border",
+            "image": "border.png",
+            "font_faces": font_faces,
+        },
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "literary" in config.fonts
+    assert config.fonts["literary"].font_faces == {}
+    assert "border" in config.decorations
+    assert config.decorations["border"].font_faces == {}
+    assert "font_faces" in caplog.text
 
 
 def test_invalid_optional_font_faces_do_not_exclude_a_bundle(tmp_path: Path, caplog) -> None:

@@ -25,6 +25,13 @@ def resolved_font() -> ResolvedFont:
         return ResolvedFont("lora", font_file.read())
 
 
+@pytest.fixture
+def resolved_italic_font() -> ResolvedFont:
+    font_path = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
+    with font_path.open("rb") as font_file:
+        return ResolvedFont("lora:italic", font_file.read())
+
+
 def make_layout(
     text: str,
     font: ResolvedFont,
@@ -174,6 +181,72 @@ def test_authored_lines_wrap_when_they_cannot_be_preserved_at_minimum(resolved_f
             region=region,
             sizes=(layout.quotation.font_size + 1, layout.quotation.font_size + 1),
             style=style,
+        )
+
+
+@pytest.mark.parametrize("style", ["centered", "left-aligned"])
+def test_mixed_face_byline_uses_independent_fonts_and_stable_geometry(
+    resolved_font: ResolvedFont, resolved_italic_font: ResolvedFont, style: str
+) -> None:
+    background = Image.new("RGB", (640, 420), "#f8f6f0")
+    composition = LiteraryComposition(
+        "A quotation with its own face.",
+        source="A Different Source",
+        attribution="A Separate Attribution",
+    )
+    region = PresentationRegion(0.08, 0.08, 0.84, 0.84)
+    mixed = layout_composition(
+        composition,
+        resolved_font,
+        region,
+        background.size,
+        20,
+        48,
+        style,
+        source_font=resolved_italic_font,
+        attribution_font=resolved_font,
+    )
+    regular = layout_composition(composition, resolved_font, region, background.size, 20, 48, style)
+    stages = (
+        CompositionVisibility(),
+        CompositionVisibility(source=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+
+    images = render_reveal_stages(
+        background,
+        resolved_font,
+        mixed,
+        stages,
+        source_font=resolved_italic_font,
+        attribution_font=resolved_font,
+    )
+    regular_image = render_reveal_stages(background, resolved_font, regular, (stages[-1],))[0]
+
+    assert mixed.source_font_identifier == "lora:italic"
+    assert mixed.attribution_font_identifier == "lora"
+    assert mixed.quotation.font_size == regular.quotation.font_size
+    assert mixed.byline is not None and regular.byline is not None
+    assert mixed.byline.bounds[0] >= mixed.region[0]
+    assert mixed.byline.bounds[2] <= mixed.region[2]
+    fields_and_fonts = (
+        (mixed.byline.prefix, resolved_font),
+        (mixed.byline.attribution, resolved_font),
+        (mixed.byline.separator, resolved_font),
+        (mixed.byline.source, resolved_italic_font),
+    )
+    baselines = {
+        field.positions[0][1] + ImageFont.truetype(BytesIO(font.data), field.font_size).getmetrics()[0]
+        for field, font in fields_and_fonts
+        if field is not None
+    }
+    assert len(baselines) == 1
+    assert images[-1].tobytes() != regular_image.tobytes()
+    assert images[0].crop(mixed.byline.prefix.bounds).tobytes() == images[-1].crop(mixed.byline.prefix.bounds).tobytes()
+    if mixed.byline.separator is not None:
+        assert (
+            images[0].crop(mixed.byline.separator.bounds).tobytes()
+            == images[-1].crop(mixed.byline.separator.bounds).tobytes()
         )
 
 

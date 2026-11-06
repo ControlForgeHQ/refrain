@@ -87,6 +87,38 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
         config.backgrounds["other"] = config.backgrounds["canvas"]
 
 
+def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path) -> None:
+    data = configuration_data()
+    data["layout"]["fonts"] = {
+        "default": ["lora"],
+        "font_faces": {"quotation": "regular", "attribution": "italic"},
+    }
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+    assert dict(config.font_faces) == {"quotation": "regular", "attribution": "italic"}
+
+    packaged_config = Path(str(files("refrain").joinpath("config.default.yaml")))
+    packaged = load_application_config(packaged_config)
+    assert dict(packaged.font_faces) == {"attribution": "italic"}
+    assert {"regular", "italic"} <= set(packaged.fonts["lora"].faces)
+    assert packaged.fonts["lora"].faces["italic"].name == "Lora-Italic.ttf"
+
+
+@pytest.mark.parametrize(
+    "preferences",
+    [None, [], "bad", {"byline": "italic"}, {"source": None}, {"quotation": ""}, {"attribution": "bad face"}],
+)
+def test_invalid_global_role_face_preferences_are_warned_and_ignored(
+    tmp_path: Path, preferences: object, caplog
+) -> None:
+    data = configuration_data()
+    data["layout"]["fonts"] = {"default": ["lora"], "font_faces": preferences}
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.font_faces == {}
+    assert "layout.fonts.font_faces" in caplog.text
+
+
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
 def test_custom_background_discovery_and_modes(tmp_path: Path, mode: str) -> None:
     path = tmp_path / "assets" / "backgrounds" / "nested" / "paper.png"

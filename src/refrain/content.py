@@ -6,10 +6,12 @@ import logging
 import os
 import re
 import unicodedata
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import time
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Optional, Union
 
 import yaml
@@ -28,8 +30,10 @@ _ENTRY_FIELDS = {
     "presentation_style",
     "eligibility",
     "reveal",
+    "font_faces",
 }
 _REVEAL_FIELDS = {"source", "attribution"}
+_FONT_ROLES = {"quotation", "source", "attribution"}
 _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -103,6 +107,7 @@ class ContentEntry:
     presentation_style: str = "centered"
     background: Optional[str] = None
     decoration: Optional[str] = None
+    font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def normalize_quotation(text: str) -> str:
@@ -237,6 +242,31 @@ def _validate_reveal(value: object, file: Path, diagnostics: list[ContentDiagnos
     return RevealOverrides(source=parsed["source"], attribution=parsed["attribution"])
 
 
+def _validate_font_faces(
+    value: object, file: Path, diagnostics: list[ContentDiagnostic]
+) -> Optional[Mapping[str, str]]:
+    if not isinstance(value, dict):
+        _diagnose(diagnostics, file, "font_faces", "must be a mapping of literary roles to face identifiers")
+        return None
+    valid = True
+    for role, face in value.items():
+        field = f"font_faces.{role}" if isinstance(role, str) else f"font_faces[{role!r}]"
+        if not isinstance(role, str) or role not in _FONT_ROLES:
+            _diagnose(diagnostics, file, field, "is not a supported literary role")
+            valid = False
+        elif not isinstance(face, str) or not _IDENTIFIER.fullmatch(face):
+            _diagnose(
+                diagnostics,
+                file,
+                field,
+                "must be a nonempty ASCII face identifier beginning with a letter or digit",
+            )
+            valid = False
+    if not valid:
+        return None
+    return MappingProxyType({role: face for role, face in value.items()})
+
+
 def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnostic]) -> Optional[ContentEntry]:
     initial_diagnostic_count = len(diagnostics)
     if not isinstance(data, dict):
@@ -301,6 +331,9 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         else (EligibilityRule(ordinary=True),)
     )
     reveal = _validate_reveal(data["reveal"], file, diagnostics) if "reveal" in data else RevealOverrides()
+    font_faces = (
+        _validate_font_faces(data["font_faces"], file, diagnostics) if "font_faces" in data else MappingProxyType({})
+    )
 
     if len(diagnostics) != initial_diagnostic_count:
         return None
@@ -317,6 +350,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         file=file,
         background=background,  # type: ignore[arg-type]
         decoration=decoration,  # type: ignore[arg-type]
+        font_faces=font_faces,  # type: ignore[arg-type]
     )
 
 

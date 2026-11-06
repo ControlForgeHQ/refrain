@@ -14,7 +14,7 @@ The artwork may be refined or replaced as Refrain evolves. Stable resource ident
 
 ## Fonts
 
-Bundled fonts retain their respective upstream licenses. Each font's directory includes its applicable license and copyright information.
+Bundled fonts retain their respective upstream licenses. Each font's directory includes its applicable license and copyright information. The `lora` bundle includes the matching Lora italic face under the same SIL Open Font License.
 
 The repository's MIT License does not replace those upstream font licenses.
 

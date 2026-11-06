@@ -66,6 +66,40 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert all(entry.file is not None for entry in entries)
 
 
+def test_role_face_preferences_are_preserved_without_bundle_lookup(tmp_path: Path) -> None:
+    preferences = {"quotation": "handwritten", "source": "regular", "attribution": "italic"}
+    write_entry(tmp_path / "entry.yaml", entry_data(font_faces=preferences))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert dict(entry.font_faces) == preferences
+
+
+@pytest.mark.parametrize(
+    "preferences",
+    [
+        None,
+        [],
+        "bad",
+        {"byline": "italic"},
+        {"quotation": None},
+        {"source": ""},
+        {"attribution": "bad face"},
+        {"quotation": "_italic"},
+    ],
+)
+def test_invalid_role_face_preferences_reject_only_the_affected_entry(
+    tmp_path: Path, preferences: object, caplog
+) -> None:
+    write_entry(tmp_path / "invalid.yaml", entry_data(id="invalid", font_faces=preferences))
+    write_entry(tmp_path / "valid.yaml", entry_data(id="valid"))
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["valid"]
+    assert any("invalid.yaml: font_faces" in record.message for record in caplog.records)
+
+
 @pytest.mark.parametrize("background", ["canvas", "none", "unknown-resource", "Custom background", "Canvas"])
 def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path, background: str, caplog) -> None:
     write_entry(

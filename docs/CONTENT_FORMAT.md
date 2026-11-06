@@ -160,6 +160,8 @@ layout:
       - "libre-baskerville"
       - "lora"
       - "source-sans-3"
+    font_faces:
+      attribution: italic
 
   backgrounds:
     default:
@@ -475,9 +477,16 @@ faces:
   regular: Lora-Regular.ttf
   italic: Lora-Italic.ttf
   handwritten: Handwriting-Regular.otf
+font_faces:
+  quotation: regular
+  attribution: italic
 ```
 
 `format` must be the integer `1`. `id` and face names must begin with an ASCII letter or digit and contain only ASCII letters, digits, hyphens, and underscores. `faces` is a nonempty mapping of face names to supported `.ttf` or `.otf` files and must contain a usable `regular` face. An unusable optional face produces a warning and is excluded individually; an unusable `regular` face excludes the bundle. Invalid face names or other structurally invalid manifest data exclude the bundle. Files within a bundle need not belong to one typographic family. Face paths are relative to the manifest directory.
+
+The optional `font_faces` mapping names the bundle author's preferred face for each of `quotation`, `source`, and `attribution`. Its values are case-sensitive face identifiers, not file paths. Omitted roles express no preference. A malformed mapping or invalid role/identifier is warned about and ignored without invalidating the bundle. A syntactically valid preference may name a face not present in the bundle; the bundle remains valid, and selection-time resolution reports the missing face and uses `regular`.
+
+The `faces` mapping registers font resources; `font_faces` expresses role preferences. They are separate interfaces.
 
 Use safe YAML loading. Unknown manifest fields produce warnings and are ignored. Invalid manifest data, unsupported versions/formats, missing or unreadable resources, absolute paths, parent traversal, and references escaping the package (including symlink escapes) exclude the affected bundle without affecting unrelated resources. Bundled font directories retain their license and copyright files.
 
@@ -498,6 +507,8 @@ layout:
       - "libre-baskerville"
       - "lora"
       - "my-lora"
+    font_faces:
+      attribution: italic
 ```
 
 The configured default pool defines the user's preferred fonts for automatic selection.
@@ -511,6 +522,8 @@ Duplicate identifiers are ignored after their first occurrence, with a warning.
 The effective default pool must contain at least one usable font whenever Refrain needs to perform a new selection.
 
 The default pool is explicitly configured. Refrain must not automatically add bundled or newly discovered fonts to the pool.
+
+The optional `layout.fonts.font_faces` mapping supplies lowest-priority face preferences and does not affect the pool or bundle-selection randomness. It accepts the same `quotation`, `source`, and `attribution` roles and face-identifier syntax as bundle manifests. Invalid mappings or values are warned about and ignored. The packaged `config.default.yaml` explicitly requests italic attribution; installations whose existing configuration omits this field do not receive an implicit italic preference.
 
 A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 
@@ -597,6 +610,9 @@ presentation_region:
   width: 0.76
   height: 0.68
 font: lora
+font_faces:
+  quotation: handwritten
+  attribution: italic
 background: aged-paper
 ```
 
@@ -607,6 +623,7 @@ background: aged-paper
 | `image` | Relative PNG path | Yes |
 | `presentation_region` | Normalized rectangle mapping | No |
 | `font` | Font identifier | No |
+| `font_faces` | Mapping of literary roles to face identifiers | No |
 | `background` | Background identifier or `"none"` | No |
 
 `format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Image paths are resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, and unreadable manifests or images exclude only the affected decoration.
@@ -615,7 +632,7 @@ Decoration images must be readable, single-frame RGBA PNGs. Source dimensions an
 
 The optional `presentation_region` follows the validation rules for `layout.presentation_region`. It remains the authored normalized rectangle on the output canvas and is not inferred or transformed from the scaled artwork.
 
-An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. Invalid artwork or presentation-region metadata excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
+An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid artwork or presentation-region metadata excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
 `layout.decorations.available` is no longer supported. It is ignored with an actionable migration warning; place each decoration and its manifest in the category directory.
 
@@ -656,11 +673,21 @@ An available explicit content-entry decoration takes precedence over the default
 
 When no explicit decoration is available, Refrain selects from the effective default decoration pool.
 
-For fonts, precedence is:
+First, Refrain selects exactly one font bundle using the existing precedence:
 
 1. An available explicit content-entry font.
 2. The selected decoration's available preferred font.
 3. Automatic selection from the effective default font pool.
+
+Each literary role then resolves a face within that one selected bundle, independently, in this order:
+
+1. The content entry's `font_faces` preference.
+2. The selected decoration's `font_faces` preference.
+3. The selected font bundle's `font_faces` preference.
+4. `layout.fonts.font_faces`.
+5. The bundle's `regular` face.
+
+The first defined preference wins, including an explicit `regular`. If that winning face is unavailable or unusable, that role uses `regular` with a warning; lower-priority preferences are not consulted. A role never selects another bundle. The selected decoration's face preferences apply even when the content entry selected a different bundle.
 
 For backgrounds, precedence is:
 
@@ -782,6 +809,7 @@ Each quotation is a separate selection candidate.
 | `attribution` | String | No | Absent |
 | `priority` | Integer | No | `0` |
 | `font` | String | No | Automatic selection from default font pool |
+| `font_faces` | Mapping of literary roles to face identifiers | No | No role preferences |
 | `background` | String | No | Decoration preference, then default background pool |
 | `decoration` | String | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
@@ -928,6 +956,21 @@ An absent `font` field means that no specific content-entry font preference is e
 An explicit empty string or invalid field type is a validation error.
 
 The resolution of preferred fonts, fallback behavior, warnings, and persistence of the selected font are defined in `docs/ARCHITECTURE.md`.
+
+### Font face preferences
+
+The optional top-level `font_faces` mapping expresses face preferences for the entry's `quotation`, `source`, and `attribution` roles and applies to every quotation in the entry.
+
+```yaml
+font_faces:
+  quotation: handwritten
+  source: regular
+  attribution: italic
+```
+
+Each value must be a case-sensitive face identifier: a nonempty string beginning with an ASCII letter or digit and containing only ASCII letters, digits, hyphens, and underscores. All roles are optional. Unknown roles, non-mapping values, explicit nulls, empty strings, and invalid identifiers reject this content entry without rejecting unrelated entries. A valid identifier need not be provided by every bundle. If the entry's winning preference is unavailable in the selected bundle, Refrain uses that bundle's `regular` face rather than consulting a lower-priority preference.
+
+There is no catch-all face or per-quotation face override. This mapping never selects a font bundle.
 
 ### Background preference
 
@@ -1318,6 +1361,7 @@ Apply the following rules:
 - An unavailable or invalid discovered background or decoration produces a warning and is excluded from its effective registry.
 - An unavailable or unregistered default background or decoration identifier produces a warning and is excluded from its effective default pool.
 - An unavailable optional font preference on an otherwise usable decoration is ignored with a warning.
+- A malformed `font_faces` mapping in global configuration, a decoration manifest, or a font-bundle manifest is warned about and ignored without invalidating the containing resource.
 - A missing background or decoration pool defaults to `["none"]`.
 - A configured background or decoration pool with no usable members falls back to `["none"]` with a warning.
 - An invalid decoration presentation region excludes that decoration without invalidating unrelated resources.
@@ -1351,6 +1395,7 @@ Content validation includes:
 - valid integer priorities;
 - supported eligibility rules and valid calendar values;
 - valid reveal schedules and presentation settings.
+- valid `font_faces` role mappings and face identifiers.
 
 Invalid or unrecognized fields make the affected content entry invalid.
 
@@ -1363,6 +1408,8 @@ An invalid entry must not invalidate otherwise valid entries or files.
 Conflicting duplicate entry identifiers must not be resolved by arbitrary filesystem enumeration order. All entries participating in a detected identifier conflict are excluded, with diagnostics identifying the conflicting entries.
 
 Content entries whose preferred font, background, or decoration identifier is unavailable remain valid when the identifier itself satisfies the field's syntax rules. Resource fallback behavior is defined in `docs/ARCHITECTURE.md`.
+
+Unlike unavailable resource preferences, a malformed content-entry `font_faces` mapping rejects only that entry.
 
 The effective content library consists of accepted, validated entries.
 

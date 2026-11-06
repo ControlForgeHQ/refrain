@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 
 from PIL import Image, ImageFont, ImageOps
 
+from .assets import valid_identifier
 from .config import (
     BackgroundResource,
     DecorationResource,
@@ -150,41 +151,84 @@ def _apply_daily_decoration(
     return background
 
 
-def _read_font(resource: FontResource) -> ResolvedFont:
-    with resource.path.open("rb") as font_file:
-        font = ResolvedFont(resource.identifier, font_file.read())
+def _read_font(resource: FontResource, face: str = "regular") -> ResolvedFont:
+    path = resource.faces.get(face)
+    if path is None and face == "regular":
+        path = resource.path
+    if path is None:
+        raise ValueError(f"font bundle {resource.identifier!r} does not provide face {face!r}")
+    with path.open("rb") as font_file:
+        identifier = resource.identifier if face == "regular" else f"{resource.identifier}:{face}"
+        font = ResolvedFont(identifier, font_file.read())
     ImageFont.truetype(io.BytesIO(font.data), size=12)
     return font
 
 
-def _resolve_font(snapshot: DailySnapshot, registry: Mapping[str, FontResource]) -> ResolvedFont:
+def _resolve_fonts(snapshot: DailySnapshot, registry: Mapping[str, FontResource]) -> dict[str, ResolvedFont]:
     selected = registry.get(snapshot.font_identifier)
     if selected is not None:
         try:
-            return _read_font(selected)
+            regular = _read_font(selected)
+            resolved_bundle = selected
         except Exception as error:
             _LOGGER.warning(
                 "Committed font %r is unavailable or unusable; using a bundled fallback: %s",
                 snapshot.font_identifier,
                 error,
             )
+            resolved_bundle = None
     else:
         _LOGGER.warning(
             "Committed font %r is unavailable; using a bundled fallback",
             snapshot.font_identifier,
         )
+        resolved_bundle = None
 
-    for identifier, resource in sorted(registry.items()):
-        if not resource.bundled:
+    if resolved_bundle is None:
+        for identifier, resource in sorted(registry.items()):
+            if not resource.bundled:
+                continue
+            try:
+                regular = _read_font(resource)
+                resolved_bundle = resource
+                break
+            except Exception as error:
+                _LOGGER.warning("Bundled fallback font %r is unusable: %s", identifier, error)
+        else:
+            raise DailyImagePreparationError(
+                f"cannot prepare daily snapshot: committed font {snapshot.font_identifier!r} is unavailable or "
+                "unusable and no usable bundled fallback font is registered"
+            )
+
+    preferences = snapshot.presentation_metadata.get("font_faces", {})
+    if not isinstance(preferences, Mapping):
+        raise DailyImagePreparationError("snapshot.presentation_metadata.font_faces must be a mapping")
+    if any(
+        role not in {"quotation", "source", "attribution"} or not valid_identifier(face)
+        for role, face in preferences.items()
+    ):
+        raise DailyImagePreparationError("snapshot.presentation_metadata.font_faces contains an invalid role or face")
+
+    resolved = {"quotation": regular, "source": regular, "attribution": regular}
+    loaded_faces = {"regular": regular}
+    for role in resolved:
+        face = preferences.get(role, "regular")
+        if face == "regular":
             continue
-        try:
-            return _read_font(resource)
-        except Exception as error:
-            _LOGGER.warning("Bundled fallback font %r is unusable: %s", identifier, error)
-    raise DailyImagePreparationError(
-        f"cannot prepare daily snapshot: committed font {snapshot.font_identifier!r} is unavailable or unusable "
-        "and no usable bundled fallback font is registered"
-    )
+        if face not in loaded_faces:
+            try:
+                loaded_faces[face] = _read_font(resolved_bundle, face)
+            except Exception as error:
+                _LOGGER.warning(
+                    "Committed %s face %r is unavailable in font bundle %r; using its regular face: %s",
+                    role,
+                    face,
+                    resolved_bundle.identifier,
+                    error,
+                )
+                loaded_faces[face] = regular
+        resolved[role] = loaded_faces[face]
+    return resolved
 
 
 def prepare_daily_images(
@@ -221,17 +265,19 @@ def prepare_daily_images(
         raise DailyImagePreparationError("decoration_registry must be a mapping of identifiers to decoration resources")
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
-    font = _resolve_font(snapshot, font_registry)
+    fonts = _resolve_fonts(snapshot, font_registry)
     try:
         layout = layout_composition(
             composition,
-            font,
+            fonts["quotation"],
             region,
             image_size,
             min_font_size,
             max_font_size,
             style,
             byline_gap_factor=_BYLINE_GAP_FACTOR,
+            source_font=fonts["source"],
+            attribution_font=fonts["attribution"],
         )
         background = _generate_daily_background(
             image_size, snapshot.background_identifier, {} if background_registry is None else background_registry
@@ -244,10 +290,12 @@ def prepare_daily_images(
         try:
             return render_reveal_stages(
                 background,
-                font,
+                fonts["quotation"],
                 layout,
                 tuple(stages),
                 concealment="pixel-distortion",
+                source_font=fonts["source"],
+                attribution_font=fonts["attribution"],
             )
         finally:
             background.close()
