@@ -782,11 +782,8 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     assert config.content_directory == config_directory / "entries"
 
 
-def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog) -> None:
-    source_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-    user_font = tmp_path / "custom-font.ttf"
-    with source_font.open("rb") as source, user_font.open("wb") as destination:
-        shutil.copyfileobj(source, destination)
+@pytest.mark.parametrize("absolute_path", ["/tmp/custom-font.ttf", r"C:\Users\example\custom-font.ttf"])
+def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog, absolute_path: str) -> None:
     data = configuration_data(
         layout={
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
@@ -800,7 +797,7 @@ def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog) -> None
     write_asset_manifest(
         package,
         "font.yaml",
-        {"format": 1, "id": "extra", "faces": {"regular": str(user_font)}},
+        {"format": 1, "id": "extra", "faces": {"regular": absolute_path}},
     )
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
     assert "extra" not in config.fonts

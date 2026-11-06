@@ -75,12 +75,14 @@ def _read_manifest(path: AssetPath) -> dict[str, object]:
 
 
 def _manifest_path(package: AssetPath, value: object, formats: set[str]) -> AssetPath:
-    if not isinstance(value, str) or not value.strip() or "\\" in value:
+    if not isinstance(value, str) or not value.strip():
         raise ValueError("resource path must be a nonempty relative path")
     posix_path = PurePosixPath(value)
     windows_path = PureWindowsPath(value)
     if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
         raise ValueError("resource path must be relative")
+    if "\\" in value:
+        raise ValueError("resource path must use forward slashes")
     if ".." in posix_path.parts:
         raise ValueError("resource path must remain within its asset package")
     if posix_path.suffix.lower() not in formats or not posix_path.parts:

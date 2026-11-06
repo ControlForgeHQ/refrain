@@ -210,6 +210,7 @@ def test_all_duplicate_custom_identifiers_are_excluded_and_bundled_ids_are_reser
     [
         ("bad name", "image.png", "identifier"),
         ("escaped", "../outside.png", "within its asset package"),
+        ("bad-separators", r"folder\image.png", "forward slashes"),
         ("future", "image.png", "manifest version 1"),
     ],
 )
