@@ -168,7 +168,8 @@ def test_background_pool_selects_distinct_usable_members(workspace: Workspace) -
 
 
 def test_decoration_preferences_resolve_before_font_background_and_region(workspace: Workspace) -> None:
-    overlay = workspace.root / "overlay.png"
+    overlay = workspace.root / "assets" / "decorations" / "overlay.png"
+    overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (1, 2, 3, 128)).save(overlay)
     workspace.config.write_text(
         _CONFIG.replace(
@@ -199,7 +200,8 @@ def test_decoration_preferences_resolve_before_font_background_and_region(worksp
 
 
 def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
-    overlay = workspace.root / "overlay.png"
+    overlay = workspace.root / "assets" / "decorations" / "overlay.png"
+    overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200)).save(overlay)
     workspace.config.write_text(
         _CONFIG.replace(
@@ -241,7 +243,8 @@ def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace
 
 
 def test_normal_runtime_recovers_missing_decoration_without_reselection(workspace: Workspace, caplog) -> None:
-    overlay = workspace.root / "overlay.png"
+    overlay = workspace.root / "assets" / "decorations" / "overlay.png"
+    overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)).save(overlay)
     workspace.config.write_text(
         _CONFIG.replace(
@@ -277,7 +280,8 @@ def test_normal_runtime_recovers_missing_decoration_without_reselection(workspac
 
 
 def test_committed_background_survives_restart_config_changes_and_resource_loss(workspace: Workspace, caplog) -> None:
-    path = workspace.root / "paper.png"
+    path = workspace.root / "assets" / "backgrounds" / "paper.png"
+    path.parent.mkdir(parents=True)
     with Image.new("RGB", (1600, 1200), (100, 140, 180)) as image:
         image.save(path)
     workspace.config.write_text(
@@ -543,7 +547,8 @@ def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspac
 def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bundled_fallback(
     workspace: Workspace, caplog
 ) -> None:
-    custom_font = workspace.root / "custom.ttf"
+    custom_font = workspace.root / "assets" / "fonts" / "custom.ttf"
+    custom_font.parent.mkdir(parents=True)
     bundled_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
     custom_font.write_bytes(bundled_font.read_bytes())
     config = workspace.config.read_text(encoding="utf-8").replace(

@@ -222,8 +222,11 @@ def initialize_installation(
             paths.state_directory,
             paths.cache_directory,
             paths.artifacts_directory,
+            paths.assets_directory,
+            *paths.asset_directories,
         )
     )
+    asset_directories = tuple(Path(path) for path in paths.asset_directories)
     try:
         existing_directories = {directory for directory in directories if _inspect_directory(directory)}
         configuration_exists = _inspect_file(Path(paths.config_file))
@@ -256,10 +259,14 @@ def initialize_installation(
             Path(paths.state_directory),
             Path(paths.cache_directory),
             Path(paths.artifacts_directory),
+            Path(paths.assets_directory),
+            *asset_directories,
             *content_directories,
         }
         _create_directory(config_directory, created, owned_directories)
         _create_directory(content_directory, created, owned_directories)
+        for directory in (Path(paths.assets_directory), *asset_directories):
+            _create_directory(directory, created, owned_directories)
         if not configuration_exists:
             _create_file(Path(paths.config_file), configuration, created, owned_directories)
         if install_samples:
@@ -303,6 +310,9 @@ def initialize_installation(
         report(
             f"Existing nonempty content directory preserved; packaged samples not installed: {paths.content_directory}"
         )
+    report(f"Assets: {paths.assets_directory}")
+    for directory in asset_directories:
+        report(f"User {directory.name}: {directory}")
     report(f"State directory: {paths.state_directory}")
     report(f"Artifacts: {paths.artifacts_directory}")
     return tuple(created)

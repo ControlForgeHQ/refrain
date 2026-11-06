@@ -83,7 +83,8 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
 @pytest.mark.parametrize("absolute", [True, False])
 def test_custom_background_paths_and_modes(tmp_path: Path, mode: str, absolute: bool) -> None:
-    path = tmp_path / "paper.png"
+    path = tmp_path / "paper.png" if absolute else tmp_path / "assets" / "backgrounds" / "paper.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
     Image.new(mode, (1600, 1200)).save(path)
     path_value = str(path) if absolute else path.name
     data = background_configuration(available={"paper": path_value}, default=["paper"])
@@ -99,8 +100,10 @@ def test_custom_background_paths_and_modes(tmp_path: Path, mode: str, absolute: 
 
 @pytest.mark.parametrize("kind", ["jpeg", "palette", "gray", "size", "animation", "corrupt", "missing", "truncated"])
 def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
-    bad_path = tmp_path / "bad.png"
-    good_path = tmp_path / "good.png"
+    backgrounds = tmp_path / "assets" / "backgrounds"
+    backgrounds.mkdir(parents=True)
+    bad_path = backgrounds / "bad.png"
+    good_path = backgrounds / "good.png"
     Image.new("RGB", (1600, 1200)).save(good_path)
     if kind == "jpeg":
         Image.new("RGB", (1600, 1200)).save(bad_path, format="JPEG")
@@ -236,7 +239,8 @@ def test_background_loader_supports_non_filesystem_package_resources(tmp_path: P
 
 
 def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
-    background_path = tmp_path / "paper.png"
+    background_path = tmp_path / "assets" / "backgrounds" / "paper.png"
+    background_path.parent.mkdir(parents=True)
     Image.new("RGB", (1600, 1200)).save(background_path)
     config_path = write_config(
         tmp_path / "config.yaml", background_configuration(available={"paper": "paper.png"}, default=["paper"])
@@ -283,7 +287,8 @@ def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -
 
 @pytest.mark.parametrize("absolute", [True, False])
 def test_custom_decoration_path_and_metadata(tmp_path: Path, absolute: bool) -> None:
-    path = tmp_path / "flourish.png"
+    path = tmp_path / "flourish.png" if absolute else tmp_path / "assets" / "decorations" / "flourish.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGBA", (1600, 1200), (12, 34, 56, 128)).save(path)
     data = decoration_configuration(
         available={
@@ -312,8 +317,10 @@ def test_custom_decoration_path_and_metadata(tmp_path: Path, absolute: bool) -> 
 
 @pytest.mark.parametrize("kind", ["rgb", "size", "animation", "corrupt", "missing"])
 def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
-    bad_path = tmp_path / "bad.png"
-    good_path = tmp_path / "good.png"
+    decorations = tmp_path / "assets" / "decorations"
+    decorations.mkdir(parents=True)
+    bad_path = decorations / "bad.png"
+    good_path = decorations / "good.png"
     Image.new("RGBA", (1600, 1200)).save(good_path)
     if kind == "rgb":
         Image.new("RGB", (1600, 1200)).save(bad_path)
@@ -343,7 +350,9 @@ def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: st
 
 
 def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, caplog) -> None:
-    Image.new("RGBA", (1600, 1200)).save(tmp_path / "overlay.png")
+    decorations = tmp_path / "assets" / "decorations"
+    decorations.mkdir(parents=True)
+    Image.new("RGBA", (1600, 1200)).save(decorations / "overlay.png")
     data = decoration_configuration(
         available={
             "bad-region": {
@@ -370,7 +379,9 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
 
 
 def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(tmp_path: Path, caplog) -> None:
-    Image.new("RGBA", (1600, 1200)).save(tmp_path / "overlay.png")
+    decorations = tmp_path / "assets" / "decorations"
+    decorations.mkdir(parents=True)
+    Image.new("RGBA", (1600, 1200)).save(decorations / "overlay.png")
     data = decoration_configuration(
         available={"usable": {"image": "overlay.png", "font": "missing-font", "background": "missing-paper"}}
     )
@@ -681,14 +692,14 @@ def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> Non
 
 def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path) -> None:
     source_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
-    user_font = tmp_path / "fonts" / "additional.font"
-    user_font.parent.mkdir()
+    user_font = tmp_path / "assets" / "fonts" / "additional.font"
+    user_font.parent.mkdir(parents=True)
     with source_font.open("rb") as source, user_font.open("wb") as destination:
         shutil.copyfileobj(source, destination)
     data = configuration_data(
         layout={
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["lora"], "available": {"extra": "fonts/additional.font"}},
+            "fonts": {"default": ["lora"], "available": {"extra": "additional.font"}},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )
@@ -698,6 +709,43 @@ def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path)
     assert config.fonts["extra"].path == user_font
     assert not config.fonts["extra"].bundled
     assert config.default_fonts == ("lora",)
+
+
+def test_category_relative_resources_use_the_effective_config_directory_and_nested_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_directory = tmp_path / "alternate" / "configuration"
+    font = config_directory / "assets" / "fonts" / "family" / "Family.ttf"
+    background = config_directory / "assets" / "backgrounds" / "backgrounds" / "Paper.png"
+    decoration = config_directory / "assets" / "decorations" / "borders" / "Border.png"
+    font.parent.mkdir(parents=True)
+    background.parent.mkdir(parents=True)
+    decoration.parent.mkdir(parents=True)
+    font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
+    Image.new("RGB", (1600, 1200)).save(background)
+    Image.new("RGBA", (1600, 1200)).save(decoration)
+
+    data = configuration_data(
+        content={"directory": "entries"},
+        layout={
+            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "fonts": {"default": ["lora"], "available": {"family": "family/Family.ttf"}},
+            "backgrounds": {"available": {"handmade-paper": "backgrounds/Paper.png"}},
+            "decorations": {"available": {"border": {"image": "borders/Border.png"}}},
+            "text": {"min_font_size": 28, "max_font_size": 100},
+        },
+    )
+    config_path = write_config(config_directory / "config.yaml", data)
+    working_directory = tmp_path / "unrelated-working-directory"
+    working_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+
+    config = load_application_config(config_path)
+
+    assert config.fonts["family"].path == font
+    assert config.backgrounds["handmade-paper"].path == background
+    assert config.decorations["border"].path == decoration
+    assert config.content_directory == config_directory / "entries"
 
 
 def test_absolute_user_font_path_is_preserved(tmp_path: Path) -> None:
