@@ -1007,7 +1007,11 @@ The architecture does not require a general-purpose layout framework, externally
 
 ### Daily background and decoration selection
 
-Refrain maintains separate effective registries for backgrounds and decorations, each containing bundled resources and accepted user-registered resources.
+Configuration loading owns asset discovery, validation, collision handling, and construction of independent font, background, and decoration registries. Bundled resources are discovered through Python package-resource APIs; user resources are discovered recursively under the corresponding `assets/{fonts,backgrounds,decorations}/` directory beside the effective configuration. Discovery occurs once when configuration is loaded. It does not monitor or modify user directories.
+
+Discovery establishes availability by stable identifier only. It never adds resources to selection pools. The configured default pools remain the sole source of automatic-selection eligibility; any available resource may still be selected explicitly by content or decoration metadata.
+
+Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow reserved bundled identifiers, and every custom resource in an intra-category collision is excluded deterministically.
 
 Application configuration defines a default selection pool for each resource type. Each pool may contain the reserved value `"none"`, representing the intentional absence of that resource.
 
@@ -1065,6 +1069,8 @@ If a committed background becomes unavailable, preparation uses the paper-white 
 If a committed decoration becomes unavailable, preparation omits the decoration with an appropriate diagnostic. It retains the committed effective presentation region rather than recalculating it from the current decoration registry or global configuration.
 
 The same rule applies when a decoration's preferred background was selected and subsequently becomes unavailable.
+
+Background source dimensions and aspect ratios are independent of the fixed 1600 × 1200 presentation canvas. Preparation applies deterministic, aspect-preserving centred cover scaling and equal-edge cropping, then composites the result over paper-white while preserving source alpha. Decorations use deterministic aspect-preserving centred contain scaling; the full overlay fits within the canvas with transparent margins. Neither policy stretches artwork. Decoration presentation-region metadata remains authored in normalized destination-canvas coordinates and is not transformed by scaling.
 
 A recoverable missing image resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required snapshot data or an unrenderable literary composition, remain errors.
 

@@ -81,11 +81,12 @@ The first release should be useful in normal household operation without dependi
 - Reserve layout space for information revealed later.
 - Support predominantly dark text on a paper-white background, with optional restrained color accents.
 - Provide a small bundled collection of subtle background images, including paper-like textures.
-- Allow user-supplied background images, a configurable default background pool, and explicit content-entry background preferences.
+- Discover bundled and user-supplied backgrounds, use a configurable default background pool, and support explicit content-entry background preferences.
 - Provide a small bundled collection of restrained decorative overlays, including borders and flourishes.
-- Allow user-supplied decorations, a configurable default decoration pool, and explicit content-entry decoration preferences.
+- Discover bundled and user-supplied decoration packages, use a configurable default decoration pool, and support explicit content-entry decoration preferences.
 - Allow decorations to define an appropriate literary presentation region, an optional preferred font, and an optional preferred background.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
+- Load self-contained manifest-based font bundles and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
@@ -286,13 +287,12 @@ Development should proceed in the following order:
 5. Implement and test reveal scheduling and hardware-independent image preparation.
 6. Implement and test persisted presentation artifacts and recovery behaviour.
 7. Integrate the physical e-paper display and establish a functional hardware baseline.
-8. Implement and test configurable background libraries, pools, and content-entry preferences.
-9. Implement and test configurable decorative overlays, composition regions, and optional background preferences.
-10. Validate the completed graphical presentation on the physical e-paper display.
-11. Establish reliable unattended operation on the target Raspberry Pi.
-12. Complete Version 0.1 validation, documentation, and release.
-13. Proceed to the companion web presentation.
-14. Evaluate later integrations and public publishing independently.
+8. Implement and test discovered visual assets, self-contained manifests, configurable pools, and content-entry preferences.
+9. Refine typography and adaptive decoration artwork for the supported display aspect ratio; validate the completed graphical presentation on physical e-paper.
+10. Establish reliable unattended operation on the target Raspberry Pi.
+11. Complete Version 0.1 validation, documentation, and release.
+12. Proceed to the companion web presentation.
+13. Evaluate later integrations and public publishing independently.
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
 

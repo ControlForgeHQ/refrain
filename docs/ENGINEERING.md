@@ -374,13 +374,13 @@ Unknown application-configuration fields and invalid optional values must be rep
 
 When optional values are omitted, informational default notices should be consolidated where practical rather than generating excessive startup output.
 
-Validate user-registered fonts individually. Exclude invalid or unavailable registrations from the effective registry while preserving usable registrations and bundled fonts.
+Discover bundled and user-owned assets when loading effective configuration, using package-resource APIs for bundled resources and category directories relative to the effective configuration for user assets. Do not monitor, modify, or generate files in user asset directories. Safely validate each manifest and resource independently; confine manifest references to their package and do not follow symlinks during discovery.
 
-Construct the effective default font pool from valid configured identifiers without automatically adding unrequested fonts.
+Construct registries from valid discovered identifiers, but construct default pools only from explicitly configured identifiers. Never add discovered assets to a default pool automatically. Custom resources cannot shadow bundled identifiers, and all custom resources in a same-category collision are excluded deterministically.
 
 An unavailable font preference in an otherwise valid content entry does not invalidate that entry. Report the unavailable preference and apply the documented default-font fallback.
 
-Validate registered backgrounds individually against the PNG requirements in `docs/CONTENT_FORMAT.md`. Preserve bundled resources and other accepted registrations when one registration fails. Build the effective default background pool without adding unrequested resources. Report unavailable content-entry background preferences without rejecting otherwise valid entries.
+Validate discovered backgrounds individually against the PNG requirements in `docs/CONTENT_FORMAT.md`. Preserve valid resources when another asset fails. Build the effective default background pool without adding unrequested resources. Report unavailable content-entry background preferences without rejecting otherwise valid entries.
 
 Validate content independently by source file and, where supported, by entry. Preserve accepted entries when other entries fail validation.
 
@@ -400,7 +400,7 @@ Use `pathlib` for filesystem path handling.
 
 Do not assume that application files, content files, persistent state, and generated images are located in the same directory.
 
-Keep configuration and user content separate from operational state, global history, and derived artifacts. Custom fonts, backgrounds, and decorations are user-owned resources under `assets/{fonts,backgrounds,decorations}/` beside the effective configuration file; they are separate from bundled package resources and generated artifacts. Relative custom-resource paths use the corresponding category directory, while absolute paths remain direct. Content-directory paths retain their configuration-relative or explicit-absolute semantics. The command-line entry point resolves platform-standard defaults and explicit overrides; application functions continue to receive effective paths rather than performing implicit home-directory lookup.
+Keep configuration and user content separate from operational state, global history, and derived artifacts. Custom fonts, backgrounds, and decorations are user-owned resources under `assets/{fonts,backgrounds,decorations}/` beside the effective configuration file; they are separate from bundled package resources and generated artifacts. Manifest references are relative to their package and must not escape it. Content-directory paths retain their configuration-relative or explicit-absolute semantics. The command-line entry point resolves platform-standard defaults and explicit overrides; application functions continue to receive effective paths rather than performing implicit home-directory lookup.
 
 Avoid assumptions tied to a particular username, home directory, mount point, or installation path.
 
@@ -704,7 +704,7 @@ Font identifiers, paths, and validation rules are defined in `docs/CONTENT_FORMA
 
 Font-selection and fallback behavior are defined in `docs/ARCHITECTURE.md`.
 
-Validate registered font files when loading application configuration.
+Validate all manifest-declared font faces when loading application configuration; each discovered bundle must provide a usable regular face.
 
 Validation must establish that each registered file exists, is readable, and can be loaded by the renderer.
 
@@ -742,11 +742,11 @@ Do not introduce general font discovery, download, or substitution infrastructur
 
 Background identifiers, registration requirements, and default-pool validation are defined in [Background registry](CONTENT_FORMAT.md#background-registry). Selection precedence and recovery behavior are defined in [Presentation and rendering](ARCHITECTURE.md#presentation-and-rendering).
 
-Load the five stable bundled identifiers (`aged-paper`, `canvas`, `cloth`, `ethereal`, and `hex`) through `importlib.resources`, so preparation works from installed packages without a source checkout. Preserve their reserved identifiers. Validate custom resources as readable, single-frame, 1600 × 1200 PNG images in RGB or RGBA mode.
+Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode without requiring source dimensions to match the output. Use deterministic aspect-preserving centred cover scaling and cropping. Preserve transparency over the paper-white base.
 
 Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background identifier before committing the snapshot; do not select backgrounds in rendering or independently for reveal stages.
 
-Keep background composition outside the shared quotation renderer. Compose the committed background over a paper-white base, preserving RGBA transparency, then render the literary composition. Resolve and compose once per complete preparation operation and reuse the result for every stage.
+Keep background composition outside the shared quotation renderer. Compose the committed background over a paper-white base, preserving RGBA transparency, then render the literary composition. Resolve and compose once per complete preparation operation and reuse the result for every stage. Use Pillow resampling suitable for reduction and enlargement, and avoid unnecessary full-resolution copies or retained decoded resources.
 
 `prepare_daily_images(snapshot, stages, font_registry, background_registry=None)` and `recover_prepared_daily_images(state, artifact_store, stages, font_registry, background_registry=None)` require the effective background registry when the committed background identifier is not `"none"`. Omission or `None` in that case is a caller error and raises `DailyImagePreparationError`, including before artifact reuse. Callers should pass the configuration's effective registry for both bundled and custom backgrounds. A supplied empty registry represents unavailable resources and retains the paper-white recovery policy. For committed `"none"` backgrounds, the registry may be omitted.
 
@@ -754,13 +754,13 @@ When regeneration cannot resolve or decode a committed background, report a warn
 
 ### Decoration loading and composition
 
-Decoration identifiers, registration requirements, default-pool validation, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Load the five reserved bundled identifiers (`ethereal`, `hex`, `lower-flourish`, `simple-border`, and `top-bottom-borders`) through `importlib.resources`. Validate custom resources as readable, single-frame, 1600 × 1200 PNG images in RGBA mode.
+Decoration identifiers, manifest requirements, default-pool validation, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate images as readable, single-frame RGBA PNGs without requiring source dimensions to match the output. Use deterministic aspect-preserving centred contain scaling, preserve transparency, and do not crop artwork.
 
 Resolve decoration, font, background, and effective region before committing the snapshot. Keep selection outside rendering. Compose the selected decoration over the already composed background and before literary rendering, once per preparation; use that complete composition for every reveal stage. A missing or unusable committed decoration is warned about and omitted during regeneration, without changing its identifier or the committed region. Do not recalculate geometry from current decoration metadata.
 
 `prepare_daily_images` and `recover_prepared_daily_images` accept the effective decoration registry independently of the background registry. Reuse valid prepared artifacts before resolving image resources, so registry or file changes do not invalidate a valid set.
 
-Wheel and source-distribution tests must verify all five bundled background PNGs, all five bundled decoration PNGs, and `assets/README.md`. Installed-package tests must open and decode both resource types through `importlib.resources`, not merely confirm their filenames exist.
+Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
 
 ### Keep presentation configuration focused
 
@@ -1273,6 +1273,7 @@ Verify that the PNG is created exclusively in the current working directory befo
 Automated testing should cover:
 
 - application configuration parsing, defaults, warnings, and fatal validation errors;
+- recursive asset discovery, package boundaries, manifest schemas, safe relative references, symlink escapes, malformed-resource isolation, identifier validation, collisions, and independence of discovered availability from default pools;
 - missing optional values with documented defaults;
 - explicitly invalid optional values with and without defaults;
 - unrecognized application-configuration fields;
@@ -1358,6 +1359,8 @@ Test font configuration and selection behavior, including:
 Use deterministic random sources where required.
 
 Test background and decoration layer ordering, RGBA transparency, consistent composition across reveal stages, and plain output for `"none"`. Verify warning-based recovery for missing or unusable committed resources, preservation of committed identifiers and effective geometry, and reuse of valid artifacts after resource changes.
+
+Test background cover scaling and centred cropping and decoration contain scaling and centring for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results.
 
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 

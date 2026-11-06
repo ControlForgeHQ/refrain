@@ -161,46 +161,31 @@ layout:
       - "lora"
       - "source-sans-3"
 
-    available:
-      my-lora: "MyCustomLora.otf"
-
   backgrounds:
     default:
       - "none"
-
-    available:
-      my-paper: "MyPaper.png"
+      - "aged-paper"
 
   decorations:
     default:
       - "none"
-
-    available:
-      my-border:
-        image: "MyBorder.png"
-        presentation_region:
-          x: 0.15
-          y: 0.20
-          width: 0.70
-          height: 0.55
-        background: "my-paper"
 
   text:
     min_font_size: 28
     max_font_size: 100
 ```
 
-The example illustrates simultaneous display backends, the information view, a default presentation region, registered fonts, backgrounds, and decorations, and automatic quotation fitting.
+The example illustrates simultaneous display backends, the information view, a default presentation region, explicit resource pools, and automatic quotation fitting.
 
 The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
 
-Refrain automatically registers its bundled fonts, backgrounds, and decorations. Bundled resources are package-owned; user-provided resources are stored separately beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Registered resources can be referenced by stable identifiers without supplying paths in content entries.
+Refrain discovers bundled resources through package resources and user resources recursively beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Each discovered resource is available by stable identifier without adding it to a default pool.
 
-The `available` mappings explicitly register user-provided resources; files are not discovered or registered automatically. Relative font, background, and decoration image paths resolve from their respective category directory beneath the effective configuration file's directory. Nested relative paths stay within that category base. Absolute paths are used directly. For example, `"backgrounds/MyPaper.png"` in the background mapping means `assets/backgrounds/backgrounds/MyPaper.png`; the category name is an ordinary path component and is not removed.
+Fonts, packaged backgrounds, and decorations use YAML manifests whose referenced files are relative to the manifest directory and confined to that package. Standalone background PNGs use their filename stem as the identifier. See the [asset registries](#font-registry) for manifest schemas and validation.
 
 When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly.
 
-This changes the Version 0.1 contract for custom resources: previous config-directory-relative paths are not searched as fallbacks or migrated. Move resources into the category directories or update registrations. Absolute paths remain available for resources stored elsewhere.
+The legacy `layout.fonts.available`, `layout.backgrounds.available`, and `layout.decorations.available` fields are unsupported and are not migrated. Refrain warns and ignores these mappings. Move resources into their category directories and provide manifests where required.
 
 The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
 
@@ -400,9 +385,9 @@ The complete literary composition consists of the primary quotation and its opti
 The layout configuration defines:
 
 - a default presentation region for the complete composition;
-- available fonts and their default selection pool;
-- available backgrounds and their default selection pool;
-- available decorations and their default selection pool;
+- discovered fonts and their default selection pool;
+- discovered backgrounds and their default selection pool;
+- discovered decorations and their default selection pool;
 - minimum and maximum primary quotation font sizes.
 
 A selected decoration may override the default presentation region and may specify a preferred background.
@@ -475,65 +460,30 @@ A content entry cannot directly specify a presentation region.
 
 ### Font registry
 
-Refrain maintains an effective font registry containing both bundled fonts and fonts explicitly registered in application configuration.
+Refrain maintains an effective registry of bundled font bundles and valid bundles discovered recursively under `<configuration directory>/assets/fonts/`. Each bundle has a stable, case-sensitive identifier; content entries and the default pool refer to the identifier, not a path.
 
-Every font has a stable, case-sensitive identifier. Content entries and the default font pool refer to fonts by these identifiers rather than by filesystem paths.
+Bundled font identifiers are `alegreya`, `libre-baskerville`, `lora`, `orbitron`, and `source-sans-3`. These identifiers are reserved and stable. `orbitron` is available for explicit selection but is not in the default pool unless configured there.
 
-#### Bundled fonts
+#### Font bundle manifests
 
-Refrain automatically registers the following bundled fonts:
-
-| Identifier | Font family |
-|---|---|
-| `alegreya` | Alegreya |
-| `libre-baskerville` | Libre Baskerville |
-| `lora` | Lora |
-| `orbitron` | Orbitron |
-| `source-sans-3` | Source Sans 3 |
-
-Bundled fonts are application resources and do not require entries in `layout.fonts.available`.
-
-`orbitron` is available for explicit font selection and is not included in the default font pool unless configured there.
-
-Their identifiers are reserved. Application configuration must not redefine or override a bundled font identifier.
-
-Bundled font identifiers form part of the public configuration interface and must remain stable across compatible releases.
-
-#### User-registered fonts
-
-The optional `layout.fonts.available` mapping registers additional fonts supplied by an installation.
-
-Each mapping key is a user-defined font identifier, and its value is the path to a supported font file.
-
-For example:
+Each package directory contains a `font.yaml` manifest:
 
 ```yaml
-layout:
-  fonts:
-    available:
-      my-lora: "MyCustomLora.otf"
-      family-handwriting: "family/FamilyHandwriting.ttf"
+format: 1
+id: literary
+faces:
+  regular: Lora-Regular.ttf
+  italic: Lora-Italic.ttf
+  handwritten: Handwriting-Regular.otf
 ```
 
-When omitted, `layout.fonts.available` defaults to an empty mapping.
+`format` must be the integer `1`. `id` and face names must begin with an ASCII letter or digit and contain only ASCII letters, digits, hyphens, and underscores. `faces` is a nonempty mapping of face names to supported `.ttf` or `.otf` files and must contain a usable `regular` face. Files within a bundle need not belong to one typographic family. Face paths are relative to the manifest directory.
 
-Font identifiers must be nonempty strings and are case-sensitive.
+Use safe YAML loading. Unknown manifest fields produce warnings and are ignored. Invalid manifest data, unsupported versions/formats, missing or unreadable resources, absolute paths, parent traversal, and references escaping the package (including symlink escapes) exclude the affected bundle without affecting unrelated resources. Bundled font directories retain their license and copyright files.
 
-User-defined identifiers must not duplicate bundled identifiers. Such registrations are ignored with a warning; user-defined fonts cannot replace or shadow bundled fonts.
+All usable bundled and discovered fonts are available for explicit content-entry selection independently of default-pool membership. A custom identifier conflicting with a bundled identifier is excluded. All custom bundles sharing an identifier are excluded with deterministic diagnostics listing their locations.
 
-Font paths must be nonempty strings.
-
-Relative font paths are resolved from `<configuration directory>/assets/fonts/`. They may contain nested subdirectories; the font remains explicitly registered through `available`.
-
-Absolute paths are permitted.
-
-A user-registered font is included in the effective font registry only when its identifier and path are valid and the referenced file exists, is readable, and can be loaded by the renderer.
-
-Invalid, missing, or unreadable font registrations are excluded individually from the effective registry, with warnings identifying the affected identifier and reason.
-
-An invalid registration must not prevent otherwise valid font registrations or bundled fonts from being available.
-
-The effective registry contains all usable bundled fonts and all accepted user-registered fonts. Both are available for explicit selection by content entries, whether or not they appear in the default font pool.
+`layout.fonts.available` is no longer supported. It is ignored with an actionable migration warning; place font files in a bundle under `assets/fonts/`.
 
 ### Default font pool
 
@@ -560,7 +510,7 @@ Duplicate identifiers are ignored after their first occurrence, with a warning.
 
 The effective default pool must contain at least one usable font whenever Refrain needs to perform a new selection.
 
-The default pool is explicitly configured. Refrain must not automatically add bundled or newly registered fonts to the pool.
+The default pool is explicitly configured. Refrain must not automatically add bundled or newly discovered fonts to the pool.
 
 A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 
@@ -574,51 +524,31 @@ Automatic font selection and its persistence are defined in `docs/ARCHITECTURE.m
 
 ### Background registry
 
-Refrain maintains an effective background registry containing bundled background images and accepted user-registered images.
+Refrain maintains an effective registry containing bundled and recursively discovered backgrounds. Identifiers are case-sensitive ASCII names beginning with a letter or digit and containing only letters, digits, hyphens, and underscores. The reserved identifier `"none"` represents no background and cannot be registered.
 
-Every background has a stable, case-sensitive identifier. The default background pool, decoration preferences, and content-entry preferences refer to these identifiers rather than filesystem paths.
+Bundled identifiers are `aged-paper`, `canvas`, `cloth`, `ethereal`, and `hex`; they remain stable and are available without being added to the default pool.
 
-The reserved identifier `"none"` represents no background image. It is always available and cannot be registered or overridden.
+#### Discovered backgrounds
 
-#### Bundled backgrounds
+Standalone PNG files use their filename stem as the identifier. For example, `assets/backgrounds/aged-paper.png` registers `aged-paper`.
 
-Refrain includes a small collection of subtle, paper-like backgrounds, registered automatically under stable identifiers.
-
-The exact bundled identifiers are documented alongside the distributed assets when introduced. Identifiers included in a release are reserved and remain stable across compatible releases.
-
-Bundled backgrounds are available for explicit selection without being automatically added to the default pool.
-
-#### User-registered backgrounds
-
-The optional `layout.backgrounds.available` mapping registers additional background images.
-
-Each key is a user-defined background identifier and its value is the path to a PNG file.
-
-For example:
+Directories containing `background.yaml` define packaged backgrounds:
 
 ```yaml
-layout:
-  backgrounds:
-    available:
-      handmade-paper: "HandmadePaper.png"
-      parchment: "paper/Parchment.png"
+format: 1
+id: forest
+image: forest.png
 ```
 
-When omitted, `layout.backgrounds.available` defaults to an empty mapping.
+`format` must be the integer `1`, and `image` is a relative PNG path resolved from the manifest directory. A recognized package is a discovery boundary, so internal images are not also registered as standalone backgrounds.
 
-Background identifiers must be nonempty, case-sensitive strings.
+Manifests use safe YAML loading; unknown fields produce warnings. Absolute references, parent traversal, paths escaping the package (including symlink escapes), unsupported formats, and unreadable manifests or images exclude only the affected resource. Backgrounds must be readable, single-frame RGB or RGBA PNGs. Source dimensions and aspect ratios may differ from the 1600 × 1200 output.
 
-User identifiers must not duplicate reserved or bundled identifiers. Such registrations are ignored with a warning.
+Background composition preserves aspect ratio with centred cover scaling: scale uniformly until the canvas is covered, then crop overflow evenly from opposing sides. The result is composited over paper-white, preserving RGBA transparency; it is never stretched or letterboxed.
 
-Relative paths are resolved from `<configuration directory>/assets/backgrounds/` and may contain nested subdirectories. Absolute paths are used directly. Registrations are explicit; the assets directory is not scanned.
+All usable discovered backgrounds are available for explicit entry or decoration preferences whether or not included in the default pool. Custom resources cannot shadow bundled identifiers. If custom resources share an identifier, all are excluded and their locations are reported deterministically.
 
-Background images must be readable, single-frame PNG images with dimensions of 1600 × 1200 pixels.
-
-RGB and RGBA backgrounds are supported. Other formats, image modes, dimensions, or unreadable resources are not accepted in Version 0.1.
-
-Invalid registrations are excluded individually from the effective registry with warnings. They must not prevent other usable backgrounds from being registered.
-
-Background images are drawn over the paper-white base image. An RGBA background may expose some of that base through transparency.
+`layout.backgrounds.available` is no longer supported. It is ignored with an actionable migration warning; use standalone PNG files or packaged backgrounds in the category directory.
 
 #### Default background pool
 
@@ -649,92 +579,45 @@ Backgrounds have no repetition history or selection weights.
 
 ### Decoration registry
 
-Refrain maintains an effective decoration registry containing bundled decorations and accepted user-registered decorations.
+Refrain maintains an effective registry containing bundled and recursively discovered decorations. A decoration is a transparent overlay with optional presentation metadata. The reserved identifier `"none"` means no decoration and cannot be registered.
 
-A decoration is a complete, transparent image overlay with optional composition metadata.
+Bundled identifiers are `ethereal`, `hex`, `lower-flourish`, `simple-border`, and `top-bottom-borders`. They remain stable and are available independently of the default pool.
 
-Each decoration may define:
+#### Decoration manifests
 
-- an image resource;
-- an effective presentation-region override;
-- a preferred font identifier;
-- a preferred background identifier, including `"none"`.
-
-The reserved identifier `"none"` represents no decoration. It is always available and cannot be registered or overridden.
-
-#### Bundled decorations
-
-Refrain automatically registers the following bundled overlays:
-
-| Identifier | Image |
-|---|---|
-| `ethereal` | `ethereal.png` |
-| `hex` | `hex.png` |
-| `lower-flourish` | `lower-flourish.png` |
-| `simple-border` | `simple-border.png` |
-| `top-bottom-borders` | `top-bottom-borders.png` |
-
-The bundled identifiers are reserved and stable. The bundled collection currently has no composition metadata; no font, background, or presentation-region preferences are implied by an image's appearance.
-
-Bundled decorations are registered automatically and remain available independently of the default decoration pool.
-
-#### User-registered decorations
-
-The optional `layout.decorations.available` mapping registers additional decoration entries.
-
-Each key is a user-defined decoration identifier. Its value is a mapping containing the decoration's image and optional metadata.
-
-| Field | Type | Required | Default |
-|---|---|---|---|
-| `image` | String path | Yes | None |
-| `presentation_region` | Normalized rectangle mapping | No | Global presentation region |
-| `font` | Font identifier | No | No preference |
-| `background` | Background identifier or `"none"` | No | No preference |
-
-For example:
+Each package directory under `<configuration directory>/assets/decorations/` contains `decoration.yaml`:
 
 ```yaml
-layout:
-  decorations:
-    available:
-      botanical-corners:
-        image: "BotanicalCorners.png"
-        presentation_region:
-          x: 0.16
-          y: 0.18
-          width: 0.68
-          height: 0.58
-
-      futuristic-corners:
-        image: "corners/FuturisticCorners.png"
-        presentation_region:
-          x: 0.12
-          y: 0.16
-          width: 0.76
-          height: 0.60
-        font: "orbitron"
-        background: "hex-paper"
+format: 1
+id: botanical-border
+image: border.png
+presentation_region:
+  x: 0.12
+  y: 0.16
+  width: 0.76
+  height: 0.68
+font: lora
+background: aged-paper
 ```
 
-When omitted, `layout.decorations.available` defaults to an empty mapping.
+| Field | Type | Required |
+|---|---|---|
+| `format` | Integer version (`1`) | Yes |
+| `id` | Asset identifier | Yes |
+| `image` | Relative PNG path | Yes |
+| `presentation_region` | Normalized rectangle mapping | No |
+| `font` | Font identifier | No |
+| `background` | Background identifier or `"none"` | No |
 
-Decoration identifiers follow the same nonempty, case-sensitive, reserved-identifier rules as background identifiers.
+`format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Image paths are resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, and unreadable manifests or images exclude only the affected decoration.
 
-Relative image paths are resolved from `<configuration directory>/assets/decorations/` and may contain nested subdirectories. Absolute paths are used directly. Registrations are explicit; the assets directory is not scanned.
+Decoration images must be readable, single-frame RGBA PNGs. Source dimensions and aspect ratios may differ from the output. Composition uniformly scales the complete image to fit, centres it, preserves transparency, and leaves transparent margins as needed; it does not crop or stretch artwork.
 
-Decoration images must be readable, single-frame RGBA PNG images with dimensions of 1600 × 1200 pixels.
+The optional `presentation_region` follows the validation rules for `layout.presentation_region`. It remains the authored normalized rectangle on the output canvas and is not inferred or transformed from the scaled artwork.
 
-Transparency is required so the underlying background can remain visible.
+An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. Invalid artwork or presentation-region metadata excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
-The optional `presentation_region` must satisfy the validation rules defined for `layout.presentation_region`.
-
-The optional `font` must be a nonempty identifier referring to a usable registered font. An unavailable preferred font produces a warning and is treated as an absent preference without invalidating an otherwise usable decoration.
-
-The optional `background` must refer to a usable registered background or `"none"`. An unavailable preferred background produces a warning and is treated as an absent preference without invalidating an otherwise usable decoration.
-
-Invalid decoration image or presentation-region registrations are excluded individually from the effective registry, with warnings.
-
-Decorations provide artwork and composition metadata. They do not define arbitrary drawing instructions, independently positioned text fields, or new literary presentation styles.
+`layout.decorations.available` is no longer supported. It is ignored with an actionable migration warning; place each decoration and its manifest in the category directory.
 
 #### Default decoration pool
 
@@ -762,6 +645,8 @@ A registered decoration outside the default pool remains available for explicit 
 An explicitly configured pool with no usable members falls back to `["none"]` with a warning.
 
 Decorations have no repetition history or selection weights.
+
+Discovery does not change pool membership. Bundled identifiers cannot be shadowed by custom assets. If multiple custom decorations share an identifier, all are excluded and their package locations are reported. The same identifier may be used in different categories.
 
 ### Background and decoration resolution
 
@@ -1417,7 +1302,7 @@ Diagnostics must identify the affected file and field or entry where applicable,
 
 ### Application configuration
 
-Application configuration is interpreted into an effective configuration containing accepted values, documented defaults, and usable registered resources.
+Application configuration is interpreted into an effective configuration containing accepted values, documented defaults, and usable discovered resources.
 
 A configuration problem is fatal only when Refrain cannot establish a valid effective value required for the operation.
 
@@ -1428,9 +1313,9 @@ Apply the following rules:
 - An invalid optional value without a documented default produces a warning and is ignored.
 - An unrecognized configuration field produces a warning and is ignored.
 - A missing or invalid required value without a usable fallback produces an error.
-- An unavailable or invalid user-registered font produces a warning and is excluded from the effective font registry.
+- An unavailable or invalid discovered font bundle produces a warning and is excluded from the effective font registry.
 - An unavailable or unregistered default-pool identifier produces a warning and is excluded from the effective default pool.
-- An unavailable or invalid user-registered background or decoration produces a warning and is excluded from its effective registry.
+- An unavailable or invalid discovered background or decoration produces a warning and is excluded from its effective registry.
 - An unavailable or unregistered default background or decoration identifier produces a warning and is excluded from its effective default pool.
 - An unavailable optional font preference on an otherwise usable decoration is ignored with a warning.
 - A missing background or decoration pool defaults to `["none"]`.

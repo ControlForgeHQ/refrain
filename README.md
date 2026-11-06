@@ -83,7 +83,16 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
-Register custom fonts explicitly; for example, `my-serif: "MySerif.ttf"` under `layout.fonts.available` resolves from `assets/fonts/` beside the effective configuration file. Nested relative paths and absolute paths are also supported.
+Custom fonts are discovered from `assets/fonts/` beside the effective configuration file. Put a `font.yaml` manifest and its face files in a directory under that category; for example:
+
+```yaml
+format: 1
+id: my-serif
+faces:
+  regular: MySerif.ttf
+```
+
+The face path is relative to the manifest. Each bundle needs a usable `regular` face; all discovered fonts are available by identifier, but only identifiers listed in `layout.fonts.default` participate in random selection.
 
 ### Daily backgrounds
 
@@ -95,11 +104,17 @@ Use `layout.backgrounds.default` to select equally among distinct usable identif
 layout:
   backgrounds:
     default: ["none", "aged-paper", "canvas"]
-    available:
-      handmade-paper: "HandmadePaper.png"
 ```
 
-Custom registrations must be readable, single-frame PNG images, exactly 1600 × 1200 pixels, in RGB or RGBA mode. Relative paths resolve from `assets/backgrounds/` beside the effective configuration file; absolute paths are permitted. Invalid registrations are excluded individually with warnings, and reserved identifiers cannot be overridden. RGBA transparency exposes the paper-white base.
+Background assets are discovered recursively under `assets/backgrounds/` beside the effective configuration file. A standalone PNG uses its filename stem as its identifier. A package directory can instead contain a `background.yaml` manifest and its image:
+
+```yaml
+format: 1
+id: handmade-paper
+image: HandmadePaper.png
+```
+
+Images must be readable single-frame PNGs in RGB or RGBA mode. Any positive source dimensions and aspect ratio are accepted; backgrounds are uniformly scaled to cover the output, centred, and cropped as needed. RGBA transparency exposes the paper-white base.
 
 A content entry's available `background: "<id>"` wins over the default pool; `background: "none"` suppresses automatic selection. An unavailable, syntactically valid preference warns and falls back to the pool without rejecting the entry. The resolved identifier remains committed across reveals and restarts. If regeneration cannot load that resource, preparation warns and uses paper-white without selecting a replacement or changing committed state. Valid prepared images remain reusable after resource changes. See [Background registry](docs/CONTENT_FORMAT.md#background-registry) and [Background and decoration recovery](docs/ARCHITECTURE.md#background-and-decoration-recovery).
 
@@ -113,15 +128,22 @@ Configure a default pool and, optionally, custom RGBA PNGs:
 layout:
   decorations:
     default: ["none", "lower-flourish", "simple-border"]
-    available:
-      botanical-corners:
-        image: "BotanicalCorners.png"
-        presentation_region: {x: 0.16, y: 0.18, width: 0.68, height: 0.58}
-        font: "lora"
-        background: "aged-paper"
 ```
 
-Decoration images must be readable, single-frame 1600 × 1200 RGBA PNGs. Relative image paths resolve from `assets/decorations/` beside the effective configuration file. The optional region uses normalized `x`, `y`, `width`, and `height` values; preferred fonts and backgrounds must be registered. An unavailable preference is warned about and ignored without invalidating the decoration. Invalid registrations are excluded independently. Omitted pools default to `["none"]`; duplicate members are ignored, and a pool with no usable members falls back to `["none"]`.
+Put custom decoration packages recursively under `assets/decorations/`, with a `decoration.yaml` manifest alongside the artwork:
+
+```yaml
+format: 1
+id: botanical-corners
+image: BotanicalCorners.png
+presentation_region: {x: 0.16, y: 0.18, width: 0.68, height: 0.58}
+font: lora
+background: aged-paper
+```
+
+Images must be readable, single-frame RGBA PNGs. Any positive source dimensions and aspect ratio are accepted; decorations are uniformly scaled to fit, centred, and never cropped. The optional presentation region remains normalized to the output canvas. Unavailable font or background preferences are warned about and ignored. Invalid assets are excluded independently. Omitted pools default to `["none"]`; discovered resources are not added automatically.
+
+Fonts, backgrounds, and decorations no longer accept `layout.*.available` registrations. Move custom assets into their category directory and add the required manifest where applicable; update `layout.*.default` only when an asset should participate in automatic selection. Legacy mappings are ignored with migration warnings. Asset identifiers are case-sensitive ASCII letters, digits, hyphens, and underscores, beginning with a letter or digit. User assets cannot shadow bundled assets, and duplicate custom identifiers are all excluded.
 
 A content entry may select a decoration for every quotation it contains:
 
@@ -150,7 +172,7 @@ Initialization copies the packaged `config.default.yaml` to `config.yaml` only w
 
 Initialization is noninteractive and repeatable. It reuses existing real configuration, content, state, and cache directories without modifying existing files. Unexpected files or filesystem links that prevent safe access are reported before installation writes begin. New files are created exclusively, and a failure after creation begins leaves and reports partial results for a later safe retry. Initialization does not create state or history files and does not start display backends or select content.
 
-The standard configuration directory contains `config.yaml`, `content/`, and `assets/` with `fonts/`, `backgrounds/`, and `decorations/` subdirectories. Initialization creates missing asset directories, accepts and preserves existing nonempty directories and files, and does not copy bundled visual resources into them. Custom resources still require explicit registration; Refrain does not scan asset directories.
+The standard configuration directory contains `config.yaml`, `content/`, and `assets/` with `fonts/`, `backgrounds/`, and `decorations/` subdirectories. Initialization creates missing asset directories, accepts and preserves existing nonempty directories and files, and does not copy bundled visual resources into them. Refrain discovers valid assets when it loads configuration; it does not modify user-owned assets or add discovered resources to default pools.
 
 ### Standard per-user locations
 
@@ -171,7 +193,7 @@ Normal operation does not generate a missing configuration or install sample con
 
 If `content.directory` is omitted, the content library defaults to `content/` alongside the selected configuration file. An explicit relative path uses that same configuration-relative base; an absolute path remains absolute.
 
-Existing custom-resource registrations that used config-directory-relative paths are not searched as a fallback or migrated. Move those files into the appropriate asset category or update the configured path; absolute paths can continue to reference resources stored elsewhere.
+Existing `layout.*.available` resource mappings are no longer supported and are not migrated. Move custom assets into the category directories and provide manifests for font bundles and packaged backgrounds/decorations. Standalone backgrounds need no manifest.
 
 ### Reset and purge
 

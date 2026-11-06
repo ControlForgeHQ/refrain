@@ -36,7 +36,8 @@ refrain = [
     "assets/fonts/**/*",
     "assets/branding/*",
     "assets/backgrounds/*.png",
-    "assets/decorations/*.png",
+    "assets/backgrounds/**/*",
+    "assets/decorations/**/*",
     "display/vendor/waveshare/*.md",
 ]
 
