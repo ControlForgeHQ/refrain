@@ -9,7 +9,7 @@ import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -26,7 +26,7 @@ from .config import (
     FontResource,
     load_application_config,
 )
-from .content import ContentLibraryError, load_content_library
+from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .display.coordinator import DisplayPublicationCoordinator
 from .eligibility import build_eligible_quotation_pool
@@ -41,7 +41,7 @@ from .persistence import (
     StateCommitError,
     StateRecoveryError,
 )
-from .preparation import DailyImagePreparationError
+from .preparation import DailyImagePreparationError, prepare_daily_images
 from .recovery import recover_prepared_daily_images
 from .scheduling import (
     SchedulingAction,
@@ -55,6 +55,7 @@ from .timekeeping import DisplayDayBoundaryObserver, next_scheduling_deadline, w
 _LOGGER = logging.getLogger(__name__)
 _IMAGE_SIZE = (1600, 1200)
 _INFORMATION_VIEW_IDENTITY = (0, -1)
+_DIAGNOSTIC_PRESENTATION_IDENTITY = (0, -2)
 _INFORMATION_VIEW_PUBLICATION_TIMEOUT = 60.0
 
 
@@ -146,7 +147,7 @@ def _resolve_decoration(configuration: ApplicationConfiguration, preferred: str 
 
 def _select_snapshot(
     configuration: ApplicationConfiguration,
-    display_date,
+    display_date: date,
     chooser: random.Random,
     state: PersistentState | None = None,
 ) -> tuple[SelectionProposal, DailySnapshot]:
@@ -171,7 +172,17 @@ def _select_snapshot(
             "add an ordinary or matching date-specific entry"
         )
 
-    entry = candidate.entry
+    snapshot = _build_snapshot(configuration, candidate.entry, candidate.quotation, display_date, chooser)
+    return proposal, snapshot
+
+
+def _build_snapshot(
+    configuration: ApplicationConfiguration,
+    entry: ContentEntry,
+    quotation: Quotation,
+    display_date: date,
+    chooser: random.Random,
+) -> DailySnapshot:
     reveal = entry.reveal
     metadata: dict[str, object] = {"presentation_style": entry.presentation_style}
     if entry.source is not None:
@@ -205,8 +216,8 @@ def _select_snapshot(
     )
     try:
         snapshot = DailySnapshot(
-            quotation_text=candidate.text,
-            quotation_identity=candidate.identity,
+            quotation_text=quotation.text,
+            quotation_identity=quotation.identity,
             font_identifier=_resolve_font(configuration, font_preference, chooser),
             background_identifier=_resolve_background(configuration, background_preference, chooser),
             decoration_identifier=decoration_identifier,
@@ -230,7 +241,126 @@ def _select_snapshot(
         resolve_reveal_stages(snapshot)
     except (ValueError, TypeError) as error:
         raise ApplicationError(f"entry {entry.id!r} cannot produce a valid daily snapshot: {error}") from error
-    return proposal, snapshot
+    return snapshot
+
+
+def _save_diagnostic_png(image: Image.Image, entry_id: str) -> Path:
+    try:
+        output = Path.cwd() / f"refrain-{entry_id}.png"
+    except OSError as error:
+        raise ApplicationError(
+            f"cannot determine the current working directory for diagnostic PNG output: {error}"
+        ) from error
+    created = False
+    try:
+        with output.open("xb") as stream:
+            created = True
+            image.save(stream, format="PNG")
+    except FileExistsError as error:
+        raise ApplicationError(
+            f"diagnostic PNG already exists: {output}; move or remove it before running --show-entry again"
+        ) from error
+    except Exception as error:
+        if created:
+            try:
+                output.unlink()
+            except OSError as cleanup_error:
+                raise ApplicationError(
+                    f"cannot save diagnostic PNG {output}: {error}; cannot remove incomplete output: {cleanup_error}"
+                ) from error
+        raise ApplicationError(f"cannot save diagnostic PNG {output}: {error}") from error
+    return output
+
+
+def run_show_entry(
+    config_file: str | Path,
+    entry_id: str,
+    *,
+    random_source: random.Random | None = None,
+    backend_factory: BackendFactory = _default_backend_factory,
+) -> Path:
+    """Render, save, and publish one fully revealed entry without accessing operational state."""
+    configuration = _load_configuration(config_file)
+    chooser = random_source if random_source is not None else random.Random()
+    images: tuple[Image.Image, ...]
+    if entry_id == "information":
+        try:
+            images = (prepare_information_view(configuration),)
+        except InformationViewPreparationError as error:
+            raise ApplicationError(f"cannot prepare information view: {error}") from error
+    else:
+        try:
+            entries = load_content_library(configuration.content_directory)
+        except ContentLibraryError as error:
+            raise ApplicationError(f"content library is invalid: {error}") from error
+
+        entry = next((candidate for candidate in entries if candidate.id == entry_id), None)
+        if entry is None:
+            raise ApplicationError(
+                f"content entry {entry_id!r} was not found in configured content library "
+                f"{configuration.content_directory}; confirm that the ID is exact and the entry has at least "
+                "one usable quotation"
+            )
+        if not entry.quotations:
+            raise ApplicationError(f"content entry {entry_id!r} has no usable quotations to present")
+        snapshot = _build_snapshot(configuration, entry, entry.quotations[0], date.today(), chooser)
+        stages = resolve_reveal_stages(snapshot)
+        try:
+            images = prepare_daily_images(
+                snapshot,
+                (stages[-1],),
+                configuration.fonts,
+                configuration.backgrounds,
+                configuration.decorations,
+            )
+        except Exception as error:
+            raise ApplicationError(f"cannot prepare diagnostic presentation for entry {entry_id!r}: {error}") from error
+
+    image = images[-1]
+    coordinator: DisplayPublicationCoordinator | None = None
+    transferred = False
+    try:
+        output = _save_diagnostic_png(image, entry_id)
+        identity = _DIAGNOSTIC_PRESENTATION_IDENTITY
+        try:
+            coordinator = DisplayPublicationCoordinator(
+                configuration.display_backends,
+                backend_factory,
+                retry=False,
+            )
+        except Exception as error:
+            raise ApplicationError(f"cannot initialize diagnostic display publication: {error}") from error
+        try:
+            coordinator.publish(identity, image)
+            transferred = True
+            coordinator.wait_for_publication(identity)
+        except Exception as error:
+            raise ApplicationError(f"cannot publish diagnostic presentation: {error}") from error
+
+        results = coordinator.publication_results(identity)
+        failed = not results
+        for backend, (published, error) in results.items():
+            if published:
+                _LOGGER.info("Diagnostic image published to display backend %s", backend)
+            else:
+                failed = True
+                _LOGGER.error(
+                    "Diagnostic image publication failed for display backend %s: %s",
+                    backend,
+                    error or "no successful acknowledgement",
+                )
+        if failed:
+            raise ApplicationError(
+                f"diagnostic image was not published by every configured display backend; PNG saved at {output}"
+            )
+        _LOGGER.info("Diagnostic PNG saved at %s", output)
+        return output
+    finally:
+        if coordinator is not None:
+            coordinator.close()
+        for prepared_image in images:
+            if not transferred or prepared_image is not image:
+                prepared_image.close()
 
 
 def _commit_selection(

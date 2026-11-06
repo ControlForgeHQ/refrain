@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import re
 import signal
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from threading import Event
 
-from .application import ApplicationError, run_application, run_demo, run_startup
+from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup
 from .installation import (
     InitializationError,
     InstallationOperationError,
@@ -24,6 +25,16 @@ from .paths import ApplicationPathError, resolve_application_paths
 
 _SERVING_BACKENDS = {"window", "image-server"}
 _LOGGER = logging.getLogger(__name__)
+_ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+
+
+def _entry_id(value: str) -> str:
+    if not _ENTRY_ID.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "entry ID must be nonempty, start with an ASCII letter or digit, and contain only "
+            "ASCII letters, digits, hyphens, and underscores"
+        )
+    return value
 
 
 def _hold_open(backend: str) -> None:
@@ -49,12 +60,19 @@ def _demo_interval(value: str) -> float:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="refrain", description="Run Refrain continuously until interrupted.")
+    parser = argparse.ArgumentParser(
+        prog="refrain",
+        description="Present Refrain quotations and manage its installation.",
+    )
     parser.add_argument("--config", help="application configuration YAML file")
-    parser.add_argument("--state", help="persistent state file (ignored in demo mode)")
-    parser.add_argument("--artifacts", help="prepared image directory (ignored in demo mode)")
+    parser.add_argument("--state", help="persistent state file (ignored in demo and --show-entry modes)")
+    parser.add_argument("--artifacts", help="prepared image directory (ignored in demo and --show-entry modes)")
     parser.add_argument(
-        "--history", help="JSONL global-history file (default: global-history.jsonl beside state; ignored with --demo)"
+        "--history",
+        help=(
+            "JSONL global-history file (default: global-history.jsonl beside state; "
+            "ignored in demo and --show-entry modes)"
+        ),
     )
     parser.add_argument(
         "--history-segment-size",
@@ -86,6 +104,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     modes.add_argument(
         "--purge", action="store_true", help="remove the complete standard per-user installation, then exit"
+    )
+    modes.add_argument(
+        "--show-entry",
+        type=_entry_id,
+        metavar="ENTRY_ID",
+        help="render and publish one content entry without changing operational state",
     )
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -164,7 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = resolve_application_paths()
         config_path = arguments.config if arguments.config is not None else paths.config_file
         config_absolute = Path(config_path).absolute()
-        if arguments.demo is None:
+        if arguments.demo is None and arguments.show_entry is None:
             state_path = arguments.state if arguments.state is not None else paths.state_file
             artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
             history_path = arguments.history
@@ -180,8 +204,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             state_path = artifacts_path = history_path = None
             _LOGGER.info(
-                "Effective configuration path: %s; demo persistence uses isolated temporary storage",
+                "Effective configuration path: %s; %s",
                 config_absolute,
+                (
+                    "diagnostic presentation does not use production persistence"
+                    if arguments.show_entry is not None
+                    else "demo persistence uses isolated temporary storage"
+                ),
             )
 
         if not config_absolute.exists():
@@ -203,6 +232,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 history_max_segments=arguments.history_max_segments,
                 keep_open=_hold_open,
             )
+        elif arguments.show_entry is not None:
+            output = run_show_entry(config_path, arguments.show_entry)
+            print(f"Diagnostic image saved to {output}")
+            return 0
         else:
             shutdown = Event()
             previous_handlers = {}

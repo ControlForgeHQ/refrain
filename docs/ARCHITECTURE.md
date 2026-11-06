@@ -1622,6 +1622,16 @@ Operational state, prepared artifacts, and global history are isolated in fresh 
 
 Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/ENGINEERING.md`.
 
+### One-shot diagnostic entry presentation
+
+The optional `--show-entry ENTRY_ID` mode presents one targeted image without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal selection and renders the final canonical reveal stage, with every supplied field visible.
+
+The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares one image through the shared renderer. Before initializing display backends, it saves that exact image as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. The output is independent of the configuration file location and is not production state.
+
+The reserved target `information` is recognized before content-library loading. It uses `prepare_information_view()` directly, without constructing a content snapshot, evaluating a reveal schedule, waiting for the configured information-view duration, or transitioning to a daily quotation. A content entry with that ID remains valid for ordinary selection but cannot override this diagnostic target.
+
+After saving the PNG, the mode publishes one image through the existing display publication coordinator. It waits until every configured backend acknowledges the image or reaches a terminal publication failure, reports each result, and exits nonzero if any destination fails. It closes the backends after the attempts complete and does not start the continuous loop or hold serving backends open. A physical e-paper panel normally retains its image after process exit; the window and image-server backends are process-scoped and stop serving when Refrain exits. Publication failure does not remove the diagnostic PNG or alter production state.
+
 ### Recovery
 
 Recovery is performed according to the stage at which an interruption occurred.

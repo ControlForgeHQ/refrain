@@ -128,6 +128,10 @@ def test_terminal_backend_failure_does_not_stop_an_operational_destination(failu
         assert coordinator.wait_for_publication((5, 0), timeout=1)
         assert not coordinator.all_unavailable
         assert coordinator.acknowledgements == {"window": None, "image-server": (5, 0)}
+        results = coordinator.publication_results((5, 0))
+        window_error = "no graphical session" if failure == "initialization" else "display disabled"
+        assert results["window"] == (False, window_error)
+        assert results["image-server"] == (True, None)
     finally:
         coordinator.close()
     assert healthy.closed

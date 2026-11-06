@@ -1262,6 +1262,12 @@ Every substantive behavior change should include focused regression coverage whe
 
 The ability to import and test core components without Raspberry Pi hardware is a project requirement.
 
+### Diagnostic entry presentation tests
+
+Use temporary configuration, content, output, and production-persistence paths to test `--show-entry` without hardware. Verify exact identifier matching, first-quotation selection without eligibility or history selection, final-stage visibility, shared resource resolution, the reserved information target without content loading or duration scheduling, and the absence of production state/history/artifact access.
+
+Verify that the PNG is created exclusively in the current working directory before backend publication and preserves the exact image mode, dimensions, and pixels given to every backend. Cover existing-file refusal, output-write errors, partial and complete publication failures, per-backend reporting, backend cleanup, and preservation of the PNG after publication failure. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
+
 ### Core test coverage
 
 Automated testing should cover:
