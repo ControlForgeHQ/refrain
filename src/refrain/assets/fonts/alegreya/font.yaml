@@ -1,4 +1,15 @@
 format: 1
 id: alegreya
 faces:
+  black: Alegreya-Black.ttf
+  black-italic: Alegreya-BlackItalic.ttf
+  bold: Alegreya-Bold.ttf
+  bold-italic: Alegreya-BoldItalic.ttf
+  extra-bold: Alegreya-ExtraBold.ttf
+  extra-bold-italic: Alegreya-ExtraBoldItalic.ttf
+  italic: Alegreya-Italic.ttf
+  medium: Alegreya-Medium.ttf
+  medium-italic: Alegreya-MediumItalic.ttf
   regular: Alegreya-Regular.ttf
+  semi-bold: Alegreya-SemiBold.ttf
+  semi-bold-italic: Alegreya-SemiBoldItalic.ttf

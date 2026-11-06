@@ -1,4 +1,11 @@
 format: 1
 id: libre-baskerville
 faces:
+  bold: LibreBaskerville-Bold.ttf
+  bold-italic: LibreBaskerville-BoldItalic.ttf
+  italic: LibreBaskerville-Italic.ttf
+  medium: LibreBaskerville-Medium.ttf
+  medium-italic: LibreBaskerville-MediumItalic.ttf
   regular: LibreBaskerville-Regular.ttf
+  semi-bold: LibreBaskerville-SemiBold.ttf
+  semi-bold-italic: LibreBaskerville-SemiBoldItalic.ttf

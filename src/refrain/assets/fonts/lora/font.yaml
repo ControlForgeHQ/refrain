@@ -1,5 +1,11 @@
 format: 1
 id: lora
 faces:
+  bold: Lora-Bold.ttf
+  bold-italic: Lora-BoldItalic.ttf
   regular: Lora-Regular.ttf
   italic: Lora-Italic.ttf
+  medium: Lora-Medium.ttf
+  medium-italic: Lora-MediumItalic.ttf
+  semi-bold: Lora-SemiBold.ttf
+  semi-bold-italic: Lora-SemiBoldItalic.ttf

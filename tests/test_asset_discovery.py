@@ -5,11 +5,29 @@ from pathlib import Path
 
 import pytest
 import yaml
-from PIL import Image
+from PIL import Image, ImageFont
 
 from refrain import load_application_config
 
 _BUNDLED_LORA = Path(__file__).parents[1] / "src" / "refrain" / "assets" / "fonts" / "lora" / "Lora-Regular.ttf"
+_FONT_STYLE_FACES = {
+    "Black": "black",
+    "BlackItalic": "black-italic",
+    "Bold": "bold",
+    "BoldItalic": "bold-italic",
+    "ExtraBold": "extra-bold",
+    "ExtraBoldItalic": "extra-bold-italic",
+    "ExtraLight": "extra-light",
+    "ExtraLightItalic": "extra-light-italic",
+    "Italic": "italic",
+    "Light": "light",
+    "LightItalic": "light-italic",
+    "Medium": "medium",
+    "MediumItalic": "medium-italic",
+    "Regular": "regular",
+    "SemiBold": "semi-bold",
+    "SemiBoldItalic": "semi-bold-italic",
+}
 
 
 def _config_data(**layout_sections: object) -> dict[str, object]:
@@ -57,6 +75,27 @@ def test_discovers_standalone_and_packaged_backgrounds_without_changing_pool(tmp
     assert "inside" not in config.backgrounds
     assert config.default_backgrounds == ("none",)
     assert config.backgrounds["forest"].path == package / "forest.png"
+
+
+def test_bundled_font_manifests_register_every_usable_static_face(tmp_path: Path) -> None:
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+    font_root = Path(__file__).parents[1] / "src" / "refrain" / "assets" / "fonts"
+
+    for package in sorted(font_root.iterdir()):
+        if not package.is_dir():
+            continue
+        expected_faces = {
+            _FONT_STYLE_FACES[font_path.stem.rsplit("-", 1)[-1]]: font_path
+            for font_path in package.iterdir()
+            if font_path.suffix.lower() in {".ttf", ".otf"}
+        }
+        resource = config.fonts[package.name]
+
+        assert resource.bundled
+        assert dict(resource.faces) == expected_faces
+        assert "regular" in resource.faces
+        for font_path in resource.faces.values():
+            ImageFont.truetype(font_path, size=12)
 
 
 def test_image_discovery_checks_metadata_without_decoding_or_copying(tmp_path: Path, monkeypatch) -> None:
