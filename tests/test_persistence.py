@@ -117,6 +117,42 @@ def test_uninitialized_location_and_initial_commit_recover_in_new_instance(tmp_p
     assert recovered.highest_reveal_stage == 0
 
 
+def test_legacy_format_five_snapshot_without_face_metadata_remains_unchanged(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Legacy typography.")
+    document = json.loads(store.path.read_bytes())
+
+    assert document["format_version"] == 5
+    assert "font_faces" not in document["state"]["snapshot"]["presentation_metadata"]
+    recovered = PersistentStateStore(store.path).load()
+
+    assert recovered == committed
+    assert "font_faces" not in recovered.snapshot.presentation_metadata
+
+
+def test_committed_role_face_identifiers_survive_restart(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    snapshot = replace(
+        make_snapshot("Role faces."),
+        presentation_metadata={
+            "source": "Resolved source",
+            "attribution": "Resolved author",
+            "presentation_style": "centered",
+            "font_faces": {"quotation": "handwritten", "source": "regular", "attribution": "italic"},
+        },
+    )
+    committed = store.commit(make_proposal("Role faces."), snapshot)
+
+    recovered = PersistentStateStore(store.path).load()
+
+    assert recovered == committed
+    assert dict(recovered.snapshot.presentation_metadata["font_faces"]) == {
+        "quotation": "handwritten",
+        "source": "regular",
+        "attribution": "italic",
+    }
+
+
 def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     first = commit(store, "First quotation.")

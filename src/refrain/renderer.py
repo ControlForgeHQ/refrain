@@ -91,6 +91,10 @@ class CompositionLayout:
     byline_gap: int
     quotation: TextFieldLayout
     byline: BylineLayout | None
+    source_font_identifier: str | None = None
+    source_font_sha256: str | None = None
+    attribution_font_identifier: str | None = None
+    attribution_font_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -314,7 +318,9 @@ def _text_field(
 
 def _layout_byline(
     composition: LiteraryComposition,
-    font: ResolvedFontData,
+    quotation_font: ResolvedFontData,
+    source_font: ResolvedFontData,
+    attribution_font: ResolvedFontData,
     quote_size: int,
     region: PixelBounds,
     style: PresentationStyle,
@@ -329,30 +335,43 @@ def _layout_byline(
     separator_text = ", " if composition.attribution is not None and composition.source is not None else ""
 
     while byline_size > 0:
-        pillow_font = _load_font(font, byline_size)
-        prefix_advance = pillow_font.getlength(prefix_text)
-        attribution_advance = pillow_font.getlength(composition.attribution) if composition.attribution else 0
-        separator_advance = pillow_font.getlength(separator_text) if separator_text else 0
-        field_metrics = []
+        punctuation_font = _load_font(quotation_font, byline_size)
+        source_pillow_font = _load_font(source_font, byline_size)
+        attribution_pillow_font = _load_font(attribution_font, byline_size)
+        prefix_advance = punctuation_font.getlength(prefix_text)
+        attribution_advance = (
+            attribution_pillow_font.getlength(composition.attribution) if composition.attribution else 0
+        )
+        separator_advance = punctuation_font.getlength(separator_text) if separator_text else 0
+        field_fonts = [(punctuation_font, prefix_text)]
         if composition.attribution is not None:
-            field_metrics.append(pillow_font.getbbox(composition.attribution))
+            field_fonts.append((attribution_pillow_font, composition.attribution))
         if composition.source is not None:
-            field_metrics.append(pillow_font.getbbox(composition.source))
-        field_metrics.append(pillow_font.getbbox(prefix_text))
+            field_fonts.append((source_pillow_font, composition.source))
         if separator_text:
-            field_metrics.append(pillow_font.getbbox(separator_text))
-        text_top = min(bounds[1] for bounds in field_metrics)
-        text_bottom = max(bounds[3] for bounds in field_metrics)
-        byline_top = bottom - (text_bottom - text_top)
+            field_fonts.append((punctuation_font, separator_text))
+        field_metrics = [(font, font.getbbox(text), font.getmetrics()[0]) for font, text in field_fonts]
+        text_top = min(bounds[1] - ascent for _, bounds, ascent in field_metrics)
+        text_bottom = max(bounds[3] - ascent for _, bounds, ascent in field_metrics)
+        baseline = bottom - text_bottom
+        byline_top = baseline + text_top
         if byline_top < top:
             byline_size -= 1
             continue
 
-        y = byline_top - text_top
-        prefix = _text_field(prefix_text, pillow_font, (left, y))
+        def baseline_position(font: ImageFont.FreeTypeFont) -> int:
+            return baseline - font.getmetrics()[0]
+
+        prefix = _text_field(prefix_text, punctuation_font, (left, baseline_position(punctuation_font)))
         x = round(left + prefix_advance)
 
-        def place_after(text: str, position_x: int, previous: TextFieldLayout) -> TextFieldLayout:
+        def place_after(
+            text: str,
+            pillow_font: ImageFont.FreeTypeFont,
+            position_x: int,
+            previous: TextFieldLayout,
+        ) -> TextFieldLayout:
+            y = baseline_position(pillow_font)
             field = _text_field(text, pillow_font, (position_x, y))
             if field.bounds[0] < previous.bounds[2]:
                 position_x += previous.bounds[2] - field.bounds[0]
@@ -361,15 +380,17 @@ def _layout_byline(
 
         attribution_layout = None
         if composition.attribution is not None:
-            attribution_layout = place_after(composition.attribution, x, prefix)
+            attribution_layout = place_after(composition.attribution, attribution_pillow_font, x, prefix)
             x = round(attribution_layout.positions[0][0] + attribution_advance)
         separator = None
         previous = attribution_layout or prefix
         if separator_text:
-            separator = place_after(separator_text, x, previous)
+            separator = place_after(separator_text, punctuation_font, x, previous)
             x = round(separator.positions[0][0] + separator_advance)
             previous = separator
-        source_layout = place_after(composition.source, x, previous) if composition.source is not None else None
+        source_layout = (
+            place_after(composition.source, source_pillow_font, x, previous) if composition.source is not None else None
+        )
 
         field_layouts = [field for field in (prefix, attribution_layout, separator, source_layout) if field is not None]
         bounds = (
@@ -439,6 +460,8 @@ def _shift_byline_y(byline: BylineLayout, amount: int) -> BylineLayout:
 def _layout_at_size(
     composition: LiteraryComposition,
     font: ResolvedFontData,
+    source_font: ResolvedFontData,
+    attribution_font: ResolvedFontData,
     image_size: tuple[int, int],
     region: PixelBounds,
     quote_size: int,
@@ -448,7 +471,7 @@ def _layout_at_size(
     left, top, right, bottom = region
     region_width, region_height = right - left, bottom - top
     quote = _measure_field(composition.quotation, font, quote_size, region_width)
-    byline = _layout_byline(composition, font, quote_size, region, style)
+    byline = _layout_byline(composition, font, source_font, attribution_font, quote_size, region, style)
     if quote is None or ((composition.source is not None or composition.attribution is not None) and byline is None):
         return None
     align = _STYLE_LAYOUTS[style]
@@ -458,7 +481,16 @@ def _layout_at_size(
     byline_font_size = (
         byline.attribution.font_size if byline and byline.attribution else byline.source.font_size if byline else 0
     )
-    byline_line_height = sum(_load_font(font, byline_font_size).getmetrics()) if byline is not None else 0
+    byline_fonts = [font]
+    if byline is not None and byline.attribution is not None:
+        byline_fonts.append(attribution_font)
+    if byline is not None and byline.source is not None:
+        byline_fonts.append(source_font)
+    byline_line_height = (
+        max(sum(_load_font(role_font, byline_font_size).getmetrics()) for role_font in byline_fonts)
+        if byline is not None
+        else 0
+    )
     field_gap = max(0, round(quote_size * byline_gap_factor)) if byline is not None else 0
     metrics_height = quote.height + field_gap + byline_line_height
     if metrics_height > region_height:
@@ -481,6 +513,10 @@ def _layout_at_size(
         byline_gap=field_gap,
         quotation=quote_layout,
         byline=byline,
+        source_font_identifier=source_font.identifier,
+        source_font_sha256=_font_sha256(source_font),
+        attribution_font_identifier=attribution_font.identifier,
+        attribution_font_sha256=_font_sha256(attribution_font),
     )
 
 
@@ -494,6 +530,8 @@ def layout_composition(
     presentation_style: PresentationStyle,
     *,
     byline_gap_factor: float = 1.20,
+    source_font: ResolvedFontData | None = None,
+    attribution_font: ResolvedFontData | None = None,
 ) -> CompositionLayout:
     """Fit the complete literary composition once for reuse across reveal images."""
     _validate_composition(composition)
@@ -514,6 +552,10 @@ def layout_composition(
     if not isinstance(presentation_style, str) or presentation_style not in _STYLE_LAYOUTS:
         raise QuotationRenderError("presentation_style must be 'centered' or 'left-aligned'")
     _validate_font(font)
+    source_font = font if source_font is None else source_font
+    attribution_font = font if attribution_font is None else attribution_font
+    _validate_font(source_font)
+    _validate_font(attribution_font)
     pixel_region = (
         math.floor(presentation_region.x * width),
         math.floor(presentation_region.y * height),
@@ -527,6 +569,8 @@ def layout_composition(
     best = _layout_at_size(
         composition,
         font,
+        source_font,
+        attribution_font,
         image_size,
         pixel_region,
         min_font_size,
@@ -545,6 +589,8 @@ def layout_composition(
         candidate = _layout_at_size(
             composition,
             font,
+            source_font,
+            attribution_font,
             image_size,
             pixel_region,
             size,
@@ -664,6 +710,8 @@ def render_reveal_stages(
     stages: Sequence[CompositionVisibility],
     *,
     concealment: Literal["pixel-distortion"] = "pixel-distortion",
+    source_font: ResolvedFontData | None = None,
+    attribution_font: ResolvedFontData | None = None,
 ) -> tuple[Image.Image, ...]:
     """Render requested cumulative visibility stages from one resolved layout."""
     if concealment != "pixel-distortion":
@@ -679,6 +727,17 @@ def render_reveal_stages(
     _validate_font(font)
     if font.identifier != layout.font_identifier or _font_sha256(font) != layout.font_sha256:
         raise QuotationRenderError("font does not match the resolved font used to create the composition layout")
+    source_font = font if source_font is None else source_font
+    attribution_font = font if attribution_font is None else attribution_font
+    for role, role_font, identifier, digest in (
+        ("source", source_font, layout.source_font_identifier, layout.source_font_sha256),
+        ("attribution", attribution_font, layout.attribution_font_identifier, layout.attribution_font_sha256),
+    ):
+        _validate_font(role_font)
+        if identifier is not None and (role_font.identifier != identifier or _font_sha256(role_font) != digest):
+            raise QuotationRenderError(
+                f"{role} font does not match the resolved font used to create the composition layout"
+            )
     _validate_reveal_stages(
         stages,
         source_available=layout.byline is not None and layout.byline.source is not None,
@@ -696,14 +755,14 @@ def render_reveal_stages(
         if byline is not None:
             if byline.attribution is not None:
                 if not stage.attribution:
-                    _conceal_field(image, font, byline.attribution)
+                    _conceal_field(image, attribution_font, byline.attribution)
                 else:
-                    _draw_field(draw, font, byline.attribution, _attribution_color(image.mode))
+                    _draw_field(draw, attribution_font, byline.attribution, _attribution_color(image.mode))
             if byline.source is not None:
                 if not stage.source:
-                    _conceal_field(image, font, byline.source)
+                    _conceal_field(image, source_font, byline.source)
                 else:
-                    _draw_field(draw, font, byline.source, fill)
+                    _draw_field(draw, source_font, byline.source, fill)
             punctuation = ImageDraw.Draw(image)
             if byline.prefix is not None:
                 _draw_field(punctuation, font, byline.prefix, fill)

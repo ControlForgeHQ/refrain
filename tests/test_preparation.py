@@ -28,7 +28,16 @@ _LAYOUT = {
     "max_font_size": 32,
 }
 _LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
+_LORA_ITALIC = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
 _FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
+_MULTI_FACE_REGISTRY = {
+    "lora": FontResource(
+        "lora",
+        _LORA,
+        bundled=True,
+        faces={"regular": _LORA, "italic": _LORA_ITALIC},
+    )
+}
 
 
 @pytest.fixture
@@ -368,6 +377,91 @@ def test_uses_committed_presentation_style(embedded_font: str, monkeypatch: pyte
     prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY)
 
     assert resolved_layouts[0].style == "left-aligned"
+
+
+def test_preparation_uses_committed_faces_for_each_role_and_all_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = make_snapshot(
+        "lora",
+        metadata={
+            "presentation_style": "centered",
+            "source": "A Sample Collection",
+            "attribution": "An Example Author",
+            "font_faces": {"quotation": "regular", "source": "italic", "attribution": "italic"},
+        },
+    )
+    original_layout = preparation.layout_composition
+    layouts = []
+
+    def capture_layout(*args: object, **kwargs: object):
+        layout = original_layout(*args, **kwargs)
+        layouts.append(layout)
+        return layout
+
+    monkeypatch.setattr(preparation, "layout_composition", capture_layout)
+    stages = resolve_reveal_stages(snapshot)
+
+    images = prepare_daily_images(snapshot, stages, _MULTI_FACE_REGISTRY)
+
+    assert len(layouts) == 1
+    layout = layouts[0]
+    assert layout.font_identifier == "lora"
+    assert layout.source_font_identifier == "lora:italic"
+    assert layout.attribution_font_identifier == "lora:italic"
+    assert layout.byline is not None
+    assert all(image.size == _IMAGE_SIZE for image in images)
+    assert dict(snapshot.presentation_metadata["font_faces"]) == {
+        "quotation": "regular",
+        "source": "italic",
+        "attribution": "italic",
+    }
+
+
+def test_missing_committed_face_uses_regular_without_changing_snapshot(caplog) -> None:
+    snapshot = make_snapshot(
+        "lora",
+        metadata={
+            "presentation_style": "centered",
+            "source": "A Sample Collection",
+            "attribution": "An Example Author",
+            "font_faces": {"quotation": "regular", "source": "missing", "attribution": "italic"},
+        },
+    )
+
+    images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _MULTI_FACE_REGISTRY)
+
+    assert images
+    assert "Committed source face 'missing'" in caplog.text
+    assert dict(snapshot.presentation_metadata["font_faces"])["source"] == "missing"
+
+
+def test_missing_bundle_fallback_uses_committed_face_identifiers(caplog) -> None:
+    snapshot = make_snapshot(
+        "removed-bundle",
+        metadata={
+            "presentation_style": "centered",
+            "source": "A Sample Collection",
+            "attribution": "An Example Author",
+            "font_faces": {"quotation": "regular", "source": "italic", "attribution": "regular"},
+        },
+    )
+    original_layout = preparation.layout_composition
+    layouts = []
+
+    def capture_layout(*args: object, **kwargs: object):
+        layout = original_layout(*args, **kwargs)
+        layouts.append(layout)
+        return layout
+
+    preparation.layout_composition = capture_layout
+    try:
+        images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _MULTI_FACE_REGISTRY)
+    finally:
+        preparation.layout_composition = original_layout
+
+    assert images
+    assert layouts[0].source_font_identifier == "lora:italic"
+    assert snapshot.font_identifier == "removed-bundle"
+    assert "Committed font 'removed-bundle' is unavailable" in caplog.text
 
 
 @pytest.mark.parametrize(

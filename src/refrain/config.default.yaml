@@ -31,6 +31,8 @@ layout:
       - "lora"
       - "orbitron"
       - "source-sans-3"
+    font_faces:
+      attribution: italic
 
   backgrounds:
     default:

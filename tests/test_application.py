@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import socket
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
@@ -248,6 +249,108 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
     }
 
 
+def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bundle(
+    workspace: Workspace, caplog
+) -> None:
+    source_font = Path(str(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")))
+    font_dir = workspace.root / "assets" / "fonts" / "literary"
+    font_dir.mkdir(parents=True)
+    shutil.copyfile(source_font, font_dir / "Regular.ttf")
+    shutil.copyfile(source_font, font_dir / "Italic.ttf")
+    (font_dir / "font.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "format": 1,
+                "id": "literary",
+                "faces": {"regular": "Regular.ttf", "italic": "Italic.ttf"},
+                "font_faces": {"quotation": "italic", "source": "regular", "attribution": "italic"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    decoration_dir = workspace.root / "assets" / "decorations" / "mixed"
+    decoration_dir.mkdir(parents=True)
+    Image.new("RGBA", (16, 16)).save(decoration_dir / "overlay.png")
+    write_decoration_manifest(
+        decoration_dir,
+        "mixed",
+        font="lora",
+        font_faces={"quotation": "italic", "source": "italic", "attribution": "italic"},
+    )
+    workspace.config.write_text(
+        _CONFIG.replace(
+            'default: ["lora"]',
+            'default: ["literary"]\n    font_faces: {quotation: italic, source: italic, attribution: italic}',
+        )
+    )
+    ordinary(
+        workspace,
+        extra=(
+            'font: "literary"\n'
+            'decoration: "mixed"\n'
+            "font_faces:\n"
+            "  quotation: unavailable\n"
+            "  attribution: regular\n"
+        ),
+    )
+
+    configuration = application.load_application_config(workspace.config)
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+
+    assert snapshot.font_identifier == "literary"
+    assert dict(snapshot.presentation_metadata["font_faces"]) == {
+        "quotation": "regular",
+        "source": "italic",
+        "attribution": "regular",
+    }
+    assert "Preferred quotation face 'unavailable'" in caplog.text
+
+
+def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoration(workspace: Workspace) -> None:
+    source_font = Path(str(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")))
+    font_dir = workspace.root / "assets" / "fonts" / "literary"
+    font_dir.mkdir(parents=True)
+    shutil.copyfile(source_font, font_dir / "Regular.ttf")
+    shutil.copyfile(source_font, font_dir / "Italic.ttf")
+    (font_dir / "font.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "format": 1,
+                "id": "literary",
+                "faces": {"regular": "Regular.ttf", "italic": "Italic.ttf"},
+                "font_faces": {"quotation": "italic"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    decoration_dir = workspace.root / "assets" / "decorations" / "plain"
+    decoration_dir.mkdir(parents=True)
+    Image.new("RGBA", (16, 16)).save(decoration_dir / "overlay.png")
+    write_decoration_manifest(decoration_dir, "plain")
+    workspace.config.write_text(
+        _CONFIG.replace(
+            'default: ["lora"]',
+            'default: ["literary"]\n    font_faces: {source: italic, attribution: italic}',
+        )
+    )
+    ordinary(
+        workspace,
+        extra=('font: "literary"\n' 'decoration: "plain"\n' "font_faces:\n" "  attribution: regular\n"),
+    )
+
+    configuration = application.load_application_config(workspace.config)
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+
+    assert snapshot.font_identifier == "literary"
+    assert dict(snapshot.presentation_metadata["font_faces"]) == {
+        "quotation": "italic",
+        "source": "italic",
+        "attribution": "regular",
+    }
+
+
 def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace, caplog) -> None:
     workspace.config.write_text(_CONFIG.replace("  fonts:", '  decorations: {default: ["hex"]}\n  fonts:'))
     ordinary(workspace, extra='decoration: "not-registered"\n')
@@ -346,6 +449,7 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
         "presentation_style": "centered",
         "source": "A Book",
         "attribution": "An Author",
+        "font_faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
     }
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert snapshot.layout["image_size"] == (1600, 1200) or list(snapshot.layout["image_size"]) == [1600, 1200]

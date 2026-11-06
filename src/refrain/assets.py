@@ -17,6 +17,7 @@ from PIL import Image, ImageFont
 from ._yaml import load_yaml
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z", re.ASCII)
+_FONT_ROLES = {"quotation", "source", "attribution"}
 _T = TypeVar("_T")
 AssetPath = Path | Traversable
 Report = Callable[[str, str, int], None]
@@ -24,6 +25,33 @@ Report = Callable[[str, str, int], None]
 
 def valid_identifier(value: object) -> bool:
     return isinstance(value, str) and _IDENTIFIER.fullmatch(value) is not None
+
+
+def parse_font_faces(value: object, field: str, report: Report) -> Mapping[str, str]:
+    if not isinstance(value, dict):
+        report(
+            field,
+            "must be a mapping of literary roles to face identifiers; preferences are ignored",
+            logging.WARNING,
+        )
+        return MappingProxyType({})
+    result: dict[str, str] = {}
+    valid = True
+    for role, face in value.items():
+        role_field = f"{field}.{role}" if isinstance(role, str) else f"{field}[{role!r}]"
+        if not isinstance(role, str) or role not in _FONT_ROLES:
+            report(role_field, "is not a supported literary role; preferences are ignored", logging.WARNING)
+            valid = False
+        elif not valid_identifier(face):
+            report(
+                role_field,
+                "must be a nonempty ASCII face identifier; preferences are ignored",
+                logging.WARNING,
+            )
+            valid = False
+        else:
+            result[role] = face
+    return MappingProxyType(result if valid else {})
 
 
 def _is_link(path: AssetPath) -> bool:
@@ -331,7 +359,7 @@ def discover_decorations(
             parsed = _parse_manifest(
                 manifest,
                 "decoration",
-                {"format", "id", "image", "presentation_region", "font", "background"},
+                {"format", "id", "image", "presentation_region", "font", "font_faces", "background"},
                 report,
             )
             if parsed is None:
@@ -354,6 +382,11 @@ def discover_decorations(
                     logging.WARNING,
                 )
                 preferred_font = None
+            font_faces = (
+                parse_font_faces(data["font_faces"], f"{field}.font_faces", report)
+                if "font_faces" in data
+                else MappingProxyType({})
+            )
             preferred_background = data.get("background")
             if "background" in data and (
                 not valid_identifier(preferred_background)
@@ -371,6 +404,7 @@ def discover_decorations(
                 bundled=is_bundled,
                 presentation_region=region,  # type: ignore[arg-type]
                 font=preferred_font,
+                font_faces=font_faces,
                 background=preferred_background,
             )
             _validate_image_candidate(
@@ -403,7 +437,7 @@ def discover_fonts(
             except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
                 report(field, f"manifest is invalid and the font bundle is excluded: {error}", logging.WARNING)
                 continue
-            _unknown_fields(data, {"format", "id", "faces"}, field, report)
+            _unknown_fields(data, {"format", "id", "faces", "font_faces"}, field, report)
             if type(data.get("format")) is not int or data.get("format") != 1:
                 report(
                     f"{field}.format",
@@ -459,11 +493,17 @@ def discover_fonts(
             if invalid_regular or "regular" not in face_paths:
                 report(f"{field}.faces.regular", "a usable regular face is required; bundle excluded", logging.WARNING)
                 continue
+            font_faces = (
+                parse_font_faces(data["font_faces"], f"{field}.font_faces", report)
+                if "font_faces" in data
+                else MappingProxyType({})
+            )
             resource = FontResource(
                 identifier=identifier,
                 path=face_paths["regular"],
                 bundled=is_bundled,
                 faces=MappingProxyType(face_paths),
+                font_faces=font_faces,
             )
             if identifier == "none":
                 report(
@@ -474,4 +514,4 @@ def discover_fonts(
     return _register_candidates(candidates, reserved, "fonts", report)
 
 
-__all__ = ["discover_backgrounds", "discover_decorations", "discover_fonts", "valid_identifier"]
+__all__ = ["discover_backgrounds", "discover_decorations", "discover_fonts", "parse_font_faces", "valid_identifier"]

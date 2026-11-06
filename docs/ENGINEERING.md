@@ -491,6 +491,8 @@ Existing development state may be explicitly archived or deleted before starting
 
 Future format changes must consider compatibility deliberately. Migration facilities should be introduced only when a supported release or demonstrated requirement makes them necessary.
 
+Role-specific typography is stored as the optional `presentation_metadata.font_faces` mapping inside the existing version-5 snapshot. A version bump is unnecessary because the metadata container already accepts optional JSON-compatible fields. A version-5 snapshot without this mapping is a supported legacy snapshot and means all roles use `regular`; recovery must not fill it from current preferences or rewrite the committed state. Its existing fingerprint also remains unchanged, allowing valid pre-feature artifacts to be reused.
+
 ### Version 0.1 operational state file
 
 The authoritative operational state is stored in one UTF-8 JSON file.
@@ -504,7 +506,7 @@ Format version 5 contains:
 - `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 4 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
+The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. New snapshots include all three resolved face identifiers in `presentation_metadata.font_faces`; a legacy snapshot without the field remains regular for every role. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 4 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
 
 Global selection history is not included in the operational-state document.
 
@@ -722,39 +724,35 @@ Font identifiers, paths, and validation rules are defined in `docs/CONTENT_FORMA
 
 Font-selection and fallback behavior are defined in `docs/ARCHITECTURE.md`.
 
-Validate all manifest-declared font faces when loading application configuration; each discovered bundle must provide a usable regular face.
+Validate all manifest-declared font faces when loading application configuration; each discovered bundle must provide a usable regular face. Validate the optional role-preference mapping independently from the registered `faces` resources. Invalid optional preference metadata is warned about and ignored without invalidating an otherwise usable bundle or decoration.
 
 Validation must establish that each registered file exists, is readable, and can be loaded by the renderer.
 
-Report unavailable content-entry font preferences during content-library loading rather than repeatedly during daily selection or scheduling.
+Validate the syntax of content-entry face preferences during content-library loading. Report a valid but unavailable winning face once when the selected bundle and preferences are resolved for a daily snapshot.
 
 Use a controlled random source for deterministic testing of automatic font selection.
 
-Resolve the selected font identifier before committing the daily snapshot.
+Select the single font bundle using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. Resolve all three effective face identifiers before committing the daily snapshot. An unavailable winning face warns and resolves directly to the bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
-Store the selected font identifier in the snapshot, not the font bytes, filesystem path, or content digest.
+Store the selected bundle identifier and the three effective face identifiers in the snapshot, not the font bytes, filesystem paths, or content digests. Keep the existing state format version by storing face identifiers in the optional snapshot presentation metadata. A pre-feature format-5 snapshot without the metadata remains recoverable and uses regular for all roles; do not infer new preferences or alter the snapshot.
 
-During image preparation, resolve that identifier against the effective font registry.
+During image preparation, resolve the committed bundle and each committed face against the effective font registry. If a face is unavailable or unusable, use `regular` from that bundle. If the bundle itself is unavailable or unusable, choose an available bundled fallback using a deterministic order and apply the committed role-face identifiers to it.
 
-If the selected font is available and loadable, use it.
-
-If the selected font is unavailable or unusable during regeneration, choose an available bundled fallback using a deterministic order.
-
-Resolve the effective font once for each complete image-preparation operation and use that font for every reveal stage prepared together.
+Resolve the committed bundle once per complete image-preparation operation, then resolve its committed role faces and use them for every reveal stage prepared together. If a committed face is missing, use that bundle's regular face; if the entire bundle is unavailable, apply the committed role-face identifiers to the deterministic bundled fallback and use its regular face for unavailable faces.
 
 Do not independently select fonts for individual reveal stages.
 
-Do not alter the committed snapshot or stored font identifier when regeneration uses a fallback.
+Do not alter the committed snapshot or stored bundle/face identifiers when regeneration uses a fallback.
 
-Existing valid prepared images remain reusable even when the selected font file has changed or become unavailable.
+Existing valid prepared images remain reusable even when a selected face or font file has changed or become unavailable.
 
 If no usable bundled fallback exists, report an actionable preparation error.
 
-Font substitution during regeneration may change the rendered appearance, including line wrapping or typography. It must not change the committed quotation, metadata, reveal schedule, or layout configuration.
+Font substitution during regeneration may change the rendered appearance, including line wrapping or typography. It must not change the committed quotation, metadata, reveal schedule, face identifiers, or layout configuration.
 
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
-Do not add font downloading or role-specific face-selection behavior beyond the manifest-based bundle discovery and regular-face rendering defined by the current scope.
+Do not add font downloading. Keep role-specific face resolution limited to quotation, source, and attribution within the one committed bundle.
 
 ### Background loading and composition
 
@@ -1306,7 +1304,7 @@ Automated testing should cover:
 - preservation of repetition history when content discovery fails or no valid quotations remain;
 - recovery of committed selections independently of current content-library availability;
 - recovery and regeneration when a previously selected custom font becomes unavailable;
-- format-4 visual-resource snapshot round trips and unchanged rejection of state versions 1, 2, and 3;
+- format-5 snapshot round trips, recovery of legacy snapshots without face metadata, and unchanged rejection of state versions 1 through 4;
 - committed background recovery without reselection or changes to the effective layout;
 - stable entry and quotation identities;
 - normalized quotation matching;
@@ -1356,7 +1354,7 @@ Test automatic text fitting with:
 
 Verify that all rendered literary content stays within the configured presentation region.
 
-Verify that the selected font, font size, wrapping, and quotation placement remain consistent across all reveal stages.
+Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
 
 Test font configuration and selection behavior, including:
 
@@ -1365,6 +1363,9 @@ Test font configuration and selection behavior, including:
 - empty default font pools;
 - default identifiers missing from the registry;
 - explicit content-entry font preferences;
+- `font_faces` parsing and invalid-value handling at all four configuration/content/manifest levels;
+- role-face precedence, explicit-regular overrides, unavailable winning-face fallback without lower-level preference lookup, and decoration preferences applied to an entry-selected bundle;
+- committed effective face identifiers, legacy snapshot and prepared-artifact recovery, and artifact fingerprint changes for typography changes;
 - unregistered content-entry fonts and their warnings;
 - randomized selection from the default pool;
 - persistence of the selected font identifier in committed state and global history, without embedded font bytes or digests;

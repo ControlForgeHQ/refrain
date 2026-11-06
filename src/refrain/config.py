@@ -18,7 +18,7 @@ import yaml
 from PIL import Image
 
 from ._yaml import load_yaml, yaml_error_location
-from .assets import valid_identifier
+from .assets import parse_font_faces, valid_identifier
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view"}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
@@ -59,6 +59,7 @@ class FontResource:
     path: Union[Path, Traversable]
     bundled: bool
     faces: Mapping[str, Union[Path, Traversable]] = field(default_factory=lambda: MappingProxyType({}))
+    font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class DecorationResource:
     presentation_region: PresentationRegion | None = None
     font: str | None = None
     background: str | None = None
+    font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,7 @@ class ApplicationConfiguration:
     default_backgrounds: tuple[str, ...] = ("none",)
     decorations: Mapping[str, DecorationResource] = field(default_factory=lambda: MappingProxyType({}))
     default_decorations: tuple[str, ...] = ("none",)
+    font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -434,7 +437,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     )
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
-    _known_fields(fonts_data, {"default", "available"}, "layout.fonts", report)
+    _known_fields(fonts_data, {"default", "available", "font_faces"}, "layout.fonts", report)
     if "available" in fonts_data:
         report(
             "layout.fonts.available",
@@ -457,6 +460,11 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         file.parent / "assets" / "fonts",
         _BUNDLED_FONT_IDS,
         report,
+    )
+    font_faces = (
+        parse_font_faces(fonts_data["font_faces"], "layout.fonts.font_faces", report)
+        if "font_faces" in fonts_data
+        else MappingProxyType({})
     )
 
     if isinstance(default_value, list):
@@ -602,4 +610,5 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         default_backgrounds=default_backgrounds,
         decorations=MappingProxyType(decoration_registry),
         default_decorations=default_decorations,
+        font_faces=font_faces,
     )

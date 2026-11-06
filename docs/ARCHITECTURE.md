@@ -620,7 +620,7 @@ For each new daily selection:
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
 13. Resolve the decoration using the entry's preference or the effective default decoration pool.
-14. Resolve the font using the entry's preference, the selected decoration's font preference, or the effective default font pool, in that precedence order.
+14. Select one font bundle using the entry preference, selected decoration preference, or effective default font pool, in that precedence order; resolve and commit each role's face within that bundle.
 15. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
 16. Resolve the effective presentation region from the selected decoration or the global presentation region.
 17. Prepare the complete daily snapshot.
@@ -1027,7 +1027,7 @@ For each selected quotation, Refrain resolves the decoration first:
 
 The selected decoration may provide a preferred font, a preferred background, and an effective presentation-region override.
 
-Font selection follows this precedence:
+Exactly one font bundle is selected using this precedence:
 
 1. Use the content entry's explicit font when available.
 2. Otherwise, use the selected decoration's preferred font when available.
@@ -1215,7 +1215,9 @@ Font selection follows this precedence:
 2. Otherwise, use an available font preference from the selected decoration.
 3. Otherwise, select from the effective default font pool.
 
-An unavailable preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning and proceeds to the next applicable preference.
+An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning and proceeds to the next bundle-selection preference.
+
+After selecting the bundle, Refrain independently resolves the `quotation`, `source`, and `attribution` faces within that bundle. For each role, the first defined preference wins in this order: content entry, selected decoration, selected bundle manifest, global `layout.fonts.font_faces`, then implicit `regular`. An explicit `regular` is defined and overrides lower-priority values. If the winning face is unavailable or unusable, that role falls directly to the selected bundle's `regular` face with an actionable warning; lower-priority face preferences are not consulted. No role selects another bundle. Decoration face preferences apply to the selected bundle even when an entry overrides the decoration's bundle preference.
 
 Each font in the effective default pool has equal selection probability.
 
@@ -1225,11 +1227,11 @@ Font selection is independent for each daily selection. Fonts do not have repeti
 
 The selected decoration is resolved before font selection. The selected font identifier is resolved before daily snapshot commitment.
 
-The selected font identifier is recorded in the committed snapshot and global selection history. Font contents and font-content hashes are not persisted in operational state.
+The selected bundle identifier and all three effective face identifiers are recorded in the committed snapshot before preparation. Font contents, paths, and font-content hashes are not persisted in operational state. Existing format-5 snapshots without face metadata remain valid and continue to render every role with `regular`; no state migration or rewrite is needed. This absence is not interpreted as a request to apply newly configured face preferences.
 
-Image preparation resolves the committed font identifier using available font resources. It does not reconsider the original entry or decoration preferences.
+Image preparation resolves the committed bundle and face identifiers using available font resources. It does not reconsider the original entry, decoration, bundle-manifest, or global preferences.
 
-If the selected font is no longer available or usable during regeneration, Refrain uses an available bundled fallback font. Fallback selection is deterministic for a given set of available bundled fonts and is consistent across all stages prepared together.
+If a committed face is no longer available or usable during regeneration, that role uses `regular` from the resolved bundle without changing the snapshot. If the entire committed bundle is unavailable or unusable, Refrain uses an available bundled fallback font, selected deterministically; it applies the committed face identifiers against that fallback bundle and uses its `regular` face for any unavailable face. The resolved bundle and role faces remain consistent across all stages prepared together.
 
 If no usable bundled fallback exists, preparation fails with an actionable diagnostic.
 
@@ -1239,11 +1241,11 @@ Font registration, default-pool validation, and configuration fallback rules are
 
 ### Stable progressive layout
 
-The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage.
+The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage. Each role uses its committed face while the source and attribution remain components of the existing unified byline.
 
 The effective presentation region, resolved from the selected decoration or global configuration and recorded in the committed snapshot, remains unchanged throughout the committed selection.
 
-The resolved layout establishes the positions, typography, wrapping, and spacing of all present fields.
+The resolved layout establishes the positions, role-specific typography, wrapping, and spacing of all present fields. Byline measurement and baseline placement account for each face's metrics, advances, and glyph bounds. The prefix and separator use the quotation face, with fixed positions determined from the complete composition.
 
 The byline is laid out using its complete final content, including both attribution and source when available, regardless of which fields are currently revealed.
 
@@ -1277,7 +1279,7 @@ Content that cannot be rendered legibly within the supported presentation region
 
 A daily snapshot must contain the selected quotation, its presentation metadata, effective reveal schedule, selected font, background, and decoration identifiers, and resolved layout values needed to prepare the presentation without consulting the original content library or current presentation configuration.
 
-`presentation_metadata` contains optional nonempty `source` and `attribution` strings, plus the required built-in `presentation_style` (`centered` or `left-aligned`). An absent optional field is represented by a missing key or `null`.
+`presentation_metadata` contains optional nonempty `source` and `attribution` strings, the required built-in `presentation_style` (`centered` or `left-aligned`), and the effective `font_faces` identifiers for `quotation`, `source`, and `attribution`. Older valid snapshots may omit `font_faces`; preparation interprets that legacy absence as `regular` for every role and does not apply current preferences.
 
 `layout` contains:
 
@@ -1287,7 +1289,7 @@ A daily snapshot must contain the selected quotation, its presentation metadata,
 
 The snapshot also preserves the resolved background and decoration identifiers. The reserved value `"none"` represents the absence of the corresponding resource.
 
-The snapshot stores resource identifiers, not font or image contents or their digests.
+The snapshot stores resource identifiers, not font or image contents or their digests. Effective role-face identifiers are part of the snapshot fingerprint used to associate prepared images, so typography changes cannot be mistaken for the same presentation. For snapshots predating face metadata, omission remains part of their canonical fingerprint, preserving reuse of their already prepared artifacts.
 
 Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
 
@@ -1324,7 +1326,7 @@ The committed daily snapshot is the authority for regenerating prepared images.
 
 Missing or invalid prepared images may be regenerated without access to the original content library.
 
-Regeneration resolves the selected font identifier through the available font registry and may use a bundled fallback if the originally selected font is unavailable or unusable.
+Regeneration resolves the committed font bundle and role-face identifiers through the available font registry. Missing role faces use the resolved bundle's regular face; a missing bundle uses the deterministic bundled fallback policy and applies committed face identifiers against that bundle. Neither recovery path changes the snapshot or consults current preferences.
 
 Committed background and decoration identifiers are resolved through the available resource registries. Missing or unusable image resources are omitted according to the background and decoration recovery policy. Regeneration retains the committed effective presentation region and does not select replacement backgrounds or decorations.
 

@@ -129,6 +129,34 @@ def _resolve_font(configuration: ApplicationConfiguration, preferred: str | None
     return identifier
 
 
+def _resolve_font_faces(
+    configuration: ApplicationConfiguration,
+    entry: ContentEntry,
+    decoration: DecorationResource | None,
+    font_identifier: str,
+) -> dict[str, str]:
+    bundle = configuration.fonts[font_identifier]
+    preference_levels = (
+        entry.font_faces,
+        {} if decoration is None else decoration.font_faces,
+        bundle.font_faces,
+        configuration.font_faces,
+    )
+    resolved: dict[str, str] = {}
+    for role in ("quotation", "source", "attribution"):
+        preferred = next((level[role] for level in preference_levels if role in level), "regular")
+        if preferred not in bundle.faces:
+            _LOGGER.warning(
+                "Preferred %s face %r is unavailable in selected font bundle %r; using its regular face",
+                role,
+                preferred,
+                font_identifier,
+            )
+            preferred = "regular"
+        resolved[role] = preferred
+    return resolved
+
+
 def _resolve_background(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
     if preferred == "none" or preferred in configuration.backgrounds:
         return preferred
@@ -209,6 +237,8 @@ def _build_snapshot(
         background_preference = None
     if background_preference is None and decoration is not None:
         background_preference = decoration.background
+    font_identifier = _resolve_font(configuration, font_preference, chooser)
+    metadata["font_faces"] = _resolve_font_faces(configuration, entry, decoration, font_identifier)
     region = (
         configuration.presentation_region
         if decoration is None
@@ -218,7 +248,7 @@ def _build_snapshot(
         snapshot = DailySnapshot(
             quotation_text=quotation.text,
             quotation_identity=quotation.identity,
-            font_identifier=_resolve_font(configuration, font_preference, chooser),
+            font_identifier=font_identifier,
             background_identifier=_resolve_background(configuration, background_preference, chooser),
             decoration_identifier=decoration_identifier,
             presentation_metadata=metadata,
