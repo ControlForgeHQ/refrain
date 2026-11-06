@@ -30,6 +30,8 @@ where = ["src"]
 [tool.setuptools.package-data]
 refrain = [
     "py.typed",
+    "config.default.yaml",
+    "sample_content/*.yaml",
     "assets/README.md",
     "assets/fonts/**/*",
     "assets/branding/*",

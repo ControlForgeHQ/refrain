@@ -136,20 +136,49 @@ An available explicit decoration (including `"none"`) takes precedence over the 
 
 ## Running Refrain
 
-`python -m refrain` normally runs continuously, showing the startup information view for 60 seconds by default before presenting the current daily quotation. Set `information_view.duration` to `0` to disable it, or to an integer from `1` through `300` to choose another duration. The interval starts after the first display backend successfully publishes the view. Refrain then presents the latest required daily reveal and continues selecting quotations at observed display-day boundaries. Outside demo mode, configuration, state, and artifact locations are required and are never inferred from a user's home directory or installation layout:
+Install the Refrain wheel in the Python environment that will run it, then initialize the per-user installation once:
 
 ```sh
-.venv/bin/python -m refrain \
-  --config examples/config.yaml \
-  --state /path/to/refrain/state.json \
-  --artifacts /path/to/refrain/artifacts \
-  --history /path/to/refrain/global-history.jsonl
+.venv/bin/python -m pip install /path/to/refrain.whl
+.venv/bin/python -m refrain --initialize
+.venv/bin/python -m refrain
 ```
 
-- `--config` is the application configuration file; relative content, font, and background paths resolve against its directory.
-- `--state` is the persistent selection-state file. It is created on first use, and its parent directory is created if needed.
-- `--artifacts` is the directory for derived prepared images. It is separate from state and content and may be regenerated from committed state.
-- `--history` is the separate JSONL selection-history file; by default it is `global-history.jsonl` beside the state file. `--history-segment-size` and `--history-max-segments` configure bounded retention (defaults: 1 MiB per segment and 20 segments, including the active segment).
+Initialization copies the packaged `config.default.yaml` to `config.yaml` and installs the packaged sample quotation library. The installed configuration is editable and remains authoritative; application upgrades do not replace it or synchronize sample content. `examples/config.yaml` remains a development-oriented example and is not used by application startup.
+
+Initialization is noninteractive and create-only. It refuses to proceed if any Refrain-owned configuration, content, state, or artifact destination already exists, including an empty directory or a link. It reports every detected conflict and makes no changes when preflight finds one. Inspect, move, or remove conflicting data manually before retrying; Refrain never provides a force, overwrite, reset, or cleanup option. A filesystem failure after creation begins may leave a partial installation, which is reported and never destructively rolled back. Initialization does not create state or history files and does not start display backends or select content.
+
+### Standard per-user locations
+
+Refrain resolves omitted paths independently of the current working directory:
+
+| Purpose | Linux | Windows |
+|---|---|---|
+| Configuration and content | `~/.config/refrain/` | `%APPDATA%\Refrain\` |
+| Operational state and global history | `~/.local/state/refrain/` | `%LOCALAPPDATA%\Refrain\State\` |
+| Prepared artifacts | `~/.cache/refrain/artifacts/` | `%LOCALAPPDATA%\Refrain\Cache\artifacts\` |
+
+On Linux, absolute `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` values replace the corresponding bases, with `refrain` appended. An unset, empty, or relative XDG value uses its per-user fallback under `~`. On macOS, Refrain uses the user's `Library/Application Support` and `Library/Caches` locations.
+
+No system-wide paths are selected automatically when running as root. System deployments should configure explicit paths and service permissions.
+
+Normal operation does not generate a missing configuration or install sample content. If the selected configuration file is absent, Refrain reports its expected path and suggests `python -m refrain --initialize`. It never falls back to the packaged configuration. Relative content, font, background, and decoration paths remain relative to the selected configuration file.
+
+### Continuous and one-shot operation
+
+`python -m refrain` runs continuously, showing the startup information view for 60 seconds by default before presenting the current daily quotation. Set `information_view.duration` to `0` to disable it, or to an integer from `1` through `300` to choose another duration. The interval starts after the first display backend successfully publishes the view. The installed default uses a loopback-only image server at `http://127.0.0.1:8080/display/current`; configure `window` or `waveshare-13in3-e` in `config.yaml` to use a desktop or attached display.
+
+`python -m refrain --once` uses the same standard paths and performs one startup/presentation cycle without scheduling future updates.
+
+The optional path arguments override their respective standard locations:
+
+- `--config` selects a configuration file.
+- `--state` selects the persistent selection-state file.
+- `--artifacts` selects the derived prepared-image directory.
+- `--history` selects the JSONL selection-history file. When omitted, history is `global-history.jsonl` beside the effective state file.
+- `--history-segment-size` and `--history-max-segments` configure bounded retention (defaults: 1 MiB per segment and 20 segments, including the active segment).
+
+State and history files are created only by normal runtime operations. State is authoritative for the committed presentation and recovery; global history is a separate historical log. Prepared artifacts are derived and can be regenerated from committed state.
 
 With no committed state, the command selects a quotation for the current display date, commits the complete daily snapshot and repetition history, records the selection independently in global history, prepares the reveal images, and presents the stage required at the current time. All schedule times use host-local civil time and operating-system timezone rules; ambiguous times use their first occurrence and skipped times become due at the first valid instant after the gap. History recording is best-effort and does not block presentation. With existing state, it recovers the committed selection without needing its original content library and reuses valid prepared images (regenerating missing or invalid ones). Missed reveals advance directly to the latest required stage; backward clock adjustments never hide information already revealed.
 
@@ -166,7 +195,7 @@ If a backend reports that its instance cannot safely recover (such as a closed d
 To cycle through real quotation presentations without changing the system clock or production state:
 
 ```powershell
-python -m refrain --config examples/config.yaml --demo 5
+python -m refrain --demo 5
 ```
 
 `--demo SECONDS` accepts positive finite integers or fractions (for example, `0.5`). It cannot be combined with `--once`. Demo mode uses the configured display backends and suppresses the startup information view regardless of its configured duration.
@@ -182,11 +211,7 @@ State, artifacts, and global history use fresh temporary session storage. `--sta
 Add `--once` to run only the startup-and-presentation workflow:
 
 ```sh
-.venv/bin/python -m refrain \
-  --config examples/config.yaml \
-  --state /path/to/refrain/state.json \
-  --artifacts /path/to/refrain/artifacts \
-  --once
+.venv/bin/python -m refrain --once
 ```
 
 One-shot execution does not schedule future updates or retry failures. When enabled, it presents the startup information view for its configured duration before the current daily image. For `window` and `image-server`, it holds the daily presentation open until Ctrl+C; the Waveshare panel retains its image after the command exits. The Python API also preserves `run_startup(...)` for one-shot use and exposes `run_application(..., shutdown_event=event)` for continuous operation with an explicit `threading.Event`.

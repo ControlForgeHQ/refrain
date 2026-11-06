@@ -1,0 +1,11 @@
+id: "shakespeare-king-lear"
+source: "King Lear"
+attribution: "William Shakespeare"
+priority: 1
+eligibility:
+  - ordinary: true
+reveal:
+  source: "15:00"
+  attribution: "19:00"
+quotations:
+  - "Nothing will come of nothing."

@@ -106,9 +106,11 @@ Correctness and maintainability take precedence over speculative micro-optimizat
 
 ### Prefer existing platform facilities
 
-Use ordinary Linux facilities where they satisfy the requirement.
+Use platform-standard per-user application-data facilities for configuration, operational state, and derived artifacts. Resolve them at the command-line boundary without adding a dependency solely for path selection; keep lower-level application and persistence interfaces explicit about the paths they receive.
 
-In particular:
+On Linux, honor absolute XDG configuration, state, and cache bases and use the per-user fallbacks when those variables are missing, empty, or relative. On Windows, use the configured roaming and local application-data directories. Other supported desktop platforms should use their established per-user locations.
+
+Use ordinary operating-system facilities where they satisfy the requirement. In particular:
 
 - use systemd for supervised service operation;
 - use standard process streams for application logging;
@@ -398,7 +400,7 @@ Use `pathlib` for filesystem path handling.
 
 Do not assume that application files, content files, persistent state, and generated images are located in the same directory.
 
-Support clearly defined locations for configuration, content, and persistent state.
+Keep configuration and user content separate from operational state, global history, and derived artifacts. The command-line entry point resolves platform-standard defaults and explicit overrides; application functions continue to receive effective paths rather than performing implicit home-directory lookup.
 
 Avoid assumptions tied to a particular username, home directory, mount point, or installation path.
 
@@ -1304,6 +1306,8 @@ Do not rely on statistical luck to make unit tests pass.
 
 Use temporary directories and isolated test state.
 
+Test path selection with injected platform and environment information. Exercise initialization conflicts, links, exclusive file creation, race-time destinations, and partial failures using temporary locations; do not use developer application-data directories.
+
 Test persistence failure at meaningful boundaries, including failures before and after commitment.
 
 Verify that incomplete data cannot be mistaken for successfully committed state.
@@ -1404,13 +1408,15 @@ Record validation limitations honestly.
 
 ### Installation approach
 
-Version 0.1 may be installed directly from source.
+The installed package includes a complete default configuration and sample content library as package resources. Explicit initialization copies these resources to standard per-user locations, but ordinary startup never performs installation or repairs missing user configuration.
 
 A package repository, installer framework, or container runtime is not required.
 
 Deployment instructions must identify the supported operating system, system dependencies, Python environment, configuration locations, and persistent-state requirements.
 
 Installation must not depend on the developer's local directory structure.
+
+Initialization must be create-only and noninteractive. Inspect all Refrain-owned destinations before modifying them; any existing destination is a conflict, and no existing user data may be overwritten, removed, or rolled back. Use exclusive creation after preflight, report every conflict, and preserve/report any partial installation on filesystem failure.
 
 ### Service management
 
@@ -1442,7 +1448,7 @@ Persistent snapshots, histories, and prepared images must survive application re
 
 Avoid writing runtime state into the installed Python package directory.
 
-Define and document deployment paths rather than assuming a particular home directory or username.
+Define and document platform-standard per-user paths rather than assuming a particular username or current working directory. Global history defaults beside the effective state file; demo persistence remains isolated in temporary storage.
 
 ### Runtime updates
 

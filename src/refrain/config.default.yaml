@@ -1,0 +1,58 @@
+# This is the initial editable configuration installed by --initialize.
+general:
+  day_start: "06:00"
+
+content:
+  directory: "content"
+
+reveal:
+  source: "12:00"
+  attribution: "18:00"
+
+information_view:
+  duration: 60
+
+display:
+  # The image server is loopback-only by default. Configure "window" or
+  # "waveshare-13in3-e" here to use a desktop or attached display instead.
+  backends:
+    - type: "image-server"
+      host: "127.0.0.1"
+      port: 8080
+
+layout:
+  presentation_region:
+    x: 0.10
+    y: 0.15
+    width: 0.80
+    height: 0.70
+
+  fonts:
+    default:
+      - "alegreya"
+      - "libre-baskerville"
+      - "lora"
+      - "orbitron"
+      - "source-sans-3"
+
+  backgrounds:
+    default:
+      - "none"
+      - "aged-paper"
+      - "canvas"
+      - "cloth"
+      - "ethereal"
+      - "hex"
+
+  decorations:
+    default:
+      - "none"
+      - "ethereal"
+      - "hex"
+      - "lower-flourish"
+      - "simple-border"
+      - "top-bottom-borders"
+
+  text:
+    min_font_size: 28
+    max_font_size: 100

@@ -114,6 +114,11 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     assert any(name.endswith("assets/fonts/alegreya/OFL.txt") for name in sdist_names)
     assert any(name.endswith("assets/fonts/orbitron/Orbitron-Regular.ttf") for name in sdist_names)
     assert any(name.endswith("assets/fonts/orbitron/OFL.txt") for name in sdist_names)
+    for package in (wheel_names, sdist_names):
+        assert any(name.endswith("config.default.yaml") for name in package)
+        assert any(name.endswith("sample_content/shakespeare-hamlet.yaml") for name in package)
+        assert any(name.endswith("sample_content/shakespeare-as-you-like-it.yaml") for name in package)
+        assert any(name.endswith("sample_content/shakespeare-king-lear.yaml") for name in package)
     for names in (wheel_names, sdist_names):
         assert any(name.endswith("assets/README.md") for name in names)
         for identifier in _BACKGROUNDS:
@@ -145,10 +150,18 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
             "-c",
             (
                 "from importlib.resources import files; "
+                "from pathlib import Path; "
                 "from PIL import Image; "
+                "from tempfile import TemporaryDirectory; "
                 "from refrain import DecorationResource, load_decoration_image; "
+                "from refrain.config import load_application_config; "
+                "from refrain.content import load_content_library; "
+                "from refrain.installation import initialize_installation; "
+                "from refrain.paths import ApplicationPaths; "
                 "root=files('refrain'); "
                 "assert root.joinpath('assets','branding','controlforge-logo.png').is_file(); "
+                "assert root.joinpath('config.default.yaml').is_file(); "
+                "assert root.joinpath('sample_content','shakespeare-hamlet.yaml').is_file(); "
                 "assert root.joinpath('assets','fonts','orbitron','Orbitron-Regular.ttf').is_file(); "
                 "assert root.joinpath('assets','fonts','orbitron','OFL.txt').is_file(); "
                 "assert root.joinpath('assets','README.md').read_text(encoding='utf-8'); "
@@ -168,7 +181,19 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "for name in identifiers]; "
                 "images=[load_decoration_image(resource) for resource in resources]; "
                 "assert all(image.mode == 'RGBA' and image.size == (1600,1200) for image in images); "
-                "[image.close() for image in images]"
+                "[image.close() for image in images]; "
+                "temporary=TemporaryDirectory(); "
+                "base=Path(temporary.name); "
+                "config=base/'config'/'refrain'; "
+                "state=base/'state'/'refrain'; "
+                "cache=base/'cache'/'refrain'; "
+                "paths=ApplicationPaths(config,config/'config.yaml',config/'content',state,state,state/'state.json',"
+                "state/'global-history.jsonl',cache,cache/'artifacts'); "
+                "initialize_installation(paths); "
+                "loaded=load_application_config(paths.config_file); "
+                "assert loaded.content_directory == paths.content_directory; "
+                "assert len(load_content_library(paths.content_directory)) >= 3; "
+                "temporary.cleanup()"
             ),
         ],
         cwd=tmp_path,

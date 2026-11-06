@@ -192,6 +192,8 @@ layout:
 
 The example illustrates simultaneous display backends, the information view, a default presentation region, registered fonts, backgrounds, and decorations, and automatic quotation fitting.
 
+The installed distribution includes `config.default.yaml` as a complete, editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below, its content directory is relative to the installed configuration, and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
+
 Refrain automatically registers its bundled fonts, backgrounds, and decorations. Registered resources can be referenced by stable identifiers without supplying paths in content entries.
 
 The `available` mappings register installation-specific resources. Their paths resolve relative to the application configuration file when not absolute.

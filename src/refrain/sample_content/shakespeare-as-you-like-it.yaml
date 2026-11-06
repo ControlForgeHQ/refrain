@@ -1,0 +1,7 @@
+id: "shakespeare-as-you-like-it"
+source: "As You Like It"
+attribution: "William Shakespeare"
+font: "libre-baskerville"
+presentation_style: "left-aligned"
+quotations:
+  - "All the world's a stage, and all the men and women merely players."
