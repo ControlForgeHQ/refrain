@@ -128,6 +128,17 @@ class DisplayPublicationCoordinator:
         with self._condition:
             return any(state.successful_identity == identity for state in self._states.values())
 
+    def publication_results(self, identity: tuple[int, int]) -> dict[str, tuple[bool, str | None]]:
+        """Return each backend's publication result for ``identity``."""
+        with self._condition:
+            return {
+                name: (
+                    state.successful_identity == identity,
+                    None if state.successful_identity == identity else state.error,
+                )
+                for name, state in self._states.items()
+            }
+
     def first_successful_publication_time(self, identity: tuple[int, int]) -> float | None:
         """Return the earliest monotonic acknowledgement time for ``identity``."""
         with self._condition:

@@ -245,6 +245,22 @@ Add `--once` to run only the startup-and-presentation workflow:
 
 One-shot execution does not schedule future updates or retry failures. When enabled, it presents the startup information view for its configured duration before the current daily image. For `window` and `image-server`, it holds the daily presentation open until Ctrl+C; the Waveshare panel retains its image after the command exits. The Python API also preserves `run_startup(...)` for one-shot use and exposes `run_application(..., shutdown_event=event)` for continuous operation with an explicit `threading.Event`.
 
+### Targeted content-entry presentation
+
+Use `--show-entry` to render and publish one content entry for inspection:
+
+```sh
+.venv/bin/python -m refrain --show-entry shakespeare-hamlet
+```
+
+The argument must exactly match a content-entry `id`; matching is case-sensitive and does not use a filename or quotation text. Refrain selects the first quotation in that entry, regardless of its date eligibility, priority, or repetition history. It renders the final canonical reveal stage, so quotation text, source, and attribution are all visible without waiting for reveal times. Fonts, backgrounds, decorations, and presentation regions use the normal resource-resolution rules, including random selection from configured default pools where applicable.
+
+The diagnostic image is saved as `refrain-<entry_id>.png` in the current working directory, not beside the configuration file. Refrain creates the PNG without overwriting an existing file and reports its absolute path on success. The exact saved image is sent once to every configured display backend; Refrain waits for each publication attempt, reports each result, closes the backends, and exits. A failed backend produces a nonzero exit status but does not remove the PNG. The mode cannot be combined with `--once`, `--demo`, `--initialize`, `--reset`, or `--purge`.
+
+The command does not read or modify operational state, global history, or prepared-image artifacts, so it does not consume a quotation or change the current daily presentation. `--state`, `--artifacts`, and `--history` are ignored, even when supplied; `--config` can select an alternate configuration. The reserved target `information` renders Refrain's existing application-owned information screen without loading the content library, consulting the configured information-view duration, or transitioning to a daily quotation. A content entry named `information` remains valid but cannot replace this diagnostic target.
+
+The command exits after publication attempts and backend cleanup. Physical e-paper displays normally retain their image, but `window` and `image-server` are process-scoped: their presentation is no longer accessible after Refrain exits. No serving-backend hold mode is provided by `--show-entry`.
+
 To preview the information view without starting display backends or the application lifecycle:
 
 ```powershell
