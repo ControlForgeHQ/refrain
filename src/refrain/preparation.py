@@ -162,7 +162,7 @@ def _resolve_font(snapshot: DailySnapshot, registry: Mapping[str, FontResource])
     if selected is not None:
         try:
             return _read_font(selected)
-        except (OSError, ValueError) as error:
+        except Exception as error:
             _LOGGER.warning(
                 "Committed font %r is unavailable or unusable; using a bundled fallback: %s",
                 snapshot.font_identifier,
@@ -179,7 +179,7 @@ def _resolve_font(snapshot: DailySnapshot, registry: Mapping[str, FontResource])
             continue
         try:
             return _read_font(resource)
-        except (OSError, ValueError) as error:
+        except Exception as error:
             _LOGGER.warning("Bundled fallback font %r is unusable: %s", identifier, error)
     raise DailyImagePreparationError(
         f"cannot prepare daily snapshot: committed font {snapshot.font_identifier!r} is unavailable or unusable "

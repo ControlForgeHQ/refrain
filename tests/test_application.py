@@ -16,6 +16,7 @@ from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 from PIL import Image
 
 import refrain.application as application
@@ -67,6 +68,18 @@ layout:
 
 def at(day: int, hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 3, day, hour, minute, tzinfo=_ZONE)
+
+
+def write_decoration_manifest(directory: Path, identifier: str, **metadata: object) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = {"format": 1, "id": identifier, "image": "overlay.png", **metadata}
+    (directory / "decoration.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+
+def write_font_manifest(directory: Path, identifier: str, font_name: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = {"format": 1, "id": identifier, "faces": {"regular": font_name}}
+    (directory / "font.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
 
 class FakeDisplay:
@@ -168,19 +181,21 @@ def test_background_pool_selects_distinct_usable_members(workspace: Workspace) -
 
 
 def test_decoration_preferences_resolve_before_font_background_and_region(workspace: Workspace) -> None:
-    overlay = workspace.root / "assets" / "decorations" / "overlay.png"
+    package = workspace.root / "assets" / "decorations" / "custom"
+    overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (1, 2, 3, 128)).save(overlay)
+    write_decoration_manifest(
+        package,
+        "custom",
+        font="source-sans-3",
+        background="ethereal",
+        presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
+    )
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
-            '  backgrounds: {default: ["canvas"]}\n'
-            "  decorations:\n"
-            "    available:\n"
-            '      custom: {image: "overlay.png", font: "source-sans-3", background: "ethereal", '
-            "presentation_region: {x: 0.12, y: 0.18, width: 0.7, height: 0.6}}\n"
-            '    default: ["none"]\n'
-            "  fonts:",
+            '  backgrounds: {default: ["canvas"]}\n' '  decorations: {default: ["none"]}\n' "  fonts:",
         )
     )
     ordinary(workspace, extra='decoration: "custom"\n')
@@ -200,18 +215,21 @@ def test_decoration_preferences_resolve_before_font_background_and_region(worksp
 
 
 def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
-    overlay = workspace.root / "assets" / "decorations" / "overlay.png"
+    package = workspace.root / "assets" / "decorations" / "custom"
+    overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200)).save(overlay)
+    write_decoration_manifest(
+        package,
+        "custom",
+        font="source-sans-3",
+        background="ethereal",
+        presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
+    )
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
-            '  backgrounds: {default: ["canvas"]}\n'
-            "  decorations:\n"
-            '    available: {custom: {image: "overlay.png", font: "source-sans-3", background: "ethereal", '
-            "presentation_region: {x: 0.12, y: 0.18, width: 0.7, height: 0.6}}}\n"
-            '    default: ["custom"]\n'
-            "  fonts:",
+            '  backgrounds: {default: ["canvas"]}\n' '  decorations: {default: ["custom"]}\n' "  fonts:",
         )
     )
     ordinary(workspace, extra='decoration: "none"\nfont: "lora"\nbackground: "none"\n')
@@ -243,17 +261,19 @@ def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace
 
 
 def test_normal_runtime_recovers_missing_decoration_without_reselection(workspace: Workspace, caplog) -> None:
-    overlay = workspace.root / "assets" / "decorations" / "overlay.png"
+    package = workspace.root / "assets" / "decorations" / "custom"
+    overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)).save(overlay)
+    write_decoration_manifest(
+        package,
+        "custom",
+        presentation_region={"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+    )
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
-            "  decorations:\n"
-            '    available: {custom: {image: "overlay.png", '
-            "presentation_region: {x: 0.2, y: 0.3, width: 0.6, height: 0.4}}}\n"
-            '    default: ["custom"]\n'
-            "  fonts:",
+            '  decorations: {default: ["custom"]}\n' "  fonts:",
         )
     )
     ordinary(workspace)
@@ -287,7 +307,7 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
-            '  backgrounds:\n    available: {paper: "paper.png"}\n    default: ["paper"]\n  fonts:',
+            '  backgrounds:\n    default: ["paper"]\n  fonts:',
         )
     )
     ordinary(workspace)
@@ -534,7 +554,7 @@ def test_entry_font_preference_is_resolved(workspace: Workspace) -> None:
 def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspace) -> None:
     config = workspace.config.read_text(encoding="utf-8").replace(
         'default: ["lora"]',
-        'default: ["missing-font"]\n    available:\n      missing-font: "missing.ttf"',
+        'default: ["missing-font"]',
     )
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace)
@@ -547,13 +567,15 @@ def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspac
 def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bundled_fallback(
     workspace: Workspace, caplog
 ) -> None:
-    custom_font = workspace.root / "assets" / "fonts" / "custom.ttf"
+    package = workspace.root / "assets" / "fonts" / "custom-font"
+    custom_font = package / "custom.ttf"
     custom_font.parent.mkdir(parents=True)
     bundled_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
     custom_font.write_bytes(bundled_font.read_bytes())
+    write_font_manifest(package, "custom-font", "custom.ttf")
     config = workspace.config.read_text(encoding="utf-8").replace(
         'default: ["lora"]',
-        'default: ["custom-font"]\n    available:\n      custom-font: "custom.ttf"',
+        'default: ["custom-font"]',
     )
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace, extra='font: "custom-font"\n')

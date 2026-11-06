@@ -157,6 +157,47 @@ def test_manifest_symlink_cannot_escape_its_package(tmp_path: Path, caplog) -> N
     assert "resolves outside its asset package" in caplog.text
 
 
+def test_asset_symlinks_are_not_followed_during_discovery(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    _write_png(outside / "linked.png")
+    _write_manifest(outside / "package", "background.yaml", {"format": 1, "id": "linked-package", "image": "image.png"})
+    _write_png(outside / "package" / "image.png")
+    asset_root = tmp_path / "assets" / "backgrounds"
+    asset_root.mkdir(parents=True)
+    try:
+        (asset_root / "linked.png").symlink_to(outside / "linked.png")
+        (asset_root / "linked-package").symlink_to(outside / "package", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks are unavailable: {error}")
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "linked" not in config.backgrounds
+    assert "linked-package" not in config.backgrounds
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"format": 2, "id": "wrong-version", "faces": {"regular": "Regular.ttf"}},
+        {"format": 1, "id": "no-regular", "faces": {"italic": "Regular.ttf"}},
+        {"format": 1, "id": "bad-face", "faces": {"regular face": "Regular.ttf"}},
+        {"format": 1, "id": "absolute-face", "faces": {"regular": "/tmp/Regular.ttf"}},
+    ],
+)
+def test_invalid_font_bundles_are_excluded_independently(tmp_path: Path, manifest: dict[str, object], caplog) -> None:
+    package = tmp_path / "assets" / "fonts" / str(manifest["id"])
+    package.mkdir(parents=True)
+    shutil.copyfile(_BUNDLED_LORA, package / "Regular.ttf")
+    _write_manifest(package, "font.yaml", manifest)
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert manifest["id"] not in config.fonts
+    assert "lora" in config.fonts
+    assert str(manifest["id"]) in caplog.text
+
+
 def test_legacy_available_mappings_are_ignored_with_migration_diagnostics(tmp_path: Path, caplog) -> None:
     data = _config_data(
         fonts={"default": ["lora"], "available": {"legacy": "font.ttf"}},

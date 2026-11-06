@@ -305,17 +305,21 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
 
 
 def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
-    overlay = demo.root / "assets" / "decorations" / "overlay.png"
+    package = demo.root / "assets" / "decorations" / "demo-overlay"
+    overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)).save(overlay)
+    (package / "decoration.yaml").write_text(
+        "format: 1\n"
+        "id: demo-overlay\n"
+        "image: overlay.png\n"
+        "presentation_region: {x: 0.2, y: 0.3, width: 0.6, height: 0.4}\n",
+        encoding="utf-8",
+    )
     demo.config.write_text(
         _CONFIG.replace(
             '  backgrounds:\n    default: ["none", "canvas"]',
-            '  backgrounds:\n    default: ["none"]\n'
-            "  decorations:\n"
-            '    available: {demo-overlay: {image: "overlay.png", '
-            "presentation_region: {x: 0.2, y: 0.3, width: 0.6, height: 0.4}}}\n"
-            '    default: ["demo-overlay"]',
+            '  backgrounds:\n    default: ["none"]\n' '  decorations: {default: ["demo-overlay"]}',
         ),
         encoding="utf-8",
     )
