@@ -67,7 +67,7 @@ Hardware-independent validation does not replace physical display validation whe
 
 ## Loading application configuration
 
-`load_application_config` reads and validates `config.yaml`, returning resolved paths, effective font, background, and decoration registries, and the settings required by downstream components. Missing optional settings use documented defaults; invalid optional settings and unknown fields are reported through Python logging and do not discard unrelated valid settings. Required values without usable fallbacks remain fatal. Relative content and user-resource paths are based on the configuration file's directory. See [`examples/config.yaml`](examples/config.yaml) for a bundled-resource example and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative configuration specification.
+`load_application_config` reads and validates `config.yaml`, returning resolved paths, effective font, background, and decoration registries, and the settings required by downstream components. Missing optional settings use documented defaults; invalid optional settings and unknown fields are reported through Python logging and do not discard unrelated valid settings. Required values without usable fallbacks remain fatal. Relative content paths are based on the configuration file's directory; relative custom-resource paths use their respective user-asset category directories. See [`examples/config.yaml`](examples/config.yaml) and [`docs/CONTENT_FORMAT.md`](docs/CONTENT_FORMAT.md) for the authoritative resource-path contract.
 
 ```python
 from refrain import ApplicationConfigurationError, load_application_config
@@ -83,6 +83,8 @@ else:
 
 Bundled fonts are package resources, not paths relative to the current directory or source checkout. Use `importlib.resources.as_file(font.path)` when an installed font loader requires a filesystem path; the `FontResource` path can also be opened directly for Pillow.
 
+Register custom fonts explicitly; for example, `my-serif: "MySerif.ttf"` under `layout.fonts.available` resolves from `assets/fonts/` beside the effective configuration file. Nested relative paths and absolute paths are also supported.
+
 ### Daily backgrounds
 
 The five bundled backgrounds have stable, reserved identifiers: `aged-paper`, `canvas`, `cloth`, `ethereal`, and `hex`. They are available through `config.backgrounds` as installed package resources, but are not automatically added to the default pool. Asset provenance is documented in [`src/refrain/assets/README.md`](src/refrain/assets/README.md).
@@ -94,10 +96,10 @@ layout:
   backgrounds:
     default: ["none", "aged-paper", "canvas"]
     available:
-      handmade-paper: "backgrounds/HandmadePaper.png"
+      handmade-paper: "HandmadePaper.png"
 ```
 
-Custom registrations must be readable, single-frame PNG images, exactly 1600 × 1200 pixels, in RGB or RGBA mode. Relative paths resolve against the configuration directory; absolute paths are permitted. Invalid registrations are excluded individually with warnings, and reserved identifiers cannot be overridden. RGBA transparency exposes the paper-white base.
+Custom registrations must be readable, single-frame PNG images, exactly 1600 × 1200 pixels, in RGB or RGBA mode. Relative paths resolve from `assets/backgrounds/` beside the effective configuration file; absolute paths are permitted. Invalid registrations are excluded individually with warnings, and reserved identifiers cannot be overridden. RGBA transparency exposes the paper-white base.
 
 A content entry's available `background: "<id>"` wins over the default pool; `background: "none"` suppresses automatic selection. An unavailable, syntactically valid preference warns and falls back to the pool without rejecting the entry. The resolved identifier remains committed across reveals and restarts. If regeneration cannot load that resource, preparation warns and uses paper-white without selecting a replacement or changing committed state. Valid prepared images remain reusable after resource changes. See [Background registry](docs/CONTENT_FORMAT.md#background-registry) and [Background and decoration recovery](docs/ARCHITECTURE.md#background-and-decoration-recovery).
 
@@ -113,13 +115,13 @@ layout:
     default: ["none", "lower-flourish", "simple-border"]
     available:
       botanical-corners:
-        image: "decorations/BotanicalCorners.png"
+        image: "BotanicalCorners.png"
         presentation_region: {x: 0.16, y: 0.18, width: 0.68, height: 0.58}
         font: "lora"
         background: "aged-paper"
 ```
 
-Decoration images must be readable, single-frame 1600 × 1200 RGBA PNGs. Relative image paths resolve from the configuration file's directory. The optional region uses normalized `x`, `y`, `width`, and `height` values; preferred fonts and backgrounds must be registered. An unavailable preference is warned about and ignored without invalidating the decoration. Invalid registrations are excluded independently. Omitted pools default to `["none"]`; duplicate members are ignored, and a pool with no usable members falls back to `["none"]`.
+Decoration images must be readable, single-frame 1600 × 1200 RGBA PNGs. Relative image paths resolve from `assets/decorations/` beside the effective configuration file. The optional region uses normalized `x`, `y`, `width`, and `height` values; preferred fonts and backgrounds must be registered. An unavailable preference is warned about and ignored without invalidating the decoration. Invalid registrations are excluded independently. Omitted pools default to `["none"]`; duplicate members are ignored, and a pool with no usable members falls back to `["none"]`.
 
 A content entry may select a decoration for every quotation it contains:
 
@@ -148,6 +150,8 @@ Initialization copies the packaged `config.default.yaml` to `config.yaml` only w
 
 Initialization is noninteractive and repeatable. It reuses existing real configuration, content, state, and cache directories without modifying existing files. Unexpected files or filesystem links that prevent safe access are reported before installation writes begin. New files are created exclusively, and a failure after creation begins leaves and reports partial results for a later safe retry. Initialization does not create state or history files and does not start display backends or select content.
 
+The standard configuration directory contains `config.yaml`, `content/`, and `assets/` with `fonts/`, `backgrounds/`, and `decorations/` subdirectories. Initialization creates missing asset directories, accepts and preserves existing nonempty directories and files, and does not copy bundled visual resources into them. Custom resources still require explicit registration; Refrain does not scan asset directories.
+
 ### Standard per-user locations
 
 Refrain resolves omitted paths independently of the current working directory:
@@ -155,6 +159,7 @@ Refrain resolves omitted paths independently of the current working directory:
 | Purpose | Linux | Windows |
 |---|---|---|
 | Configuration and content | `~/.config/refrain/` | `%APPDATA%\Refrain\` |
+| User-provided visual assets | `~/.config/refrain/assets/` | `%APPDATA%\Refrain\assets\` |
 | Operational state and global history | `~/.local/state/refrain/` | `%LOCALAPPDATA%\Refrain\State\` |
 | Prepared artifacts | `~/.cache/refrain/artifacts/` | `%LOCALAPPDATA%\Refrain\Cache\artifacts\` |
 
@@ -162,15 +167,17 @@ On Linux, absolute `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` val
 
 No system-wide paths are selected automatically when running as root. System deployments should configure explicit paths and service permissions.
 
-Normal operation does not generate a missing configuration or install sample content. If the selected configuration file is absent, Refrain reports its expected path and suggests `python -m refrain --initialize`. It never falls back to the packaged configuration. Relative content, font, background, and decoration paths remain relative to the selected configuration file.
+Normal operation does not generate a missing configuration or install sample content. If the selected configuration file is absent, Refrain reports its expected path and suggests `python -m refrain --initialize`. It never falls back to the packaged configuration. With `--config /custom/location/config.yaml`, the assets root is `/custom/location/assets/`; Refrain does not also search platform-standard asset locations or the current working directory. Relative content paths remain relative to the selected configuration file, while custom font, background, and decoration paths use their corresponding category directories under that assets root.
 
 If `content.directory` is omitted, the content library defaults to `content/` alongside the selected configuration file. An explicit relative path uses that same configuration-relative base; an absolute path remains absolute.
+
+Existing custom-resource registrations that used config-directory-relative paths are not searched as a fallback or migrated. Move those files into the appropriate asset category or update the configured path; absolute paths can continue to reference resources stored elsewhere.
 
 ### Reset and purge
 
 Perform reset and purge only while Refrain is stopped. Both operations manage standard per-user locations only and reject `--config`, `--state`, `--artifacts`, and `--history` overrides. They do not load configuration or start selection, preparation, display backends, or normal application startup.
 
-Reset removes runtime-generated state, the active and rotated global-history files, and generated cache contents. It preserves configuration, the standard content library, user resources, and the standard directory structure. The next normal startup selects and commits a quotation as an initial selection and regenerates required artifacts.
+Reset removes runtime-generated state, the active and rotated global-history files, and generated cache contents. It preserves configuration, the standard content library, the complete user-assets tree, and the standard directory structure. The next normal startup selects and commits a quotation as an initial selection and regenerates required artifacts.
 
 ```sh
 .venv/bin/python -m refrain --reset
@@ -178,7 +185,7 @@ Reset removes runtime-generated state, the active and rotated global-history fil
 
 The command displays the affected paths and requires an interactive terminal. Type exactly `RESET` to proceed. Any other input, EOF, or unavailable terminal cancels the operation without filesystem changes.
 
-Purge permanently removes the complete Refrain installation from standard per-user configuration, operational, and cache locations, including configuration, content, and user-provided files within those locations. It leaves shared parent directories intact and does not follow configuration references to external content or resources.
+Purge permanently removes the complete Refrain installation from standard per-user configuration, operational, and cache locations, including configuration, content, and custom fonts, backgrounds, and decorations stored in the standard assets directory. It leaves shared parent directories intact, does not follow configuration references to external content or resources, and does not delete resources referenced by absolute external paths.
 
 ```sh
 .venv/bin/python -m refrain --purge

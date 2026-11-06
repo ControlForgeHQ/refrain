@@ -162,14 +162,14 @@ layout:
       - "source-sans-3"
 
     available:
-      my-lora: "fonts/MyCustomLora.otf"
+      my-lora: "MyCustomLora.otf"
 
   backgrounds:
     default:
       - "none"
 
     available:
-      my-paper: "backgrounds/MyPaper.png"
+      my-paper: "MyPaper.png"
 
   decorations:
     default:
@@ -177,7 +177,7 @@ layout:
 
     available:
       my-border:
-        image: "decorations/MyBorder.png"
+        image: "MyBorder.png"
         presentation_region:
           x: 0.15
           y: 0.20
@@ -194,9 +194,13 @@ The example illustrates simultaneous display backends, the information view, a d
 
 The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
 
-Refrain automatically registers its bundled fonts, backgrounds, and decorations. Registered resources can be referenced by stable identifiers without supplying paths in content entries.
+Refrain automatically registers its bundled fonts, backgrounds, and decorations. Bundled resources are package-owned; user-provided resources are stored separately beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Registered resources can be referenced by stable identifiers without supplying paths in content entries.
 
-The `available` mappings register installation-specific resources. Their paths resolve relative to the application configuration file when not absolute.
+The `available` mappings explicitly register user-provided resources; files are not discovered or registered automatically. Relative font, background, and decoration image paths resolve from their respective category directory beneath the effective configuration file's directory. Nested relative paths stay within that category base. Absolute paths are used directly. For example, `"backgrounds/MyPaper.png"` in the background mapping means `assets/backgrounds/backgrounds/MyPaper.png`; the category name is an ordinary path component and is not removed.
+
+When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly.
+
+This changes the Version 0.1 contract for custom resources: previous config-directory-relative paths are not searched as fallbacks or migrated. Move resources into the category directories or update registrations. Absolute paths remain available for resources stored elsewhere.
 
 The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
 
@@ -507,8 +511,8 @@ For example:
 layout:
   fonts:
     available:
-      my-lora: "fonts/MyCustomLora.otf"
-      family-handwriting: "fonts/FamilyHandwriting.ttf"
+      my-lora: "MyCustomLora.otf"
+      family-handwriting: "family/FamilyHandwriting.ttf"
 ```
 
 When omitted, `layout.fonts.available` defaults to an empty mapping.
@@ -519,7 +523,7 @@ User-defined identifiers must not duplicate bundled identifiers. Such registrati
 
 Font paths must be nonempty strings.
 
-Relative font paths are resolved relative to the directory containing `config.yaml`.
+Relative font paths are resolved from `<configuration directory>/assets/fonts/`. They may contain nested subdirectories; the font remains explicitly registered through `available`.
 
 Absolute paths are permitted.
 
@@ -596,8 +600,8 @@ For example:
 layout:
   backgrounds:
     available:
-      handmade-paper: "backgrounds/HandmadePaper.png"
-      parchment: "backgrounds/Parchment.png"
+      handmade-paper: "HandmadePaper.png"
+      parchment: "paper/Parchment.png"
 ```
 
 When omitted, `layout.backgrounds.available` defaults to an empty mapping.
@@ -606,7 +610,7 @@ Background identifiers must be nonempty, case-sensitive strings.
 
 User identifiers must not duplicate reserved or bundled identifiers. Such registrations are ignored with a warning.
 
-Relative paths resolve from the directory containing the application configuration file. Absolute paths are permitted.
+Relative paths are resolved from `<configuration directory>/assets/backgrounds/` and may contain nested subdirectories. Absolute paths are used directly. Registrations are explicit; the assets directory is not scanned.
 
 Background images must be readable, single-frame PNG images with dimensions of 1600 × 1200 pixels.
 
@@ -694,7 +698,7 @@ layout:
   decorations:
     available:
       botanical-corners:
-        image: "decorations/BotanicalCorners.png"
+        image: "BotanicalCorners.png"
         presentation_region:
           x: 0.16
           y: 0.18
@@ -702,7 +706,7 @@ layout:
           height: 0.58
 
       futuristic-corners:
-        image: "decorations/FuturisticCorners.png"
+        image: "corners/FuturisticCorners.png"
         presentation_region:
           x: 0.12
           y: 0.16
@@ -716,7 +720,7 @@ When omitted, `layout.decorations.available` defaults to an empty mapping.
 
 Decoration identifiers follow the same nonempty, case-sensitive, reserved-identifier rules as background identifiers.
 
-Relative image paths resolve from the directory containing the application configuration file. Absolute paths are permitted.
+Relative image paths are resolved from `<configuration directory>/assets/decorations/` and may contain nested subdirectories. Absolute paths are used directly. Registrations are explicit; the assets directory is not scanned.
 
 Decoration images must be readable, single-frame RGBA PNG images with dimensions of 1600 × 1200 pixels.
 

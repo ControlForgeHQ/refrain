@@ -318,6 +318,12 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     def use_default(field: str, value: str) -> None:
         defaults_used.append(f"{field}={value}")
 
+    def resolve_resource_path(category: str, value: str) -> Path:
+        path = Path(value)
+        if not path.is_absolute():
+            path = file.parent / "assets" / category / path
+        return path
+
     def finish_diagnostics() -> None:
         for diagnostic in diagnostics:
             if diagnostic.severity >= logging.WARNING:
@@ -514,9 +520,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         if not isinstance(path_value, str) or not path_value:
             report(field, "must be a nonempty font file path; this registration is excluded")
             continue
-        font_path = Path(path_value)
-        if not font_path.is_absolute():
-            font_path = file.parent / font_path
+        font_path = resolve_resource_path("fonts", path_value)
         if _load_font(font_path, field, report):
             font_registry[identifier] = FontResource(identifier=identifier, path=font_path, bundled=False)
 
@@ -568,9 +572,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         if not isinstance(path_value, str) or not path_value.strip():
             report(field_name, "must be a nonempty background file path; this registration is excluded")
             continue
-        background_path = Path(path_value)
-        if not background_path.is_absolute():
-            background_path = file.parent / background_path
+        background_path = resolve_resource_path("backgrounds", path_value)
         _register_background(
             BackgroundResource(identifier=identifier, path=background_path, bundled=False),
             field_name,
@@ -642,9 +644,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         if not isinstance(image_value, str) or not image_value.strip():
             report(f"{field_name}.image", "is required and must be a nonempty file path; this registration is excluded")
             continue
-        decoration_path = Path(image_value)
-        if not decoration_path.is_absolute():
-            decoration_path = file.parent / decoration_path
+        decoration_path = resolve_resource_path("decorations", image_value)
 
         region = None
         if "presentation_region" in registration:

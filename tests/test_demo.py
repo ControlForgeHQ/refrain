@@ -305,7 +305,8 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
 
 
 def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
-    overlay = demo.root / "overlay.png"
+    overlay = demo.root / "assets" / "decorations" / "overlay.png"
+    overlay.parent.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)).save(overlay)
     demo.config.write_text(
         _CONFIG.replace(

@@ -37,7 +37,7 @@ layout:
 
     # Optional custom fonts.
     # available:
-    #   my-lora: "fonts/MyCustomLora.otf"
+    #   my-lora: "MyCustomLora.otf"
 
   backgrounds:
     # Bundled backgrounds are registered automatically.
@@ -52,9 +52,8 @@ layout:
 
     # Optional custom backgrounds. Images must be readable, single-frame
     # RGB/RGBA PNGs at 1600 x 1200.
-    # Relative paths resolve from the directory containing config.yaml.
     # available:
-    #   handmade-paper: "backgrounds/HandmadePaper.png"
+    #   handmade-paper: "HandmadePaper.png"
 
   decorations:
     # Bundled decorations are registered automatically. Use "none" for no overlay.
@@ -68,10 +67,10 @@ layout:
       - "top-bottom-borders"
 
     # Optional custom transparent overlays must be readable, single-frame
-    # 1600 x 1200 RGBA PNGs. Relative paths resolve from this configuration file.
+    # 1600 x 1200 RGBA PNGs.
     # available:
     #   botanical-corners:
-    #     image: "decorations/BotanicalCorners.png"
+    #     image: "BotanicalCorners.png"
     #     presentation_region: {x: 0.16, y: 0.18, width: 0.68, height: 0.58}
     #     font: "lora"
     #     background: "aged-paper"

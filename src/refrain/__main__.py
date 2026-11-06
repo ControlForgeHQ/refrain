@@ -118,7 +118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 confirmed = confirm_operation(
                     "RESET",
                     "This removes operational state, global history, and generated cache data. "
-                    "Configuration and content are preserved.",
+                    "Configuration, content, and custom assets are preserved.",
                     (
                         Path(paths.state_file),
                         Path(paths.history_file),
@@ -135,13 +135,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 confirmed = confirm_operation(
                     "PURGE REFRAIN",
                     "WARNING: this permanently removes configuration, content, and user-provided files "
-                    "within the standard Refrain locations.",
+                    "within the standard Refrain locations, including custom fonts, backgrounds, and decorations "
+                    "in the standard assets directory.",
                     tuple(
                         dict.fromkeys(
                             Path(path)
                             for path in (
                                 paths.config_directory,
                                 paths.content_directory,
+                                paths.assets_directory,
+                                *paths.asset_directories,
                                 paths.operational_directory,
                                 paths.state_directory,
                                 paths.cache_directory,

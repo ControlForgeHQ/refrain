@@ -190,6 +190,8 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     }
     assert paths.state_directory.is_dir()
     assert paths.artifacts_directory.is_dir()
+    assert paths.assets_directory.is_dir()
+    assert all((paths.assets_directory / category).is_dir() for category in ("fonts", "backgrounds", "decorations"))
     assert not paths.state_file.exists()
     assert not paths.history_file.exists()
     assert any("Configuration:" in message for message in reports)
@@ -198,6 +200,61 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     assert any("Artifacts:" in message for message in reports)
     assert paths.state_directory in created
     assert paths.artifacts_directory in created
+
+
+def test_initialization_preserves_nonempty_assets_and_does_not_validate_them(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    user_asset = paths.assets_directory / "fonts" / "nested" / "user-font.ttf"
+    user_asset.parent.mkdir(parents=True)
+    user_asset.write_bytes(b"not a font, initialization does not validate assets")
+    (paths.assets_directory / "backgrounds").mkdir()
+
+    initialize_installation(paths)
+    contents = {
+        path.relative_to(paths.assets_directory): path.read_bytes()
+        for path in paths.assets_directory.rglob("*")
+        if path.is_file()
+    }
+    initialize_installation(paths)
+
+    assert {
+        path.relative_to(paths.assets_directory): path.read_bytes()
+        for path in paths.assets_directory.rglob("*")
+        if path.is_file()
+    } == contents
+    assert user_asset.read_bytes() == b"not a font, initialization does not validate assets"
+    assert (paths.assets_directory / "decorations").is_dir()
+
+
+@pytest.mark.parametrize("category", ["assets", "assets/fonts", "assets/backgrounds", "assets/decorations"])
+def test_initialization_rejects_files_blocking_asset_directories_before_writing(tmp_path: Path, category: str) -> None:
+    paths = _paths(tmp_path)
+    blocker = paths.config_directory / category
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_bytes(b"user data")
+
+    with pytest.raises(InitializationError) as error:
+        initialize_installation(paths)
+
+    assert str(blocker) in str(error.value)
+    assert blocker.read_bytes() == b"user data"
+    assert not paths.config_file.exists()
+
+
+def test_initialization_rejects_linked_asset_directory_without_following_it(tmp_path: Path, symlink_or_skip) -> None:
+    paths = _paths(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep"
+    sentinel.write_bytes(b"outside")
+    paths.assets_directory.mkdir(parents=True)
+    symlink_or_skip(paths.assets_directory / "fonts", external, directory=True)
+
+    with pytest.raises(InitializationError, match="filesystem link"):
+        initialize_installation(paths)
+
+    assert sentinel.read_bytes() == b"outside"
+    assert not paths.config_file.exists()
 
 
 def test_existing_empty_configuration_and_content_directories_are_reused(tmp_path: Path) -> None:
@@ -438,6 +495,9 @@ def test_partial_initialization_failure_reports_created_data_without_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = _paths(tmp_path)
+    user_asset = paths.assets_directory / "fonts" / "keep.ttf"
+    user_asset.parent.mkdir(parents=True)
+    user_asset.write_bytes(b"user font")
     original_create_file = installation._create_file
 
     def fail_on_config(path: Path, contents: bytes, created: list[Path], owned_directories: set[Path]) -> None:
@@ -450,6 +510,7 @@ def test_partial_initialization_failure_reports_created_data_without_rollback(
         initialize_installation(paths)
     assert str(paths.config_file) not in str(error.value)
     assert paths.content_directory.is_dir()
+    assert user_asset.read_bytes() == b"user font"
 
 
 def test_repeated_initialization_succeeds_without_modifying_installed_files(tmp_path: Path) -> None:
@@ -527,6 +588,14 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
     content.write_text("custom content", encoding="utf-8")
     resource = paths.config_directory / "user-font.ttf"
     resource.write_bytes(b"font")
+    asset_files = {
+        paths.assets_directory / "fonts" / "nested" / "custom.ttf": b"font bytes",
+        paths.assets_directory / "backgrounds" / "paper" / "custom.png": b"background bytes",
+        paths.assets_directory / "decorations" / "custom.png": b"decoration bytes",
+    }
+    for path, contents in asset_files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
     for path in (
         paths.state_file,
         paths.history_file,
@@ -542,6 +611,7 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
     assert config.read_text(encoding="utf-8") == "custom configuration"
     assert content.read_text(encoding="utf-8") == "custom content"
     assert resource.read_bytes() == b"font"
+    assert {path: path.read_bytes() for path in asset_files} == asset_files
     assert not paths.state_file.exists()
     assert not paths.history_file.exists()
     assert not (paths.state_directory / "global-history.1.jsonl").exists()
@@ -586,9 +656,22 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     paths.config_directory.mkdir(parents=True)
     paths.state_directory.mkdir(parents=True)
     paths.cache_directory.mkdir(parents=True)
-    (paths.config_directory / "config.yaml").write_text("content: {directory: /external}", encoding="utf-8")
+    external_resource = tmp_path / "external-font.ttf"
+    external_resource.write_bytes(b"external font")
+    (paths.config_directory / "config.yaml").write_text(
+        f"content: {{directory: /external}}\nlayout: {{fonts: {{available: {{outside: {external_resource}}}}}}}\n",
+        encoding="utf-8",
+    )
     (paths.config_directory / "content").mkdir()
     (paths.config_directory / "content" / "entry.yaml").write_text("user content", encoding="utf-8")
+    assets = {
+        paths.assets_directory / "fonts" / "serif" / "custom.ttf": b"custom font",
+        paths.assets_directory / "backgrounds" / "paper" / "custom.png": b"custom background",
+        paths.assets_directory / "decorations" / "frames" / "custom.png": b"custom decoration",
+    }
+    for path, contents in assets.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
     external = tmp_path / "external"
     external.mkdir()
     (external / "keep").write_text("outside", encoding="utf-8")
@@ -600,10 +683,13 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     assert not paths.config_directory.exists()
     assert not paths.state_directory.exists()
     assert not paths.cache_directory.exists()
+    assert not paths.assets_directory.exists()
     assert paths.config_directory.parent.is_dir()
     assert paths.state_directory.parent.is_dir()
     assert paths.cache_directory.parent.is_dir()
     assert (external / "keep").read_text(encoding="utf-8") == "outside"
+    assert not any(path.exists() for path in assets)
+    assert external_resource.read_bytes() == b"external font"
     assert purge_installation(paths) == removed
 
 
@@ -828,6 +914,8 @@ def test_initialize_cli_exits_without_starting_application(
     assert "Initialization complete." in output
     assert str(paths.config_file) in output
     assert str(paths.content_directory) in output
+    assert str(paths.assets_directory) in output
+    assert str(paths.assets_directory / "fonts") in output
     assert str(paths.state_directory) in output
     assert str(paths.artifacts_directory) in output
 
@@ -852,6 +940,30 @@ def test_destructive_cli_operations_require_confirmation_before_work(
 
     assert cli.main([operation]) == 1
     assert paths.config_file.read_text(encoding="utf-8") == "preserve"
+
+
+def test_cancelled_purge_preserves_assets_and_describes_their_deletion_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    custom_asset = paths.assets_directory / "fonts" / "custom.ttf"
+    custom_asset.parent.mkdir(parents=True)
+    custom_asset.write_bytes(b"custom font")
+    captured: dict[str, object] = {}
+
+    def cancel(confirmation: str, description: str, locations: tuple[Path, ...]) -> bool:
+        captured.update(confirmation=confirmation, description=description, locations=locations)
+        return False
+
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(cli, "confirm_operation", cancel)
+
+    assert cli.main(["--purge"]) == 1
+
+    assert captured["confirmation"] == "PURGE REFRAIN"
+    assert "custom fonts, backgrounds, and decorations" in captured["description"]
+    assert paths.assets_directory in captured["locations"]
+    assert custom_asset.read_bytes() == b"custom font"
 
 
 @pytest.mark.parametrize(

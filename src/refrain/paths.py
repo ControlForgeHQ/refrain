@@ -27,6 +27,16 @@ class ApplicationPaths:
     cache_directory: PurePath
     artifacts_directory: PurePath
 
+    @property
+    def assets_directory(self) -> PurePath:
+        """Standard user-owned assets beside the per-user configuration."""
+        return self.config_directory / "assets"
+
+    @property
+    def asset_directories(self) -> tuple[PurePath, ...]:
+        """Standard category directories for user-owned visual resources."""
+        return tuple(self.assets_directory / category for category in ("fonts", "backgrounds", "decorations"))
+
 
 def _absolute_path(value: str, path_type: type[PurePath], name: str) -> PurePath:
     path = path_type(value)
