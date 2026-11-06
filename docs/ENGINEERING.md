@@ -207,7 +207,6 @@ Avoid language features or third-party packages that unnecessarily exclude suppo
 
 The project's minimum supported Python version must be established in the project metadata once implementation begins.
 
-#
 ### Cross-platform development and testing
 
 Refrain's hardware-independent components must remain compatible with Linux and Windows development environments. Prefer platform-neutral Python interfaces and avoid unnecessary operating-system-specific assumptions.
