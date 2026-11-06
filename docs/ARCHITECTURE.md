@@ -1197,9 +1197,9 @@ The initial release does not require additional styles, arbitrary layout scripti
 
 ### Font selection
 
-Bundled fonts, backgrounds, and decorations are package-owned resources accessed through package-resource mechanisms. User-provided resources belong under the `assets/` directory beside the effective configuration file, separated into `fonts/`, `backgrounds/`, and `decorations/`; they are not generated cache data. The configuration loader registers only resources explicitly named in the existing `available` mappings and does not discover files by scanning these directories.
+Bundled fonts, backgrounds, and decorations are package-owned resources accessed through package-resource mechanisms. User-provided resources belong under the `assets/` directory beside the effective configuration file, separated into `fonts/`, `backgrounds/`, and `decorations/`; they are not generated cache data. The configuration loader discovers and validates resources in these locations when effective configuration is loaded.
 
-Refrain maintains an effective font registry containing usable bundled application fonts and accepted user-registered fonts.
+Refrain maintains an effective font registry containing usable bundled and discovered font bundles.
 
 Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool.
 

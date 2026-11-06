@@ -63,7 +63,7 @@ class FontResource:
 
 @dataclass(frozen=True)
 class BackgroundResource:
-    """A validated bundled or user-registered background PNG."""
+    """A validated bundled or discovered background PNG."""
 
     identifier: str
     path: Union[Path, Traversable]
@@ -72,7 +72,7 @@ class BackgroundResource:
 
 @dataclass(frozen=True)
 class DecorationResource:
-    """A validated bundled or user-registered decorative PNG and its preferences."""
+    """A validated bundled or discovered decorative PNG and its preferences."""
 
     identifier: str
     path: Union[Path, Traversable]

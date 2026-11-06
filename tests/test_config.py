@@ -44,6 +44,13 @@ def write_config(path: Path, data: dict[str, object]) -> Path:
     return path
 
 
+def write_asset_manifest(directory: Path, name: str, data: dict[str, object]) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def diagnostic_fields(path: Path) -> tuple[str, ...]:
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(path)
@@ -81,13 +88,11 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
-@pytest.mark.parametrize("absolute", [True, False])
-def test_custom_background_paths_and_modes(tmp_path: Path, mode: str, absolute: bool) -> None:
-    path = tmp_path / "paper.png" if absolute else tmp_path / "assets" / "backgrounds" / "paper.png"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new(mode, (1600, 1200)).save(path)
-    path_value = str(path) if absolute else path.name
-    data = background_configuration(available={"paper": path_value}, default=["paper"])
+def test_custom_background_discovery_and_modes(tmp_path: Path, mode: str) -> None:
+    path = tmp_path / "assets" / "backgrounds" / "nested" / "paper.png"
+    path.parent.mkdir(parents=True)
+    Image.new(mode, (31, 17)).save(path)
+    data = background_configuration(default=["paper"])
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -98,7 +103,7 @@ def test_custom_background_paths_and_modes(tmp_path: Path, mode: str, absolute: 
         assert image.getpixel((0, 0)) == ((0, 0, 0) if mode == "RGB" else (0, 0, 0, 0))
 
 
-@pytest.mark.parametrize("kind", ["jpeg", "palette", "gray", "size", "animation", "corrupt", "missing", "truncated"])
+@pytest.mark.parametrize("kind", ["jpeg", "palette", "gray", "animation", "corrupt", "truncated"])
 def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
     backgrounds = tmp_path / "assets" / "backgrounds"
     backgrounds.mkdir(parents=True)
@@ -109,8 +114,6 @@ def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, c
         Image.new("RGB", (1600, 1200)).save(bad_path, format="JPEG")
     elif kind in {"palette", "gray"}:
         Image.new("P" if kind == "palette" else "L", (1600, 1200)).save(bad_path)
-    elif kind == "size":
-        Image.new("RGB", (1200, 1600)).save(bad_path)
     elif kind == "animation":
         Image.new("RGBA", (1600, 1200)).save(
             bad_path, save_all=True, append_images=[Image.new("RGBA", (1600, 1200), "red")], duration=100
@@ -119,20 +122,23 @@ def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, c
         bad_path.write_bytes(b"not an image")
     elif kind == "truncated":
         bad_path.write_bytes(good_path.read_bytes()[:100])
-    data = background_configuration(available={"bad": "bad.png", "good": "good.png"}, default=["bad", "good"])
+    data = background_configuration(default=["bad", "good"])
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert "bad" not in config.backgrounds
     assert "good" in config.backgrounds
     assert config.default_backgrounds == ("good",)
-    assert "layout.backgrounds.available.bad" in caplog.text
+    assert "assets.background.bad" in caplog.text
     assert "excluded" in caplog.text
 
 
 @pytest.mark.parametrize("identifier", ["none", "aged-paper", "canvas", "cloth", "ethereal", "hex"])
 def test_reserved_background_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
-    data = background_configuration(available={identifier: "missing.png"})
+    asset_path = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
+    asset_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 6)).save(asset_path)
+    data = background_configuration()
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -176,7 +182,7 @@ def test_default_background_pool_deduplicates_and_excludes_invalid_values(tmp_pa
 
     assert config.default_backgrounds == ("canvas", "none", "hex")
     assert "background identifier 'Canvas' is unavailable" in caplog.text
-    assert "must be a nonempty background identifier" in caplog.text
+    assert "must be a valid background identifier" in caplog.text
 
 
 @pytest.mark.parametrize("pool", [None, [], {}, "canvas", False, ["missing"], ["", None, " "]])
@@ -242,9 +248,7 @@ def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch
     background_path = tmp_path / "assets" / "backgrounds" / "paper.png"
     background_path.parent.mkdir(parents=True)
     Image.new("RGB", (1600, 1200)).save(background_path)
-    config_path = write_config(
-        tmp_path / "config.yaml", background_configuration(available={"paper": "paper.png"}, default=["paper"])
-    )
+    config_path = write_config(tmp_path / "config.yaml", background_configuration(default=["paper"]))
     original_open = Path.open
 
     def deny_background_read(path: Path, *args, **kwargs):
@@ -258,7 +262,7 @@ def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch
 
     assert "paper" not in config.backgrounds
     assert config.default_backgrounds == ("none",)
-    assert "layout.backgrounds.available.paper" in caplog.text
+    assert "assets.background.paper" in caplog.text
     assert "background read denied" in caplog.text
 
 
@@ -285,20 +289,24 @@ def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -
         config.decorations["other"] = config.decorations["hex"]
 
 
-@pytest.mark.parametrize("absolute", [True, False])
-def test_custom_decoration_path_and_metadata(tmp_path: Path, absolute: bool) -> None:
-    path = tmp_path / "flourish.png" if absolute else tmp_path / "assets" / "decorations" / "flourish.png"
+def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
+    package = tmp_path / "assets" / "decorations" / "custom-flourish"
+    path = package / "flourish.png"
     path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGBA", (1600, 1200), (12, 34, 56, 128)).save(path)
-    data = decoration_configuration(
-        available={
-            "custom-flourish": {
-                "image": str(path) if absolute else path.name,
-                "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6},
-                "font": "lora",
-                "background": "none",
-            }
+    Image.new("RGBA", (29, 17), (12, 34, 56, 128)).save(path)
+    write_asset_manifest(
+        package,
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "custom-flourish",
+            "image": "flourish.png",
+            "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6},
+            "font": "lora",
+            "background": "none",
         },
+    )
+    data = decoration_configuration(
         default=["custom-flourish"],
     )
 
@@ -315,28 +323,33 @@ def test_custom_decoration_path_and_metadata(tmp_path: Path, absolute: bool) -> 
     assert config.default_decorations == ("custom-flourish",)
 
 
-@pytest.mark.parametrize("kind", ["rgb", "size", "animation", "corrupt", "missing"])
+@pytest.mark.parametrize("kind", ["rgb", "animation", "corrupt", "missing"])
 def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
     decorations = tmp_path / "assets" / "decorations"
-    decorations.mkdir(parents=True)
-    bad_path = decorations / "bad.png"
-    good_path = decorations / "good.png"
-    Image.new("RGBA", (1600, 1200)).save(good_path)
+    bad_package = decorations / "bad-package"
+    good_package = decorations / "good-package"
+    bad_path = bad_package / "bad.png"
+    good_path = good_package / "good.png"
+    good_path.parent.mkdir(parents=True)
+    Image.new("RGBA", (37, 21)).save(good_path)
     if kind == "rgb":
+        bad_path.parent.mkdir(parents=True)
         Image.new("RGB", (1600, 1200)).save(bad_path)
-    elif kind == "size":
-        Image.new("RGBA", (1200, 1600)).save(bad_path)
     elif kind == "animation":
+        bad_path.parent.mkdir(parents=True)
         Image.new("RGBA", (1600, 1200)).save(
             bad_path, save_all=True, append_images=[Image.new("RGBA", (1600, 1200), "red")], duration=100
         )
     elif kind == "corrupt":
+        bad_path.parent.mkdir(parents=True)
         bad_path.write_bytes(b"not an image")
+    write_asset_manifest(
+        bad_package,
+        "decoration.yaml",
+        {"format": 1, "id": "bad", "image": "missing.png" if kind == "missing" else "bad.png"},
+    )
+    write_asset_manifest(good_package, "decoration.yaml", {"format": 1, "id": "good", "image": "good.png"})
     data = decoration_configuration(
-        available={
-            "bad": {"image": "missing.png" if kind == "missing" else bad_path.name},
-            "good": {"image": "good.png"},
-        },
         default=["bad", "good"],
     )
 
@@ -345,22 +358,31 @@ def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: st
     assert "bad" not in config.decorations
     assert "good" in config.decorations
     assert config.default_decorations == ("good",)
-    assert "layout.decorations.available.bad" in caplog.text
+    if kind == "missing":
+        assert "decoration.yaml.image" in caplog.text
+    else:
+        assert "assets.decorations.bad" in caplog.text
     assert "excluded" in caplog.text
 
 
 def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, caplog) -> None:
     decorations = tmp_path / "assets" / "decorations"
-    decorations.mkdir(parents=True)
-    Image.new("RGBA", (1600, 1200)).save(decorations / "overlay.png")
-    data = decoration_configuration(
-        available={
-            "bad-region": {
-                "image": "overlay.png",
-                "presentation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
-            },
-            "valid": {"image": "overlay.png"},
+    (decorations / "bad-region").mkdir(parents=True)
+    (decorations / "valid").mkdir(parents=True)
+    Image.new("RGBA", (1600, 1200)).save(decorations / "bad-region" / "overlay.png")
+    Image.new("RGBA", (1600, 1200)).save(decorations / "valid" / "overlay.png")
+    write_asset_manifest(
+        decorations / "bad-region",
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "bad-region",
+            "image": "overlay.png",
+            "presentation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
         },
+    )
+    write_asset_manifest(decorations / "valid", "decoration.yaml", {"format": 1, "id": "valid", "image": "overlay.png"})
+    data = decoration_configuration(
         default=["bad-region", "valid"],
     )
 
@@ -375,16 +397,25 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
         "valid",
     }
     assert config.default_decorations == ("valid",)
-    assert "layout.decorations.available.bad-region.presentation_region" in caplog.text
+    assert "bad-region/decoration.yaml.presentation_region" in caplog.text
 
 
 def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(tmp_path: Path, caplog) -> None:
-    decorations = tmp_path / "assets" / "decorations"
-    decorations.mkdir(parents=True)
-    Image.new("RGBA", (1600, 1200)).save(decorations / "overlay.png")
-    data = decoration_configuration(
-        available={"usable": {"image": "overlay.png", "font": "missing-font", "background": "missing-paper"}}
+    package = tmp_path / "assets" / "decorations" / "usable"
+    package.mkdir(parents=True)
+    Image.new("RGBA", (1600, 1200)).save(package / "overlay.png")
+    write_asset_manifest(
+        package,
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "usable",
+            "image": "overlay.png",
+            "font": "missing-font",
+            "background": "missing-paper",
+        },
     )
+    data = decoration_configuration()
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -411,12 +442,11 @@ def test_default_decoration_pool_deduplicates_and_falls_back_to_none(tmp_path: P
     "identifier", ["none", "ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"]
 )
 def test_reserved_decoration_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
-    config = load_application_config(
-        write_config(
-            tmp_path / "config.yaml",
-            decoration_configuration(available={identifier: {"image": "missing.png"}}),
-        )
-    )
+    package = tmp_path / "assets" / "decorations" / "conflicting"
+    package.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(package / "overlay.png")
+    write_asset_manifest(package, "decoration.yaml", {"format": 1, "id": identifier, "image": "overlay.png"})
+    config = load_application_config(write_config(tmp_path / "config.yaml", decoration_configuration()))
 
     if identifier == "none":
         assert identifier not in config.decorations
@@ -692,14 +722,16 @@ def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> Non
 
 def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path) -> None:
     source_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
-    user_font = tmp_path / "assets" / "fonts" / "additional.font"
+    package = tmp_path / "assets" / "fonts" / "extra"
+    user_font = package / "Regular.ttf"
     user_font.parent.mkdir(parents=True)
     with source_font.open("rb") as source, user_font.open("wb") as destination:
         shutil.copyfileobj(source, destination)
+    write_asset_manifest(package, "font.yaml", {"format": 1, "id": "extra", "faces": {"regular": "Regular.ttf"}})
     data = configuration_data(
         layout={
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["lora"], "available": {"extra": "additional.font"}},
+            "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )
@@ -715,7 +747,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_directory = tmp_path / "alternate" / "configuration"
-    font = config_directory / "assets" / "fonts" / "family" / "Family.ttf"
+    font = config_directory / "assets" / "fonts" / "family" / "Regular.ttf"
     background = config_directory / "assets" / "backgrounds" / "backgrounds" / "Paper.png"
     decoration = config_directory / "assets" / "decorations" / "borders" / "Border.png"
     font.parent.mkdir(parents=True)
@@ -724,14 +756,16 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
     Image.new("RGB", (1600, 1200)).save(background)
     Image.new("RGBA", (1600, 1200)).save(decoration)
+    write_asset_manifest(font.parent, "font.yaml", {"format": 1, "id": "family", "faces": {"regular": "Regular.ttf"}})
+    write_asset_manifest(decoration.parent, "decoration.yaml", {"format": 1, "id": "border", "image": "Border.png"})
 
     data = configuration_data(
         content={"directory": "entries"},
         layout={
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["lora"], "available": {"family": "family/Family.ttf"}},
-            "backgrounds": {"available": {"handmade-paper": "backgrounds/Paper.png"}},
-            "decorations": {"available": {"border": {"image": "borders/Border.png"}}},
+            "fonts": {"default": ["lora"]},
+            "backgrounds": {"default": ["none"]},
+            "decorations": {"default": ["none"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         },
     )
@@ -743,12 +777,12 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     config = load_application_config(config_path)
 
     assert config.fonts["family"].path == font
-    assert config.backgrounds["handmade-paper"].path == background
+    assert config.backgrounds["Paper"].path == background
     assert config.decorations["border"].path == decoration
     assert config.content_directory == config_directory / "entries"
 
 
-def test_absolute_user_font_path_is_preserved(tmp_path: Path) -> None:
+def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog) -> None:
     source_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
     user_font = tmp_path / "custom-font.ttf"
     with source_font.open("rb") as source, user_font.open("wb") as destination:
@@ -756,33 +790,45 @@ def test_absolute_user_font_path_is_preserved(tmp_path: Path) -> None:
     data = configuration_data(
         layout={
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["lora"], "available": {"extra": str(user_font)}},
+            "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )
 
+    package = tmp_path / "assets" / "fonts" / "extra"
+    package.mkdir(parents=True)
+    write_asset_manifest(
+        package,
+        "font.yaml",
+        {"format": 1, "id": "extra", "faces": {"regular": str(user_font)}},
+    )
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
+    assert "extra" not in config.fonts
+    assert "within its asset package" in caplog.text
 
-    assert config.fonts["extra"].path == user_font
 
-
-def test_mixed_user_font_registrations_keep_only_usable_fonts(tmp_path: Path, caplog) -> None:
+def test_mixed_discovered_font_bundles_keep_only_usable_fonts(tmp_path: Path, caplog) -> None:
     source_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
-    valid_font = tmp_path / "valid.ttf"
+    valid_package = tmp_path / "assets" / "fonts" / "valid-user-font"
+    valid_font = valid_package / "Regular.ttf"
+    valid_package.mkdir(parents=True)
     valid_font.write_bytes(source_font.read_bytes())
+    write_asset_manifest(
+        valid_package, "font.yaml", {"format": 1, "id": "valid-user-font", "faces": {"regular": "Regular.ttf"}}
+    )
+    missing_package = tmp_path / "assets" / "fonts" / "missing-user-font"
+    write_asset_manifest(
+        missing_package,
+        "font.yaml",
+        {"format": 1, "id": "missing-user-font", "faces": {"regular": "missing.ttf"}},
+    )
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
                 layout={
                     "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-                    "fonts": {
-                        "default": ["valid-user-font", "missing-user-font"],
-                        "available": {
-                            "valid-user-font": str(valid_font),
-                            "missing-user-font": str(tmp_path / "missing.ttf"),
-                        },
-                    },
+                    "fonts": {"default": ["valid-user-font", "missing-user-font"]},
                     "text": {"min_font_size": 28, "max_font_size": 100},
                 }
             ),
@@ -811,7 +857,7 @@ def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, ca
     assert 1 not in config.fonts
     assert "general[1]" in caplog.text
     assert "general.timezone" in caplog.text
-    assert "layout.fonts.available[1]" in caplog.text
+    assert "layout.fonts.available: is no longer supported" in caplog.text
     assert "ignored" in caplog.text
 
 
@@ -1017,39 +1063,58 @@ def test_unreadable_config_is_rejected(tmp_path: Path, monkeypatch: pytest.Monke
     assert "$" in diagnostic_fields(config_path)
 
 
-def test_user_font_collisions_missing_files_and_unsupported_files_are_excluded(tmp_path: Path, caplog) -> None:
-    for identifier, font_path in (
-        ("lora", "missing.ttf"),
-        ("not-a-font", "missing.ttf"),
-        ("not-a-font", "invalid.ttf"),
+def test_font_collisions_and_invalid_bundles_are_excluded(tmp_path: Path, caplog) -> None:
+    font_bytes = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes()
+    for package in (
+        tmp_path / "assets" / "fonts" / "reserved",
+        tmp_path / "assets" / "fonts" / "duplicate-a",
+        tmp_path / "assets" / "fonts" / "duplicate-b",
     ):
-        if font_path == "invalid.ttf":
-            (tmp_path / font_path).write_bytes(b"not a font")
-        data = configuration_data(
-            layout={
-                "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-                "fonts": {"default": ["lora"], "available": {identifier: font_path}},
-                "text": {"min_font_size": 28, "max_font_size": 100},
-            }
+        package.mkdir(parents=True)
+        (package / "Regular.ttf").write_bytes(font_bytes)
+    write_asset_manifest(
+        tmp_path / "assets" / "fonts" / "reserved",
+        "font.yaml",
+        {"format": 1, "id": "lora", "faces": {"regular": "Regular.ttf"}},
+    )
+    for directory in ("duplicate-a", "duplicate-b"):
+        write_asset_manifest(
+            tmp_path / "assets" / "fonts" / directory,
+            "font.yaml",
+            {"format": 1, "id": "duplicate", "faces": {"regular": "Regular.ttf"}},
         )
+    missing = tmp_path / "assets" / "fonts" / "missing"
+    write_asset_manifest(missing, "font.yaml", {"format": 1, "id": "missing", "faces": {"regular": "missing.ttf"}})
+    invalid = tmp_path / "assets" / "fonts" / "invalid"
+    invalid.mkdir()
+    (invalid / "Regular.ttf").write_bytes(b"not a font")
+    write_asset_manifest(invalid, "font.yaml", {"format": 1, "id": "invalid", "faces": {"regular": "Regular.ttf"}})
 
-        config = load_application_config(write_config(tmp_path / "config.yaml", data))
+    config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
-        assert "layout.fonts.available." + identifier in caplog.text
-        assert config.fonts["lora"].bundled
-        assert (identifier in config.fonts) == (identifier == "lora")
+    assert config.fonts["lora"].bundled
+    assert "duplicate" not in config.fonts
+    assert "missing" not in config.fonts
+    assert "invalid" not in config.fonts
+    assert "conflicts with reserved bundled identifier 'lora'" in caplog.text
+    assert "share identifier 'duplicate'; all are excluded" in caplog.text
+    assert "resource path is missing" in caplog.text
+    assert "unsupported by Pillow" in caplog.text
 
 
 def test_unreadable_user_font_is_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
-    user_font = tmp_path / "font.ttf"
+    package = tmp_path / "assets" / "fonts" / "extra"
+    package.mkdir(parents=True)
+    user_font = package / "font.ttf"
     user_font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
     data = configuration_data(
         layout={
             "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["lora"], "available": {"extra": str(user_font)}},
+            "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )
+    write_asset_manifest(package, "font.yaml", {"format": 1, "id": "extra", "faces": {"regular": "font.ttf"}})
     config_path = write_config(tmp_path / "config.yaml", data)
     original_open = Path.open
 
@@ -1061,5 +1126,5 @@ def test_unreadable_user_font_is_excluded(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(Path, "open", deny_font_read)
 
     config = load_application_config(config_path)
-    assert "layout.fonts.available.extra" in caplog.text
+    assert "font.yaml.faces.regular" in caplog.text
     assert "extra" not in config.fonts

@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import MappingProxyType
 from typing import TypeVar
 
 import yaml
@@ -29,10 +30,12 @@ def _is_link(path: AssetPath) -> bool:
     return isinstance(path, Path) and path.is_symlink()
 
 
-def _children(path: AssetPath) -> list[AssetPath]:
+def _children(path: AssetPath, report: Report | None = None, category: str = "assets") -> list[AssetPath]:
     try:
         return sorted(path.iterdir(), key=lambda item: item.name)
-    except (OSError, NotImplementedError):
+    except (OSError, NotImplementedError) as error:
+        if report is not None and isinstance(error, OSError):
+            report(f"assets.{category}.{path}", f"cannot inspect asset directory: {error}", logging.WARNING)
         return []
 
 
@@ -43,7 +46,9 @@ def _exists(path: AssetPath) -> bool:
         return False
 
 
-def _walk_packages(root: AssetPath, manifest: str) -> Iterable[tuple[AssetPath, AssetPath]]:
+def _walk_packages(
+    root: AssetPath, manifest: str, report: Report, category: str
+) -> Iterable[tuple[AssetPath, AssetPath]]:
     def visit(directory: AssetPath):
         if _is_link(directory):
             return
@@ -51,7 +56,7 @@ def _walk_packages(root: AssetPath, manifest: str) -> Iterable[tuple[AssetPath, 
         if not _is_link(manifest_path) and _exists(manifest_path):
             yield directory, manifest_path
             return
-        for child in _children(directory):
+        for child in _children(directory, report, category):
             if _is_link(child):
                 continue
             if child.is_dir():
@@ -132,13 +137,13 @@ def _parse_manifest(
     return image_path, data
 
 
-def _valid_font_file(path: AssetPath) -> bool:
+def _font_validation_error(path: AssetPath) -> str | None:
     try:
         with path.open("rb") as stream:
             ImageFont.truetype(stream, size=12)
-    except (OSError, ValueError, SyntaxError):
-        return False
-    return True
+    except Exception as error:
+        return str(error)
+    return None
 
 
 def _validate_candidate(
@@ -234,7 +239,7 @@ def discover_backgrounds(
                         "background",
                     )
                 return
-            for child in _children(directory):
+            for child in _children(directory, report, "backgrounds"):
                 if _is_link(child):
                     continue
                 if child.is_dir():
@@ -304,7 +309,7 @@ def discover_decorations(
 
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
-        for package, manifest in _walk_packages(root, "decoration.yaml"):
+        for package, manifest in _walk_packages(root, "decoration.yaml", report, "decorations"):
             field = str(manifest)
             parsed = _parse_manifest(
                 manifest,
@@ -325,7 +330,7 @@ def discover_decorations(
                     report(f"{field}.presentation_region", "is invalid; this decoration is excluded", logging.WARNING)
                     continue
             preferred_font = data.get("font")
-            if preferred_font is not None and (not valid_identifier(preferred_font) or preferred_font not in font_ids):
+            if "font" in data and (not valid_identifier(preferred_font) or preferred_font not in font_ids):
                 report(
                     f"{field}.font",
                     f"font preference {preferred_font!r} is unavailable or invalid; ignored",
@@ -333,7 +338,7 @@ def discover_decorations(
                 )
                 preferred_font = None
             preferred_background = data.get("background")
-            if preferred_background is not None and (
+            if "background" in data and (
                 not valid_identifier(preferred_background)
                 or (preferred_background != "none" and preferred_background not in background_ids)
             ):
@@ -375,7 +380,7 @@ def discover_fonts(
 
     candidates: list[tuple[str, FontResource, bool, str]] = []
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
-        for package, manifest in _walk_packages(root, "font.yaml"):
+        for package, manifest in _walk_packages(root, "font.yaml", report, "fonts"):
             field = str(manifest)
             try:
                 data = _read_manifest(manifest)
@@ -421,9 +426,10 @@ def discover_fonts(
                     report(face_field, f"font path is invalid: {error}", logging.WARNING)
                     invalid = True
                     continue
-                if not _valid_font_file(face_path):
+                font_error = _font_validation_error(face_path)
+                if font_error is not None:
                     report(
-                        face_field, "font file is not readable or supported by Pillow; bundle excluded", logging.WARNING
+                        face_field, f"font file is unreadable or unsupported by Pillow: {font_error}", logging.WARNING
                     )
                     invalid = True
                     continue
@@ -434,7 +440,7 @@ def discover_fonts(
                 identifier=identifier,
                 path=face_paths["regular"],
                 bundled=is_bundled,
-                faces=face_paths,
+                faces=MappingProxyType(face_paths),
             )
             if identifier == "none":
                 report(

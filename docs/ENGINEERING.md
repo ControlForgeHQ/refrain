@@ -736,7 +736,7 @@ Font substitution during regeneration may change the rendered appearance, includ
 
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
-Do not introduce general font discovery, download, or substitution infrastructure without a demonstrated requirement.
+Do not add font downloading or role-specific face-selection behavior beyond the manifest-based bundle discovery and regular-face rendering defined by the current scope.
 
 ### Background loading and composition
 
