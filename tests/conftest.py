@@ -40,9 +40,8 @@ def junction_or_skip():
     def create(link: Path, target: Path) -> None:
         if sys.platform != "win32":
             pytest.skip("Windows junctions are platform-specific")
-        command = f'mklink /J "{link}" "{target}"'
         result = subprocess.run(
-            ["cmd.exe", "/c", command],
+            ["cmd.exe", "/c", "mklink", "/J", str(link), str(target)],
             capture_output=True,
             text=True,
             check=False,
