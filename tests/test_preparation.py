@@ -196,6 +196,62 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
             image.close()
 
 
+def test_background_cover_scaling_crops_center(tmp_path: Path) -> None:
+    path = tmp_path / "wide.png"
+    with Image.new("RGB", (8, 2), (240, 20, 10)) as source:
+        for x in range(3, 5):
+            for y in range(source.height):
+                source.putpixel((x, y), (10, 20, 240))
+        source.save(path)
+
+    background = preparation._generate_daily_background(
+        (4, 4), "wide", {"wide": BackgroundResource("wide", path, False)}
+    )
+    try:
+        assert background.size == (4, 4)
+        assert background.mode == "RGB"
+        assert background.getpixel((1, 1))[2] > background.getpixel((1, 1))[0]
+        assert background.getpixel((2, 2))[2] > background.getpixel((2, 2))[0]
+    finally:
+        background.close()
+
+
+def test_background_cover_scaling_preserves_alpha(tmp_path: Path) -> None:
+    path = tmp_path / "transparent.png"
+    Image.new("RGBA", (4, 2), (10, 20, 240, 128)).save(path)
+
+    background = preparation._generate_daily_background(
+        (8, 4), "transparent", {"transparent": BackgroundResource("transparent", path, False)}
+    )
+    try:
+        assert background.size == (8, 4)
+        assert background.getpixel((4, 2)) == (132, 137, 247)
+    finally:
+        background.close()
+
+
+def test_decoration_contain_scaling_centres_transparent_portrait(tmp_path: Path) -> None:
+    path = tmp_path / "portrait.png"
+    with Image.new("RGBA", (2, 4), (220, 40, 20, 128)) as source:
+        source.save(path)
+    background = Image.new("RGB", (8, 4), (80, 120, 160))
+
+    composed = preparation._apply_daily_decoration(
+        background,
+        "portrait",
+        {"portrait": DecorationResource("portrait", path, False)},
+    )
+    try:
+        assert composed.size == (8, 4)
+        assert composed.getpixel((0, 0)) == (80, 120, 160)
+        assert composed.getpixel((2, 1)) == (80, 120, 160)
+        assert composed.getpixel((3, 1)) == (150, 80, 90)
+        assert composed.getpixel((4, 1)) == (150, 80, 90)
+        assert composed.getpixel((5, 1)) == (80, 120, 160)
+    finally:
+        composed.close()
+
+
 def test_missing_committed_decoration_is_omitted_without_changing_snapshot(tmp_path: Path, caplog) -> None:
     region = {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}
     snapshot = replace(

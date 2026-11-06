@@ -123,8 +123,11 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
         assert any(name.endswith("assets/README.md") for name in names)
         for identifier in _BACKGROUNDS:
             assert any(name.endswith(f"assets/backgrounds/{identifier}.png") for name in names)
+        for identifier in ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"):
+            assert any(name.endswith(f"assets/fonts/{identifier}/font.yaml") for name in names)
         for identifier in _DECORATIONS:
-            assert any(name.endswith(f"assets/decorations/{identifier}.png") for name in names)
+            assert any(name.endswith(f"assets/decorations/{identifier}/{identifier}.png") for name in names)
+            assert any(name.endswith(f"assets/decorations/{identifier}/decoration.yaml") for name in names)
 
     installed = tmp_path / "installed"
     subprocess.run(
@@ -177,7 +180,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "image.close(); "
                 "stream.close(); "
                 "identifiers=('ethereal','hex','lower-flourish','simple-border','top-bottom-borders'); "
-                "resources=[DecorationResource(name,root.joinpath('assets','decorations',name+'.png'),True) "
+                "resources=[DecorationResource(name,root.joinpath('assets','decorations',name,name+'.png'),True) "
                 "for name in identifiers]; "
                 "images=[load_decoration_image(resource) for resource in resources]; "
                 "assert all(image.mode == 'RGBA' and image.size == (1600,1200) for image in images); "
@@ -192,6 +195,10 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "initialize_installation(paths); "
                 "loaded=load_application_config(paths.config_file); "
                 "assert loaded.content_directory == paths.content_directory; "
+                "assert set(loaded.decorations) == "
+                "set(('ethereal','hex','lower-flourish','simple-border','top-bottom-borders')); "
+                "assert set(loaded.backgrounds) == set(('aged-paper','canvas','cloth','ethereal','hex')); "
+                "assert set(loaded.fonts) == set(('alegreya','libre-baskerville','lora','orbitron','source-sans-3')); "
                 "assert len(load_content_library(paths.content_directory)) >= 3; "
                 "temporary.cleanup()"
             ),

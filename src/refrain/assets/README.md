@@ -2,6 +2,8 @@
 
 This directory contains visual resources distributed with Refrain.
 
+Background images are discovered from `backgrounds/`; decorations and font bundles are discovered through their `decoration.yaml` and `font.yaml` package manifests. The manifests preserve the public resource identifiers documented in `docs/CONTENT_FORMAT.md`.
+
 ## Backgrounds and Decorations
 
 The PNG images under `backgrounds/` and `decorations/` were generated specifically for Refrain using OpenAI image-generation tools, with human creative direction, selection, and review.

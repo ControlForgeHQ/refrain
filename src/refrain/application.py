@@ -122,8 +122,8 @@ def _resolve_font(configuration: ApplicationConfiguration, preferred: str | None
     if identifier is None:
         if not configuration.default_fonts:
             raise ApplicationError(
-                "no usable font remains in layout.fonts.default; register a usable configured font "
-                "or select a valid registered font in the content entry"
+                "no usable font remains in layout.fonts.default; discover a valid font bundle and add its identifier "
+                "to the default pool, or select an available font in the content entry"
             )
         identifier = chooser.choice(configuration.default_fonts)
     return identifier

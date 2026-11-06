@@ -15,30 +15,19 @@ from types import MappingProxyType
 from typing import Callable, Mapping, Union
 
 import yaml
-from PIL import Image, ImageFont
+from PIL import Image
 
 from ._yaml import load_yaml, yaml_error_location
+from .assets import valid_identifier
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view"}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _LOGGER = logging.getLogger(__name__)
-_BUNDLED_FONT_FILES = {
-    "alegreya": ("assets", "fonts", "alegreya", "Alegreya-Regular.ttf"),
-    "libre-baskerville": ("assets", "fonts", "libre-baskerville", "LibreBaskerville-Regular.ttf"),
-    "lora": ("assets", "fonts", "lora", "Lora-Regular.ttf"),
-    "orbitron": ("assets", "fonts", "orbitron", "Orbitron-Regular.ttf"),
-    "source-sans-3": ("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf"),
-}
-_BUNDLED_BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
-_BUNDLED_DECORATIONS = {
-    "ethereal": {"presentation_region": None, "font": None, "background": None},
-    "hex": {"presentation_region": None, "font": None, "background": None},
-    "lower-flourish": {"presentation_region": None, "font": None, "background": None},
-    "simple-border": {"presentation_region": None, "font": None, "background": None},
-    "top-bottom-borders": {"presentation_region": None, "font": None, "background": None},
-}
+_BUNDLED_FONT_IDS = {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
+_BUNDLED_BACKGROUND_IDS = {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
+_BUNDLED_DECORATION_IDS = {"ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"}
 
 
 @dataclass(frozen=True)
@@ -64,16 +53,17 @@ class ApplicationConfigurationError(Exception):
 
 @dataclass(frozen=True)
 class FontResource:
-    """A validated bundled or user-registered Pillow-compatible font."""
+    """A validated font bundle whose regular face preserves initial rendering behavior."""
 
     identifier: str
     path: Union[Path, Traversable]
     bundled: bool
+    faces: Mapping[str, Union[Path, Traversable]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)
 class BackgroundResource:
-    """A validated bundled or user-registered background PNG."""
+    """A validated bundled or discovered background PNG."""
 
     identifier: str
     path: Union[Path, Traversable]
@@ -82,7 +72,7 @@ class BackgroundResource:
 
 @dataclass(frozen=True)
 class DecorationResource:
-    """A validated bundled or user-registered decorative PNG and its preferences."""
+    """A validated bundled or discovered decorative PNG and its preferences."""
 
     identifier: str
     path: Union[Path, Traversable]
@@ -229,77 +219,45 @@ def _valid_image_server_host(value: object) -> bool:
         )
 
 
-def _load_font(path: Union[Path, Traversable], field: str, report: Callable[[str, str], None]) -> bool:
-    try:
-        with path.open("rb") as font_file:
-            ImageFont.truetype(font_file, size=12)
-    except Exception as error:
-        report(field, f"is excluded; it must be an existing, readable font supported by Pillow: {error}")
-        return False
-    return True
-
-
 def load_background_image(resource: BackgroundResource) -> Image.Image:
-    """Revalidate a resource and return a detached RGB/RGBA image owned by the caller.
+    """Revalidate and return a fully decoded RGB/RGBA image owned by the caller.
 
     Unreadable resources raise their loading exception; unsupported images raise
     ``ValueError``. No image is cached, so regeneration checks the current resource.
+    The decoded image is returned directly to avoid a second full-resolution copy.
     """
     with resource.path.open("rb") as background_file:
-        with Image.open(background_file) as image:
+        image = Image.open(background_file)
+        try:
             if image.format != "PNG":
                 raise ValueError("background must be a PNG image")
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("background must be a single-frame PNG image")
-            if image.size != (1600, 1200):
-                raise ValueError("background dimensions must be exactly 1600 × 1200 pixels")
             if image.mode not in {"RGB", "RGBA"}:
                 raise ValueError("background mode must be RGB or RGBA")
             image.load()
-            return image.copy()
+        except Exception:
+            image.close()
+            raise
+        return image
 
 
 def load_decoration_image(resource: DecorationResource) -> Image.Image:
-    """Revalidate a decoration and return a detached RGBA image owned by the caller."""
+    """Revalidate and return a fully decoded RGBA image owned by the caller."""
     with resource.path.open("rb") as decoration_file:
-        with Image.open(decoration_file) as image:
+        image = Image.open(decoration_file)
+        try:
             if image.format != "PNG":
                 raise ValueError("decoration must be a PNG image")
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("decoration must be a single-frame PNG image")
-            if image.size != (1600, 1200):
-                raise ValueError("decoration dimensions must be exactly 1600 × 1200 pixels")
             if image.mode != "RGBA":
                 raise ValueError("decoration mode must be RGBA")
             image.load()
-            return image.copy()
-
-
-def _register_background(
-    resource: BackgroundResource, field: str, registry: dict[str, BackgroundResource], report: Callable[..., None]
-) -> None:
-    try:
-        with load_background_image(resource):
-            pass
-    except Exception as error:
-        report(field, f"is excluded; it must be an existing, readable background PNG: {error}")
-    else:
-        registry[resource.identifier] = resource
-
-
-def _register_decoration(
-    resource: DecorationResource,
-    field: str,
-    registry: dict[str, DecorationResource],
-    report: Callable[..., None],
-) -> None:
-    try:
-        with load_decoration_image(resource):
-            pass
-    except Exception as error:
-        report(field, f"is excluded; it must be an existing, readable RGBA decoration PNG: {error}")
-    else:
-        registry[resource.identifier] = resource
+        except Exception:
+            image.close()
+            raise
+        return image
 
 
 def load_application_config(config_file: Union[str, Path]) -> ApplicationConfiguration:
@@ -317,12 +275,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     def use_default(field: str, value: str) -> None:
         defaults_used.append(f"{field}={value}")
-
-    def resolve_resource_path(category: str, value: str) -> Path:
-        path = Path(value)
-        if not path.is_absolute():
-            path = file.parent / "assets" / category / path
-        return path
 
     def finish_diagnostics() -> None:
         for diagnostic in diagnostics:
@@ -483,6 +435,11 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
     _known_fields(fonts_data, {"default", "available"}, "layout.fonts", report)
+    if "available" in fonts_data:
+        report(
+            "layout.fonts.available",
+            "is no longer supported; place each font bundle under assets/fonts/ with a font.yaml manifest",
+        )
     default_value = fonts_data.get("default")
     default_fonts: tuple[str, ...] = ()
     if not isinstance(default_value, list) or not default_value:
@@ -492,45 +449,23 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             logging.ERROR,
         )
 
-    available_data: dict[str, object] = {}
-    if "available" in fonts_data:
-        available_data = _mapping(fonts_data["available"], "layout.fonts.available", report)
-    else:
-        use_default("layout.fonts.available", "an empty mapping")
-
-    font_registry: dict[str, FontResource] = {}
     package_root = files("refrain")
-    for identifier, resource_parts in _BUNDLED_FONT_FILES.items():
-        resource = package_root.joinpath(*resource_parts)
-        if _load_font(resource, f"layout.fonts.bundled.{identifier}", report):
-            font_registry[identifier] = FontResource(identifier=identifier, path=resource, bundled=True)
+    from .assets import discover_fonts
 
-    for identifier, path_value in available_data.items():
-        field = (
-            f"layout.fonts.available.{identifier}"
-            if isinstance(identifier, str)
-            else f"layout.fonts.available[{identifier!r}]"
-        )
-        if not isinstance(identifier, str) or not identifier:
-            report(field, "font identifiers must be nonempty strings; this registration is ignored")
-            continue
-        if identifier in _BUNDLED_FONT_FILES:
-            report(field, f"identifier {identifier!r} is reserved for a bundled font; this registration is ignored")
-            continue
-        if not isinstance(path_value, str) or not path_value:
-            report(field, "must be a nonempty font file path; this registration is excluded")
-            continue
-        font_path = resolve_resource_path("fonts", path_value)
-        if _load_font(font_path, field, report):
-            font_registry[identifier] = FontResource(identifier=identifier, path=font_path, bundled=False)
+    font_registry = discover_fonts(
+        package_root.joinpath("assets", "fonts"),
+        file.parent / "assets" / "fonts",
+        _BUNDLED_FONT_IDS,
+        report,
+    )
 
     if isinstance(default_value, list):
         effective_default_fonts: list[str] = []
         seen_default_fonts: set[str] = set()
         for index, identifier in enumerate(default_value):
             field = f"layout.fonts.default[{index}]"
-            if not isinstance(identifier, str) or not identifier:
-                report(field, "must be a nonempty font identifier; it is excluded")
+            if not valid_identifier(identifier):
+                report(field, "must be a valid font identifier; it is excluded")
             elif identifier in seen_default_fonts:
                 report(field, f"duplicates font identifier {identifier!r}; the duplicate is ignored")
             elif identifier not in font_registry:
@@ -543,42 +478,19 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     backgrounds_data = _mapping(layout.get("backgrounds", {}), "layout.backgrounds", report)
     _known_fields(backgrounds_data, {"default", "available"}, "layout.backgrounds", report)
-    background_registry: dict[str, BackgroundResource] = {}
-    for identifier in _BUNDLED_BACKGROUNDS:
-        resource = BackgroundResource(
-            identifier=identifier,
-            path=package_root.joinpath("assets", "backgrounds", f"{identifier}.png"),
-            bundled=True,
-        )
-        _register_background(resource, f"layout.backgrounds.bundled.{identifier}", background_registry, report)
-
     if "available" in backgrounds_data:
-        available_backgrounds = _mapping(backgrounds_data["available"], "layout.backgrounds.available", report)
-    else:
-        available_backgrounds = {}
-        use_default("layout.backgrounds.available", "an empty mapping")
-    for identifier, path_value in available_backgrounds.items():
-        field_name = (
-            f"layout.backgrounds.available.{identifier}"
-            if isinstance(identifier, str)
-            else f"layout.backgrounds.available[{identifier!r}]"
+        report(
+            "layout.backgrounds.available",
+            "is no longer supported; place PNG files or background packages under assets/backgrounds/",
         )
-        if not isinstance(identifier, str) or not identifier.strip():
-            report(field_name, "background identifiers must be nonempty strings; this registration is excluded")
-            continue
-        if identifier == "none" or identifier in _BUNDLED_BACKGROUNDS:
-            report(field_name, f"identifier {identifier!r} is reserved; this registration is ignored")
-            continue
-        if not isinstance(path_value, str) or not path_value.strip():
-            report(field_name, "must be a nonempty background file path; this registration is excluded")
-            continue
-        background_path = resolve_resource_path("backgrounds", path_value)
-        _register_background(
-            BackgroundResource(identifier=identifier, path=background_path, bundled=False),
-            field_name,
-            background_registry,
-            report,
-        )
+    from .assets import discover_backgrounds
+
+    background_registry = discover_backgrounds(
+        package_root.joinpath("assets", "backgrounds"),
+        file.parent / "assets" / "backgrounds",
+        _BUNDLED_BACKGROUND_IDS,
+        report,
+    )
 
     default_backgrounds = ("none",)
     if "default" not in backgrounds_data:
@@ -592,8 +504,8 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         else:
             for index, identifier in enumerate(background_default_value):
                 field_name = f"layout.backgrounds.default[{index}]"
-                if not isinstance(identifier, str) or not identifier.strip():
-                    report(field_name, "must be a nonempty background identifier; it is excluded")
+                if not valid_identifier(identifier):
+                    report(field_name, "must be a valid background identifier; it is excluded")
                     continue
                 if identifier in seen_backgrounds:
                     continue
@@ -609,91 +521,22 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     decorations_data = _mapping(layout.get("decorations", {}), "layout.decorations", report)
     _known_fields(decorations_data, {"available", "default"}, "layout.decorations", report)
-    decoration_registry: dict[str, DecorationResource] = {}
-    for identifier, metadata in _BUNDLED_DECORATIONS.items():
-        resource = DecorationResource(
-            identifier=identifier,
-            path=package_root.joinpath("assets", "decorations", f"{identifier}.png"),
-            bundled=True,
-            **metadata,
-        )
-        _register_decoration(resource, f"layout.decorations.bundled.{identifier}", decoration_registry, report)
-
     if "available" in decorations_data:
-        available_decorations = _mapping(decorations_data["available"], "layout.decorations.available", report)
-    else:
-        available_decorations = {}
-        use_default("layout.decorations.available", "an empty mapping")
-    for identifier, registration in available_decorations.items():
-        field_name = (
-            f"layout.decorations.available.{identifier}"
-            if isinstance(identifier, str)
-            else f"layout.decorations.available[{identifier!r}]"
+        report(
+            "layout.decorations.available",
+            "is no longer supported; use assets/decorations/ packages containing decoration.yaml",
         )
-        if not isinstance(identifier, str) or not identifier.strip():
-            report(field_name, "decoration identifiers must be nonempty strings; this registration is excluded")
-            continue
-        if identifier == "none" or identifier in _BUNDLED_DECORATIONS:
-            report(field_name, f"identifier {identifier!r} is reserved; this registration is ignored")
-            continue
-        if not isinstance(registration, dict):
-            report(field_name, "must be a mapping; this registration is excluded")
-            continue
-        _known_fields(registration, {"image", "presentation_region", "font", "background"}, field_name, report)
-        image_value = registration.get("image")
-        if not isinstance(image_value, str) or not image_value.strip():
-            report(f"{field_name}.image", "is required and must be a nonempty file path; this registration is excluded")
-            continue
-        decoration_path = resolve_resource_path("decorations", image_value)
+    from .assets import discover_decorations
 
-        region = None
-        if "presentation_region" in registration:
-            region = _parse_presentation_region(
-                registration["presentation_region"],
-                f"{field_name}.presentation_region",
-                report,
-                logging.WARNING,
-            )
-            if region is None:
-                report(
-                    f"{field_name}.presentation_region",
-                    "is invalid; this decoration registration is excluded",
-                )
-                continue
-
-        preferred_font = registration.get("font")
-        if "font" in registration:
-            if not isinstance(preferred_font, str) or not preferred_font.strip():
-                report(f"{field_name}.font", "must be a nonempty font identifier; preference ignored")
-                preferred_font = None
-            elif preferred_font not in font_registry:
-                report(
-                    f"{field_name}.font",
-                    f"font identifier {preferred_font!r} is unavailable; preference ignored",
-                )
-                preferred_font = None
-
-        preferred_background = registration.get("background")
-        if "background" in registration:
-            if not isinstance(preferred_background, str) or not preferred_background.strip():
-                report(f"{field_name}.background", "must be a nonempty background identifier; preference ignored")
-                preferred_background = None
-            elif preferred_background != "none" and preferred_background not in background_registry:
-                report(
-                    f"{field_name}.background",
-                    f"background identifier {preferred_background!r} is unavailable; preference ignored",
-                )
-                preferred_background = None
-
-        resource = DecorationResource(
-            identifier=identifier,
-            path=decoration_path,
-            bundled=False,
-            presentation_region=region,
-            font=preferred_font,
-            background=preferred_background,
-        )
-        _register_decoration(resource, field_name, decoration_registry, report)
+    decoration_registry = discover_decorations(
+        package_root.joinpath("assets", "decorations"),
+        file.parent / "assets" / "decorations",
+        _BUNDLED_DECORATION_IDS,
+        set(font_registry),
+        set(background_registry),
+        report,
+        _parse_presentation_region,
+    )
 
     default_decorations = ("none",)
     if "default" not in decorations_data:
@@ -707,8 +550,8 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         else:
             for index, identifier in enumerate(decoration_default_value):
                 field_name = f"layout.decorations.default[{index}]"
-                if not isinstance(identifier, str) or not identifier.strip():
-                    report(field_name, "must be a nonempty decoration identifier; it is excluded")
+                if not valid_identifier(identifier):
+                    report(field_name, "must be a valid decoration identifier; it is excluded")
                     continue
                 if identifier in seen_decorations:
                     continue

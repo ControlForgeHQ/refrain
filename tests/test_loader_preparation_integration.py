@@ -124,6 +124,21 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     decoration = Image.new("RGBA", (1600, 1200), (0, 0, 0, 0))
     decoration.putpixel((1, 0), (0, 0, 255, 255))
     decoration.save(decoration_path)
+    (font_path.parent / "font.yaml").write_text(
+        yaml.safe_dump(
+            {"format": 1, "id": "family-serif", "faces": {"regular": "Serif.ttf"}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (background_path.parent / "background.yaml").write_text(
+        yaml.safe_dump({"format": 1, "id": "paper", "image": "Paper.png"}, sort_keys=False),
+        encoding="utf-8",
+    )
+    (decoration_path.parent / "decoration.yaml").write_text(
+        yaml.safe_dump({"format": 1, "id": "border", "image": "Border.png"}, sort_keys=False),
+        encoding="utf-8",
+    )
 
     content_directory = tmp_path / "content"
     content_directory.mkdir()
@@ -148,15 +163,9 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
                 "display": {"backends": [{"type": "window"}]},
                 "layout": {
                     "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
-                    "fonts": {"default": ["family-serif"], "available": {"family-serif": "custom/Serif.ttf"}},
-                    "backgrounds": {
-                        "default": ["paper"],
-                        "available": {"paper": "paper/Paper.png"},
-                    },
-                    "decorations": {
-                        "default": ["border"],
-                        "available": {"border": {"image": "borders/Border.png"}},
-                    },
+                    "fonts": {"default": ["family-serif"]},
+                    "backgrounds": {"default": ["paper"]},
+                    "decorations": {"default": ["border"]},
                     "text": {"min_font_size": 28, "max_font_size": 36},
                 },
             },

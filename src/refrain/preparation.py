@@ -6,7 +6,7 @@ import io
 import logging
 from collections.abc import Mapping, Sequence
 
-from PIL import Image, ImageFont
+from PIL import Image, ImageFont, ImageOps
 
 from .config import (
     BackgroundResource,
@@ -108,10 +108,12 @@ def _generate_daily_background(
         return base
     try:
         with load_background_image(resource) as image:
-            if image.size != image_size:
-                raise ValueError("background dimensions do not match the committed image size")
-            base.paste(image, (0, 0), image if image.mode == "RGBA" else None)
-    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+            fitted = ImageOps.fit(image, image_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            try:
+                base.paste(fitted, (0, 0), fitted if fitted.mode == "RGBA" else None)
+            finally:
+                fitted.close()
+    except Exception as error:
         _LOGGER.warning(
             "Committed background %r is unavailable or unusable; using the paper-white base: %s",
             identifier,
@@ -133,10 +135,13 @@ def _apply_daily_decoration(
         return background
     try:
         with load_decoration_image(resource) as image:
-            if image.size != background.size:
-                raise ValueError("decoration dimensions do not match the committed image size")
-            background.paste(image, (0, 0), image)
-    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+            contained = ImageOps.contain(image, background.size, method=Image.Resampling.LANCZOS)
+            try:
+                position = ((background.width - contained.width) // 2, (background.height - contained.height) // 2)
+                background.paste(contained, position, contained)
+            finally:
+                contained.close()
+    except Exception as error:
         _LOGGER.warning(
             "Committed decoration %r is unavailable or unusable; omitting the overlay: %s",
             identifier,
@@ -157,7 +162,7 @@ def _resolve_font(snapshot: DailySnapshot, registry: Mapping[str, FontResource])
     if selected is not None:
         try:
             return _read_font(selected)
-        except (OSError, ValueError) as error:
+        except Exception as error:
             _LOGGER.warning(
                 "Committed font %r is unavailable or unusable; using a bundled fallback: %s",
                 snapshot.font_identifier,
@@ -174,7 +179,7 @@ def _resolve_font(snapshot: DailySnapshot, registry: Mapping[str, FontResource])
             continue
         try:
             return _read_font(resource)
-        except (OSError, ValueError) as error:
+        except Exception as error:
             _LOGGER.warning("Bundled fallback font %r is unusable: %s", identifier, error)
     raise DailyImagePreparationError(
         f"cannot prepare daily snapshot: committed font {snapshot.font_identifier!r} is unavailable or unusable "
