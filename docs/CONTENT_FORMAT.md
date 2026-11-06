@@ -192,7 +192,7 @@ layout:
 
 The example illustrates simultaneous display backends, the information view, a default presentation region, registered fonts, backgrounds, and decorations, and automatic quotation fitting.
 
-The installed distribution includes `config.default.yaml` as a complete, editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below, its content directory is relative to the installed configuration, and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
+The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
 
 Refrain automatically registers its bundled fonts, backgrounds, and decorations. Registered resources can be referenced by stable identifiers without supplying paths in content entries.
 
@@ -350,7 +350,7 @@ This configuration controls automatic startup presentation only. It does not def
 |---|---|---|---|
 | `content.directory` | String | No | `"content"` |
 
-`directory` identifies the location of the content library.
+`directory` identifies the location of the content library. The field may be omitted; when absent, the effective directory is `content/` alongside the selected configuration file. This default applies equally to platform-standard configuration and a file selected with `--config`, and does not produce an informational diagnostic.
 
 Relative paths are interpreted relative to the directory containing the application configuration file.
 

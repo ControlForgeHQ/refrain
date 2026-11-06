@@ -1,12 +1,60 @@
 from __future__ import annotations
 
+import errno
+import subprocess
+import sys
 import time as time_module
 from datetime import datetime, timedelta, timezone, tzinfo
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
 import refrain.local_time as local_time
+
+
+@pytest.fixture
+def symlink_or_skip():
+    def create(link: Path, target: Path, *, directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except NotImplementedError as error:
+            pytest.skip(f"symbolic links are unsupported: {error}")
+        except OSError as error:
+            unavailable_errors = {
+                errno.EACCES,
+                errno.EPERM,
+                getattr(errno, "ENOSYS", -1),
+                getattr(errno, "ENOTSUP", -1),
+                getattr(errno, "EOPNOTSUPP", -1),
+            }
+            if error.errno in unavailable_errors or getattr(error, "winerror", None) == 1314:
+                pytest.skip(f"symbolic-link creation is unavailable or denied: {error}")
+            raise
+
+    return create
+
+
+@pytest.fixture
+def junction_or_skip():
+    def create(link: Path, target: Path) -> None:
+        if sys.platform != "win32":
+            pytest.skip("Windows junctions are platform-specific")
+        result = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            raise OSError(
+                f"could not create Windows junction {link} -> {target}: "
+                f"{result.stdout.strip()} {result.stderr.strip()}"
+            )
+        if not link.is_junction():
+            raise AssertionError(f"junction command did not create a junction at {link}")
+
+    return create
 
 
 @pytest.fixture

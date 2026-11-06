@@ -2,9 +2,6 @@
 general:
   day_start: "06:00"
 
-content:
-  directory: "content"
-
 reveal:
   source: "12:00"
   attribution: "18:00"
