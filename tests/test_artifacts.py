@@ -382,14 +382,9 @@ def test_cleanup_preserves_unrecognized_files_and_trees(store, snapshot, images)
     assert store.load(2, snapshot, stage_count=3) == current
 
 
-def symlink_or_skip(link: Path, target: Path, *, directory: bool = False) -> None:
-    try:
-        link.symlink_to(target, target_is_directory=directory)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink creation unavailable on this platform")
-
-
-def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(store, snapshot, images, tmp_path) -> None:
+def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(
+    store, snapshot, images, tmp_path, symlink_or_skip
+) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     sentinel = outside / "state.json"
@@ -409,7 +404,9 @@ def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(store, snaps
 
 
 @pytest.mark.parametrize("location", ["root", "ancestor", "revision", "payload", "stage", "manifest"])
-def test_links_are_not_accepted_for_loading_or_storage(store, snapshot, images, tmp_path, location) -> None:
+def test_links_are_not_accepted_for_loading_or_storage(
+    store, snapshot, images, tmp_path, location, symlink_or_skip
+) -> None:
     result = store.store(1, snapshot, images)
     if location == "ancestor":
         alias = tmp_path / "alias"

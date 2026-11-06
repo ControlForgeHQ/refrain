@@ -271,12 +271,12 @@ def test_existing_state_history_and_artifact_files_are_preserved(tmp_path: Path)
     assert {path: path.read_bytes() for path in expected} == expected
 
 
-def test_preflight_rejects_unexpected_objects_before_writing(tmp_path: Path) -> None:
+def test_preflight_rejects_unexpected_objects_before_writing(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     paths.config_directory.mkdir(parents=True)
     paths.config_file.mkdir()
     paths.content_directory.parent.mkdir(parents=True, exist_ok=True)
-    paths.content_directory.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    symlink_or_skip(paths.content_directory, tmp_path / "elsewhere", directory=True)
 
     with pytest.raises(InitializationError) as error:
         initialize_installation(paths)
@@ -300,17 +300,25 @@ def test_preflight_reports_a_non_directory_ancestor_before_creating_anything(tmp
     assert not paths.cache_directory.exists()
 
 
-def test_symlink_destination_is_a_conflict(tmp_path: Path) -> None:
+def test_symlink_destination_is_a_conflict(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     paths.cache_directory.parent.mkdir(parents=True)
     unrelated = tmp_path / "unrelated"
     unrelated.mkdir()
-    paths.cache_directory.symlink_to(unrelated, target_is_directory=True)
+    symlink_or_skip(paths.cache_directory, unrelated, directory=True)
 
     with pytest.raises(InitializationError, match=str(paths.cache_directory)):
         initialize_installation(paths)
     assert list(unrelated.iterdir()) == []
     assert not paths.config_directory.exists()
+
+
+def test_symlink_helper_does_not_skip_unrelated_creation_errors(tmp_path: Path, symlink_or_skip) -> None:
+    link = tmp_path / "existing-link"
+    link.write_text("not a link", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        symlink_or_skip(link, tmp_path / "target")
 
 
 @pytest.mark.parametrize(
@@ -477,17 +485,18 @@ class _TerminalOutput(io.StringIO):
 )
 def test_confirmation_requires_exact_typed_value(response: str, expected: bool) -> None:
     output = _TerminalOutput()
+    expected_path = Path("/standard/state.json")
 
     confirmed = confirm_operation(
         "RESET",
         "Reset explanation",
-        (Path("/standard/state.json"),),
+        (expected_path,),
         input_stream=_TerminalInput(response),
         output_stream=output,
     )
 
     assert confirmed is expected
-    assert "/standard/state.json" in output.getvalue()
+    assert str(expected_path) in output.getvalue()
     if not expected:
         assert "cancelled" in output.getvalue()
 
@@ -542,13 +551,13 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
     assert paths.artifacts_directory.is_dir()
 
 
-def test_reset_is_idempotent_and_does_not_follow_artifact_links(tmp_path: Path) -> None:
+def test_reset_is_idempotent_and_does_not_follow_artifact_links(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     paths.artifacts_directory.mkdir(parents=True)
     external = tmp_path / "external"
     external.mkdir()
     (external / "keep").write_text("outside", encoding="utf-8")
-    (paths.artifacts_directory / "linked").symlink_to(external, target_is_directory=True)
+    symlink_or_skip(paths.artifacts_directory / "linked", external, directory=True)
 
     reset_installation(paths)
     reset_installation(paths)
@@ -557,12 +566,12 @@ def test_reset_is_idempotent_and_does_not_follow_artifact_links(tmp_path: Path) 
     assert (external / "keep").read_text(encoding="utf-8") == "outside"
 
 
-def test_reset_rejects_linked_standard_runtime_root(tmp_path: Path) -> None:
+def test_reset_rejects_linked_standard_runtime_root(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     external = tmp_path / "external"
     external.mkdir()
     paths.artifacts_directory.parent.mkdir(parents=True)
-    paths.artifacts_directory.symlink_to(external, target_is_directory=True)
+    symlink_or_skip(paths.artifacts_directory, external, directory=True)
 
     with pytest.raises(InstallationOperationError, match="filesystem link"):
         reset_installation(paths)
@@ -570,7 +579,9 @@ def test_reset_rejects_linked_standard_runtime_root(tmp_path: Path) -> None:
     assert list(external.iterdir()) == []
 
 
-def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_links(tmp_path: Path) -> None:
+def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_links(
+    tmp_path: Path, symlink_or_skip
+) -> None:
     paths = _paths(tmp_path)
     paths.config_directory.mkdir(parents=True)
     paths.state_directory.mkdir(parents=True)
@@ -581,7 +592,7 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     external = tmp_path / "external"
     external.mkdir()
     (external / "keep").write_text("outside", encoding="utf-8")
-    (paths.config_directory / "linked").symlink_to(external, target_is_directory=True)
+    symlink_or_skip(paths.config_directory / "linked", external, directory=True)
 
     removed = purge_installation(paths)
 
@@ -596,18 +607,68 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     assert purge_installation(paths) == removed
 
 
-def test_purge_refuses_linked_installation_root(tmp_path: Path) -> None:
+def test_purge_refuses_linked_installation_root(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     external = tmp_path / "external"
     external.mkdir()
     (external / "keep").write_text("outside", encoding="utf-8")
     paths.config_directory.parent.mkdir(parents=True)
-    paths.config_directory.symlink_to(external, target_is_directory=True)
+    symlink_or_skip(paths.config_directory, external, directory=True)
 
     with pytest.raises(InstallationOperationError, match="filesystem link"):
         purge_installation(paths)
 
     assert (external / "keep").read_text(encoding="utf-8") == "outside"
+
+
+def test_purge_removes_nested_junction_without_following_external_target(tmp_path: Path, junction_or_skip) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep"
+    sentinel.write_text("outside", encoding="utf-8")
+    junction = paths.config_directory / "linked"
+    junction_or_skip(junction, external)
+
+    purge_installation(paths)
+
+    assert not paths.config_directory.exists()
+    assert not junction.is_junction()
+    assert sentinel.read_text(encoding="utf-8") == "outside"
+
+
+def test_purge_refuses_standard_installation_junction_root(tmp_path: Path, junction_or_skip) -> None:
+    paths = _paths(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep"
+    sentinel.write_text("outside", encoding="utf-8")
+    paths.config_directory.parent.mkdir(parents=True)
+    junction_or_skip(paths.config_directory, external)
+
+    with pytest.raises(InstallationOperationError, match="filesystem link"):
+        purge_installation(paths)
+
+    assert paths.config_directory.is_junction()
+    assert sentinel.read_text(encoding="utf-8") == "outside"
+
+
+def test_reset_removes_artifact_junction_without_following_external_target(tmp_path: Path, junction_or_skip) -> None:
+    paths = _paths(tmp_path)
+    paths.artifacts_directory.mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep"
+    sentinel.write_text("outside", encoding="utf-8")
+    junction = paths.artifacts_directory / "linked"
+    junction_or_skip(junction, external)
+
+    reset_installation(paths)
+
+    assert list(paths.artifacts_directory.iterdir()) == []
+    assert not junction.is_junction()
+    assert sentinel.read_text(encoding="utf-8") == "outside"
 
 
 def _install_cli_paths(monkeypatch: pytest.MonkeyPatch, paths: ApplicationPaths) -> None:
