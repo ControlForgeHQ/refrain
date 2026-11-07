@@ -117,6 +117,8 @@ quotations:
         assert saved.size == backend.images[0].size
         assert saved.tobytes() == backend.images[0].tobytes()
         assert saved.getpixel((160, 300)) == (127, 127, 127)
+        assert saved.getpixel((1437, 1037)) == (255, 255, 255)
+        assert saved.getpixel((1449, 1049)) == (0, 0, 0)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -223,6 +225,7 @@ def test_information_target_uses_existing_renderer_without_loading_content(
         assert saved.mode == backend.images[0].mode == "RGB"
         assert saved.size == backend.images[0].size == (1600, 1200)
         assert saved.tobytes() == backend.images[0].tobytes()
+        assert saved.getpixel((1437, 1037)) == (250, 249, 245)
     assert backend.closed
     for image in backend.images:
         image.close()

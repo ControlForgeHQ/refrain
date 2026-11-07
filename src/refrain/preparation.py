@@ -18,6 +18,12 @@ from .config import (
     load_decoration_image,
 )
 from .persistence import DailySnapshot, ResolvedFont
+from .qr import (
+    QRCodeGenerationError,
+    composite_qr_code,
+    qr_parameters_from_metadata,
+    render_qr_code,
+)
 from .renderer import (
     CompositionVisibility,
     LiteraryComposition,
@@ -114,6 +120,14 @@ def _resolve_text_color(snapshot: DailySnapshot) -> tuple[int, int, int] | None:
             "snapshot.presentation_metadata.text_color_rgb must contain three integers from 0 through 255"
         )
     return value[0], value[1], value[2]
+
+
+def _resolve_qr_parameters(snapshot: DailySnapshot):
+    metadata = _require_mapping(snapshot.presentation_metadata, "presentation_metadata")
+    try:
+        return qr_parameters_from_metadata(metadata.get("qr_code"))
+    except QRCodeGenerationError as error:
+        raise DailyImagePreparationError(f"snapshot.presentation_metadata.qr_code is invalid: {error}") from error
 
 
 def _resolve_decoration_tint(snapshot: DailySnapshot) -> tuple[int, int, int] | None:
@@ -327,6 +341,7 @@ def prepare_daily_images(
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
     text_color = _resolve_text_color(snapshot)
+    qr_parameters = _resolve_qr_parameters(snapshot)
     decoration_tint = _resolve_decoration_tint(snapshot)
     fonts = _resolve_fonts(snapshot, font_registry)
     try:
@@ -352,7 +367,7 @@ def prepare_daily_images(
             decoration_tint,
         )
         try:
-            return render_reveal_stages(
+            images = render_reveal_stages(
                 background,
                 fonts["quotation"],
                 layout,
@@ -362,6 +377,21 @@ def prepare_daily_images(
                 attribution_font=fonts["attribution"],
                 text_color=text_color,
             )
+            qr_code = None
+            try:
+                qr_code = render_qr_code(qr_parameters, image_size)
+                for image in images:
+                    composite_qr_code(image, qr_code)
+                return images
+            except Exception:
+                for image in images:
+                    image.close()
+                raise
+            finally:
+                if qr_code is not None:
+                    qr_code.image.close()
+        except QRCodeGenerationError as error:
+            raise DailyImagePreparationError(f"cannot prepare daily snapshot QR code: {error}") from error
         finally:
             background.close()
     except QuotationRenderError as error:

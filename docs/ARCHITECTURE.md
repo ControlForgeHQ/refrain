@@ -652,6 +652,7 @@ Refrain maintains sufficient durable operational state to preserve:
 - the display date associated with that selection;
 - the selected quotation's original text;
 - the resolved presentation metadata and font identifier;
+- the resolved QR URL, version, error-correction level, module size, quiet zone, and placement offsets;
 - the committed decoration tinting decision and, when enabled, palette identifier and resolved RGB value;
 - the reveal schedule applicable to the selection;
 - relevant layout configuration;
@@ -671,7 +672,7 @@ The daily snapshot contains a complete copy of the selected quotation and the co
 
 It includes only the selected quotation from its containing content entry, not the entry's other quotations.
 
-The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering.
+The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering. It also contains the resolved QR URL and all QR generation and placement parameters required to reproduce the mandatory literary-presentation QR code.
 
 Font, background, decoration, and applicable decoration-colour selection occurs after quotation selection and before the daily snapshot is committed.
 
@@ -986,12 +987,17 @@ The renderer is independent of the purpose of the background image. It does not 
 
 For normal daily presentations, preparation resolves the selected background and decoration before invoking the shared renderer. When the snapshot commits tinting as enabled, preparation replaces the selected decoration's RGB channels with the committed RGB value while preserving its original alpha channel. It does not derive opacity from source RGB values or modify the source asset. Background and decoration selection does not modify the selected quotation or its repetition identity.
 
-The daily background is composed in this order:
+The complete daily image is composed in this order:
 
 1. Create a paper-white base image.
 2. Composite the selected background image, if any.
 3. Composite the selected decoration image, if any.
 4. Render the literary composition within the effective presentation region.
+5. Composite one QR code, including its opaque-white quiet zone, over the complete image.
+
+QR encoding and rasterization are separate from literary typography and fitting. The application supplies fixed initial defaults, while the internal QR-generation interface accepts an explicit URL, version, error-correction level, module size, quiet-zone width, right and bottom offsets, and destination dimensions. The resolved inputs are committed with each new daily snapshot and are used unchanged for every reveal stage and any later image regeneration.
+
+QR placement uses the complete symbol-and-quiet-zone footprint measured from the right and bottom image edges. Preparation fails if the footprint does not fit; it does not resize, crop, shift, or reposition the code. The quiet zone is solid white, and the QR code is composited after both the literary composition and decoration. Preparation does not reserve literary space or validate overlap. Authored presentation regions and decoration artwork are responsible for avoiding unwanted overlap.
 
 Backgrounds and decorations are distinct resources. A background supplies the underlying image, while a decoration supplies a transparent overlay that may define an appropriate presentation region and an optional preferred background.
 
@@ -1002,6 +1008,8 @@ The resolved region applies to the complete literary composition and remains fix
 The same composed background and resolved literary layout are used to prepare all reveal stages. Backgrounds and decorations are not independently selected or repositioned between stages.
 
 Other views, including the information view, may provide their own backgrounds and presentation regions without using the daily background or decoration pools.
+
+The mandatory QR code applies only to literary presentations, including `--show-entry` for ordinary content entries. The startup information view and `--show-entry information` remain independent and do not receive a QR code.
 
 The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
 

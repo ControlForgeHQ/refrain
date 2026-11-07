@@ -44,6 +44,7 @@ from refrain.display import (
 )
 from refrain.display.coordinator import DisplayPublicationCoordinator
 from refrain.information_view import InformationViewPreparationError
+from refrain.qr import REPOSITORY_URL, QRCodeParameters
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
@@ -641,13 +642,41 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
         "text_color_identifier": "black",
         "text_color_rgb": (0, 0, 0),
         "decoration_tint_enabled": False,
+        "qr_code": {
+            "url": "https://github.com/ControlForgeHQ/refrain",
+            "version": 4,
+            "error_correction": "M",
+            "module_size": 3,
+            "quiet_zone": 4,
+            "right_offset": 40,
+            "bottom_offset": 40,
+        },
     }
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert snapshot.layout["image_size"] == (1600, 1200) or list(snapshot.layout["image_size"]) == [1600, 1200]
     assert state.repetition_history == {snapshot.quotation_identity}
     assert len(workspace.history_records()) == 1
     assert display.sizes == [(1600, 1200)] and display.closed == 1
+    assert display.images[0].getpixel((1437, 1037)) == (255, 255, 255)
+    assert display.images[0].getpixel((1449, 1049)) == (0, 0, 0)
     assert len(png_files(workspace.artifacts)) == 3
+
+
+def test_snapshot_accepts_an_explicit_internal_qr_url(workspace: Workspace) -> None:
+    ordinary(workspace)
+    configuration = application.load_application_config(workspace.config)
+    entry = application.load_content_library(configuration.content_directory)[0]
+    snapshot = application._build_snapshot(
+        configuration,
+        entry,
+        entry.quotations[0],
+        date(2026, 3, 10),
+        Random(1),
+        qr_parameters=QRCodeParameters("https://example.org/quote", 4, "M", 3, 4, 40, 40),
+    )
+
+    assert snapshot.presentation_metadata["qr_code"]["url"] == "https://example.org/quote"
+    assert snapshot.presentation_metadata["qr_code"]["url"] != REPOSITORY_URL
 
 
 def test_debug_layout_only_changes_published_copy_of_cached_image(workspace: Workspace) -> None:

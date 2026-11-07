@@ -481,17 +481,17 @@ Recovery behavior must be covered by automated tests using controlled failures a
 
 Persistent operational state uses an explicitly versioned representation.
 
-Format version 5 is the supported operational-state format.
+Format version 6 is the supported operational-state format.
 
-Formats 1 through 4 are unsupported development formats. They must produce a clear, actionable compatibility error without modifying the existing file.
+Formats 1 through 5 are unsupported development formats. They must produce a clear, actionable compatibility error without modifying the existing file.
 
 No migration implementation is provided for these pre-release development formats.
 
-Existing development state may be explicitly archived or deleted before starting the revised application.
+Existing prerelease development state must be reset before starting the revised application, using `python -m refrain --reset`.
 
 Future format changes must consider compatibility deliberately. Migration facilities should be introduced only when a supported release or demonstrated requirement makes them necessary.
 
-Role-specific typography is stored as the optional `presentation_metadata.font_faces` mapping inside the existing version-5 snapshot. A version bump is unnecessary because the metadata container already accepts optional JSON-compatible fields. A version-5 snapshot without this mapping is a supported legacy snapshot and means all roles use `regular`; recovery must not fill it from current preferences or rewrite the committed state. Its existing fingerprint also remains unchanged, allowing valid pre-feature artifacts to be reused.
+Role-specific typography is stored as the optional `presentation_metadata.font_faces` mapping. A version-6 snapshot also requires `presentation_metadata.qr_code`, containing the resolved URL, fixed QR version, error-correction level, integer module size, quiet-zone width, and right and bottom offsets. These parameters are committed inputs rather than current-configuration defaults; malformed or missing QR metadata makes the persisted snapshot invalid. No migration from earlier prerelease formats is provided.
 
 ### Version 0.1 operational state file
 
@@ -499,14 +499,14 @@ The authoritative operational state is stored in one UTF-8 JSON file.
 
 Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload.
 
-Format version 5 contains:
+Format version 6 contains:
 
 - `revision`: the positive, monotonically increasing committed selection revision;
 - `snapshot`: the current committed daily snapshot;
 - `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. New snapshots include all three resolved face identifiers in `presentation_metadata.font_faces`; a legacy snapshot without the field remains regular for every role. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 4 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
+The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. New snapshots include all three resolved face identifiers in `presentation_metadata.font_faces`; absence means regular for every role. The required `presentation_metadata.qr_code` stores the resolved URL and all QR rendering and placement parameters. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 5 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
 
 Global selection history is not included in the operational-state document.
 
@@ -775,6 +775,16 @@ Decoration identifiers, manifest requirements, default-pool validation, and pref
 Resolve decoration, font, background, and effective region before committing the snapshot. Keep selection outside rendering. Compose the selected decoration over the already composed background and before literary rendering, once per preparation; use that complete composition for every reveal stage. A missing or unusable committed decoration is warned about and omitted during regeneration, without changing its identifier or the committed region. Do not recalculate geometry from current decoration metadata.
 
 `prepare_daily_images` and `recover_prepared_daily_images` accept the effective decoration registry independently of the background registry. Reuse valid prepared artifacts before resolving image resources, so registry or file changes do not invalidate a valid set.
+
+### Mandatory QR composition
+
+Generate exactly one QR symbol for each literary presentation using the shared QR encoder and rasterizer. Reuse the standalone diagnostic's QR encoding, capacity checks, integer-module rasterization, and footprint calculation; keep diagnostic canvas generation, reporting, file saving, and publication outside the production helpers.
+
+Resolve the complete QR footprint once per image-preparation operation and composite the same opaque RGB footprint onto every reveal stage after the literary renderer finishes. Use exact square integer-pixel modules, black foreground, and a solid-white quiet zone without antialiasing, resampling, transparency, or resizing. Resolve all QR parameters from the committed snapshot during regeneration; do not generate or alter QR images during scheduling, cache loading, or backend publication.
+
+Validate the requested fixed QR version and destination-fit geometry. Capacity and fit failures must raise an actionable preparation error rather than changing the version or module size or producing a QR-free image. Do not check QR overlap with the literary region or modify typography or region geometry to reserve QR space. The information view remains outside this pipeline and must not gain a QR code.
+
+Test default and explicit URLs, fallback URL resolution, fixed version and error correction, module and footprint pixels, quiet-zone opacity, bottom-right offsets, exact-fit and non-fitting destinations, capacity errors, and composition after text over backgrounds and decorations. Verify identical QR pixels across reveal stages and unchanged QR inputs during snapshot reload and artifact regeneration.
 
 Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
 

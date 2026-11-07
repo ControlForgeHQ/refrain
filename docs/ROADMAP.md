@@ -88,6 +88,7 @@ The first release should be useful in normal household operation without dependi
 - Allow explicitly tintable decoration artwork to use shared-palette colours while preserving authored alpha.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
+- Include one mandatory, fixed-default QR code linking to the Refrain repository in every literary presentation, with its rendering inputs committed for daily-image recovery.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
@@ -116,6 +117,7 @@ The first release should be useful in normal household operation without dependi
 - Verify recovery of committed selections and prepared images after application restarts.
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
+- Validate QR encoding, exact raster geometry, placement, reveal-stage consistency, and prepared-image recovery without display hardware.
 - Validate bundled and user-supplied background and decoration resources, selection precedence, and recovery behaviour.
 - Verify that decoration-defined presentation regions preserve complete literary content without overlap or clipping.
 - Validate physical display behaviour on the target hardware, including selected backgrounds, decorations, typography, and logos.

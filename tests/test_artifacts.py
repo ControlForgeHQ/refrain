@@ -28,6 +28,7 @@ from refrain import (
     SchedulingContext,
     SelectionProposal,
 )
+from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 
 @pytest.fixture
@@ -36,7 +37,12 @@ def snapshot() -> DailySnapshot:
         quotation_text="A thought worth keeping.",
         quotation_identity="A thought worth keeping.",
         font_identifier="test",
-        presentation_metadata={"source": "Collection", "attribution": "Author", "presentation_style": "centered"},
+        presentation_metadata={
+            "source": "Collection",
+            "attribution": "Author",
+            "presentation_style": "centered",
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
+        },
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout={"image_size": (32, 24), "nested": {"values": [1, True, None]}},
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
@@ -113,10 +119,16 @@ def test_revisions_have_distinct_locations(store, snapshot, images) -> None:
                 "attribution": "Author",
                 "presentation_style": "centered",
                 "font_faces": {"quotation": "italic", "source": "regular", "attribution": "regular"},
+                "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
             }
         },
         {"background_identifier": "canvas"},
-        {"presentation_metadata": {"source": "Changed"}},
+        {
+            "presentation_metadata": {
+                "source": "Changed",
+                "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
+            }
+        },
         {"reveal_schedule": {"quotation": "07:00"}},
         {"layout": {"image_size": (32, 24), "other": 1}},
         {"scheduling": SchedulingContext(date(2026, 10, 27), "06:00")},
