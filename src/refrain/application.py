@@ -25,6 +25,7 @@ from .config import (
     DecorationResource,
     DisplayBackendConfiguration,
     FontResource,
+    PresentationRegion,
     load_application_config,
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library
@@ -44,6 +45,7 @@ from .persistence import (
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .recovery import recover_prepared_daily_images
+from .renderer import annotate_presentation_region
 from .scheduling import (
     SchedulingAction,
     SchedulingEvaluationError,
@@ -398,6 +400,7 @@ def run_show_entry(
     config_file: str | Path,
     entry_id: str,
     *,
+    debug_layout: bool = False,
     random_source: random.Random | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
 ) -> Path:
@@ -405,6 +408,7 @@ def run_show_entry(
     configuration = _load_configuration(config_file)
     chooser = random_source if random_source is not None else random.Random()
     images: tuple[Image.Image, ...]
+    snapshot: DailySnapshot | None = None
     if entry_id == "information":
         try:
             images = (prepare_information_view(configuration),)
@@ -441,7 +445,11 @@ def run_show_entry(
     image = images[-1]
     coordinator: DisplayPublicationCoordinator | None = None
     transferred = False
+    annotated_image: Image.Image | None = None
     try:
+        if snapshot is not None and debug_layout:
+            annotated_image = _debug_layout_image(image, snapshot, True)
+            image = annotated_image
         output = _save_diagnostic_png(image, entry_id)
         identity = _DIAGNOSTIC_PRESENTATION_IDENTITY
         try:
@@ -483,6 +491,8 @@ def run_show_entry(
         for prepared_image in images:
             if not transferred or prepared_image is not image:
                 prepared_image.close()
+        if annotated_image is not None and not transferred:
+            annotated_image.close()
 
 
 def _commit_selection(
@@ -549,6 +559,24 @@ def _load_configuration(config_file: str | Path) -> ApplicationConfiguration:
         raise ApplicationError(f"application configuration is invalid: {error}") from error
 
 
+def _debug_layout_image(image: Image.Image, snapshot: DailySnapshot, enabled: bool) -> Image.Image:
+    if not enabled:
+        return image
+    region = PresentationRegion(**snapshot.layout["presentation_region"])
+    return annotate_presentation_region(image, region)
+
+
+def _stage_publication_image(image: Image.Image, snapshot: DailySnapshot, debug_layout: bool) -> Image.Image:
+    try:
+        annotated = _debug_layout_image(image, snapshot, debug_layout)
+    except Exception:
+        image.close()
+        raise
+    if annotated is not image:
+        image.close()
+    return annotated
+
+
 def _recover_images(
     state: PersistentState,
     artifact_store: PreparedImageArtifactStore,
@@ -600,6 +628,7 @@ def run_startup(
     state_path: str | Path,
     artifact_root: str | Path,
     *,
+    debug_layout: bool = False,
     now: datetime | None = None,
     random_source: random.Random | None = None,
     history_path: str | Path | None = None,
@@ -694,6 +723,7 @@ def run_startup(
             image = artifacts.load_stage(stage)
         except ArtifactStoreError as error:
             raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
+        image = _stage_publication_image(image, state.snapshot, debug_layout)
         identity = (state.revision, stage)
         coordinator.publish(identity, image)
         if not coordinator.wait_for_publication(identity):
@@ -716,6 +746,7 @@ def run_application(
     state_path: str | Path,
     artifact_root: str | Path,
     *,
+    debug_layout: bool = False,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
     history_path: str | Path | None = None,
@@ -900,6 +931,7 @@ def run_application(
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
+                    image = _stage_publication_image(image, state.snapshot, debug_layout)
                     coordinator.publish(identity, image)
                     continue
                 if last_failure is not None:
@@ -937,6 +969,7 @@ def run_demo(
     config_file: str | Path,
     interval: float,
     *,
+    debug_layout: bool = False,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
     history_segment_size: int = 1_048_576,
@@ -1031,6 +1064,7 @@ def run_demo(
                         raise _RetryableApplicationError(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
+                    image = _stage_publication_image(image, state.snapshot, debug_layout)
                     coordinator.publish(identity, image)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
                     continue

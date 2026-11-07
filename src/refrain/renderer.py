@@ -137,6 +137,37 @@ def _validate_sizes(min_font_size: int, max_font_size: int) -> None:
         raise QuotationRenderError("max_font_size must be greater than or equal to min_font_size")
 
 
+def _pixel_region(region: PresentationRegion, image_size: tuple[int, int]) -> PixelBounds:
+    _validate_region(region)
+    width, height = image_size
+    return (
+        math.floor(region.x * width),
+        math.floor(region.y * height),
+        math.ceil((region.x + region.width) * width),
+        math.ceil((region.y + region.height) * height),
+    )
+
+
+def annotate_presentation_region(image: Image.Image, region: PresentationRegion) -> Image.Image:
+    """Return a copy with a translucent outline around the literary presentation region."""
+    bounds = _pixel_region(region, image.size)
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    left, top, right, bottom = bounds
+    draw.rectangle((left, top, right - 1, bottom - 1), outline=(0, 0, 0, 128), width=2)
+    background = image.convert("RGBA")
+    try:
+        annotated = Image.alpha_composite(background, overlay)
+    finally:
+        background.close()
+        overlay.close()
+    if annotated.mode != image.mode:
+        converted = annotated.convert(image.mode)
+        annotated.close()
+        return converted
+    return annotated
+
+
 def _validate_composition(composition: LiteraryComposition) -> None:
     if not isinstance(composition, LiteraryComposition):
         raise QuotationRenderError("composition must be a LiteraryComposition")
@@ -556,12 +587,7 @@ def layout_composition(
     attribution_font = font if attribution_font is None else attribution_font
     _validate_font(source_font)
     _validate_font(attribution_font)
-    pixel_region = (
-        math.floor(presentation_region.x * width),
-        math.floor(presentation_region.y * height),
-        math.ceil((presentation_region.x + presentation_region.width) * width),
-        math.ceil((presentation_region.y + presentation_region.height) * height),
-    )
+    pixel_region = _pixel_region(presentation_region, image_size)
     if pixel_region[2] <= pixel_region[0] or pixel_region[3] <= pixel_region[1]:
         raise QuotationRenderError("presentation_region is smaller than one pixel at the supplied image dimensions")
 

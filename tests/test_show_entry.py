@@ -97,6 +97,7 @@ quotations:
     output = application.run_show_entry(
         config,
         "requested-entry",
+        debug_layout=True,
         random_source=Random(1),
         backend_factory=lambda _: backend,
     )
@@ -115,6 +116,7 @@ quotations:
         assert saved.mode == backend.images[0].mode
         assert saved.size == backend.images[0].size
         assert saved.tobytes() == backend.images[0].tobytes()
+        assert saved.getpixel((160, 300)) == (127, 127, 127)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -212,7 +214,7 @@ def test_information_target_uses_existing_renderer_without_loading_content(
 
     monkeypatch.setattr(application, "prepare_information_view", capture_information)
     monkeypatch.setattr(application, "load_content_library", unexpected_content_load)
-    output = application.run_show_entry(config, "information", backend_factory=lambda _: backend)
+    output = application.run_show_entry(config, "information", debug_layout=True, backend_factory=lambda _: backend)
 
     assert prepared and prepared[0].information_view_duration == 0
     assert output == tmp_path / "refrain-information.png"
@@ -247,7 +249,7 @@ def test_information_target_takes_precedence_over_a_content_entry_with_the_same_
         lambda _directory: pytest.fail("the reserved target must bypass content-entry lookup"),
     )
 
-    output = application.run_show_entry(config, "information", backend_factory=lambda _: backend)
+    output = application.run_show_entry(config, "information", debug_layout=True, backend_factory=lambda _: backend)
 
     with Image.open(output) as saved:
         assert saved.size == (4, 4)
@@ -273,6 +275,7 @@ def test_every_configured_backend_receives_the_same_diagnostic_image(
     output = application.run_show_entry(
         config,
         "entry",
+        debug_layout=True,
         backend_factory=lambda configuration: backends[configuration.type],
     )
 
@@ -281,6 +284,7 @@ def test_every_configured_backend_receives_the_same_diagnostic_image(
     assert backends["window"].images[0].tobytes() == backends["image-server"].images[0].tobytes()
     with Image.open(output) as saved:
         assert saved.tobytes() == backends["window"].images[0].tobytes()
+        assert saved.getpixel((160, 300)) == (127, 127, 127)
     for backend in backends.values():
         for image in backend.images:
             image.close()
@@ -312,7 +316,9 @@ def test_partial_publication_failure_preserves_png_and_closes_backends(
     monkeypatch.setattr(
         cli,
         "run_show_entry",
-        lambda config_path, entry_id: original(config_path, entry_id, backend_factory=factory),
+        lambda config_path, entry_id, **kwargs: original(
+            config_path, entry_id, debug_layout=kwargs["debug_layout"], backend_factory=factory
+        ),
     )
     assert cli.main(["--show-entry", "entry", "--config", str(config)]) == 1
 
@@ -364,8 +370,13 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
     backend = RecordingBackend()
     original = application.run_show_entry
 
-    def run_with_backend(config_path, entry_id):
-        return original(config_path, entry_id, backend_factory=lambda _: backend)
+    def run_with_backend(config_path, entry_id, **kwargs):
+        return original(
+            config_path,
+            entry_id,
+            debug_layout=kwargs["debug_layout"],
+            backend_factory=lambda _: backend,
+        )
 
     monkeypatch.setattr(cli, "run_show_entry", run_with_backend)
     assert (
@@ -373,6 +384,7 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
             [
                 "--show-entry",
                 "entry",
+                "--debug-layout",
                 "--config",
                 str(config),
                 "--state",
@@ -389,6 +401,7 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
     assert state.read_bytes() == b"unchanged state"
     assert history.read_bytes() == b"unchanged history"
     assert (artifacts / "production.png").read_bytes() == b"unchanged artifact"
+    assert backend.images[0].getpixel((160, 300)) == (127, 127, 127)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -405,8 +418,12 @@ def test_cli_uses_default_configuration_path_for_show_entry(
         "resolve_application_paths",
         lambda: SimpleNamespace(config_file=config, state_file=tmp_path / "unused-state"),
     )
-    monkeypatch.setattr(cli, "run_show_entry", lambda path, entry_id: observed.append((path, entry_id)) or tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "run_show_entry",
+        lambda path, entry_id, **kwargs: observed.append((path, entry_id, kwargs)) or tmp_path,
+    )
 
-    assert cli.main(["--show-entry", "entry"]) == 0
-    assert observed == [(config, "entry")]
+    assert cli.main(["--show-entry", "entry", "--debug-layout"]) == 0
+    assert observed == [(config, "entry", {"debug_layout": True})]
     assert str(tmp_path) in capsys.readouterr().out

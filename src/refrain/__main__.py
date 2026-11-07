@@ -68,6 +68,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--state", help="persistent state file (ignored in demo and --show-entry modes)")
     parser.add_argument("--artifacts", help="prepared image directory (ignored in demo and --show-entry modes)")
     parser.add_argument(
+        "--debug-layout",
+        action="store_true",
+        help="outline the effective literary presentation region on published images",
+    )
+    parser.add_argument(
         "--history",
         help=(
             "JSONL global-history file (default: global-history.jsonl beside state; "
@@ -227,13 +232,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_path,
                 state_path,
                 artifacts_path,
+                debug_layout=arguments.debug_layout,
                 history_path=history_path,
                 history_segment_size=arguments.history_segment_size,
                 history_max_segments=arguments.history_max_segments,
                 keep_open=_hold_open,
             )
         elif arguments.show_entry is not None:
-            output = run_show_entry(config_path, arguments.show_entry)
+            output = run_show_entry(config_path, arguments.show_entry, debug_layout=arguments.debug_layout)
             print(f"Diagnostic image saved to {output}")
             return 0
         else:
@@ -248,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     run_demo(
                         config_path,
                         arguments.demo,
+                        debug_layout=arguments.debug_layout,
                         shutdown_event=shutdown,
                         history_segment_size=arguments.history_segment_size,
                         history_max_segments=arguments.history_max_segments,
@@ -257,6 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         config_path,
                         state_path,
                         artifacts_path,
+                        debug_layout=arguments.debug_layout,
                         shutdown_event=shutdown,
                         history_path=history_path,
                         history_segment_size=arguments.history_segment_size,
