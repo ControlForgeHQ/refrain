@@ -362,6 +362,82 @@ def test_preparation_is_deterministic(embedded_font: str) -> None:
     assert tuple(image.tobytes() for image in first) == tuple(image.tobytes() for image in second)
 
 
+def test_committed_color_is_rendered_for_all_literary_fields_and_reveal_stages() -> None:
+    color = (198, 90, 32)
+    snapshot = make_snapshot(
+        "lora",
+        metadata={
+            "presentation_style": "centered",
+            "source": "A Sample Collection",
+            "attribution": "An Example Author",
+            "text_color_identifier": "burnt-orange",
+            "text_color_rgb": color,
+        },
+    )
+    stages = resolve_reveal_stages(snapshot)
+    resolved_layouts = []
+    original_layout = preparation.layout_composition
+
+    def capture_layout(*args: object, **kwargs: object):
+        layout = original_layout(*args, **kwargs)
+        resolved_layouts.append(layout)
+        return layout
+
+    preparation.layout_composition = capture_layout
+    try:
+        images = prepare_daily_images(snapshot, stages, _FONT_REGISTRY)
+    finally:
+        preparation.layout_composition = original_layout
+
+    layout = resolved_layouts[0]
+    assert layout.byline is not None
+    visible_fields = [
+        layout.quotation,
+        layout.byline.prefix,
+        layout.byline.separator,
+        layout.byline.source,
+        layout.byline.attribution,
+    ]
+    assert all(field is not None for field in visible_fields)
+
+    def has_selected_color(bounds: tuple[int, int, int, int], image: Image.Image) -> bool:
+        return any(red > green > blue for red, green, blue in image.crop(bounds).get_flattened_data())
+
+    for image, stage in zip(images, stages, strict=True):
+        assert has_selected_color(layout.quotation.bounds, image)
+        assert has_selected_color(layout.byline.prefix.bounds, image)
+        if stage.source:
+            assert has_selected_color(layout.byline.source.bounds, image)
+        if stage.attribution:
+            assert has_selected_color(layout.byline.attribution.bounds, image)
+
+    legacy_snapshot = make_snapshot("lora")
+    legacy_layouts = []
+
+    def capture_legacy_layout(*args: object, **kwargs: object):
+        layout = original_layout(*args, **kwargs)
+        legacy_layouts.append(layout)
+        return layout
+
+    preparation.layout_composition = capture_legacy_layout
+    try:
+        legacy_images = prepare_daily_images(
+            legacy_snapshot,
+            resolve_reveal_stages(legacy_snapshot),
+            _FONT_REGISTRY,
+        )
+    finally:
+        preparation.layout_composition = original_layout
+    legacy_layout_result = legacy_layouts[0]
+    assert legacy_layout_result.byline is not None
+    assert any(
+        red == green == blue and red < 255
+        for red, green, blue in legacy_images[-1]
+        .crop(legacy_layout_result.byline.attribution.bounds)
+        .get_flattened_data()
+    )
+
+
 def test_uses_committed_presentation_style(embedded_font: str, monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = make_snapshot(embedded_font, style="left-aligned")
     original_layout = preparation.layout_composition

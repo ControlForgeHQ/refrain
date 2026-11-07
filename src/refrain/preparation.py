@@ -95,6 +95,27 @@ def _resolve_presentation(
     return composition, region, (size[0], size[1]), min_font_size, max_font_size, style
 
 
+def _resolve_text_color(snapshot: DailySnapshot) -> tuple[int, int, int] | None:
+    metadata = _require_mapping(snapshot.presentation_metadata, "presentation_metadata")
+    identifier = metadata.get("text_color_identifier")
+    value = metadata.get("text_color_rgb")
+    if identifier is None and value is None:
+        return None
+    if not valid_identifier(identifier):
+        raise DailyImagePreparationError(
+            "snapshot.presentation_metadata.text_color_identifier must be a valid identifier"
+        )
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 3
+        or any(type(channel) is not int or not 0 <= channel <= 255 for channel in value)
+    ):
+        raise DailyImagePreparationError(
+            "snapshot.presentation_metadata.text_color_rgb must contain three integers from 0 through 255"
+        )
+    return value[0], value[1], value[2]
+
+
 def _generate_daily_background(
     image_size: tuple[int, int],
     identifier: str,
@@ -265,6 +286,7 @@ def prepare_daily_images(
         raise DailyImagePreparationError("decoration_registry must be a mapping of identifiers to decoration resources")
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
+    text_color = _resolve_text_color(snapshot)
     fonts = _resolve_fonts(snapshot, font_registry)
     try:
         layout = layout_composition(
@@ -296,6 +318,7 @@ def prepare_daily_images(
                 concealment="pixel-distortion",
                 source_font=fonts["source"],
                 attribution_font=fonts["attribution"],
+                text_color=text_color,
             )
         finally:
             background.close()

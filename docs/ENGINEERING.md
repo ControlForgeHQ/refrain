@@ -1294,8 +1294,10 @@ Automated testing should cover:
 - explicitly invalid optional values with and without defaults;
 - unrecognized application-configuration fields;
 - unavailable or invalid registered fonts and effective font-pool construction;
+- built-in and custom palette values, invalid palette definitions, and effective text-color pool construction;
 - bundled and custom background registration, independent rejection of invalid PNGs, reserved identifiers, and default-pool construction;
 - explicit background preferences, `"none"` suppression, and unavailable-preference fallback;
+- content and decoration text-color preferences, precedence, unavailable members, and duplicate-free selection;
 - content-file parsing failures and independent rejection of invalid entries;
 - partial content-library acceptance with valid entries preserved;
 - duplicate entry identifiers and deterministic conflict handling;
@@ -1304,6 +1306,7 @@ Automated testing should cover:
 - preservation of repetition history when content discovery fails or no valid quotations remain;
 - recovery of committed selections independently of current content-library availability;
 - recovery and regeneration when a previously selected custom font becomes unavailable;
+- format-5 snapshot round trips with committed text colors, palette-change regeneration, and legacy rendering without color metadata;
 - format-5 snapshot round trips, recovery of legacy snapshots without face metadata, and unchanged rejection of state versions 1 through 4;
 - committed background recovery without reselection or changes to the effective layout;
 - stable entry and quotation identities;
@@ -1355,6 +1358,8 @@ Test automatic text fitting with:
 Verify that all rendered literary content stays within the configured presentation region.
 
 Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
+
+Verify that committed literary text colors are identical for the quotation, source, attribution, and punctuation across reveal stages. Confirm legacy snapshots retain the existing attribution distinction and that the information view's typography is unchanged.
 
 Test font configuration and selection behavior, including:
 

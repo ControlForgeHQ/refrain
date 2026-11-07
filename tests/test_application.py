@@ -215,6 +215,71 @@ def test_decoration_preferences_resolve_before_font_background_and_region(worksp
     }
 
 
+def test_text_color_precedence_deduplicates_candidates_and_commits_rgb(workspace: Workspace, caplog) -> None:
+    package = workspace.root / "assets" / "decorations" / "custom"
+    overlay = package / "overlay.png"
+    overlay.parent.mkdir(parents=True)
+    Image.new("RGBA", (16, 16)).save(overlay)
+    write_decoration_manifest(package, "custom", text_color=["blue", "burnt-orange", "blue"])
+    workspace.config.write_text(
+        'palette:\n  red: "#C82F32"\n  burnt-orange: "#C65A20"\n' + _CONFIG,
+        encoding="utf-8",
+    )
+    ordinary(
+        workspace,
+        extra=(
+            'decoration: "custom"\n' "text_color:\n" "  - missing-color\n" "  - red\n" "  - red\n" "  - burnt-orange\n"
+        ),
+    )
+    configuration = application.load_application_config(workspace.config)
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+
+    color_identifier = snapshot.presentation_metadata["text_color_identifier"]
+    assert color_identifier in {"red", "burnt-orange"}
+    value = configuration.palette[color_identifier]
+    assert snapshot.presentation_metadata["text_color_rgb"] == (
+        int(value[1:3], 16),
+        int(value[3:5], 16),
+        int(value[5:7], 16),
+    )
+    assert "missing-color" in caplog.text
+
+    entry = application.load_content_library(workspace.content)[0]
+    decoration = configuration.decorations["custom"]
+
+    class RecordingChooser:
+        members: tuple[str, ...] = ()
+
+        def choice(self, members):
+            self.members = tuple(members)
+            return self.members[-1]
+
+    chooser = RecordingChooser()
+    assert application._resolve_text_color(configuration, entry, decoration, chooser) == (
+        "burnt-orange",
+        (198, 90, 32),
+    )
+    assert chooser.members == ("red", "burnt-orange")
+
+    without_entry_preference = replace(entry, text_color=None)
+    assert application._resolve_text_color(configuration, without_entry_preference, decoration, chooser)[0] == (
+        "burnt-orange"
+    )
+    unavailable_decoration = replace(decoration, text_color=("missing-color",))
+    global_preference = replace(configuration, default_text_colors=("green",))
+    assert application._resolve_text_color(
+        global_preference, without_entry_preference, unavailable_decoration, chooser
+    ) == ("green", (0, 255, 0))
+    black_fallback = replace(
+        configuration,
+        palette={**configuration.palette, "black": "#123456"},
+        default_text_colors=("missing-color",),
+    )
+    assert application._resolve_text_color(
+        black_fallback, without_entry_preference, unavailable_decoration, chooser
+    ) == ("black", (18, 52, 86))
+
+
 def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
     package = workspace.root / "assets" / "decorations" / "custom"
     overlay = package / "overlay.png"
@@ -430,6 +495,29 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     assert "Committed background 'paper'" in caplog.text
 
 
+def test_committed_text_color_survives_palette_changes_and_artifact_regeneration(workspace: Workspace) -> None:
+    workspace.config.write_text('palette:\n  red: "#C82F32"\n' + _CONFIG, encoding="utf-8")
+    ordinary(workspace, extra="text_color: red\n")
+
+    first, first_display = workspace.run(at(10, 7))
+    committed = first.state.snapshot.presentation_metadata
+    assert committed["text_color_identifier"] == "red"
+    assert committed["text_color_rgb"] == (200, 47, 50)
+    assert (200, 47, 50) in first_display.images[-1].get_flattened_data()
+    state_bytes = workspace.state.read_bytes()
+
+    workspace.config.write_text('palette:\n  red: "#00FF00"\n' + _CONFIG, encoding="utf-8")
+    for artifact in png_files(workspace.artifacts):
+        artifact.unlink()
+    second, second_display = workspace.run(at(10, 7))
+
+    assert second.state == first.state
+    assert workspace.state.read_bytes() == state_bytes
+    assert second_display.images[-1].tobytes() == first_display.images[-1].tobytes()
+    assert (200, 47, 50) in second_display.images[-1].get_flattened_data()
+    assert (0, 255, 0) not in second_display.images[-1].get_flattened_data()
+
+
 def png_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.png"))
 
@@ -450,6 +538,8 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
         "source": "A Book",
         "attribution": "An Author",
         "font_faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
+        "text_color_identifier": "black",
+        "text_color_rgb": (0, 0, 0),
     }
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert snapshot.layout["image_size"] == (1600, 1200) or list(snapshot.layout["image_size"]) == [1600, 1200]
