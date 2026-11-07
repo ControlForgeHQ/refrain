@@ -1,4 +1,19 @@
 format: 1
 id: source-sans-3
 faces:
+  black: SourceSans3-Black.ttf
+  black-italic: SourceSans3-BlackItalic.ttf
+  bold: SourceSans3-Bold.ttf
+  bold-italic: SourceSans3-BoldItalic.ttf
+  extra-bold: SourceSans3-ExtraBold.ttf
+  extra-bold-italic: SourceSans3-ExtraBoldItalic.ttf
+  extra-light: SourceSans3-ExtraLight.ttf
+  extra-light-italic: SourceSans3-ExtraLightItalic.ttf
+  italic: SourceSans3-Italic.ttf
+  light: SourceSans3-Light.ttf
+  light-italic: SourceSans3-LightItalic.ttf
+  medium: SourceSans3-Medium.ttf
+  medium-italic: SourceSans3-MediumItalic.ttf
   regular: SourceSans3-Regular.ttf
+  semi-bold: SourceSans3-SemiBold.ttf
+  semi-bold-italic: SourceSans3-SemiBoldItalic.ttf

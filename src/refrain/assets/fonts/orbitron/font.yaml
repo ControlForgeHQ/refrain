@@ -1,4 +1,9 @@
 format: 1
 id: orbitron
 faces:
+  black: Orbitron-Black.ttf
+  bold: Orbitron-Bold.ttf
+  extra-bold: Orbitron-ExtraBold.ttf
+  medium: Orbitron-Medium.ttf
   regular: Orbitron-Regular.ttf
+  semi-bold: Orbitron-SemiBold.ttf

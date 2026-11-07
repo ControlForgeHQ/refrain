@@ -8,6 +8,8 @@ import tarfile
 from pathlib import Path
 from zipfile import ZipFile
 
+import yaml
+
 _ROOT = Path(__file__).parent.parent
 _LIBRARIES = {f"DEV_Config_{bits}_{variant}.so" for bits in ("32", "64") for variant in ("b", "w")}
 _BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
@@ -125,6 +127,11 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
             assert any(name.endswith(f"assets/backgrounds/{identifier}.png") for name in names)
         for identifier in ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"):
             assert any(name.endswith(f"assets/fonts/{identifier}/font.yaml") for name in names)
+        for font_package in sorted((source / "src/refrain/assets/fonts").iterdir()):
+            manifest = yaml.safe_load((font_package / "font.yaml").read_text(encoding="utf-8"))
+            package_path = Path("assets/fonts") / font_package.name
+            for filename in (*manifest["faces"].values(), "OFL.txt"):
+                assert any(name.endswith((package_path / filename).as_posix()) for name in names)
         for identifier in _DECORATIONS:
             assert any(name.endswith(f"assets/decorations/{identifier}/{identifier}.png") for name in names)
             assert any(name.endswith(f"assets/decorations/{identifier}/decoration.yaml") for name in names)
