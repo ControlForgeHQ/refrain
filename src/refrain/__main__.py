@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Event
 
 from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup, run_test_qr
+from .decoration_diagnostic import run_decoration_diagnostic
 from .installation import (
     InitializationError,
     InstallationOperationError,
@@ -133,6 +134,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     modes.add_argument(
         "--test-qr", action="store_true", help="publish a QR calibration image without changing daily state"
+    )
+    modes.add_argument(
+        "--test-decorations", action="store_true", help="interactively inspect decorations without changing daily state"
     )
     parser.add_argument("--qr-payload", help="text or URL encoded into the QR code (default: https://example.com/)")
     parser.add_argument(
@@ -267,7 +271,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = resolve_application_paths()
         config_path = arguments.config if arguments.config is not None else paths.config_file
         config_absolute = Path(config_path).absolute()
-        if arguments.demo is None and arguments.show_entry is None and not arguments.test_qr:
+        if (
+            arguments.demo is None
+            and arguments.show_entry is None
+            and not arguments.test_qr
+            and not arguments.test_decorations
+        ):
             state_path = arguments.state if arguments.state is not None else paths.state_file
             artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
             history_path = arguments.history
@@ -287,7 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_absolute,
                 (
                     "diagnostic presentation does not use production persistence"
-                    if arguments.show_entry is not None or arguments.test_qr
+                    if arguments.show_entry is not None or arguments.test_qr or arguments.test_decorations
                     else "demo persistence uses isolated temporary storage"
                 ),
             )
@@ -319,6 +328,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.test_qr:
             output, _ = run_test_qr(config_path, qr_parameters)
             print(f"QR diagnostic image saved to {output}")
+            return 0
+        elif arguments.test_decorations:
+            run_decoration_diagnostic(config_path, debug_layout=arguments.debug_layout)
             return 0
         else:
             shutdown = Event()

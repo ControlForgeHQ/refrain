@@ -224,7 +224,7 @@ The command displays all standard Refrain-owned locations and requires an intera
 
 `python -m refrain --once` uses the same standard paths and performs one startup/presentation cycle without scheduling future updates.
 
-Add `--debug-layout` to outline the effective literary presentation region in black at 50% opacity. It is available in normal operation, one-shot, demo, and `--show-entry` modes:
+Add `--debug-layout` to outline the effective literary presentation region in black at 50% opacity. It is available in normal operation, one-shot, demo, `--show-entry`, and `--test-decorations` modes:
 
 ```sh
 python -m refrain --demo 5 --debug-layout
@@ -303,6 +303,14 @@ The diagnostic image is saved as `refrain-<entry_id>.png` in the current working
 The command does not read or modify operational state, global history, or prepared-image artifacts, so it does not consume a quotation or change the current daily presentation. `--state`, `--artifacts`, and `--history` are ignored, even when supplied; `--config` can select an alternate configuration. The reserved target `information` renders Refrain's existing application-owned information screen without loading the content library, consulting the configured information-view duration, or transitioning to a daily quotation. A content entry named `information` remains valid but cannot replace this diagnostic target.
 
 The command exits after publication attempts and backend cleanup. Physical e-paper displays normally retain their image, but `window` and `image-server` are process-scoped: their presentation is no longer accessible after Refrain exits. No serving-backend hold mode is provided by `--show-entry`.
+
+### Interactive decoration inspection
+
+Run `python -m refrain --test-decorations --debug-layout` in an interactive Linux or Windows terminal to inspect all discovered bundled and user decorations on the configured displays. `--debug-layout` is optional and outlines the effective literary region. Each decoration is shown with a fixed, fully revealed short quotation followed by a long quotation, including the production QR code. Decorations are ordered by identifier, including those outside the default pool.
+
+Press **Space** for the next presentation, **B** for the previous one, **R** to reload the current decoration, or **Q** or **Ctrl+C** to quit. No Enter is needed; navigation wraps in both directions. Edit the decoration PNG or manifest externally and press R to inspect changes. If reload fails, the previous display remains and you can correct the files and retry. Restart the command to discover added, removed, or renamed packages.
+
+This mode does not load the content library or access operational state, history, or prepared-image artifacts. It does not show the startup information view. It requires an interactive terminal and cannot be combined with other operating modes.
 
 ### QR display calibration
 

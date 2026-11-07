@@ -456,6 +456,7 @@ def discover_decorations(
                 text_color=preferred_text_color,
                 tintable=tintable,
                 decoration_color=preferred_decoration_color,
+                manifest=manifest,
             )
             _validate_image_candidate(
                 resource,
