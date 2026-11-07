@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import random
 import re
 import time
@@ -11,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from threading import Event
 
 from PIL import Image
@@ -44,6 +45,13 @@ from .persistence import (
     StateRecoveryError,
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
+from .qr_diagnostic import (
+    QRCalibrationError,
+    QRCalibrationGeometry,
+    QRCalibrationParameters,
+    create_qr_calibration_image,
+    validate_qr_calibration_parameters,
+)
 from .recovery import recover_prepared_daily_images
 from .renderer import annotate_presentation_region
 from .scheduling import (
@@ -493,6 +501,121 @@ def run_show_entry(
                 prepared_image.close()
         if annotated_image is not None and not transferred:
             annotated_image.close()
+
+
+def _save_qr_diagnostic_png(image: Image.Image) -> Path:
+    try:
+        output = Path.cwd() / "refrain-qr-test.png"
+    except OSError as error:
+        raise ApplicationError(
+            f"cannot determine the current working directory for QR diagnostic output: {error}"
+        ) from error
+    temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w+b",
+            prefix=".refrain-qr-test-",
+            suffix=".tmp",
+            dir=output.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            image.save(stream, format="PNG")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
+    except Exception as error:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise ApplicationError(
+                    f"cannot save QR diagnostic PNG {output}: {error}; "
+                    f"cannot remove temporary output {temporary}: {cleanup_error}"
+                ) from error
+        raise ApplicationError(f"cannot save QR diagnostic PNG {output}: {error}") from error
+    return output
+
+
+def _report_qr_diagnostic(parameters: QRCalibrationParameters, geometry: QRCalibrationGeometry, output: Path) -> None:
+    left, top, right, bottom = geometry.bounds
+    _LOGGER.info("QR calibration payload: %r", parameters.payload)
+    _LOGGER.info("QR error-correction level: %s", parameters.error_correction)
+    _LOGGER.info("QR version: %d", geometry.version)
+    _LOGGER.info("QR symbol modules (excluding quiet zone): %d", geometry.symbol_modules)
+    _LOGGER.info("QR module size: %d pixels", geometry.module_size)
+    _LOGGER.info(
+        "QR quiet zone: %d modules (%d pixels per side)",
+        geometry.quiet_zone,
+        geometry.quiet_zone_pixels,
+    )
+    _LOGGER.info("QR complete footprint: %d x %d pixels", *geometry.footprint_size)
+    _LOGGER.info("QR right and bottom offsets: %d, %d pixels", geometry.right_offset, geometry.bottom_offset)
+    _LOGGER.info("QR footprint pixel bounds (inclusive): (%d, %d) to (%d, %d)", left, top, right, bottom)
+    _LOGGER.info("QR output image dimensions: %d x %d pixels", *geometry.image_size)
+    _LOGGER.info("QR diagnostic PNG saved at %s", output)
+
+
+def run_test_qr(
+    config_file: str | Path,
+    parameters: QRCalibrationParameters = QRCalibrationParameters(),
+    *,
+    backend_factory: BackendFactory = _default_backend_factory,
+) -> tuple[Path, QRCalibrationGeometry]:
+    """Generate, save, and publish a QR calibration image without accessing daily state."""
+    try:
+        validate_qr_calibration_parameters(parameters)
+    except QRCalibrationError as error:
+        raise ApplicationError(str(error)) from error
+    configuration = _load_configuration(config_file)
+    try:
+        calibration = create_qr_calibration_image(parameters)
+    except QRCalibrationError as error:
+        raise ApplicationError(f"cannot generate QR calibration image: {error}") from error
+
+    image = calibration.image
+    coordinator: DisplayPublicationCoordinator | None = None
+    transferred = False
+    try:
+        output = _save_qr_diagnostic_png(image)
+        _report_qr_diagnostic(parameters, calibration.geometry, output)
+        try:
+            coordinator = DisplayPublicationCoordinator(
+                configuration.display_backends,
+                backend_factory,
+                retry=False,
+            )
+        except Exception as error:
+            raise ApplicationError(f"cannot initialize QR diagnostic display publication: {error}") from error
+        try:
+            coordinator.publish(_DIAGNOSTIC_PRESENTATION_IDENTITY, image)
+            transferred = True
+            coordinator.wait_for_publication(_DIAGNOSTIC_PRESENTATION_IDENTITY)
+        except Exception as error:
+            raise ApplicationError(f"cannot publish QR diagnostic image: {error}") from error
+
+        results = coordinator.publication_results(_DIAGNOSTIC_PRESENTATION_IDENTITY)
+        failed = not results
+        for backend, (published, error) in results.items():
+            if published:
+                _LOGGER.info("QR diagnostic image published to display backend %s", backend)
+            else:
+                failed = True
+                _LOGGER.error(
+                    "QR diagnostic image publication failed for display backend %s: %s",
+                    backend,
+                    error or "no successful acknowledgement",
+                )
+        if failed:
+            raise ApplicationError(
+                f"QR diagnostic image was not published by every configured display backend; PNG saved at {output}"
+            )
+        return output, calibration.geometry
+    finally:
+        if coordinator is not None:
+            coordinator.close()
+        if not transferred:
+            image.close()
 
 
 def _commit_selection(

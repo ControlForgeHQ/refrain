@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "PyYAML>=6.0.3,<7",
     "Pillow>=13.0.0,<14",
+    "qrcode>=8.2,<9",
 ]
 
 [project.optional-dependencies]

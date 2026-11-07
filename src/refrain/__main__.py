@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from threading import Event
 
-from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup
+from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup, run_test_qr
 from .installation import (
     InitializationError,
     InstallationOperationError,
@@ -22,6 +22,7 @@ from .installation import (
     reset_installation,
 )
 from .paths import ApplicationPathError, resolve_application_paths
+from .qr_diagnostic import QRCalibrationError, QRCalibrationParameters, validate_qr_calibration_parameters
 
 _SERVING_BACKENDS = {"window", "image-server"}
 _LOGGER = logging.getLogger(__name__)
@@ -65,8 +66,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Present Refrain quotations and manage its installation.",
     )
     parser.add_argument("--config", help="application configuration YAML file")
-    parser.add_argument("--state", help="persistent state file (ignored in demo and --show-entry modes)")
-    parser.add_argument("--artifacts", help="prepared image directory (ignored in demo and --show-entry modes)")
+    parser.add_argument("--state", help="persistent state file (ignored in demo and diagnostic modes)")
+    parser.add_argument("--artifacts", help="prepared image directory (ignored in demo and diagnostic modes)")
     parser.add_argument(
         "--debug-layout",
         action="store_true",
@@ -76,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--history",
         help=(
             "JSONL global-history file (default: global-history.jsonl beside state; "
-            "ignored in demo and --show-entry modes)"
+            "ignored in demo and diagnostic modes)"
         ),
     )
     parser.add_argument(
@@ -116,8 +117,60 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="ENTRY_ID",
         help="render and publish one content entry without changing operational state",
     )
+    modes.add_argument(
+        "--test-qr", action="store_true", help="publish a QR calibration image without changing daily state"
+    )
+    parser.add_argument("--qr-payload", help="text or URL encoded into the QR code (default: https://example.com/)")
+    parser.add_argument(
+        "--qr-error-correction",
+        choices=("L", "M", "Q", "H"),
+        help="QR error-correction level (default: M)",
+    )
+    parser.add_argument("--qr-module-size", type=int, help="QR module size in pixels (default: 4)")
+    parser.add_argument("--qr-quiet-zone", type=int, help="quiet-zone width in modules (default: 4)")
+    parser.add_argument("--qr-right-offset", type=int, help="right edge offset in pixels (default: 40)")
+    parser.add_argument("--qr-bottom-offset", type=int, help="bottom edge offset in pixels (default: 40)")
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    qr_options = (
+        ("--qr-payload", arguments.qr_payload),
+        ("--qr-error-correction", arguments.qr_error_correction),
+        ("--qr-module-size", arguments.qr_module_size),
+        ("--qr-quiet-zone", arguments.qr_quiet_zone),
+        ("--qr-right-offset", arguments.qr_right_offset),
+        ("--qr-bottom-offset", arguments.qr_bottom_offset),
+    )
+    specified_qr_options = [option for option, value in qr_options if value is not None]
+    if not arguments.test_qr and specified_qr_options:
+        parser.error("QR-specific options are only available with --test-qr: " + ", ".join(specified_qr_options))
+    default_qr_parameters = QRCalibrationParameters()
+    qr_parameters = QRCalibrationParameters(
+        payload=arguments.qr_payload if arguments.qr_payload is not None else default_qr_parameters.payload,
+        error_correction=(
+            arguments.qr_error_correction
+            if arguments.qr_error_correction is not None
+            else default_qr_parameters.error_correction
+        ),
+        module_size=(
+            arguments.qr_module_size if arguments.qr_module_size is not None else default_qr_parameters.module_size
+        ),
+        quiet_zone=(
+            arguments.qr_quiet_zone if arguments.qr_quiet_zone is not None else default_qr_parameters.quiet_zone
+        ),
+        right_offset=(
+            arguments.qr_right_offset if arguments.qr_right_offset is not None else default_qr_parameters.right_offset
+        ),
+        bottom_offset=(
+            arguments.qr_bottom_offset
+            if arguments.qr_bottom_offset is not None
+            else default_qr_parameters.bottom_offset
+        ),
+    )
+    if arguments.test_qr:
+        try:
+            validate_qr_calibration_parameters(qr_parameters)
+        except QRCalibrationError as error:
+            parser.error(str(error))
     try:
         if arguments.initialize:
             overrides = [
@@ -193,7 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = resolve_application_paths()
         config_path = arguments.config if arguments.config is not None else paths.config_file
         config_absolute = Path(config_path).absolute()
-        if arguments.demo is None and arguments.show_entry is None:
+        if arguments.demo is None and arguments.show_entry is None and not arguments.test_qr:
             state_path = arguments.state if arguments.state is not None else paths.state_file
             artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
             history_path = arguments.history
@@ -213,7 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_absolute,
                 (
                     "diagnostic presentation does not use production persistence"
-                    if arguments.show_entry is not None
+                    if arguments.show_entry is not None or arguments.test_qr
                     else "demo persistence uses isolated temporary storage"
                 ),
             )
@@ -241,6 +294,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.show_entry is not None:
             output = run_show_entry(config_path, arguments.show_entry, debug_layout=arguments.debug_layout)
             print(f"Diagnostic image saved to {output}")
+            return 0
+        elif arguments.test_qr:
+            output, _ = run_test_qr(config_path, qr_parameters)
+            print(f"QR diagnostic image saved to {output}")
             return 0
         else:
             shutdown = Event()

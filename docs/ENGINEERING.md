@@ -1284,6 +1284,10 @@ Use temporary configuration, content, output, and production-persistence paths t
 
 Verify that the PNG is created exclusively in the current working directory before backend publication and preserves the exact image mode, dimensions, and pixels given to every backend. Cover existing-file refusal, output-write errors, partial and complete publication failures, per-backend reporting, backend cleanup, and preservation of the PNG after publication failure. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
 
+### QR calibration diagnostic tests
+
+Test QR generation at each supported error-correction level, automatic version selection, exact integer-pixel module rendering, quiet-zone and footprint geometry, and placement boundaries. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
+
 ### Core test coverage
 
 Automated testing should cover:

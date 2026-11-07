@@ -294,6 +294,24 @@ The command does not read or modify operational state, global history, or prepar
 
 The command exits after publication attempts and backend cleanup. Physical e-paper displays normally retain their image, but `window` and `image-server` are process-scoped: their presentation is no longer accessible after Refrain exits. No serving-backend hold mode is provided by `--show-entry`.
 
+### QR display calibration
+
+Use the standalone `--test-qr` mode to generate a QR calibration image and publish it to the configured display backends. It does not load the content library or access daily selection, scheduling, state, history, or prepared-image artifacts. It is independent of `--debug-layout`; the image contains no literary layout outlines.
+
+```sh
+python -m refrain --test-qr \
+  --qr-payload https://example.com/refrain/calibration \
+  --qr-error-correction M \
+  --qr-module-size 5 \
+  --qr-quiet-zone 4 \
+  --qr-right-offset 40 \
+  --qr-bottom-offset 40
+```
+
+`--qr-payload` defaults to `https://example.com/`. `--qr-error-correction` accepts `L`, `M`, `Q`, or `H` and defaults to `M`; higher correction levels add redundancy and may increase the QR version needed for the same payload. `--qr-module-size` defaults to 4 pixels and controls the exact square pixel size of each symbol module. `--qr-quiet-zone` defaults to 4 modules and sets the white margin around the symbol. Reducing the quiet zone below the conventional four modules may adversely affect scanning reliability. `--qr-right-offset` and `--qr-bottom-offset` default to 40 pixels and measure the white space from the corresponding canvas edge to the outer edge of the complete symbol-and-quiet-zone footprint. All QR-specific options require `--test-qr`; the full footprint must fit without resizing or cropping.
+
+The complete 1600 × 1200 RGB image is saved as `refrain-qr-test.png` in the current working directory. A successful later invocation atomically replaces that file. The exact saved image is submitted to every configured display backend; a backend failure is reported and the diagnostic PNG is retained. The command reports the payload, resolved QR geometry, offsets, bounds, and output dimensions. Successful generation or display does not guarantee reliable scanning on the physical display; scanning reliability must be assessed through physical calibration tests.
+
 To preview the information view without starting display backends or the application lifecycle:
 
 ```powershell
