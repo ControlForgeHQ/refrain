@@ -90,9 +90,7 @@ Do not add an elaborate recovery framework when a simple, bounded retry or resta
 
 ### Respect resource-constrained hardware
 
-The initial development target is the Raspberry Pi 3 B+.
-
-The Raspberry Pi Zero 2 W is a candidate for compact deployment.
+The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1.
 
 Favor implementations that can operate within modest memory, CPU, and storage budgets.
 
@@ -125,11 +123,15 @@ Each project document has one authoritative responsibility.
 
 ### README.md
 
-The project README is the user-facing entry point.
+The root `README.md` is a concise, user-facing introduction to Refrain.
 
-It describes what Refrain does, its current capabilities, installation, basic usage, and links to deeper documentation.
+It describes the project's purpose, general direction, development status, and where interested users can follow progress.
 
-It does not own runtime architecture or future release requirements.
+It is not an installation guide, configuration reference, technical manual, feature inventory, or implementation history.
+
+Routine development work must not trigger updates to the root README. It is changed only when the project maintainer explicitly requests a README change.
+
+Technical information belongs in its authoritative project document. Implementation details and validation outcomes belong in the relevant issues and pull requests.
 
 ### docs/ROADMAP.md
 
@@ -192,6 +194,8 @@ When a change affects documentation:
 4. Replace duplicated requirements with references where appropriate.
 
 A normal change should require edits to as few authoritative documents as practical.
+
+Routine development work must not trigger updates to the root README; update the authoritative technical document instead.
 
 ## Python development
 

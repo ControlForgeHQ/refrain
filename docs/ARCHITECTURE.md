@@ -74,9 +74,7 @@ The initial deployment targets:
 - Waveshare 13.3-inch e-Paper HAT+ (E);
 - 1600 × 1200 display resolution.
 
-The Raspberry Pi 3 B+ is the initial development and hardware-validation platform.
-
-The Raspberry Pi Zero 2 W is a candidate for compact deployments, subject to successful hardware integration and resource validation.
+The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1 and the initial hardware-validation platform.
 
 The application must not depend on performance, memory capacity, peripheral availability, or other characteristics exclusive to the Raspberry Pi 3 B+.
 
@@ -94,7 +92,7 @@ The display backend owns hardware-specific integration, including the Waveshare 
 
 Support for additional display hardware is not an initial product requirement, although display resolution, supported color capabilities, and hardware-specific operations must remain isolated from core content and scheduling logic.
 
-The runtime should avoid unnecessary memory use and background processing, particularly to preserve compatibility with resource-constrained Raspberry Pi models.
+The runtime should avoid unnecessary memory use and background processing. Quality decisions for infrequent daily image preparation must not be rejected solely because they require additional processing.
 
 
 ## Terminology
@@ -620,10 +618,10 @@ For each new daily selection:
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
 13. Resolve the decoration using the entry's preference or the effective default decoration pool.
-14. If the selected decoration is tintable, resolve its colour from the entry preference, decoration preference, effective decoration-colour pool, or built-in `black` fallback.
+14. If at least one selected decoration layer is effectively tintable and a tint is selected, resolve one decoration colour from the entry preference, decoration preference, effective decoration-colour pool, or built-in `black` fallback.
 15. Select one font bundle using the entry preference, selected decoration preference, or effective default font pool, in that precedence order; resolve and commit each role's face within that bundle.
 16. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
-17. Resolve the effective presentation region from the selected decoration or the global presentation region.
+17. Resolve output geometry, effective literary insets, QR enablement, ordered layer conditions, and all required rendering transformations.
 18. Prepare the complete daily snapshot.
 19. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
 20. Record the committed selection in global history on a best-effort basis.
@@ -652,7 +650,10 @@ Refrain maintains sufficient durable operational state to preserve:
 - the display date associated with that selection;
 - the selected quotation's original text;
 - the resolved presentation metadata and font identifier;
-- the resolved QR URL, version, error-correction level, module size, quiet zone, and placement offsets;
+- configured output dimensions and effective literary geometry;
+- selected visual resource identifiers and colors;
+- resolved QR enablement and, when enabled, the URL, version, error-correction level, integer module size, quiet zone, and final-resolution placement offsets;
+- effective decoration layer order, conditions, rendering methods, and transformation geometry;
 - the committed decoration tinting decision and, when enabled, palette identifier and resolved RGB value;
 - the reveal schedule applicable to the selection;
 - relevant layout configuration;
@@ -672,7 +673,9 @@ The daily snapshot contains a complete copy of the selected quotation and the co
 
 It includes only the selected quotation from its containing content entry, not the entry's other quotations.
 
-The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering. It also contains the resolved QR URL and all QR generation and placement parameters required to reproduce the mandatory literary-presentation QR code.
+The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering. New snapshots also preserve output dimensions, effective literary insets, resolved QR enablement and generation parameters, and the effective ordered decoration layers with their conditions, rendering methods, and transformation geometry.
+
+New snapshots use format version 7 and contain resource identifiers and resolved scalar parameters, not PNG bytes. Existing version-6 snapshots remain legacy snapshots: valid prepared artifacts may be reused unchanged, and regeneration must honor their committed dimensions, normalized presentation region, QR parameters, and single-image decoration semantics. Do not convert an old normalized region to insets or infer legacy QR behavior from current preferences. Earlier unsupported snapshot versions retain their existing handling; do not silently replace or reinterpret them.
 
 Font, background, decoration, and applicable decoration-colour selection occurs after quotation selection and before the daily snapshot is committed.
 
@@ -680,7 +683,7 @@ An entry's explicit resource preferences take precedence according to the select
 
 The selected resource identifiers and effective presentation settings remain fixed throughout the committed display day.
 
-The decoration tinting decision is also fixed in the snapshot. For tintable decorations, the selected palette identifier and RGB value are committed, so later palette or manifest changes cannot recolour the presentation. Non-tintable or absent decorations commit tinting disabled without selecting a colour.
+The decoration tinting decision is also fixed in the snapshot. The effective tintability of each layer and the single selected decoration tint color are committed, so later palette or manifest changes cannot recolour the presentation. If no tint is selected, effectively tintable layers retain their authored colors.
 
 The snapshot contains resolved presentation values rather than references to mutable content-library entries or configuration that may subsequently change.
 
@@ -688,7 +691,7 @@ The snapshot does not contain font or image resource bytes, filesystem paths, or
 
 The snapshot is immutable after commitment.
 
-The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. Regeneration preserves the selected content, reveal schedule, effective presentation region, and committed resource identifiers.
+The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. Regeneration preserves the selected content, reveal schedule, output dimensions, effective literary geometry, resolved QR policy, ordered decoration layers, transformations, and committed resource identifiers.
 
 Presentation resources are resolved at preparation time. Missing fonts use the documented bundled-font fallback policy. Missing background or decoration images use the documented visual-resource recovery policy.
 
@@ -971,45 +974,58 @@ Rendered output must be testable and inspectable without Raspberry Pi display ha
 
 ### View composition
 
-Refrain separates view-specific background composition from literary content rendering.
+Daily-image preparation separates graphical composition from the shared literary renderer. The renderer owns the typography, fitting, positioning, and drawing of the quotation and its optional source and attribution within the resolved literary rectangle. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
 
-A background generator produces a base image containing the visual elements owned by that view, including background imagery, decorative elements, branding, diagnostic information, and other content outside the literary composition.
+#### Output and working canvases
 
-The shared quotation renderer accepts a background image and a literary composition consisting of:
+Output dimensions are configured once per application instance. All configured display backends receive the same complete final-resolution image; a backend does not select or resize an independent resolution. A backend that cannot accept the configured dimensions reports that incompatibility. The Waveshare 13.3-inch HAT+ (E) uses its native 1600 × 1200 landscape or 1200 × 1600 portrait dimensions.
 
-- a required quotation;
-- optional source information;
-- optional attribution information.
+The initial supported aspect ratios are 4:3, 16:9, and 16:10, within a maximum 3840 × 2400 raster envelope. The reference canvas is 1600 pixels wide, with height derived from the selected ratio: 1200, 900, or 1000 pixels respectively. The reference canvas expresses design measurements; it is not an output or working image.
 
-The renderer owns the typography, fitting, positioning, and drawing of all three fields within an explicitly supplied presentation region.
+The working canvas is the largest integer-sized canvas within the envelope that preserves the configured aspect ratio. Its dimensions are 3200 × 2400 for 4:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. Raster background and decoration composition takes place at working-canvas resolution, then is reduced to final output dimensions when necessary. Do not upscale a raster resource beyond what its destination geometry requires.
 
-The renderer is independent of the purpose of the background image. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
+Reference measurements are mapped with one uniform scale for each resolved canvas. Convert each nonnegative measurement to the nearest integer pixel, with exact half-pixel values rounded upward. Compute opposing edges independently, then derive the remaining width or height by subtraction so the resolved rectangle has no rounding gap. Reject non-finite, negative, out-of-range, or degenerate geometry before rendering.
 
-For normal daily presentations, preparation resolves the selected background and decoration before invoking the shared renderer. When the snapshot commits tinting as enabled, preparation replaces the selected decoration's RGB channels with the committed RGB value while preserving its original alpha channel. It does not derive opacity from source RGB values or modify the source asset. Background and decoration selection does not modify the selected quotation or its repetition identity.
+#### Literary presentation geometry
 
-The complete daily image is composed in this order:
+The literary region is defined by four independent reference-canvas insets: `left`, `right`, `top`, and `bottom`. Each inset is measured inward from its corresponding edge and is multiplied by the uniform reference-to-canvas scale. The effective rectangle is the area remaining after those resolved insets are removed.
 
-1. Create a paper-white base image.
-2. Composite the selected background image, if any.
-3. Composite the selected decoration image, if any.
-4. Render the literary composition within the effective presentation region.
-5. Composite one QR code, including its opaque-white quiet zone, over the complete image.
+Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the committed presentation. The resulting rectangle must have positive width and height and contain the complete literary composition. It remains unchanged across every reveal stage.
 
-QR encoding and rasterization are separate from literary typography and fitting. The application supplies fixed initial defaults, while the internal QR-generation interface accepts an explicit URL, version, error-correction level, module size, quiet-zone width, right and bottom offsets, and destination dimensions. The resolved inputs are committed with each new daily snapshot and are used unchanged for every reveal stage and any later image regeneration.
+Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
 
-QR placement uses the complete symbol-and-quiet-zone footprint measured from the right and bottom image edges. Preparation fails if the footprint does not fit; it does not resize, crop, shift, or reposition the code. The quiet zone is solid white, and the QR code is composited after both the literary composition and decoration. Preparation does not reserve literary space or validate overlap. Authored presentation regions and decoration artwork are responsible for avoiding unwanted overlap.
+#### Raster composition pipeline
 
-Backgrounds and decorations are distinct resources. A background supplies the underlying image, while a decoration supplies a transparent overlay that may define an appropriate presentation region and an optional preferred background.
+Prepare each literary reveal-stage image in this order:
 
-The effective presentation region comes from the selected decoration when that decoration defines an override. Otherwise, it comes from `layout.presentation_region`.
+1. Resolve configured output geometry and its working canvas.
+2. Compose a paper-white base, the selected background, and selected decoration PNG layers at working resolution, processing layers in manifest order.
+3. Downsample the graphical composition to final output dimensions.
+4. Fit and render all literary text at final resolution using the stable effective rectangle.
+5. When QR generation is enabled, generate and composite the QR code at final resolution.
+6. Persist the complete prepared reveal-stage images and publish them through the existing backend architecture.
 
-The resolved region applies to the complete literary composition and remains fixed throughout every reveal stage of the committed selection.
+Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. The same geometry and graphical composition are used for every reveal stage. Other views, including the information view, retain their separate composition and QR behavior.
 
-The same composed background and resolved literary layout are used to prepare all reveal stages. Backgrounds and decorations are not independently selected or repositioned between stages.
+#### Decoration layers
 
-Other views, including the information view, may provide their own backgrounds and presentation regions without using the daily background or decoration pools.
+A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The initial methods are `contain`, which aspect-preservingly scales the image to fit the working canvas, and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. No other methods or independent positioning are defined.
 
-The mandatory QR code applies only to literary presentations, including `--show-entry` for ordinary content entries. The startup information view and `--show-entry information` remain independent and do not receive a QR code.
+For `nine-slice`, source dimensions are mapped into the reference canvas using one uniform contain scale; that same uniform reference-space scale preserves corner proportions on the working canvas. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
+
+Place the four corner regions at the corresponding destination canvas corners without changing their proportions. Horizontal edges preserve their thickness and adapt along their horizontal length; vertical edges preserve their thickness and adapt along their vertical length. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
+
+Use the deterministic reference-space scaling and nearest-integer, half-up rounding rule defined above for all slice boundaries and corner dimensions. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
+
+#### Decoration tinting
+
+Decoration-wide and per-layer `tintable` values both default to `true`. A layer is tintable only when `decoration.tintable AND layer.tintable` is true. This permission does not require a tint to be selected. If tinting is selected, one effective decoration tint color is committed and applied only to effectively tintable layers; do not select separate colors per layer. Preserve each source pixel's alpha, including antialiasing and transparency.
+
+#### QR generation and conditional artwork
+
+The presentation-level QR policy defaults to enabled and may be disabled. Effective enablement is the logical AND of that policy and the selected decoration's `qr_ready` value; omission of `qr_ready` means `true`. A selected decoration with `qr_ready: false` therefore suppresses QR generation even when the presentation policy enables it. Resolve and commit effective QR enablement before image preparation rather than inferring it from available artwork. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, enabled-only, or disabled-only respectively. Conditions do not change layer order.
+
+When enabled, generate the QR symbol at final output resolution with square integer-pixel modules and its complete quiet zone. Composite it without subsequent resize or resampling. Resolve its dimensions and offsets from final output geometry and commit the resolved generation parameters. Do not automatically modify literary insets or image slicing to accommodate QR placement; QR overlap is not automatically avoided. The standalone information view remains outside literary QR behavior.
 
 The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
 
@@ -1037,7 +1053,7 @@ For each selected quotation, Refrain resolves the decoration first:
 2. An explicit decoration value of `"none"` suppresses decoration selection.
 3. Otherwise, select from the effective default decoration pool.
 
-The selected decoration may provide a preferred font, a preferred background, and an effective presentation-region override.
+The selected decoration may provide preferred font and background values and a complete literary-inset override.
 
 Exactly one font bundle is selected using this precedence:
 
@@ -1060,7 +1076,7 @@ Invalid decoration registrations must not make unrelated fonts, backgrounds, or 
 
 Each effective background and decoration default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
 
-The selected font, background, and decoration identifiers and effective presentation region are committed with the daily presentation. They are not part of quotation identity or repetition history.
+The selected font, background, and decoration identifiers, output dimensions, effective literary insets, resolved QR enablement, ordered layers, and rendering transformations are committed with the daily presentation. They are not part of quotation identity or repetition history.
 
 These selections remain fixed throughout the committed display day, including after restarts.
 
@@ -1072,7 +1088,7 @@ The registries, valid identifiers, image requirements, pool configuration, and c
 
 ### Background and decoration recovery
 
-The committed daily snapshot identifies the selected background and decoration and contains the effective presentation region.
+The committed daily snapshot identifies the selected background and decoration, contains the effective literary insets and output dimensions, and records the ordered decoration layers and resolved transformation geometry.
 
 The snapshot does not embed background or decoration image bytes, filesystem paths, or content hashes.
 
@@ -1082,13 +1098,13 @@ When prepared images must be regenerated, Refrain uses the committed identifiers
 
 If a committed background becomes unavailable, preparation uses the paper-white base with an appropriate diagnostic. It does not randomly select another background.
 
-If a committed decoration becomes unavailable, preparation omits the decoration with an appropriate diagnostic. It retains the committed effective presentation region rather than recalculating it from the current decoration registry or global configuration.
+If a committed decoration or one of its required layer images becomes unavailable, preparation omits that decoration with an appropriate diagnostic. It retains the committed effective literary insets rather than recalculating them from the current decoration registry or global configuration.
 
 The committed tinting decision and RGB value are used during regeneration; preparation does not recalculate tintability or colour from the current manifest or palette. Snapshots predating tint metadata preserve legacy untinted rendering, including when a current decoration manifest marks the resource tintable.
 
 The same rule applies when a decoration's preferred background was selected and subsequently becomes unavailable.
 
-Background source dimensions and aspect ratios are independent of the fixed 1600 × 1200 presentation canvas. Preparation applies deterministic, aspect-preserving centred cover scaling and equal-edge cropping, then composites the result over paper-white while preserving source alpha. Decorations use deterministic aspect-preserving centred contain scaling; the full overlay fits within the canvas with transparent margins. Neither policy stretches artwork. Decoration presentation-region metadata remains authored in normalized destination-canvas coordinates and is not transformed by scaling.
+Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation applies deterministic, aspect-preserving centered cover scaling and equal-edge cropping at working resolution, then composites the result over paper-white while preserving source alpha. Decoration layers use the configured rendering method at working resolution. Their slice coordinates and transformations do not determine the literary insets.
 
 A recoverable missing image resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required snapshot data or an unrenderable literary composition, remain errors.
 
@@ -1164,7 +1180,7 @@ The design prioritizes:
 - a predominantly paper-white background;
 - dark text with optional color accents.
 
-The layout defines a bounded rectangular presentation region containing the complete literary composition: the quotation and its optional source and attribution.
+The effective literary rectangle derived from the four presentation insets contains the complete literary composition: the quotation and its optional source and attribution.
 
 The shared quotation renderer determines the arrangement of all present fields within that region.
 
@@ -1192,7 +1208,7 @@ The byline retains its applicable leading dash and separator punctuation through
 
 Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
-The presentation region is configurable using resolution-independent coordinates.
+The presentation insets are configured in reference-canvas pixels and uniformly scaled to resolved canvas dimensions.
 
 Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
@@ -1245,7 +1261,7 @@ Font selection is independent for each daily selection. Fonts do not have repeti
 
 The selected decoration is resolved before font selection. The selected font identifier is resolved before daily snapshot commitment.
 
-The selected bundle identifier and all three effective face identifiers are recorded in the committed snapshot before preparation. Font contents, paths, and font-content hashes are not persisted in operational state. Existing format-5 snapshots without face metadata remain valid and continue to render every role with `regular`; no state migration or rewrite is needed. This absence is not interpreted as a request to apply newly configured face preferences.
+The selected bundle identifier and all three effective face identifiers are recorded in the committed snapshot before preparation. Font contents, paths, and font-content hashes are not persisted in operational state. Existing format-6 snapshots without face metadata remain valid and continue to render every role with `regular`; no state migration or rewrite is needed. This absence is not interpreted as a request to apply newly configured face preferences.
 
 Image preparation resolves the committed bundle and face identifiers using available font resources. It does not reconsider the original entry, decoration, bundle-manifest, or global preferences.
 
@@ -1261,7 +1277,7 @@ Font registration, default-pool validation, and configuration fallback rules are
 
 The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage. Each role uses its committed face while the source and attribution remain components of the existing unified byline.
 
-The effective presentation region, resolved from the selected decoration or global configuration and recorded in the committed snapshot, remains unchanged throughout the committed selection.
+The effective literary rectangle, resolved from the selected decoration's insets or global insets and recorded in the committed snapshot, remains unchanged throughout the committed selection.
 
 The resolved layout establishes the positions, role-specific typography, wrapping, and spacing of all present fields. Byline measurement and baseline placement account for each face's metrics, advances, and glyph bounds. The prefix and separator use the quotation face, with fixed positions determined from the complete composition.
 
@@ -1291,7 +1307,7 @@ Additional configurable concealment styles are not required.
 
 All reveal stages use the same resolved composition layout.
 
-Content that cannot be rendered legibly within the supported presentation region must be handled explicitly rather than silently clipped, truncated, or omitted.
+Content that cannot be rendered legibly within the supported literary rectangle must be handled explicitly rather than silently clipped, truncated, or omitted.
 
 ### Committed daily presentation data
 
@@ -1301,9 +1317,14 @@ A daily snapshot must contain the selected quotation, its presentation metadata,
 
 `layout` contains:
 
-- `image_size`: a two-item sequence of positive integer pixel dimensions in width, height order;
-- `presentation_region`: the effective normalized rectangle with `x`, `y`, `width`, and `height`, including any selected decoration override;
+- `output_size`: configured final dimensions as positive integer width and height;
+- `working_size`: the resolved high-resolution composition dimensions;
+- `reference_size`: the reference-canvas dimensions associated with the selected aspect ratio;
+- `presentation_insets`: the four resolved reference-pixel inset values;
+- `literary_region`: the effective integer-pixel rectangle at final output resolution;
 - `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
+
+The committed presentation metadata also contains effective QR enablement and, when enabled, its complete generation and placement parameters. It records the effective ordered decoration layers, layer conditions, rendering methods, source identifiers, source-pixel slice boundaries, and resolved transformation geometry. Snapshot format 7 includes these values in its canonical fingerprint; dimensions, geometry, conditions, and transformations therefore cannot be changed by later configuration or manifest edits.
 
 The snapshot also preserves the resolved background and decoration identifiers. The reserved value `"none"` represents the absence of the corresponding resource.
 
@@ -1348,7 +1369,7 @@ Missing or invalid prepared images may be regenerated without access to the orig
 
 Regeneration resolves the committed font bundle and role-face identifiers through the available font registry. Missing role faces use the resolved bundle's regular face; a missing bundle uses the deterministic bundled fallback policy and applies committed face identifiers against that bundle. Neither recovery path changes the snapshot or consults current preferences.
 
-Committed background and decoration identifiers are resolved through the available resource registries. Missing or unusable image resources are omitted according to the background and decoration recovery policy. Regeneration retains the committed effective presentation region and does not select replacement backgrounds or decorations.
+Committed background and decoration identifiers are resolved through the available resource registries. Missing or unusable image resources are omitted according to the background and decoration recovery policy. Regeneration retains the committed output dimensions, effective literary geometry, QR decision, and ordered layer transformations; it does not select replacement resources or derive new decisions from current preferences.
 
 Regeneration uses the committed text-color RGB value without consulting the current palette. If both text-color fields are absent, it preserves the historical renderer behavior and attribution-color distinction; it does not infer a color from current configuration.
 
@@ -1405,7 +1426,7 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare backend accepts complete RGB 1200 × 1600 portrait and 1600 × 1200 landscape images; images with alpha or palette transparency are unsupported. It converts the complete image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare backend accepts complete RGB images at its native 1200 × 1600 portrait and 1600 × 1200 landscape resolutions; images with alpha or palette transparency are unsupported. It rejects other dimensions rather than independently rescaling a backend image. It converts the complete image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
 
@@ -1561,7 +1582,7 @@ Configuration and content remain user-owned inputs. Operational state and global
 
 `--reset` and `--purge` are separate interactive operations for the standard per-user installation and must be run while Refrain is stopped. Reset removes the standard operational-state file, global-history records and rotations, and generated cache contents while preserving configuration, content, all user assets, and installation directories. Purge removes the Refrain-owned standard configuration, operational, and cache directory trees, including configuration, content, and assets stored beneath the standard configuration directory; it does not follow configured paths or remove shared application-data parents. Neither operation accepts runtime path overrides or starts the application lifecycle. Their deletion checks and confirmation requirements are described in [engineering guidance](ENGINEERING.md#installation-and-destructive-operations).
 
-The platform-specific locations and command-line usage are documented in the [README](../README.md#running-refrain).
+Platform paths, installation, and service operation are documented in [engineering guidance](ENGINEERING.md#deployment-and-service-operation); public configuration is specified in [the content-format document](CONTENT_FORMAT.md).
 
 ### Startup
 
@@ -1664,7 +1685,7 @@ After saving the PNG, the mode publishes one image through the existing display 
 
 ### Standalone QR calibration
 
-The optional `--test-qr` mode generates a dedicated 1600 × 1200 RGB calibration image, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
+The optional `--test-qr` mode generates a final-resolution RGB calibration image using the configured output dimensions, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
 
 The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. The image is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output, and the same image is published through the existing coordinator to every configured backend. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
 

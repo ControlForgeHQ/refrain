@@ -73,22 +73,27 @@ The first release should be useful in normal household operation without dependi
 
 ### Visual presentation
 
-- Produce complete 1600 × 1200 presentation images.
+- Configure one presentation output resolution per application instance.
+- Support 4:3, 16:9, and 16:10 output aspect ratios within a maximum 3840 × 2400 reference raster envelope.
+- Compose raster artwork at high resolution, then render literary text and QR output at final output resolution.
 - Provide one attractive, typography-first default layout.
 - Separate view-specific background composition from shared quotation rendering.
 - Support meaningful typography and spacing configuration.
 - Preserve the primary quotation's positioning across reveal stages.
 - Reserve layout space for information revealed later.
+- Configure independent literary presentation insets for each edge.
 - Support named, configurable colors for the complete literary composition while retaining a black-text default.
 - Provide a small bundled collection of subtle background images, including paper-like textures.
 - Discover bundled and user-supplied backgrounds, use a configurable default background pool, and support explicit content-entry background preferences.
-- Provide a small bundled collection of restrained decorative overlays, including borders and flourishes.
+- Provide ordered multi-image decoration compositions, including restrained borders and flourishes.
 - Discover bundled and user-supplied decoration packages, use a configurable default decoration pool, and support explicit content-entry decoration preferences.
-- Allow decorations to define an appropriate literary presentation region and optional preferred font, background, and literary text color.
-- Allow explicitly tintable decoration artwork to use shared-palette colours while preserving authored alpha.
+- Support adaptive nine-slice decoration artwork with stretching and centered cropping.
+- Allow decorations to define literary presentation insets and optional preferred font, background, and literary text color.
+- Allow decoration-wide and per-layer tinting with shared-palette colours while preserving authored alpha.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
-- Include one mandatory, fixed-default QR code linking to the Refrain repository in every literary presentation, with its rendering inputs committed for daily-image recovery.
+- Support QR-enabled and QR-free literary presentations, including artwork conditional on QR presence.
+- Generate enabled QR codes at final resolution with integer-pixel modules and a complete quiet zone.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
@@ -118,10 +123,11 @@ The first release should be useful in normal household operation without dependi
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
 - Provide interactive, state-isolated visual inspection of discovered decorations with short and long literary compositions.
-- Validate QR encoding, exact raster geometry, placement, reveal-stage consistency, and prepared-image recovery without display hardware.
+- Validate resolution-aware geometry, artwork transformations, and visual diagnostics without display hardware.
+- Validate QR encoding, exact final-resolution raster geometry, placement, reveal-stage consistency, and prepared-image recovery without display hardware.
 - Validate bundled and user-supplied background and decoration resources, selection precedence, and recovery behaviour.
-- Verify that decoration-defined presentation regions preserve complete literary content without overlap or clipping.
-- Validate physical display behaviour on the target hardware, including selected backgrounds, decorations, typography, and logos.
+- Verify that independently configured presentation insets preserve complete literary content without clipping.
+- Validate physical display behaviour on the Waveshare e-paper hardware and representative non-e-paper output.
 - Validate simultaneous backend operation, independent updates, failure isolation, and recovery.
 - Document installation, configuration, content creation, and ordinary operation.
 
@@ -284,19 +290,14 @@ Each should be evaluated against demonstrated user needs and the added maintenan
 
 Development should proceed in the following order:
 
-1. Establish repository documentation, engineering standards, and contributor workflow.
-2. Define and validate the initial content and configuration contracts.
-3. Implement and test content loading, quotation eligibility, and selection policy.
-4. Implement and test persistent histories, daily snapshots, and atomic selection commitment.
-5. Implement and test reveal scheduling and hardware-independent image preparation.
-6. Implement and test persisted presentation artifacts and recovery behaviour.
-7. Integrate the physical e-paper display and establish a functional hardware baseline.
-8. Implement and test discovered visual assets, self-contained manifests, configurable pools, and content-entry preferences.
-9. Refine typography and adaptive decoration artwork for the supported display aspect ratio; validate the completed graphical presentation on physical e-paper.
-10. Establish reliable unattended operation on the target Raspberry Pi.
-11. Complete Version 0.1 validation, documentation, and release.
-12. Proceed to the companion web presentation.
-13. Evaluate later integrations and public publishing independently.
+1. Establish repository documentation, engineering standards, contributor workflow, and the resolution-independent architecture and public interfaces.
+2. Implement and test the rendering pipeline, configurable output geometry, and ordered decoration compositions.
+3. Implement resolution-aware visual diagnostics and hardware-independent rendering validation.
+4. Refine bundled artwork for the supported aspect ratios and validate on e-paper and representative non-e-paper output.
+5. Establish reliable unattended operation on the target Raspberry Pi.
+6. Complete Version 0.1 validation, documentation, and release.
+7. Proceed to the companion web presentation.
+8. Evaluate later integrations and public publishing independently.
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
 
