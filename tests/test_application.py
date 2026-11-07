@@ -650,16 +650,88 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert len(png_files(workspace.artifacts)) == 3
 
 
-def test_one_shot_startup_presents_information_before_daily_image(workspace: Workspace) -> None:
+def test_debug_layout_only_changes_published_copy_of_cached_image(workspace: Workspace) -> None:
+    ordinary(workspace)
+    _, baseline_display = workspace.run(at(10, 7))
+    cached = {path: path.read_bytes() for path in png_files(workspace.artifacts)}
+    committed = workspace.load()
+
+    _, debug_display = workspace.run(at(10, 7), debug_layout=True)
+
+    assert baseline_display.images[0].getpixel((160, 300)) == (255, 255, 255)
+    assert debug_display.images[0].getpixel((160, 300)) == (127, 127, 127)
+    assert {path: path.read_bytes() for path in png_files(workspace.artifacts)} == cached
+    assert workspace.load() == committed
+    for display in (baseline_display, debug_display):
+        for image in display.images:
+            image.close()
+
+
+def test_debug_layout_uses_committed_region_after_configuration_and_manifest_change(workspace: Workspace) -> None:
+    package = workspace.root / "assets" / "decorations" / "custom"
+    package.mkdir(parents=True)
+    Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)).save(package / "overlay.png")
+    write_decoration_manifest(
+        package,
+        "custom",
+        presentation_region={"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+    )
+    ordinary(workspace, extra='decoration: "custom"\n')
+    _, baseline_display = workspace.run(at(10, 7))
+    committed = workspace.load()
+
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace(
+            "x: 0.1, y: 0.15, width: 0.8, height: 0.55",
+            "x: 0.3, y: 0.4, width: 0.4, height: 0.3",
+        ),
+        encoding="utf-8",
+    )
+    write_decoration_manifest(
+        package,
+        "custom",
+        presentation_region={"x": 0.4, "y": 0.5, "width": 0.5, "height": 0.4},
+    )
+    _, debug_display = workspace.run(at(10, 7), debug_layout=True)
+
+    assert committed.snapshot.layout["presentation_region"] == {
+        "x": 0.2,
+        "y": 0.3,
+        "width": 0.6,
+        "height": 0.4,
+    }
+    assert baseline_display.images[0].getpixel((320, 450)) == (255, 255, 255)
+    assert debug_display.images[0].getpixel((320, 450)) == (127, 127, 127)
+    assert workspace.load() == committed
+    for display in (baseline_display, debug_display):
+        for image in display.images:
+            image.close()
+
+
+def test_one_shot_debug_layout_only_outlines_the_daily_presentation(workspace: Workspace, monkeypatch) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
+    prepared_information = []
+    prepare_information = application.prepare_information_view
 
-    result, display = workspace.run(at(10, 7))
+    def capture_information(configuration):
+        image = prepare_information(configuration)
+        prepared_information.append(image.copy())
+        return image
+
+    monkeypatch.setattr(application, "prepare_information_view", capture_information)
+
+    result, display = workspace.run(at(10, 7), debug_layout=True)
 
     assert result.state.revision == 1
     assert display.sizes == [(1600, 1200), (1600, 1200)]
     assert display.images[0].tobytes() != display.images[1].tobytes()
+    assert display.images[0].tobytes() == prepared_information[0].tobytes()
+    assert display.images[1].getpixel((160, 300)) == (127, 127, 127)
     assert len(workspace.history_records()) == 1
+    prepared_information[0].close()
+    for image in display.images:
+        image.close()
 
 
 def test_one_shot_startup_advances_reveal_due_during_information_interval(workspace: Workspace) -> None:
@@ -723,6 +795,7 @@ def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspa
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        debug_layout=True,
         now=at(10, 7),
         random_source=Random(1),
         backend_factory=factory,
@@ -731,6 +804,10 @@ def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspa
     assert result.state.revision == 1
     assert all(display.sizes == [(1600, 1200)] and display.closed == 1 for display in displays.values())
     assert displays["window"].images[0].tobytes() == displays["image-server"].images[0].tobytes()
+    assert displays["window"].images[0].getpixel((160, 300)) == (127, 127, 127)
+    for display in displays.values():
+        for image in display.images:
+            image.close()
 
 
 def test_history_write_failure_does_not_interrupt_startup_presentation(
@@ -1551,7 +1628,7 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
         clock.move(at(10, 12))
 
     clock = RuntimeClock(at(10, 7), [forbid_content_reload, at(10, 18), at(10, 19)])
-    stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
+    stages, initialized, display = run_continuously(workspace, clock, monkeypatch, debug_layout=True)
     assert stages == [(1, 0), (1, 1), (1, 2)]
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 3
@@ -1559,6 +1636,9 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert clock.deadlines[:2] == [at(10, 12), at(10, 18)]
     assert workspace.load().highest_reveal_stage == 2
     assert len(workspace.history_records()) == 1
+    assert [image.getpixel((160, 300)) for image in display.images] == [(127, 127, 127)] * 3
+    for image in display.images:
+        image.close()
 
 
 def test_continuous_http_publication_progresses_while_another_backend_is_busy(workspace) -> None:

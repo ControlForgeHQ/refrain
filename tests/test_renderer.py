@@ -15,7 +15,7 @@ from refrain import (
     layout_composition,
     render_reveal_stages,
 )
-from refrain.renderer import QuotationRenderError
+from refrain.renderer import QuotationRenderError, annotate_presentation_region
 
 
 @pytest.fixture
@@ -46,6 +46,52 @@ def make_layout(
 
 def render_layout(background: Image.Image, font: ResolvedFont, layout):
     return render_reveal_stages(background, font, layout, (CompositionVisibility(),))[0]
+
+
+@pytest.mark.parametrize(
+    ("background", "expected"),
+    [
+        ((255, 255, 255), (127, 127, 127)),
+        ((30, 50, 80), (15, 25, 40)),
+    ],
+)
+def test_presentation_region_outline_uses_renderer_bounds_and_alpha(
+    background: tuple[int, int, int], expected: tuple[int, int, int]
+) -> None:
+    image = Image.new("RGB", (10, 8), background)
+    original = image.copy()
+
+    annotated = annotate_presentation_region(image, PresentationRegion(0.23, 0.13, 0.4, 0.53))
+
+    assert annotated is not image
+    assert annotated.size == image.size
+    assert annotated.mode == image.mode
+    assert annotated.getpixel((2, 1)) == expected
+    assert annotated.getpixel((3, 2)) == expected
+    assert annotated.getpixel((5, 4)) == expected
+    assert annotated.getpixel((6, 5)) == expected
+    assert annotated.getpixel((4, 3)) == background
+    assert annotated.getpixel((1, 1)) == background
+    assert annotated.getpixel((7, 5)) == background
+    assert image.tobytes() == original.tobytes()
+
+
+@pytest.mark.parametrize(
+    ("region", "expected_pixel"),
+    [
+        (PresentationRegion(0, 0, 1, 1), (0, 0)),
+        (PresentationRegion(0.9, 0.875, 0.1, 0.125), (9, 7)),
+    ],
+)
+def test_presentation_region_outline_stays_inside_image_edges(
+    region: PresentationRegion, expected_pixel: tuple[int, int]
+) -> None:
+    image = Image.new("RGB", (10, 8), "white")
+
+    annotated = annotate_presentation_region(image, region)
+
+    assert annotated.getpixel(expected_pixel) == (127, 127, 127)
+    assert annotated.size == image.size
 
 
 def test_short_quotation_uses_maximum_and_returns_background_copy(resolved_font: ResolvedFont) -> None:

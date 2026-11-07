@@ -222,9 +222,10 @@ def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, tmp_pa
     monkeypatch.setattr(cli, "run_demo", run)
     monkeypatch.setattr(cli, "run_application", DemoWorkspace.forbidden)
     monkeypatch.setattr(cli, "run_startup", DemoWorkspace.forbidden)
-    assert cli.main(["--config", config.name, "--demo", value]) == 0
+    assert cli.main(["--config", config.name, "--demo", value, "--debug-layout"]) == 0
     assert calls[0][:2] == (config.name, float(value))
-    assert set(calls[0][2]) == {"shutdown_event", "history_segment_size", "history_max_segments"}
+    assert calls[0][2]["debug_layout"] is True
+    assert set(calls[0][2]) == {"debug_layout", "shutdown_event", "history_segment_size", "history_max_segments"}
     assert handlers == {signal.SIGINT: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
 
 
@@ -244,8 +245,11 @@ def test_cli_once_excludes_demo(capsys):
     assert "not allowed with argument" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("mode", [[], ["--once"]])
-def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("mode", "debug_layout"),
+    [([], False), (["--once"], False), ([], True), (["--once"], True)],
+)
+def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, debug_layout, tmp_path, monkeypatch):
     config = tmp_path / "config.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
     state = tmp_path / "state" / "state.json"
@@ -265,9 +269,11 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, tmp_
 
     monkeypatch.setattr(cli, "run_application", run)
     monkeypatch.setattr(cli, "run_startup", run)
-    assert cli.main(mode) == 0
+    arguments = [*mode, *(["--debug-layout"] if debug_layout else [])]
+    assert cli.main(arguments) == 0
     assert calls[0][:3] == (config, state, artifacts)
     assert calls[0][3]["history_path"] is None
+    assert calls[0][3]["debug_layout"] is debug_layout
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
@@ -304,7 +310,7 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
     demo.assert_clean()
 
 
-def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
+def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, monkeypatch):
     package = demo.root / "assets" / "decorations" / "demo-overlay"
     overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
@@ -326,15 +332,24 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
     demo.entry(metadata=False)
     demo.clock.limit = 2
     pixels = []
+    debug_pixels = []
+    annotate = application._debug_layout_image
+
+    def inspect_debug_image(image, snapshot, enabled):
+        annotated = annotate(image, snapshot, enabled)
+        if enabled:
+            debug_pixels.append((dict(snapshot.layout["presentation_region"]), annotated.getpixel((320, 400))))
+        return annotated
 
     def inspect_prepared_stage(_coordinator, _identity):
         if not pixels:
             with demo.prepared[0][2].load_stage(0) as image:
                 pixels.append(image.getpixel((10, 10)))
 
+    monkeypatch.setattr(application, "_debug_layout_image", inspect_debug_image)
     demo.on_publish = inspect_prepared_stage
 
-    demo.run()
+    demo.run(debug_layout=True)
 
     state, _, _ = demo.prepared[0]
     assert state.snapshot.decoration_identifier == "demo-overlay"
@@ -345,6 +360,10 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
         "height": 0.4,
     }
     assert pixels[0] == (227, 137, 147)
+    assert debug_pixels == [
+        ({"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}, (113, 68, 73)),
+        ({"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}, (113, 68, 73)),
+    ]
     demo.assert_clean()
 
 

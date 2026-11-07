@@ -224,6 +224,14 @@ The command displays all standard Refrain-owned locations and requires an intera
 
 `python -m refrain --once` uses the same standard paths and performs one startup/presentation cycle without scheduling future updates.
 
+Add `--debug-layout` to outline the effective literary presentation region in black at 50% opacity. It is available in normal operation, one-shot, demo, and `--show-entry` modes:
+
+```sh
+python -m refrain --demo 5 --debug-layout
+```
+
+The overlay is applied only to the published literary image; it does not change prepared-image artifacts or the information view.
+
 The optional path arguments override their respective standard locations:
 
 - `--config` selects a configuration file.
