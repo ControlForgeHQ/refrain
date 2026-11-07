@@ -1654,6 +1654,12 @@ The reserved target `information` is recognized before content-library loading. 
 
 After saving the PNG, the mode publishes one image through the existing display publication coordinator. It waits until every configured backend acknowledges the image or reaches a terminal publication failure, reports each result, and exits nonzero if any destination fails. It closes the backends after the attempts complete and does not start the continuous loop or hold serving backends open. A physical e-paper panel normally retains its image after process exit; the window and image-server backends are process-scoped and stop serving when Refrain exits. Publication failure does not remove the diagnostic PNG or alter production state.
 
+### Standalone QR calibration
+
+The optional `--test-qr` mode generates a dedicated 1600 × 1200 RGB calibration image, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
+
+The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. The image is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output, and the same image is published through the existing coordinator to every configured backend. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
+
 ### Recovery
 
 Recovery is performed according to the stage at which an interruption occurred.
