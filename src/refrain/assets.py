@@ -54,6 +54,28 @@ def parse_font_faces(value: object, field: str, report: Report) -> Mapping[str, 
     return MappingProxyType(result if valid else {})
 
 
+def _parse_decoration_text_color(value: object, field: str, report: Report) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        if value:
+            return (value,)
+        report(field, "must be a palette identifier or nonempty sequence of identifiers; preference is ignored")
+        return None
+    if not isinstance(value, list) or not value:
+        report(field, "must be a palette identifier or nonempty sequence of identifiers; preference is ignored")
+        return None
+    result: list[str] = []
+    for index, identifier in enumerate(value):
+        if isinstance(identifier, str):
+            result.append(identifier)
+        else:
+            report(
+                f"{field}[{index}]",
+                "must be a palette identifier; this preference member is ignored",
+                logging.WARNING,
+            )
+    return tuple(result) or None
+
+
 def _is_link(path: AssetPath) -> bool:
     return isinstance(path, Path) and path.is_symlink()
 
@@ -359,7 +381,7 @@ def discover_decorations(
             parsed = _parse_manifest(
                 manifest,
                 "decoration",
-                {"format", "id", "image", "presentation_region", "font", "font_faces", "background"},
+                {"format", "id", "image", "presentation_region", "font", "font_faces", "background", "text_color"},
                 report,
             )
             if parsed is None:
@@ -398,6 +420,11 @@ def discover_decorations(
                     logging.WARNING,
                 )
                 preferred_background = None
+            preferred_text_color = (
+                _parse_decoration_text_color(data["text_color"], f"{field}.text_color", report)
+                if "text_color" in data
+                else None
+            )
             resource = DecorationResource(
                 identifier=identifier,
                 path=image_path,
@@ -406,6 +433,7 @@ def discover_decorations(
                 font=preferred_font,
                 font_faces=font_faces,
                 background=preferred_background,
+                text_color=preferred_text_color,
             )
             _validate_image_candidate(
                 resource,

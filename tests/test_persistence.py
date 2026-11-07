@@ -153,6 +153,28 @@ def test_committed_role_face_identifiers_survive_restart(tmp_path: Path) -> None
     }
 
 
+def test_committed_text_color_survives_format_five_restart(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    snapshot = replace(
+        make_snapshot("Committed color."),
+        presentation_metadata={
+            "source": "Resolved source",
+            "attribution": "Resolved author",
+            "presentation_style": "centered",
+            "text_color_identifier": "burnt-orange",
+            "text_color_rgb": (198, 90, 32),
+        },
+    )
+    committed = store.commit(make_proposal("Committed color."), snapshot)
+
+    recovered = PersistentStateStore(store.path).load()
+
+    assert recovered == committed
+    assert recovered.snapshot.presentation_metadata["text_color_identifier"] == "burnt-orange"
+    assert recovered.snapshot.presentation_metadata["text_color_rgb"] == (198, 90, 32)
+    assert json.loads(store.path.read_text(encoding="utf-8"))["format_version"] == 5
+
+
 def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     first = commit(store, "First quotation.")

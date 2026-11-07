@@ -17,6 +17,7 @@ from threading import Event
 from PIL import Image
 
 from .artifacts import ArtifactStoreError, PreparedImageArtifactSet, PreparedImageArtifactStore
+from .assets import valid_identifier
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
@@ -173,6 +174,43 @@ def _resolve_decoration(configuration: ApplicationConfiguration, preferred: str 
     return chooser.choice(configuration.default_decorations)
 
 
+def _resolve_text_color(
+    configuration: ApplicationConfiguration,
+    entry: ContentEntry,
+    decoration: DecorationResource | None,
+    chooser: random.Random,
+) -> tuple[str, tuple[int, int, int]]:
+    preference_levels = (
+        ("content entry", entry.text_color),
+        ("selected decoration", None if decoration is None else decoration.text_color),
+        ("layout.text.colors", configuration.default_text_colors),
+        ("built-in fallback", ("black",)),
+    )
+    for source, candidates in preference_levels:
+        if candidates is None:
+            continue
+        usable: list[str] = []
+        seen: set[str] = set()
+        for identifier in candidates:
+            if not valid_identifier(identifier):
+                _LOGGER.warning("Text colour identifier %r from %s is invalid; excluding it", identifier, source)
+            elif identifier not in configuration.palette:
+                _LOGGER.warning("Text colour identifier %r from %s is unavailable; excluding it", identifier, source)
+            elif identifier not in seen:
+                usable.append(identifier)
+                seen.add(identifier)
+        if usable:
+            identifier = usable[0] if len(usable) == 1 else chooser.choice(tuple(usable))
+            value = configuration.palette[identifier]
+            return identifier, (
+                int(value[1:3], 16),
+                int(value[3:5], 16),
+                int(value[5:7], 16),
+            )
+    value = configuration.palette.get("black", "#000000")
+    return "black", (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
+
+
 def _select_snapshot(
     configuration: ApplicationConfiguration,
     display_date: date,
@@ -245,11 +283,15 @@ def _build_snapshot(
         else (decoration.presentation_region or configuration.presentation_region)
     )
     try:
+        background_identifier = _resolve_background(configuration, background_preference, chooser)
+        text_color_identifier, text_color_rgb = _resolve_text_color(configuration, entry, decoration, chooser)
+        metadata["text_color_identifier"] = text_color_identifier
+        metadata["text_color_rgb"] = text_color_rgb
         snapshot = DailySnapshot(
             quotation_text=quotation.text,
             quotation_identity=quotation.identity,
             font_identifier=font_identifier,
-            background_identifier=_resolve_background(configuration, background_preference, chooser),
+            background_identifier=background_identifier,
             decoration_identifier=decoration_identifier,
             presentation_metadata=metadata,
             reveal_schedule={

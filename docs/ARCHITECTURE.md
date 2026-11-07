@@ -1052,6 +1052,10 @@ The selected font, background, and decoration identifiers and effective presenta
 
 These selections remain fixed throughout the committed display day, including after restarts.
 
+After resolving the decoration, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected decoration's `text_color`, the effective `layout.text.colors` pool, then built-in `black`. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
+
+The selected palette identifier and its resolved RGB value are committed in the daily snapshot. Color selection is independent of quotation identity and repetition history. The effective text color is fixed for the committed display day and is not reconsidered during reveal progression or recovery.
+
 The registries, valid identifiers, image requirements, pool configuration, and content-entry overrides are specified in `docs/CONTENT_FORMAT.md`.
 
 ### Background and decoration recovery
@@ -1279,7 +1283,7 @@ Content that cannot be rendered legibly within the supported presentation region
 
 A daily snapshot must contain the selected quotation, its presentation metadata, effective reveal schedule, selected font, background, and decoration identifiers, and resolved layout values needed to prepare the presentation without consulting the original content library or current presentation configuration.
 
-`presentation_metadata` contains optional nonempty `source` and `attribution` strings, the required built-in `presentation_style` (`centered` or `left-aligned`), and the effective `font_faces` identifiers for `quotation`, `source`, and `attribution`. Older valid snapshots may omit `font_faces`; preparation interprets that legacy absence as `regular` for every role and does not apply current preferences.
+`presentation_metadata` contains optional nonempty `source` and `attribution` strings, the required built-in `presentation_style` (`centered` or `left-aligned`), and the effective `font_faces` identifiers for `quotation`, `source`, and `attribution`. New snapshots also contain `text_color_identifier` and `text_color_rgb`, the committed palette identifier and its three resolved integer RGB channels. Older valid snapshots may omit `font_faces`; preparation interprets that legacy absence as `regular` for every role and does not apply current preferences. Snapshots omitting both text-color values retain legacy literary colors, including muted attribution.
 
 `layout` contains:
 
@@ -1290,6 +1294,8 @@ A daily snapshot must contain the selected quotation, its presentation metadata,
 The snapshot also preserves the resolved background and decoration identifiers. The reserved value `"none"` represents the absence of the corresponding resource.
 
 The snapshot stores resource identifiers, not font or image contents or their digests. Effective role-face identifiers are part of the snapshot fingerprint used to associate prepared images, so typography changes cannot be mistaken for the same presentation. For snapshots predating face metadata, omission remains part of their canonical fingerprint, preserving reuse of their already prepared artifacts.
+
+The committed RGB channels are part of snapshot metadata and its fingerprint. Image regeneration uses those channels rather than current palette configuration, so a later palette edit cannot recolor a committed presentation.
 
 Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
 
@@ -1329,6 +1335,8 @@ Missing or invalid prepared images may be regenerated without access to the orig
 Regeneration resolves the committed font bundle and role-face identifiers through the available font registry. Missing role faces use the resolved bundle's regular face; a missing bundle uses the deterministic bundled fallback policy and applies committed face identifiers against that bundle. Neither recovery path changes the snapshot or consults current preferences.
 
 Committed background and decoration identifiers are resolved through the available resource registries. Missing or unusable image resources are omitted according to the background and decoration recovery policy. Regeneration retains the committed effective presentation region and does not select replacement backgrounds or decorations.
+
+Regeneration uses the committed text-color RGB value without consulting the current palette. If both text-color fields are absent, it preserves the historical renderer behavior and attribution-color distinction; it does not infer a color from current configuration.
 
 Recovery must not change the selected quotation, presentation metadata, reveal schedule, committed resource identifiers, or committed layout configuration.
 

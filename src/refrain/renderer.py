@@ -670,6 +670,17 @@ def _attribution_color(mode: str) -> tuple[int, ...] | int:
     return (48, 48, 48)
 
 
+def _color_for_mode(color: tuple[int, int, int], mode: str) -> tuple[int, ...] | int:
+    if mode == "RGB":
+        return color
+    luminance = (299 * color[0] + 587 * color[1] + 114 * color[2]) // 1000
+    if mode == "RGBA":
+        return (*color, 255)
+    if mode == "L":
+        return luminance
+    return int(luminance >= 128)
+
+
 def _validate_reveal_stages(
     stages: Sequence[CompositionVisibility],
     *,
@@ -712,6 +723,7 @@ def render_reveal_stages(
     concealment: Literal["pixel-distortion"] = "pixel-distortion",
     source_font: ResolvedFontData | None = None,
     attribution_font: ResolvedFontData | None = None,
+    text_color: tuple[int, int, int] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Render requested cumulative visibility stages from one resolved layout."""
     if concealment != "pixel-distortion":
@@ -722,6 +734,12 @@ def render_reveal_stages(
         raise QuotationRenderError(f"background image mode {background.mode!r} is not supported")
     if not isinstance(layout, CompositionLayout):
         raise QuotationRenderError("layout must be a CompositionLayout")
+    if text_color is not None and (
+        not isinstance(text_color, tuple)
+        or len(text_color) != 3
+        or any(type(channel) is not int or not 0 <= channel <= 255 for channel in text_color)
+    ):
+        raise QuotationRenderError("text_color must be an RGB tuple with channels from 0 through 255")
     if background.size != layout.image_size:
         raise QuotationRenderError("background dimensions do not match the composition layout")
     _validate_font(font)
@@ -745,7 +763,12 @@ def render_reveal_stages(
     )
 
     fill: tuple[int, ...] | int
-    fill = (0, 0, 0, 255) if background.mode == "RGBA" else ((0, 0, 0) if background.mode == "RGB" else 0)
+    if text_color is None:
+        fill = (0, 0, 0, 255) if background.mode == "RGBA" else ((0, 0, 0) if background.mode == "RGB" else 0)
+        attribution_fill = _attribution_color(background.mode)
+    else:
+        fill = _color_for_mode(text_color, background.mode)
+        attribution_fill = fill
     rendered: list[Image.Image] = []
     for stage in stages:
         image = background.copy()
@@ -757,7 +780,7 @@ def render_reveal_stages(
                 if not stage.attribution:
                     _conceal_field(image, attribution_font, byline.attribution)
                 else:
-                    _draw_field(draw, attribution_font, byline.attribution, _attribution_color(image.mode))
+                    _draw_field(draw, attribution_font, byline.attribution, attribution_fill)
             if byline.source is not None:
                 if not stage.source:
                     _conceal_field(image, source_font, byline.source)

@@ -79,12 +79,12 @@ The first release should be useful in normal household operation without dependi
 - Support meaningful typography and spacing configuration.
 - Preserve the primary quotation's positioning across reveal stages.
 - Reserve layout space for information revealed later.
-- Support predominantly dark text on a paper-white background, with optional restrained color accents.
+- Support named, configurable colors for the complete literary composition while retaining a black-text default.
 - Provide a small bundled collection of subtle background images, including paper-like textures.
 - Discover bundled and user-supplied backgrounds, use a configurable default background pool, and support explicit content-entry background preferences.
 - Provide a small bundled collection of restrained decorative overlays, including borders and flourishes.
 - Discover bundled and user-supplied decoration packages, use a configurable default decoration pool, and support explicit content-entry decoration preferences.
-- Allow decorations to define an appropriate literary presentation region, an optional preferred font, and an optional preferred background.
+- Allow decorations to define an appropriate literary presentation region and optional preferred font, background, and literary text color.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.

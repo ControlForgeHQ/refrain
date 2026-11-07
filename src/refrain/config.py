@@ -20,14 +20,23 @@ from PIL import Image
 from ._yaml import load_yaml, yaml_error_location
 from .assets import parse_font_faces, valid_identifier
 
-_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view"}
+_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view", "palette"}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
+_HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 _LOGGER = logging.getLogger(__name__)
 _BUNDLED_FONT_IDS = {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
 _BUNDLED_BACKGROUND_IDS = {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
 _BUNDLED_DECORATION_IDS = {"ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"}
+_BUILTIN_PALETTE = {
+    "black": "#000000",
+    "white": "#FFFFFF",
+    "red": "#FF0000",
+    "yellow": "#FFFF00",
+    "blue": "#0000FF",
+    "green": "#00FF00",
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,7 @@ class DecorationResource:
     font: str | None = None
     background: str | None = None
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    text_color: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +141,8 @@ class ApplicationConfiguration:
     decorations: Mapping[str, DecorationResource] = field(default_factory=lambda: MappingProxyType({}))
     default_decorations: tuple[str, ...] = ("none",)
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    palette: Mapping[str, str] = field(default_factory=lambda: MappingProxyType(_BUILTIN_PALETTE))
+    default_text_colors: tuple[str, ...] = ("black",)
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -305,6 +317,18 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         finish_diagnostics()
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
     _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
+
+    palette = dict(_BUILTIN_PALETTE)
+    if "palette" in data:
+        palette_data = _mapping(data["palette"], "palette", report)
+        for identifier, value in palette_data.items():
+            field_name = f"palette.{identifier}" if isinstance(identifier, str) else f"palette[{identifier!r}]"
+            if not valid_identifier(identifier):
+                report(field_name, "must be a valid palette identifier; the colour is ignored")
+            elif not isinstance(value, str) or not _HEX_COLOR.fullmatch(value):
+                report(field_name, "must be a quoted six-digit #RRGGBB colour; the colour is ignored")
+            else:
+                palette[identifier] = value
 
     display = _mapping(data.get("display", {}), "display", report)
     _known_fields(display, {"backends"}, "display", report)
@@ -577,7 +601,34 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             report("layout.decorations.default", "has no usable members; using ['none']")
 
     text_data = _mapping(layout.get("text", {}), "layout.text", report)
-    _known_fields(text_data, {"min_font_size", "max_font_size"}, "layout.text", report)
+    _known_fields(text_data, {"colors", "min_font_size", "max_font_size"}, "layout.text", report)
+    default_text_colors = ("black",)
+    if "colors" not in text_data:
+        use_default("layout.text.colors", "['black']")
+    else:
+        configured_text_colors = text_data["colors"]
+        usable_text_colors: list[str] = []
+        seen_text_colors: set[str] = set()
+        if not isinstance(configured_text_colors, list) or not configured_text_colors:
+            report("layout.text.colors", "must be a nonempty sequence of palette identifiers")
+        else:
+            for index, identifier in enumerate(configured_text_colors):
+                field_name = f"layout.text.colors[{index}]"
+                if not valid_identifier(identifier):
+                    report(field_name, "must be a valid palette identifier; it is excluded")
+                elif identifier in seen_text_colors:
+                    report(field_name, f"duplicates palette identifier {identifier!r}; the duplicate is ignored")
+                elif identifier not in palette:
+                    report(field_name, f"palette identifier {identifier!r} is unavailable; it is excluded")
+                else:
+                    usable_text_colors.append(identifier)
+                if isinstance(identifier, str):
+                    seen_text_colors.add(identifier)
+        if usable_text_colors:
+            default_text_colors = tuple(usable_text_colors)
+        else:
+            report("layout.text.colors", "has no usable members; using ['black']")
+
     sizes: dict[str, int] = {}
     for field in ("min_font_size", "max_font_size"):
         value = text_data.get(field)
@@ -611,4 +662,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         decorations=MappingProxyType(decoration_registry),
         default_decorations=default_decorations,
         font_faces=font_faces,
+        palette=MappingProxyType(palette),
+        default_text_colors=default_text_colors,
     )

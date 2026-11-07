@@ -87,6 +87,61 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
         config.backgrounds["other"] = config.backgrounds["canvas"]
 
 
+def test_builtin_palette_custom_colors_and_black_text_default(tmp_path: Path) -> None:
+    data = configuration_data()
+    data["palette"] = {"red": "#C82F32", "burnt-orange": "#C65A20"}
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert dict(config.palette) == {
+        "black": "#000000",
+        "white": "#FFFFFF",
+        "red": "#C82F32",
+        "yellow": "#FFFF00",
+        "blue": "#0000FF",
+        "green": "#00FF00",
+        "burnt-orange": "#C65A20",
+    }
+    assert config.default_text_colors == ("black",)
+
+
+def test_invalid_palette_definitions_are_warned_and_ignored(tmp_path: Path, caplog) -> None:
+    data = configuration_data()
+    data["palette"] = {"invalid id": "#123456", "bad-hex": "#12345g", "red": "#123"}
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert "invalid id" not in config.palette
+    assert "bad-hex" not in config.palette
+    assert config.palette["red"] == "#FF0000"
+    assert "palette.invalid id" in caplog.text
+    assert "quoted six-digit #RRGGBB" in caplog.text
+
+
+def test_text_color_pool_filters_unavailable_and_duplicate_members(tmp_path: Path, caplog) -> None:
+    data = configuration_data()
+    data["palette"] = {"burnt-orange": "#C65A20"}
+    data["layout"]["text"]["colors"] = ["burnt-orange", "missing", "burnt-orange", None, "blue"]
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_text_colors == ("burnt-orange", "blue")
+    assert "palette identifier 'missing' is unavailable" in caplog.text
+    assert "duplicates palette identifier 'burnt-orange'" in caplog.text
+
+
+@pytest.mark.parametrize("pool", [None, [], "bad", ["missing"], ["", None]])
+def test_unusable_text_color_pool_falls_back_to_black(tmp_path: Path, caplog, pool: object) -> None:
+    data = configuration_data()
+    data["layout"]["text"]["colors"] = pool
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_text_colors == ("black",)
+    assert "layout.text.colors" in caplog.text
+    assert "using ['black']" in caplog.text
+
+
 def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path) -> None:
     data = configuration_data()
     data["layout"]["fonts"] = {
@@ -335,6 +390,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
             "image": "flourish.png",
             "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6},
             "font": "lora",
+            "text_color": ["black", "burnt-orange"],
             "background": "none",
         },
     )
@@ -351,6 +407,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
         PresentationRegion(0.1, 0.2, 0.7, 0.6),
         "lora",
         "none",
+        text_color=("black", "burnt-orange"),
     )
     assert config.default_decorations == ("custom-flourish",)
 
@@ -445,6 +502,7 @@ def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(
             "image": "overlay.png",
             "font": "missing-font",
             "background": "missing-paper",
+            "text_color": [None],
         },
     )
     data = decoration_configuration()
@@ -453,8 +511,10 @@ def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(
 
     assert config.decorations["usable"].font is None
     assert config.decorations["usable"].background is None
+    assert config.decorations["usable"].text_color is None
     assert "usable" in config.decorations
     assert "missing-font" in caplog.text and "missing-paper" in caplog.text
+    assert "decoration.yaml.text_color[0]" in caplog.text
 
 
 def test_default_decoration_pool_deduplicates_and_falls_back_to_none(tmp_path: Path, caplog) -> None:

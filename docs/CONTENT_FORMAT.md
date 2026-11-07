@@ -173,6 +173,8 @@ layout:
       - "none"
 
   text:
+    colors:
+      - "black"
     min_font_size: 28
     max_font_size: 100
 ```
@@ -196,6 +198,26 @@ The reserved value `"none"` is available for backgrounds and decorations. The ex
 User-supplied resource paths, rectangle dimensions, and font-size values are examples rather than universal defaults.
 
 The resolution and precedence of content-entry resource preferences are defined in the corresponding sections below.
+
+### Named color palette
+
+The optional top-level `palette` mapping defines named RGB colors available to literary text preferences and the default text-color pool.
+
+The six built-in identifiers are `black`, `white`, `red`, `yellow`, `blue`, and `green`, initially mapped to `#000000`, `#FFFFFF`, `#FF0000`, `#FFFF00`, `#0000FF`, and `#00FF00`. These conventional digital RGB values are provisional and are not calibrated Spectra-6 pigment measurements.
+
+Custom identifiers follow the shared ASCII asset identifier rules: begin with a letter or digit and contain only letters, digits, hyphens, and underscores. Each value must be a quoted six-digit `#RRGGBB` string. Custom entries extend the built-in palette, and a configured built-in identifier overrides its default RGB value without removing that identifier. Invalid identifiers or values are warned about and ignored; an invalid override leaves the built-in value in place.
+
+For example:
+
+```yaml
+palette:
+  red: "#C82F32"
+  burnt-orange: "#C65A20"
+  sky-blue: "#78B7D4"
+  nasty-green-goo: "#718C23"
+```
+
+RGB lists and direct RGB values in content entries or decoration manifests are not supported.
 
 ### Display backends
 
@@ -613,6 +635,9 @@ font: lora
 font_faces:
   quotation: handwritten
   attribution: italic
+text_color:
+  - black
+  - burnt-orange
 background: aged-paper
 ```
 
@@ -624,6 +649,7 @@ background: aged-paper
 | `presentation_region` | Normalized rectangle mapping | No |
 | `font` | Font identifier | No |
 | `font_faces` | Mapping of literary roles to face identifiers | No |
+| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No |
 | `background` | Background identifier or `"none"` | No |
 
 `format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Image paths are resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, and unreadable manifests or images exclude only the affected decoration.
@@ -633,6 +659,8 @@ Decoration images must be readable, single-frame RGBA PNGs. Source dimensions an
 The optional `presentation_region` follows the validation rules for `layout.presentation_region`. It remains the authored normalized rectangle on the output canvas and is not inferred or transformed from the scaled artwork.
 
 An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid artwork or presentation-region metadata excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
+
+The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints the decoration image. It accepts the same scalar-or-nonempty-list syntax as the content-entry field. Invalid or unavailable members are diagnosed at selection time and ignored without invalidating the decoration.
 
 `layout.decorations.available` is no longer supported. It is ignored with an actionable migration warning; place each decoration and its manifest in the category directory.
 
@@ -665,6 +693,14 @@ Decorations have no repetition history or selection weights.
 
 Discovery does not change pool membership. Bundled identifiers cannot be shadowed by custom assets. If multiple custom decorations share an identifier, all are excluded and their package locations are reported. The same identifier may be used in different categories.
 
+### Default text-color pool
+
+`layout.text.colors` is an optional nonempty sequence of palette identifiers. When omitted, the effective pool is `["black"]`.
+
+The effective pool contains distinct identifiers registered in the effective palette. Invalid, unavailable, or duplicate members are excluded with warnings. If no usable member remains, the pool falls back to `["black"]`.
+
+Each effective member has equal selection probability. A configured override of `palette.black` applies whenever selection resolves to `black`.
+
 ### Background and decoration resolution
 
 For each selected quotation, Refrain resolves the decoration before resolving the font and background.
@@ -696,6 +732,15 @@ For backgrounds, precedence is:
 3. Automatic selection from the effective default background pool.
 
 An unavailable explicit content-entry preference produces a warning and falls back to the next applicable selection level. It does not invalidate the otherwise valid entry.
+
+The literary text color is resolved after the decoration has been selected, using the first level with one or more usable palette identifiers:
+
+1. The content entry's `text_color`.
+2. The selected decoration's `text_color`.
+3. The effective `layout.text.colors` pool.
+4. The built-in `black` fallback.
+
+Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. The selected palette identifier and RGB value are committed before rendering.
 
 An unavailable decoration font or background preference is ignored with a warning, without invalidating an otherwise usable decoration.
 
@@ -810,6 +855,7 @@ Each quotation is a separate selection candidate.
 | `priority` | Integer | No | `0` |
 | `font` | String | No | Automatic selection from default font pool |
 | `font_faces` | Mapping of literary roles to face identifiers | No | No role preferences |
+| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | Decoration preference, then global text-color pool |
 | `background` | String | No | Decoration preference, then default background pool |
 | `decoration` | String | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
@@ -821,6 +867,22 @@ No other entry-level fields are defined for Version 0.1.
 All quotations in an entry inherit the entry's metadata, priority, font preference, background preference, decoration preference, presentation style, eligibility, and reveal configuration.
 
 Individual quotations do not have independent overrides.
+
+### Text-color preference
+
+An entry may prefer one palette identifier or provide a nonempty selection pool:
+
+```yaml
+text_color: burnt-orange
+```
+
+```yaml
+text_color:
+  - black
+  - burnt-orange
+```
+
+List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette at selection time. Unknown, malformed, or unavailable members are diagnosed during selection and excluded; a preference with no usable members falls through to the next selection level without invalidating the content entry. RGB values are not accepted here.
 
 ### Entry identifiers
 

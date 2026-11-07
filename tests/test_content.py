@@ -76,6 +76,33 @@ def test_role_face_preferences_are_preserved_without_bundle_lookup(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
+    ("preference", "expected"),
+    [
+        ("burnt-orange", ("burnt-orange",)),
+        (["black", "unknown", "black"], ("black", "unknown", "black")),
+    ],
+)
+def test_text_color_preferences_are_preserved_without_palette_lookup(
+    tmp_path: Path, preference: object, expected: tuple[str, ...]
+) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(text_color=preference))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.text_color == expected
+
+
+@pytest.mark.parametrize("preference", [None, [], 1, [None], ["black", 1]])
+def test_malformed_text_color_preferences_reject_only_the_affected_entry(tmp_path: Path, preference: object) -> None:
+    write_entry(tmp_path / "invalid.yaml", entry_data(id="invalid", text_color=preference))
+    write_entry(tmp_path / "valid.yaml", entry_data(id="valid"))
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["valid"]
+
+
+@pytest.mark.parametrize(
     "preferences",
     [
         None,
