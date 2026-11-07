@@ -85,6 +85,7 @@ The first release should be useful in normal household operation without dependi
 - Provide a small bundled collection of restrained decorative overlays, including borders and flourishes.
 - Discover bundled and user-supplied decoration packages, use a configurable default decoration pool, and support explicit content-entry decoration preferences.
 - Allow decorations to define an appropriate literary presentation region and optional preferred font, background, and literary text color.
+- Allow explicitly tintable decoration artwork to use shared-palette colours while preserving authored alpha.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Preserve selected visual resources and effective presentation geometry throughout the committed display day.

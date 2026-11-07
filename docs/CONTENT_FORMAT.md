@@ -171,6 +171,8 @@ layout:
   decorations:
     default:
       - "none"
+    colors:
+      - "black"
 
   text:
     colors:
@@ -201,7 +203,7 @@ The resolution and precedence of content-entry resource preferences are defined 
 
 ### Named color palette
 
-The optional top-level `palette` mapping defines named RGB colors available to literary text preferences and the default text-color pool.
+The optional top-level `palette` mapping defines named RGB colors available to literary text and decoration preferences and their default pools.
 
 The six built-in identifiers are `black`, `white`, `red`, `yellow`, `blue`, and `green`, initially mapped to `#000000`, `#FFFFFF`, `#FF0000`, `#FFFF00`, `#0000FF`, and `#00FF00`. These conventional digital RGB values are provisional and are not calibrated Spectra-6 pigment measurements.
 
@@ -215,6 +217,12 @@ palette:
   burnt-orange: "#C65A20"
   sky-blue: "#78B7D4"
   nasty-green-goo: "#718C23"
+
+layout:
+  decorations:
+    colors:
+      - "black"
+      - "burnt-orange"
 ```
 
 RGB lists and direct RGB values in content entries or decoration manifests are not supported.
@@ -639,6 +647,10 @@ text_color:
   - black
   - burnt-orange
 background: aged-paper
+tintable: true
+decoration_color:
+  - sky-blue
+  - burnt-orange
 ```
 
 | Field | Type | Required |
@@ -651,6 +663,8 @@ background: aged-paper
 | `font_faces` | Mapping of literary roles to face identifiers | No |
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No |
 | `background` | Background identifier or `"none"` | No |
+| `tintable` | Boolean | No |
+| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No |
 
 `format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Image paths are resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, and unreadable manifests or images exclude only the affected decoration.
 
@@ -661,6 +675,10 @@ The optional `presentation_region` follows the validation rules for `layout.pres
 An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid artwork or presentation-region metadata excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
 The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints the decoration image. It accepts the same scalar-or-nonempty-list syntax as the content-entry field. Invalid or unavailable members are diagnosed at selection time and ignored without invalidating the decoration.
+
+The optional `tintable` field must be a YAML boolean and defaults to `false`. A malformed value produces a warning and is treated as `false`, leaving the otherwise usable decoration available. Decorations remain untinted unless explicitly marked `true`.
+
+The optional `decoration_color` is a preference for tinting this decoration and is distinct from `text_color`. It accepts a palette identifier or nonempty sequence, but has no visual effect unless `tintable` is `true`. Invalid or unavailable members are diagnosed during selection and ignored without invalidating the decoration.
 
 `layout.decorations.available` is no longer supported. It is ignored with an actionable migration warning; place each decoration and its manifest in the category directory.
 
@@ -692,6 +710,12 @@ An explicitly configured pool with no usable members falls back to `["none"]` wi
 Decorations have no repetition history or selection weights.
 
 Discovery does not change pool membership. Bundled identifiers cannot be shadowed by custom assets. If multiple custom decorations share an identifier, all are excluded and their package locations are reported. The same identifier may be used in different categories.
+
+#### Default decoration color pool
+
+The optional `layout.decorations.colors` field is a nonempty sequence of identifiers from the shared top-level `palette`. When omitted, the effective pool is `["black"]`.
+
+Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. If no usable identifier remains, the pool falls back to `["black"]`. Each distinct usable identifier has equal selection probability.
 
 ### Default text-color pool
 
@@ -742,13 +766,24 @@ The literary text color is resolved after the decoration has been selected, usin
 
 Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. The selected palette identifier and RGB value are committed before rendering.
 
+Decoration colour is resolved independently for a selected tintable decoration using the first level with usable candidates:
+
+1. The content entry's `decoration_color`.
+2. The selected decoration's `decoration_color`.
+3. The effective `layout.decorations.colors` pool.
+4. The built-in `black` fallback.
+
+Invalid and unavailable identifiers are excluded with diagnostics. Duplicate identifiers do not add selection weight. The first level with usable candidates is selected uniformly without combining levels. If no decoration is selected or it is not tintable, colour selection is unnecessary and the image is left unchanged.
+
+Tinting replaces every visible pixel's RGB with the committed palette colour and preserves the original alpha channel, including transparency, antialiasing, and authored tonal variation. Source RGB luminance is not used to derive opacity. Existing contain scaling and centered composition are unchanged.
+
 An unavailable decoration font or background preference is ignored with a warning, without invalidating an otherwise usable decoration.
 
 An absent decoration preference does not prevent explicit content-entry resource selection or automatic selection from the corresponding default pool.
 
 The selected decoration determines the effective presentation region when it defines an override; otherwise the global presentation region applies.
 
-The final font, background, and decoration identifiers and effective presentation region are committed with the daily selection.
+The final font, background, and decoration identifiers, effective presentation region, and decoration tint decision are committed with the daily selection. Tintable decorations also commit the selected palette identifier and resolved RGB value.
 
 No resource is reselected during reveal progression or restart recovery. Image regeneration resolves the committed identifiers independently of the original content-entry and decoration preferences.
 
@@ -856,6 +891,7 @@ Each quotation is a separate selection candidate.
 | `font` | String | No | Automatic selection from default font pool |
 | `font_faces` | Mapping of literary roles to face identifiers | No | No role preferences |
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | Decoration preference, then global text-color pool |
+| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | Selected decoration preference, then global decoration-color pool |
 | `background` | String | No | Decoration preference, then default background pool |
 | `decoration` | String | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
@@ -883,6 +919,23 @@ text_color:
 ```
 
 List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette at selection time. Unknown, malformed, or unavailable members are diagnosed during selection and excluded; a preference with no usable members falls through to the next selection level without invalidating the content entry. RGB values are not accepted here.
+
+### Decoration-color preference
+
+An entry may prefer one shared-palette identifier or provide a nonempty selection pool:
+
+```yaml
+decoration_color: burnt-orange
+```
+
+```yaml
+decoration_color:
+  - sage-green
+  - ink-blue
+  - burnt-orange
+```
+
+This preference affects only a selected decoration whose manifest sets `tintable: true`. It uses the same validation, equal-probability, and fallback rules as other palette preferences; invalid or unavailable identifiers do not invalidate the content entry. Direct RGB values are not accepted.
 
 ### Entry identifiers
 

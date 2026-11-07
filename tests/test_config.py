@@ -103,6 +103,35 @@ def test_builtin_palette_custom_colors_and_black_text_default(tmp_path: Path) ->
         "burnt-orange": "#C65A20",
     }
     assert config.default_text_colors == ("black",)
+    assert config.default_decoration_colors == ("black",)
+
+
+def test_decoration_color_pool_uses_shared_palette_and_distinct_members(tmp_path: Path, caplog) -> None:
+    data = configuration_data()
+    data["palette"] = {"sage-green": "#718C23", "terracotta": "#C65A20"}
+    data["layout"]["decorations"] = {
+        "default": ["none"],
+        "colors": ["sage-green", "missing", "sage-green", "terracotta", None],
+    }
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_decoration_colors == ("sage-green", "terracotta")
+    assert "palette identifier 'missing' is unavailable" in caplog.text
+    assert "duplicates palette identifier 'sage-green'" in caplog.text
+    assert "layout.decorations.colors[4]" in caplog.text
+
+
+@pytest.mark.parametrize("pool", [None, [], "bad", ["missing"], ["", None]])
+def test_unusable_decoration_color_pool_falls_back_to_black(tmp_path: Path, caplog, pool: object) -> None:
+    data = configuration_data()
+    data["layout"]["decorations"] = {"colors": pool}
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_decoration_colors == ("black",)
+    assert "layout.decorations.colors" in caplog.text
+    assert "using ['black']" in caplog.text
 
 
 def test_invalid_palette_definitions_are_warned_and_ignored(tmp_path: Path, caplog) -> None:
@@ -154,6 +183,7 @@ def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path
     packaged_config = Path(str(files("refrain").joinpath("config.default.yaml")))
     packaged = load_application_config(packaged_config)
     assert dict(packaged.font_faces) == {"attribution": "italic"}
+    assert packaged.default_decoration_colors == ("black",)
     assert {"regular", "italic"} <= set(packaged.fonts["lora"].faces)
     assert packaged.fonts["lora"].faces["italic"].name == "Lora-Italic.ttf"
 

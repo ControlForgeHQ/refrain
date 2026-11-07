@@ -92,6 +92,8 @@ class DecorationResource:
     background: str | None = None
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     text_color: tuple[str, ...] | None = None
+    tintable: bool = False
+    decoration_color: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,7 @@ class ApplicationConfiguration:
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     palette: Mapping[str, str] = field(default_factory=lambda: MappingProxyType(_BUILTIN_PALETTE))
     default_text_colors: tuple[str, ...] = ("black",)
+    default_decoration_colors: tuple[str, ...] = ("black",)
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -552,7 +555,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             report("layout.backgrounds.default", "has no usable members; using ['none']")
 
     decorations_data = _mapping(layout.get("decorations", {}), "layout.decorations", report)
-    _known_fields(decorations_data, {"available", "default"}, "layout.decorations", report)
+    _known_fields(decorations_data, {"available", "default", "colors"}, "layout.decorations", report)
     if "available" in decorations_data:
         report(
             "layout.decorations.available",
@@ -599,6 +602,36 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             default_decorations = tuple(effective_decorations)
         else:
             report("layout.decorations.default", "has no usable members; using ['none']")
+
+    default_decoration_colors = ("black",)
+    if "colors" not in decorations_data:
+        use_default("layout.decorations.colors", "['black']")
+    else:
+        configured_decoration_colors = decorations_data["colors"]
+        usable_decoration_colors: list[str] = []
+        seen_decoration_colors: set[str] = set()
+        if not isinstance(configured_decoration_colors, list) or not configured_decoration_colors:
+            report("layout.decorations.colors", "must be a nonempty sequence of palette identifiers")
+        else:
+            for index, identifier in enumerate(configured_decoration_colors):
+                field_name = f"layout.decorations.colors[{index}]"
+                if not valid_identifier(identifier):
+                    report(field_name, "must be a valid palette identifier; it is excluded")
+                elif identifier in seen_decoration_colors:
+                    report(
+                        field_name,
+                        f"duplicates palette identifier {identifier!r}; the duplicate is ignored",
+                    )
+                elif identifier not in palette:
+                    report(field_name, f"palette identifier {identifier!r} is unavailable; it is excluded")
+                else:
+                    usable_decoration_colors.append(identifier)
+                if isinstance(identifier, str):
+                    seen_decoration_colors.add(identifier)
+        if usable_decoration_colors:
+            default_decoration_colors = tuple(usable_decoration_colors)
+        else:
+            report("layout.decorations.colors", "has no usable members; using ['black']")
 
     text_data = _mapping(layout.get("text", {}), "layout.text", report)
     _known_fields(text_data, {"colors", "min_font_size", "max_font_size"}, "layout.text", report)
@@ -664,4 +697,5 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         font_faces=font_faces,
         palette=MappingProxyType(palette),
         default_text_colors=default_text_colors,
+        default_decoration_colors=default_decoration_colors,
     )

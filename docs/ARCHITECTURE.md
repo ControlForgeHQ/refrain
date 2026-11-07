@@ -620,12 +620,13 @@ For each new daily selection:
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
 13. Resolve the decoration using the entry's preference or the effective default decoration pool.
-14. Select one font bundle using the entry preference, selected decoration preference, or effective default font pool, in that precedence order; resolve and commit each role's face within that bundle.
-15. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
-16. Resolve the effective presentation region from the selected decoration or the global presentation region.
-17. Prepare the complete daily snapshot.
-18. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
-19. Record the committed selection in global history on a best-effort basis.
+14. If the selected decoration is tintable, resolve its colour from the entry preference, decoration preference, effective decoration-colour pool, or built-in `black` fallback.
+15. Select one font bundle using the entry preference, selected decoration preference, or effective default font pool, in that precedence order; resolve and commit each role's face within that bundle.
+16. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
+17. Resolve the effective presentation region from the selected decoration or the global presentation region.
+18. Prepare the complete daily snapshot.
+19. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
+20. Record the committed selection in global history on a best-effort basis.
 
 Selection is not complete until operational-state commitment succeeds.
 
@@ -651,6 +652,7 @@ Refrain maintains sufficient durable operational state to preserve:
 - the display date associated with that selection;
 - the selected quotation's original text;
 - the resolved presentation metadata and font identifier;
+- the committed decoration tinting decision and, when enabled, palette identifier and resolved RGB value;
 - the reveal schedule applicable to the selection;
 - relevant layout configuration;
 - active repetition history;
@@ -671,11 +673,13 @@ It includes only the selected quotation from its containing content entry, not t
 
 The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering.
 
-Font, background, and decoration selection occurs after quotation selection and before the daily snapshot is committed.
+Font, background, decoration, and applicable decoration-colour selection occurs after quotation selection and before the daily snapshot is committed.
 
 An entry's explicit resource preferences take precedence according to the selection rules defined in the presentation and rendering section. Unavailable preferences do not invalidate otherwise usable quotations.
 
 The selected resource identifiers and effective presentation settings remain fixed throughout the committed display day.
+
+The decoration tinting decision is also fixed in the snapshot. For tintable decorations, the selected palette identifier and RGB value are committed, so later palette or manifest changes cannot recolour the presentation. Non-tintable or absent decorations commit tinting disabled without selecting a colour.
 
 The snapshot contains resolved presentation values rather than references to mutable content-library entries or configuration that may subsequently change.
 
@@ -980,7 +984,7 @@ The renderer owns the typography, fitting, positioning, and drawing of all three
 
 The renderer is independent of the purpose of the background image. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
 
-For normal daily presentations, preparation resolves the selected background and decoration before invoking the shared renderer. Background and decoration selection does not modify the selected quotation or its repetition identity.
+For normal daily presentations, preparation resolves the selected background and decoration before invoking the shared renderer. When the snapshot commits tinting as enabled, preparation replaces the selected decoration's RGB channels with the committed RGB value while preserving its original alpha channel. It does not derive opacity from source RGB values or modify the source asset. Background and decoration selection does not modify the selected quotation or its repetition identity.
 
 The daily background is composed in this order:
 
@@ -1071,6 +1075,8 @@ When prepared images must be regenerated, Refrain uses the committed identifiers
 If a committed background becomes unavailable, preparation uses the paper-white base with an appropriate diagnostic. It does not randomly select another background.
 
 If a committed decoration becomes unavailable, preparation omits the decoration with an appropriate diagnostic. It retains the committed effective presentation region rather than recalculating it from the current decoration registry or global configuration.
+
+The committed tinting decision and RGB value are used during regeneration; preparation does not recalculate tintability or colour from the current manifest or palette. Snapshots predating tint metadata preserve legacy untinted rendering, including when a current decoration manifest marks the resource tintable.
 
 The same rule applies when a decoration's preferred background was selected and subsequently becomes unavailable.
 

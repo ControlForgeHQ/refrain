@@ -54,7 +54,7 @@ def parse_font_faces(value: object, field: str, report: Report) -> Mapping[str, 
     return MappingProxyType(result if valid else {})
 
 
-def _parse_decoration_text_color(value: object, field: str, report: Report) -> tuple[str, ...] | None:
+def _parse_decoration_color(value: object, field: str, report: Report) -> tuple[str, ...] | None:
     if isinstance(value, str):
         if value:
             return (value,)
@@ -381,7 +381,18 @@ def discover_decorations(
             parsed = _parse_manifest(
                 manifest,
                 "decoration",
-                {"format", "id", "image", "presentation_region", "font", "font_faces", "background", "text_color"},
+                {
+                    "format",
+                    "id",
+                    "image",
+                    "presentation_region",
+                    "font",
+                    "font_faces",
+                    "background",
+                    "text_color",
+                    "tintable",
+                    "decoration_color",
+                },
                 report,
             )
             if parsed is None:
@@ -421,10 +432,19 @@ def discover_decorations(
                 )
                 preferred_background = None
             preferred_text_color = (
-                _parse_decoration_text_color(data["text_color"], f"{field}.text_color", report)
+                _parse_decoration_color(data["text_color"], f"{field}.text_color", report)
                 if "text_color" in data
                 else None
             )
+            preferred_decoration_color = (
+                _parse_decoration_color(data["decoration_color"], f"{field}.decoration_color", report)
+                if "decoration_color" in data
+                else None
+            )
+            tintable = data.get("tintable", False)
+            if "tintable" in data and type(tintable) is not bool:
+                report(f"{field}.tintable", "must be a YAML boolean; tinting is disabled", logging.WARNING)
+                tintable = False
             resource = DecorationResource(
                 identifier=identifier,
                 path=image_path,
@@ -434,6 +454,8 @@ def discover_decorations(
                 font_faces=font_faces,
                 background=preferred_background,
                 text_color=preferred_text_color,
+                tintable=tintable,
+                decoration_color=preferred_decoration_color,
             )
             _validate_image_candidate(
                 resource,

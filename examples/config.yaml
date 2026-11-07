@@ -1,6 +1,9 @@
 general:
   day_start: "06:00"
 
+palette:
+  terracotta: "#C65A20"
+
 content:
   directory: "content"
 
@@ -52,6 +55,9 @@ layout:
       - "lower-flourish"
       - "simple-border"
       - "top-bottom-borders"
+    colors:
+      - "black"
+      - "terracotta"
 
   text:
     colors:
