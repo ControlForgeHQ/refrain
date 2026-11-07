@@ -69,17 +69,21 @@ def create_config(directory: Path, *, multiple_backends: bool = False) -> Path:
 
 
 @pytest.mark.parametrize("level", ["L", "M", "Q", "H"])
-def test_qr_generation_preserves_error_correction_and_exact_module_pixels(level: str) -> None:
-    parameters = QRCalibrationParameters(payload="pixel grid", error_correction=level, module_size=3, quiet_zone=2)
+@pytest.mark.parametrize("version", [None, 4])
+def test_qr_generation_preserves_error_correction_and_exact_module_pixels(level: str, version: int | None) -> None:
+    parameters = QRCalibrationParameters(
+        payload="pixel grid", error_correction=level, version=version, module_size=3, quiet_zone=2
+    )
     result = create_qr_calibration_image(parameters)
     try:
         expected = qrcode.QRCode(
+            version=version,
             error_correction=_ERROR_LEVELS[level],
             box_size=1,
             border=0,
         )
         expected.add_data(parameters.payload.encode("utf-8"), optimize=0)
-        expected.make(fit=True)
+        expected.make(fit=version is None)
         geometry = result.geometry
         assert geometry.version == expected.version
         assert geometry.symbol_modules == expected.modules_count
@@ -124,10 +128,33 @@ def test_qr_version_increases_for_larger_payload() -> None:
         long.image.close()
 
 
+@pytest.mark.parametrize(("version", "payload"), [(1, "x"), (40, "x"), (4, "short")])
+def test_fixed_qr_versions_are_not_changed(version: int, payload: str) -> None:
+    result = create_qr_calibration_image(QRCalibrationParameters(payload=payload, version=version))
+    try:
+        assert result.geometry.version == version
+        assert result.geometry.symbol_modules == 17 + 4 * version
+        assert result.geometry.footprint_size == ((17 + 4 * version + 8) * result.geometry.module_size,) * 2
+    finally:
+        result.image.close()
+
+
+def test_fixed_qr_version_has_constant_footprint_for_different_payloads() -> None:
+    short = create_qr_calibration_image(QRCalibrationParameters(payload="x", version=4))
+    longer = create_qr_calibration_image(QRCalibrationParameters(payload="a" * 60, version=4))
+    try:
+        assert short.geometry.footprint_size == longer.geometry.footprint_size
+        assert short.geometry.symbol_modules == longer.geometry.symbol_modules == 33
+    finally:
+        short.image.close()
+        longer.image.close()
+
+
 def test_default_and_configured_geometry_uses_complete_footprint() -> None:
     default = create_qr_calibration_image()
     configured = create_qr_calibration_image(
         QRCalibrationParameters(
+            version=4,
             module_size=3,
             quiet_zone=1,
             right_offset=17,
@@ -168,6 +195,10 @@ def test_zero_offsets_and_exact_fit_boundary() -> None:
                 payload="https://example.com/", module_size=49, quiet_zone=0, right_offset=0, bottom_offset=0
             )
         )
+    with pytest.raises(QRCalibrationError, match=r"1239 x 1239.*available.*1600 x 1200"):
+        create_qr_calibration_image(
+            QRCalibrationParameters(version=40, module_size=7, quiet_zone=0, right_offset=0, bottom_offset=0)
+        )
 
 
 @pytest.mark.parametrize(
@@ -176,6 +207,12 @@ def test_zero_offsets_and_exact_fit_boundary() -> None:
         ("payload", "", "nonempty"),
         ("payload", "\ud800", "UTF-8"),
         ("error_correction", "X", "L, M, Q, or H"),
+        ("version", 0, "1 through 40"),
+        ("version", -1, "1 through 40"),
+        ("version", 41, "1 through 40"),
+        ("version", 1.5, "1 through 40"),
+        ("version", True, "1 through 40"),
+        ("version", "4", "1 through 40"),
         ("module_size", 0, "positive integer"),
         ("module_size", True, "integer"),
         ("quiet_zone", -1, "nonnegative integer"),
@@ -192,6 +229,14 @@ def test_invalid_qr_parameters_are_rejected(field: str, value: object, message: 
 def test_payload_larger_than_supported_qr_capacity_is_actionable() -> None:
     with pytest.raises(QRCalibrationError, match="too large.*shorten the payload"):
         create_qr_calibration_image(QRCalibrationParameters(payload="x" * 3000))
+
+
+def test_fixed_qr_version_capacity_error_is_actionable() -> None:
+    with pytest.raises(
+        QRCalibrationError,
+        match=r"available capacity.*version 1.*error-correction level M.*increase the version.*shorten the payload",
+    ):
+        create_qr_calibration_image(QRCalibrationParameters(payload="x" * 100, version=1))
 
 
 def test_cli_defaults_and_explicit_parameters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,12 +256,16 @@ def test_cli_defaults_and_explicit_parameters(tmp_path: Path, monkeypatch: pytes
 
     assert cli.main(["--test-qr"]) == 0
     assert observed[-1] == (config, QRCalibrationParameters())
+    assert cli.main(["--test-qr", "--qr-version", "auto"]) == 0
+    assert observed[-1] == (config, QRCalibrationParameters())
     assert (
         cli.main(
             [
                 "--test-qr",
                 "--qr-payload",
                 "https://example.com/calibration",
+                "--qr-version",
+                "4",
                 "--qr-error-correction",
                 "H",
                 "--qr-module-size",
@@ -234,6 +283,7 @@ def test_cli_defaults_and_explicit_parameters(tmp_path: Path, monkeypatch: pytes
     assert observed[-1][1] == QRCalibrationParameters(
         payload="https://example.com/calibration",
         error_correction="H",
+        version=4,
         module_size=5,
         quiet_zone=2,
         right_offset=0,
@@ -245,6 +295,7 @@ def test_cli_defaults_and_explicit_parameters(tmp_path: Path, monkeypatch: pytes
     "arguments",
     [
         ["--qr-payload", "value"],
+        ["--qr-version", "auto"],
         ["--qr-error-correction", "H"],
         ["--qr-module-size", "5"],
         ["--qr-quiet-zone", "2"],
@@ -264,12 +315,17 @@ def test_qr_cli_rejects_bad_level_geometry_and_other_modes(capsys: pytest.Captur
     with pytest.raises(SystemExit):
         cli.main(["--test-qr", "--qr-module-size", "0"])
     assert "positive integer" in capsys.readouterr().err
+    for version in ("0", "-1", "41", "1.5", "invalid", ""):
+        with pytest.raises(SystemExit):
+            cli.main(["--test-qr", "--qr-version", version])
+        assert "QR version must be 'auto' or an integer from 1 through 40" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         cli.main(["--test-qr", "--once"])
 
 
+@pytest.mark.parametrize("version", [None, 4])
 def test_qr_diagnostic_uses_no_content_or_production_persistence_and_publishes_exact_png(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, version: int | None
 ) -> None:
     caplog.set_level("INFO")
     config = create_config(tmp_path / "config", multiple_backends=True)
@@ -286,7 +342,7 @@ def test_qr_diagnostic_uses_no_content_or_production_persistence_and_publishes_e
     monkeypatch.setattr(application, "GlobalHistoryStore", unexpected_use)
     output, geometry = application.run_test_qr(
         config,
-        QRCalibrationParameters(module_size=5, quiet_zone=2, right_offset=13, bottom_offset=7),
+        QRCalibrationParameters(version=version, module_size=5, quiet_zone=2, right_offset=13, bottom_offset=7),
         backend_factory=lambda configuration: backends[configuration.type],
     )
 
@@ -294,7 +350,8 @@ def test_qr_diagnostic_uses_no_content_or_production_persistence_and_publishes_e
     assert output.is_file()
     assert geometry.bounds[2] == 1600 - 13 - 1
     assert geometry.bounds[3] == 1200 - 7 - 1
-    assert "QR version:" in caplog.text
+    assert f"QR requested version: {version if version is not None else 'auto'}" in caplog.text
+    assert f"QR resolved version: {version if version is not None else geometry.version}" in caplog.text
     assert "QR footprint pixel bounds (inclusive)" in caplog.text
     for backend in backends.values():
         assert backend.closed
@@ -338,6 +395,27 @@ def test_qr_png_replacement_and_failed_save_preserve_previous_image(
     assert not list(tmp_path.glob(".refrain-qr-test-*.tmp"))
     for image in backend.images:
         image.close()
+
+
+def test_fixed_version_capacity_failure_preserves_existing_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = create_config(tmp_path / "config")
+    monkeypatch.chdir(tmp_path)
+    backend = RecordingBackend()
+    output = tmp_path / "refrain-qr-test.png"
+    application.run_test_qr(config, backend_factory=lambda _: backend)
+    previous = output.read_bytes()
+
+    with pytest.raises(ApplicationError, match=r"version 1.*error-correction level M.*increase the version"):
+        application.run_test_qr(
+            config,
+            QRCalibrationParameters(payload="x" * 100, version=1),
+            backend_factory=lambda _: backend,
+        )
+
+    assert output.read_bytes() == previous
+    assert len(backend.images) == 1
+    assert backend.closed
+    backend.images[0].close()
 
 
 def test_qr_backend_failure_is_reported_and_png_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

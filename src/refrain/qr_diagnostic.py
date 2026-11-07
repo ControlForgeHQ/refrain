@@ -26,6 +26,7 @@ class QRCalibrationError(ValueError):
 class QRCalibrationParameters:
     payload: str = "https://example.com/"
     error_correction: str = "M"
+    version: int | None = None
     module_size: int = 4
     quiet_zone: int = 4
     right_offset: int = 40
@@ -62,6 +63,8 @@ def validate_qr_calibration_parameters(parameters: QRCalibrationParameters) -> N
         raise QRCalibrationError("QR payload must be representable as UTF-8 text") from error
     if parameters.error_correction not in _ERROR_CORRECTION:
         raise QRCalibrationError("QR error-correction level must be one of L, M, Q, or H")
+    if parameters.version is not None and (type(parameters.version) is not int or not 1 <= parameters.version <= 40):
+        raise QRCalibrationError("QR version must be 'auto' or an integer from 1 through 40")
     for name in ("module_size", "quiet_zone", "right_offset", "bottom_offset"):
         value = getattr(parameters, name)
         if type(value) is not int:
@@ -80,15 +83,26 @@ def create_qr_calibration_image(
     """Create the complete QR calibration canvas and its resolved pixel geometry."""
     validate_qr_calibration_parameters(parameters)
     code = qrcode.QRCode(
-        version=None,
+        version=parameters.version,
         error_correction=_ERROR_CORRECTION[parameters.error_correction],
         box_size=1,
         border=0,
     )
     try:
         code.add_data(parameters.payload.encode("utf-8"), optimize=0)
-        code.make(fit=True)
-    except (DataOverflowError, ValueError) as error:
+        code.make(fit=parameters.version is None)
+    except DataOverflowError as error:
+        if parameters.version is not None:
+            raise QRCalibrationError(
+                f"QR payload exceeds available capacity for requested version {parameters.version} "
+                f"at error-correction level {parameters.error_correction}; increase the version, "
+                "shorten the payload, or reduce the error-correction level"
+            ) from error
+        raise QRCalibrationError(
+            f"QR payload is too large for error-correction level {parameters.error_correction}; "
+            "shorten the payload or choose a lower error-correction level"
+        ) from error
+    except ValueError as error:
         raise QRCalibrationError(
             f"QR payload is too large for error-correction level {parameters.error_correction}; "
             "shorten the payload or choose a lower error-correction level"
