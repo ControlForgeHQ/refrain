@@ -301,6 +301,7 @@ Use the standalone `--test-qr` mode to generate a QR calibration image and publi
 ```sh
 python -m refrain --test-qr \
   --qr-payload https://example.com/refrain/calibration \
+  --qr-version auto \
   --qr-error-correction M \
   --qr-module-size 5 \
   --qr-quiet-zone 4 \
@@ -308,9 +309,9 @@ python -m refrain --test-qr \
   --qr-bottom-offset 40
 ```
 
-`--qr-payload` defaults to `https://example.com/`. `--qr-error-correction` accepts `L`, `M`, `Q`, or `H` and defaults to `M`; higher correction levels add redundancy and may increase the QR version needed for the same payload. `--qr-module-size` defaults to 4 pixels and controls the exact square pixel size of each symbol module. `--qr-quiet-zone` defaults to 4 modules and sets the white margin around the symbol. Reducing the quiet zone below the conventional four modules may adversely affect scanning reliability. `--qr-right-offset` and `--qr-bottom-offset` default to 40 pixels and measure the white space from the corresponding canvas edge to the outer edge of the complete symbol-and-quiet-zone footprint. All QR-specific options require `--test-qr`; the full footprint must fit without resizing or cropping.
+`--qr-payload` defaults to `https://example.com/`. `--qr-version` defaults to `auto`, which selects the smallest version that fits the payload at the selected error-correction level. To keep the symbol size constant, set an integer version from 1 through 40; a fixed version is never adjusted. Version `v` contains `17 + 4 × v` symbol modules per side, so its complete footprint is `(17 + 4 × v + 2 × quiet-zone) × module-size` pixels per side. A payload that exceeds the fixed version's capacity is rejected; increase the version, shorten the payload, or reduce the error-correction level. `--qr-error-correction` accepts `L`, `M`, `Q`, or `H` and defaults to `M`; higher correction levels add redundancy and may increase the version needed for the same payload. `--qr-module-size` defaults to 4 pixels and controls the exact square pixel size of each symbol module. `--qr-quiet-zone` defaults to 4 modules and sets the white margin around the symbol. Reducing the quiet zone below the conventional four modules may adversely affect scanning reliability. `--qr-right-offset` and `--qr-bottom-offset` default to 40 pixels and measure the white space from the corresponding canvas edge to the outer edge of the complete symbol-and-quiet-zone footprint. All QR-specific options require `--test-qr`; the full footprint must fit without resizing or cropping.
 
-The complete 1600 × 1200 RGB image is saved as `refrain-qr-test.png` in the current working directory. A successful later invocation atomically replaces that file. The exact saved image is submitted to every configured display backend; a backend failure is reported and the diagnostic PNG is retained. The command reports the payload, resolved QR geometry, offsets, bounds, and output dimensions. Successful generation or display does not guarantee reliable scanning on the physical display; scanning reliability must be assessed through physical calibration tests.
+The complete 1600 × 1200 RGB image is saved as `refrain-qr-test.png` in the current working directory. A successful later invocation atomically replaces that file. A fixed version that cannot encode the payload fails before saving or publishing, leaving an existing diagnostic PNG unchanged. The exact saved image is submitted to every configured display backend; a backend failure is reported and the diagnostic PNG is retained. The command reports the payload, requested and resolved QR versions, geometry, offsets, bounds, and output dimensions. Successful generation or display does not guarantee reliable scanning on the physical display; scanning reliability must be assessed through physical calibration tests.
 
 To preview the information view without starting display backends or the application lifecycle:
 

@@ -38,6 +38,20 @@ def _entry_id(value: str) -> str:
     return value
 
 
+def _qr_version(value: str) -> str | int:
+    if value == "auto":
+        return value
+    if not re.fullmatch(r"[+-]?[0-9]+", value):
+        raise argparse.ArgumentTypeError("QR version must be 'auto' or an integer from 1 through 40") from None
+    try:
+        version = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("QR version must be 'auto' or an integer from 1 through 40") from None
+    if not 1 <= version <= 40:
+        raise argparse.ArgumentTypeError("QR version must be 'auto' or an integer from 1 through 40")
+    return version
+
+
 def _hold_open(backend: str) -> None:
     if backend not in _SERVING_BACKENDS:
         return
@@ -122,6 +136,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--qr-payload", help="text or URL encoded into the QR code (default: https://example.com/)")
     parser.add_argument(
+        "--qr-version",
+        type=_qr_version,
+        help="QR version: auto or a fixed version from 1 through 40 (default: auto)",
+    )
+    parser.add_argument(
         "--qr-error-correction",
         choices=("L", "M", "Q", "H"),
         help="QR error-correction level (default: M)",
@@ -134,6 +153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     qr_options = (
         ("--qr-payload", arguments.qr_payload),
+        ("--qr-version", arguments.qr_version),
         ("--qr-error-correction", arguments.qr_error_correction),
         ("--qr-module-size", arguments.qr_module_size),
         ("--qr-quiet-zone", arguments.qr_quiet_zone),
@@ -151,6 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.qr_error_correction is not None
             else default_qr_parameters.error_correction
         ),
+        version=None if arguments.qr_version in (None, "auto") else arguments.qr_version,
         module_size=(
             arguments.qr_module_size if arguments.qr_module_size is not None else default_qr_parameters.module_size
         ),

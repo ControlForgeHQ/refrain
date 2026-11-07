@@ -540,8 +540,9 @@ def _save_qr_diagnostic_png(image: Image.Image) -> Path:
 def _report_qr_diagnostic(parameters: QRCalibrationParameters, geometry: QRCalibrationGeometry, output: Path) -> None:
     left, top, right, bottom = geometry.bounds
     _LOGGER.info("QR calibration payload: %r", parameters.payload)
+    _LOGGER.info("QR requested version: %s", parameters.version if parameters.version is not None else "auto")
+    _LOGGER.info("QR resolved version: %d", geometry.version)
     _LOGGER.info("QR error-correction level: %s", parameters.error_correction)
-    _LOGGER.info("QR version: %d", geometry.version)
     _LOGGER.info("QR symbol modules (excluding quiet zone): %d", geometry.symbol_modules)
     _LOGGER.info("QR module size: %d pixels", geometry.module_size)
     _LOGGER.info(
