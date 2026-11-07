@@ -1344,7 +1344,15 @@ class RuntimeClock(Event):
         return self.is_set()
 
 
-def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
+def run_continuously(
+    workspace,
+    clock,
+    monkeypatch,
+    display=None,
+    *,
+    await_publication_before_scheduling=False,
+    **kwargs,
+):
     display = display or FakeDisplay()
     presentations = []
     initializations = []
@@ -1365,6 +1373,15 @@ def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
         initializations.append(configuration.type)
         return display
 
+    scheduling_wait = kwargs.pop("scheduling_wait", clock.scheduling_wait)
+
+    def wait_for_scheduling_event(deadline, shutdown, **wait_kwargs):
+        if await_publication_before_scheduling and coordinators:
+            coordinator = coordinators[-1]
+            identity = coordinator.requested[-1]
+            assert coordinator.wait_for_publication(identity, timeout=2)
+        return scheduling_wait(deadline, shutdown, **wait_kwargs)
+
     with monkeypatch.context() as patch:
         patch.setattr(application, "DisplayPublicationCoordinator", TrackingCoordinator)
         run_application(
@@ -1374,7 +1391,7 @@ def run_continuously(workspace, clock, monkeypatch, display=None, **kwargs):
             shutdown_event=clock,
             wall_clock=lambda: clock.now,
             monotonic_clock=lambda: clock.elapsed,
-            scheduling_wait=kwargs.pop("scheduling_wait", clock.scheduling_wait),
+            scheduling_wait=wait_for_scheduling_event,
             random_source=Random(1),
             backend_factory=kwargs.pop("backend_factory", initialize),
             **kwargs,
@@ -1657,7 +1674,13 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
         clock.move(at(10, 12))
 
     clock = RuntimeClock(at(10, 7), [forbid_content_reload, at(10, 18), at(10, 19)])
-    stages, initialized, display = run_continuously(workspace, clock, monkeypatch, debug_layout=True)
+    stages, initialized, display = run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        debug_layout=True,
+        await_publication_before_scheduling=True,
+    )
     assert stages == [(1, 0), (1, 1), (1, 2)]
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 3
