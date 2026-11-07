@@ -117,12 +117,21 @@ def test_uninitialized_location_and_initial_commit_recover_in_new_instance(tmp_p
     assert recovered.highest_reveal_stage == 0
 
 
-def test_legacy_format_five_snapshot_without_face_metadata_remains_unchanged(tmp_path: Path) -> None:
+def test_format_six_snapshot_without_face_metadata_remains_unchanged(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     committed = commit(store, "Legacy typography.")
     document = json.loads(store.path.read_bytes())
 
-    assert document["format_version"] == 5
+    assert document["format_version"] == 6
+    assert document["state"]["snapshot"]["presentation_metadata"]["qr_code"] == {
+        "url": "https://github.com/ControlForgeHQ/refrain",
+        "version": 4,
+        "error_correction": "M",
+        "module_size": 3,
+        "quiet_zone": 4,
+        "right_offset": 40,
+        "bottom_offset": 40,
+    }
     assert "font_faces" not in document["state"]["snapshot"]["presentation_metadata"]
     recovered = PersistentStateStore(store.path).load()
 
@@ -153,7 +162,7 @@ def test_committed_role_face_identifiers_survive_restart(tmp_path: Path) -> None
     }
 
 
-def test_committed_text_color_survives_format_five_restart(tmp_path: Path) -> None:
+def test_committed_text_color_survives_format_six_restart(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     snapshot = replace(
         make_snapshot("Committed color."),
@@ -172,7 +181,7 @@ def test_committed_text_color_survives_format_five_restart(tmp_path: Path) -> No
     assert recovered == committed
     assert recovered.snapshot.presentation_metadata["text_color_identifier"] == "burnt-orange"
     assert recovered.snapshot.presentation_metadata["text_color_rgb"] == (198, 90, 32)
-    assert json.loads(store.path.read_text(encoding="utf-8"))["format_version"] == 5
+    assert json.loads(store.path.read_text(encoding="utf-8"))["format_version"] == 6
 
 
 def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path: Path) -> None:
@@ -339,7 +348,9 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
 
     assert recovered.snapshot == snapshot
     assert recovered.snapshot.font_identifier == "stable-font"
-    assert recovered.snapshot.presentation_metadata == {"source": "Old source", "attribution": "Old author"}
+    assert recovered.snapshot.presentation_metadata["source"] == "Old source"
+    assert recovered.snapshot.presentation_metadata["attribution"] == "Old author"
+    assert recovered.snapshot.presentation_metadata["qr_code"]["url"] == "https://github.com/ControlForgeHQ/refrain"
 
 
 @pytest.mark.parametrize("contents", [b"{", b"\xff", b""])
@@ -378,11 +389,22 @@ def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -
         PersistentStateStore(state_path).load()
 
 
-def test_state_v5_excludes_timezone_global_history_and_font_contents(tmp_path: Path) -> None:
+def test_missing_committed_qr_parameters_are_rejected(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Persisted.")
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    del document["state"]["snapshot"]["presentation_metadata"]["qr_code"]
+    _write_document(store.path, document)
+
+    with pytest.raises(StateRecoveryError, match="snapshot.presentation_metadata.qr_code is required"):
+        store.load()
+
+
+def test_state_v6_excludes_timezone_global_history_and_font_contents(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    assert document["format_version"] == 5
+    assert document["format_version"] == 6
     assert "global_history" not in document["state"]
     assert document["state"]["snapshot"]["font_identifier"] == "test-font"
     assert "font" not in document["state"]["snapshot"]
@@ -390,7 +412,7 @@ def test_state_v5_excludes_timezone_global_history_and_font_contents(tmp_path: P
     assert "sha256" in document and "sha256" not in document["state"]["snapshot"]
 
 
-def test_format_five_persists_background_decoration_and_effective_region(tmp_path: Path) -> None:
+def test_format_six_persists_background_decoration_and_effective_region(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     snapshot = replace(
         make_snapshot("Persisted."),
@@ -423,7 +445,7 @@ def test_format_five_persists_background_decoration_and_effective_region(tmp_pat
 
 
 @pytest.mark.parametrize("field", ["background_identifier", "decoration_identifier"])
-def test_format_five_requires_visual_resource_fields(tmp_path: Path, field: str) -> None:
+def test_format_six_requires_visual_resource_fields(tmp_path: Path, field: str) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Persisted.")
     document = json.loads(store.path.read_text())
@@ -433,12 +455,12 @@ def test_format_five_requires_visual_resource_fields(tmp_path: Path, field: str)
         store.load()
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 5])
 def test_unsupported_development_versions_are_not_modified(tmp_path: Path, version: int) -> None:
     state_path = tmp_path / "state.json"
     original = json.dumps({"format_version": version, "state": {}, "sha256": "bad"}).encode()
     state_path.write_bytes(original)
-    with pytest.raises(UnsupportedStateVersionError, match="version 5 is required"):
+    with pytest.raises(UnsupportedStateVersionError, match="version 6 is required"):
         PersistentStateStore(state_path).load()
     assert state_path.read_bytes() == original
 
@@ -721,7 +743,7 @@ def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) ->
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Committed.")
     document = json.loads(store.path.read_bytes())
-    assert document["format_version"] == 5
+    assert document["format_version"] == 6
     document["format_version"] = 1
     document["state"]["snapshot"]["highest_reveal_stage"] = document["state"].pop("highest_reveal_stage")
     _write_document(store.path, document)
@@ -742,7 +764,7 @@ def test_format_four_state_is_rejected_without_modifying_its_bytes(tmp_path: Pat
     _write_document(store.path, document)
     contents = store.path.read_bytes()
 
-    with pytest.raises(UnsupportedStateVersionError, match="version 5 is required"):
+    with pytest.raises(UnsupportedStateVersionError, match="version 6 is required"):
         store.load()
 
     assert store.path.read_bytes() == contents

@@ -17,9 +17,15 @@ from types import MappingProxyType
 from typing import Any
 
 from .content import normalize_quotation
+from .qr import (
+    PRODUCTION_QR_PARAMETERS,
+    QRCodeGenerationError,
+    qr_parameters_from_metadata,
+    qr_parameters_to_metadata,
+)
 from .selection import SelectionProposal
 
-_FORMAT_VERSION = 5
+_FORMAT_VERSION = 6
 _DEFAULT_HISTORY_SEGMENT_SIZE = 1_048_576
 _DEFAULT_HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -148,6 +154,15 @@ class DailySnapshot:
             value = getattr(self, field)
             if not isinstance(value, Mapping):
                 raise TypeError(f"{field} must be a mapping")
+            if field == "presentation_metadata":
+                value = dict(value)
+                try:
+                    qr_parameters = qr_parameters_from_metadata(
+                        value.get("qr_code", qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS))
+                    )
+                except QRCodeGenerationError as error:
+                    raise ValueError(f"presentation_metadata.qr_code is invalid: {error}") from error
+                value["qr_code"] = qr_parameters_to_metadata(qr_parameters)
             object.__setattr__(self, field, _freeze_json(value, field))
 
     @property
@@ -482,6 +497,13 @@ def _decode_snapshot(value: object) -> DailySnapshot:
             "scheduling",
         },
     )
+    metadata = data["presentation_metadata"]
+    if not isinstance(metadata, dict) or "qr_code" not in metadata:
+        raise ValueError("snapshot.presentation_metadata.qr_code is required")
+    try:
+        qr_parameters_from_metadata(metadata["qr_code"])
+    except QRCodeGenerationError as error:
+        raise ValueError(f"snapshot.presentation_metadata.qr_code is invalid: {error}") from error
     scheduling_data = _require_mapping(
         data["scheduling"],
         "snapshot.scheduling",
@@ -511,7 +533,7 @@ def _decode_document(value: object) -> PersistentState:
         raise StateRecoveryError("persistent-state format_version must be an integer")
     if version != _FORMAT_VERSION:
         raise UnsupportedStateVersionError(
-            f"unsupported persistent-state format version {version}; version 5 is required. "
+            f"unsupported persistent-state format version {version}; version 6 is required. "
             "Archive or remove this development state file before starting Refrain; it was not modified."
         )
     payload = document["state"]

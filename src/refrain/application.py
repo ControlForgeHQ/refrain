@@ -45,6 +45,11 @@ from .persistence import (
     StateRecoveryError,
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
+from .qr import (
+    PRODUCTION_QR_PARAMETERS,
+    QRCodeParameters,
+    qr_parameters_to_metadata,
+)
 from .qr_diagnostic import (
     QRCalibrationError,
     QRCalibrationGeometry,
@@ -304,9 +309,13 @@ def _build_snapshot(
     quotation: Quotation,
     display_date: date,
     chooser: random.Random,
+    qr_parameters: QRCodeParameters | None = None,
 ) -> DailySnapshot:
     reveal = entry.reveal
     metadata: dict[str, object] = {"presentation_style": entry.presentation_style}
+    metadata["qr_code"] = qr_parameters_to_metadata(
+        PRODUCTION_QR_PARAMETERS if qr_parameters is None else qr_parameters
+    )
     if entry.source is not None:
         metadata["source"] = entry.source
     if entry.attribution is not None:

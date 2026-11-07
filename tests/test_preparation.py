@@ -19,6 +19,7 @@ from refrain import (
     resolve_reveal_stages,
 )
 from refrain.config import BackgroundResource, DecorationResource
+from refrain.qr import QRCodeParameters, qr_parameters_to_metadata
 
 _IMAGE_SIZE = (320, 240)
 _LAYOUT = {
@@ -164,6 +165,49 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
         if mode == "RGBA":
             assert image.getpixel((0, 0)) == (255, 255, 255)
             assert image.getpixel((1, 0)) == (127, 127, 127)
+    finally:
+        for image in images:
+            image.close()
+
+
+def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tmp_path: Path) -> None:
+    background_path = tmp_path / "paper.png"
+    decoration_path = tmp_path / "overlay.png"
+    with Image.new("RGB", (1600, 1200), (80, 120, 160)) as background:
+        background.save(background_path)
+    with Image.new("RGBA", (1600, 1200), (200, 20, 40, 255)) as decoration:
+        decoration.save(decoration_path)
+    snapshot = replace(
+        make_snapshot(
+            "lora",
+            source="A Sample Collection",
+            layout={
+                **_LAYOUT,
+                "image_size": (1600, 1200),
+                "presentation_region": {"x": 0.75, "y": 0.75, "width": 0.2, "height": 0.2},
+                "min_font_size": 16,
+                "max_font_size": 24,
+            },
+        ),
+        background_identifier="paper",
+        decoration_identifier="overlay",
+    )
+    stages = resolve_reveal_stages(snapshot)
+    images = prepare_daily_images(
+        snapshot,
+        stages,
+        _FONT_REGISTRY,
+        {"paper": BackgroundResource("paper", background_path, False)},
+        {"overlay": DecorationResource("overlay", decoration_path, False)},
+    )
+    try:
+        assert all(image.mode == "RGB" and image.size == (1600, 1200) for image in images)
+        assert images[0].getpixel((10, 10)) == (200, 20, 40)
+        for image in images[1:]:
+            assert image.crop((1437, 1037, 1560, 1160)).tobytes() == images[0].crop((1437, 1037, 1560, 1160)).tobytes()
+        assert images[0].getpixel((1437, 1037)) == (255, 255, 255)
+        assert images[0].getpixel((1449, 1049)) == (0, 0, 0)
+        assert snapshot.layout["presentation_region"] == {"x": 0.75, "y": 0.75, "width": 0.2, "height": 0.2}
     finally:
         for image in images:
             image.close()
@@ -436,6 +480,17 @@ def test_committed_color_is_rendered_for_all_literary_fields_and_reveal_stages()
             "attribution": "An Example Author",
             "text_color_identifier": "burnt-orange",
             "text_color_rgb": color,
+            "qr_code": qr_parameters_to_metadata(
+                QRCodeParameters(
+                    url=None,
+                    version=4,
+                    error_correction="M",
+                    module_size=1,
+                    quiet_zone=0,
+                    right_offset=0,
+                    bottom_offset=0,
+                )
+            ),
         },
     )
     stages = resolve_reveal_stages(snapshot)
