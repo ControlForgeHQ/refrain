@@ -72,7 +72,7 @@ The initial deployment targets:
 - Raspberry Pi OS Lite;
 - Python;
 - Waveshare 13.3-inch e-Paper HAT+ (E);
-- 1600 × 1200 display resolution.
+- Waveshare-native 1600 × 1200 landscape output.
 
 The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1 and the initial hardware-validation platform.
 
@@ -618,7 +618,7 @@ For each new daily selection:
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
 13. Resolve the decoration using the entry's preference or the effective default decoration pool.
-14. If at least one selected decoration layer is effectively tintable and a tint is selected, resolve one decoration colour from the entry preference, decoration preference, effective decoration-colour pool, or built-in `black` fallback.
+14. When at least one layer is effectively tintable and decoration-colour selection applies, resolve and commit one colour from the entry preference, decoration preference, effective decoration-colour pool, or built-in `black` fallback. Tintability alone does not require selecting a tint.
 15. Select one font bundle using the entry preference, selected decoration preference, or effective default font pool, in that precedence order; resolve and commit each role's face within that bundle.
 16. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
 17. Resolve output geometry, effective literary insets, QR enablement, ordered layer conditions, and all required rendering transformations.
@@ -683,7 +683,7 @@ An entry's explicit resource preferences take precedence according to the select
 
 The selected resource identifiers and effective presentation settings remain fixed throughout the committed display day.
 
-The decoration tinting decision is also fixed in the snapshot. The effective tintability of each layer and the single selected decoration tint color are committed, so later palette or manifest changes cannot recolour the presentation. If no tint is selected, effectively tintable layers retain their authored colors.
+The decoration tinting decision is also fixed in the snapshot. The effective tintability of each layer and, if selected, the single decoration tint color are committed, so later palette or manifest changes cannot recolour the presentation. If no tint is selected, every layer retains its authored colors.
 
 The snapshot contains resolved presentation values rather than references to mutable content-library entries or configuration that may subsequently change.
 
@@ -952,7 +952,7 @@ Without a committed selection, the evaluator calculates the initial display date
 
 `refrain.next_scheduling_deadline(current_time, configuration, state)` returns the next applicable committed reveal time or configured display-day boundary. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; observation and waiting do not select content, mutate persistent state, prepare images, or operate a display.
 
-The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by the snapshot's resolved schedule in host-local time and the persisted highest stage. The format-5 scheduling context contains only the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by the snapshot's resolved schedule in host-local time and the persisted highest stage. The scheduling context contains only the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
 
 The coordinator presents the corresponding prepared image when a reveal advancement is required. Scheduling evaluation does not determine whether an image was successfully presented.
 
@@ -1025,7 +1025,7 @@ Decoration-wide and per-layer `tintable` values both default to `true`. A layer 
 
 The presentation-level QR policy defaults to enabled and may be disabled. Effective enablement is the logical AND of that policy and the selected decoration's `qr_ready` value; omission of `qr_ready` means `true`. A selected decoration with `qr_ready: false` therefore suppresses QR generation even when the presentation policy enables it. Resolve and commit effective QR enablement before image preparation rather than inferring it from available artwork. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, enabled-only, or disabled-only respectively. Conditions do not change layer order.
 
-When enabled, generate the QR symbol at final output resolution with square integer-pixel modules and its complete quiet zone. Composite it without subsequent resize or resampling. Resolve its dimensions and offsets from final output geometry and commit the resolved generation parameters. Do not automatically modify literary insets or image slicing to accommodate QR placement; QR overlap is not automatically avoided. The standalone information view remains outside literary QR behavior.
+When enabled, generate a black QR symbol at final output resolution with square integer-pixel modules and its complete opaque-white quiet zone. Composite it without subsequent resize or resampling. Resolve its dimensions and offsets from final output geometry and commit the resolved generation parameters. Do not automatically modify literary insets or image slicing to accommodate QR placement; QR overlap is not automatically avoided. The standalone information view remains outside literary QR behavior.
 
 The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
 
@@ -1580,7 +1580,7 @@ The explicit, noninteractive `--initialize` operation manages only standard per-
 
 Configuration and content remain user-owned inputs. Operational state and global history remain authoritative and historical persistence respectively; prepared artifacts remain derived output. Runtime creation of those persistence and artifact files remains owned by their existing components.
 
-`--reset` and `--purge` are separate interactive operations for the standard per-user installation and must be run while Refrain is stopped. Reset removes the standard operational-state file, global-history records and rotations, and generated cache contents while preserving configuration, content, all user assets, and installation directories. Purge removes the Refrain-owned standard configuration, operational, and cache directory trees, including configuration, content, and assets stored beneath the standard configuration directory; it does not follow configured paths or remove shared application-data parents. Neither operation accepts runtime path overrides or starts the application lifecycle. Their deletion checks and confirmation requirements are described in [engineering guidance](ENGINEERING.md#installation-and-destructive-operations).
+`--reset` and `--purge` are separate interactive operations for the standard per-user installation and must be run while Refrain is stopped. Reset removes the standard operational-state file, global-history records and rotations, and generated cache contents while preserving configuration, content, all user assets, and installation directories. Purge removes the Refrain-owned standard configuration, operational, and cache directory trees, including configuration, content, and assets stored beneath the standard configuration directory; it does not follow configured paths or remove shared application-data parents. Neither operation accepts runtime path overrides or starts the application lifecycle. Their deletion checks and confirmation requirements are described in [engineering guidance](ENGINEERING.md#installation-approach).
 
 Platform paths, installation, and service operation are documented in [engineering guidance](ENGINEERING.md#deployment-and-service-operation); public configuration is specified in [the content-format document](CONTENT_FORMAT.md).
 

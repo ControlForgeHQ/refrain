@@ -264,7 +264,7 @@ The former singular `display.backend` field is not supported. No compatibility a
 
 Backend selection is independent of content selection, reveal scheduling, and image preparation.
 
-All configured backends consume the same complete prepared images. Backend selection does not change the configured output dimensions, literary insets, typography, committed snapshot, or reveal schedule.
+All configured backends consume the same complete prepared images. Backend selection does not change the configured output dimensions, literary insets, typography, committed snapshot, or reveal schedule. Independent output resolutions for individual backends are not supported.
 
 Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
 
@@ -382,6 +382,8 @@ When `enabled` is `false`, no QR code is generated for literary presentations. E
 
 Boolean values are required when the field is present; strings, integers, and other YAML types are invalid. An omitted setting enables QR generation. An invalid optional value produces a warning and uses the default `true`.
 
+QR enablement is configured at the presentation level only. Content entries have no QR override; a decoration's `qr_ready` field may suppress generation for that selected decoration.
+
 ### Content settings
 
 | Field | Type | Required | Default |
@@ -456,7 +458,7 @@ The configured output must use exactly one of the supported aspect ratios, 4:3, 
 
 Boolean values, non-integer dimensions, zero or negative values, unsupported aspect ratios, and dimensions outside the envelope are invalid. An omitted value uses the documented default. An invalid optional value produces a warning and falls back to `[1600, 1200]`. A configured backend that cannot accept the selected dimensions reports an actionable incompatibility; it must not receive an independently resized image.
 
-`layout.presentation_insets` defines the default literary rectangle as four independent reference-canvas pixel measurements:
+The `layout.presentation_insets` mapping is required and defines the default literary rectangle as four independent reference-canvas pixel measurements:
 
 | Field | Type | Required |
 |---|---|---|
@@ -482,6 +484,8 @@ layout:
 Each opposing pair must leave a positive width or height on the reference canvas. A missing required edge, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
 
 The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage.
+
+YAML supplies the configured output dimensions, reference-pixel insets, and source-image slice measurements. The working-canvas dimensions, converted pixel geometry, and effective layer transformations are resolved runtime values and are committed separately in the daily snapshot as defined by `docs/ARCHITECTURE.md`; they are not additional YAML fields.
 
 A content entry cannot directly specify presentation insets.
 
@@ -704,7 +708,7 @@ Each `layers` item is a mapping with the following fields:
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-`contain` preserves aspect ratio and fits the source image within the working canvas. It accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
+`contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. It accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
@@ -1203,7 +1207,7 @@ Version 0.1 supports the following values:
 | Value | Behavior |
 |---|---|
 | `"centered"` | Each quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space. |
-| `"left-aligned"` | Quotation lines share a common left edge. The complete text block remains horizontally centered according to its widest rendered line, rather than anchored to the region's left edge, and vertically centered within its allocated space. The byline is right-aligned within the presentation region. |
+| `"left-aligned"` | Quotation lines share a common left edge. The complete text block remains horizontally centered according to its widest rendered line, rather than anchored to the literary rectangle's left edge, and vertically centered within its allocated space. The byline is right-aligned within the literary rectangle. |
 
 For example:
 
@@ -1647,6 +1651,7 @@ The initial formats do not define:
 - automatic contrast adjustment or foreground recolouring;
 - arbitrary graphical transformations or decoration placement instructions;
 - independent per-backend output resolutions or multi-resolution asset variants;
+- per-entry QR settings;
 - general-purpose themes or style scripting;
 - content-triggered external actions;
 - independent presentation layouts for individual display backends;

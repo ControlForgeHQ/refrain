@@ -485,17 +485,17 @@ Recovery behavior must be covered by automated tests using controlled failures a
 
 Persistent operational state uses an explicitly versioned representation.
 
-Format version 6 is the supported operational-state format.
+Format version 7 is the operational-state format for new daily snapshots.
 
-Formats 1 through 5 are unsupported development formats. They must produce a clear, actionable compatibility error without modifying the existing file.
+Existing format-version-6 snapshots remain recoverable as legacy snapshots. Reuse valid prepared artifacts unchanged. If regeneration is required, use the version-6 committed dimensions, normalized presentation region, QR parameters, and single-image decoration semantics; do not convert the old region or derive QR behavior from current preferences. Do not rewrite or migrate a version-6 snapshot during reveal progression or recovery. A newly committed daily selection uses version 7.
 
-No migration implementation is provided for these pre-release development formats.
+Formats 1 through 5 remain unsupported development formats. They must produce a clear, actionable compatibility error without modifying the existing file.
 
-Existing prerelease development state must be reset before starting the revised application, using `python -m refrain --reset`.
+No migration implementation is provided for the unsupported pre-version-6 development formats.
 
 Future format changes must consider compatibility deliberately. Migration facilities should be introduced only when a supported release or demonstrated requirement makes them necessary.
 
-Role-specific typography is stored as the optional `presentation_metadata.font_faces` mapping. A version-6 snapshot also requires `presentation_metadata.qr_code`, containing the resolved URL, fixed QR version, error-correction level, integer module size, quiet-zone width, and right and bottom offsets. These parameters are committed inputs rather than current-configuration defaults; malformed or missing QR metadata makes the persisted snapshot invalid. No migration from earlier prerelease formats is provided.
+Version-7 snapshots require `presentation_metadata.font_faces`, the resolved QR enablement, output dimensions, effective literary insets, resolved final-resolution literary rectangle, and effective ordered decoration layers, conditions, methods, and transformation geometry. When QR is enabled, the snapshot also contains its URL, version, error-correction level, integer module size, quiet-zone width, and final-resolution placement offsets; when disabled, it must not regenerate a QR code. These are committed decisions, not current-configuration defaults. A version-6 snapshot retains its former QR and layout requirements.
 
 ### Version 0.1 operational state file
 
@@ -503,14 +503,14 @@ The authoritative operational state is stored in one UTF-8 JSON file.
 
 Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload.
 
-Format version 6 contains:
+Format version 7 contains:
 
 - `revision`: the positive, monotonically increasing committed selection revision;
 - `snapshot`: the current committed daily snapshot;
 - `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
 - `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
 
-The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. New snapshots include all three resolved face identifiers in `presentation_metadata.font_faces`; absence means regular for every role. The required `presentation_metadata.qr_code` stores the resolved URL and all QR rendering and placement parameters. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 5 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
+The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. `presentation_metadata.font_faces` contains all three resolved face identifiers. The snapshot records effective QR enablement and, when enabled, complete QR generation and placement parameters. Its layout distinguishes configured output dimensions, resolved working dimensions, reference-canvas dimensions, effective reference-pixel insets, and the final-resolution literary rectangle. Ordered decoration layer identifiers, conditions, methods, tintability, source-pixel slice boundaries, and resolved transformation geometry are committed. The scheduling context contains only the display date and day-start time. Format-6 snapshots retain their existing representation and recovery semantics; formats 1 through 5 remain unsupported and unchanged. The snapshot does not contain resource bytes, paths, or image hashes.
 
 Global selection history is not included in the operational-state document.
 
@@ -682,12 +682,12 @@ The internal layout is:
     ...
 ```
 
-The suffix is a random filesystem transaction name, not a second snapshot or artifact-set identity. A revision directory has one authoritative manifest pointing to one immutable image directory. This indirection permits atomic replacement of an existing complete set using standard file replacement on both POSIX and Windows, without attempting to replace a nonempty directory. Every stage is an independently readable, complete lossless PNG. Supported modes are `1`, `L`, `LA`, `RGB`, and `RGBA`; dimensions must match the committed snapshot's `layout.image_size`, and every stage must have the same mode. No image conversion or resizing occurs.
+The suffix is a random filesystem transaction name, not a second snapshot or artifact-set identity. A revision directory has one authoritative manifest pointing to one immutable image directory. This indirection permits atomic replacement of an existing complete set using standard file replacement on both POSIX and Windows, without attempting to replace a nonempty directory. Every stage is an independently readable, complete lossless PNG. Supported modes are `1`, `L`, `LA`, `RGB`, and `RGBA`; version-7 stage dimensions must match committed output dimensions, while version-6 artifacts retain their legacy dimensions. Every stage in a set must have the same mode and dimensions. No image conversion or resizing occurs during artifact storage or loading.
 
 
 The version 1 UTF-8 JSON manifest contains an `artifacts` object and its canonical JSON SHA-256 checksum. Metadata records `format_version`, `revision`, `snapshot_sha256`, the relative `image_directory`, `image_size`, `mode`, and an ordered `stages` array containing exact filenames and PNG-file SHA-256 digests.
 
-The snapshot fingerprint covers quotation text and identity, the selected font identifier, presentation metadata, reveal schedule, layout, and the complete format-5 scheduling context (display date and day-start time). It excludes reveal progress, repetition history, and global history.
+The snapshot fingerprint covers quotation text and identity, selected resource identifiers, presentation metadata, reveal schedule, output and working geometry, effective insets, resolved layer transformations, and scheduling context (display date and day-start time). It excludes reveal progress, repetition history, and global history.
 
 The fingerprint does not include font-file contents or font-content hashes. Changes to installed font resources do not independently invalidate existing prepared images.
 
@@ -720,6 +720,14 @@ Display-specific conversion belongs at the boundary between prepared images and 
 
 Do not allow the renderer to depend directly on Waveshare-specific objects or APIs.
 
+### Output geometry and diagnostics
+
+Use Pillow for high-resolution raster composition and downsampling. Keep configured output dimensions, reference-canvas measurements, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images; use one deterministic uniform scale and the architecture's nearest-integer, half-up rounding rule for coordinate and slice conversion.
+
+Compose backgrounds and decorations on the resolved working canvas, then downsample the graphical result once to final output dimensions. Avoid unnecessary raster upscaling and full-canvas copies. Render literary typography and the QR symbol only after downsampling, at final output resolution.
+
+Keep visual diagnostics resolution-aware: derive their canvas and placement from the configured output geometry, and do not assume one fixed canvas size. A diagnostic must not mutate committed presentation state or generated daily artifacts.
+
 ### Font loading and resolution
 
 Use Pillow-compatible font files for text rendering.
@@ -738,7 +746,7 @@ Use a controlled random source for deterministic testing of automatic font selec
 
 Select the single font bundle using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. Resolve all three effective face identifiers before committing the daily snapshot. An unavailable winning face warns and resolves directly to the bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
-Store the selected bundle identifier and the three effective face identifiers in the snapshot, not the font bytes, filesystem paths, or content digests. Keep the existing state format version by storing face identifiers in the optional snapshot presentation metadata. A pre-feature format-5 snapshot without the metadata remains recoverable and uses regular for all roles; do not infer new preferences or alter the snapshot.
+Store the selected bundle identifier and the three effective face identifiers in the snapshot, not the font bytes, filesystem paths, or content digests. A version-6 snapshot without face metadata remains recoverable and uses regular for all roles; do not infer new preferences or alter the snapshot.
 
 During image preparation, resolve the committed bundle and each committed face against the effective font registry. If a face is unavailable or unusable, use `regular` from that bundle. If the bundle itself is unavailable or unusable, choose an available bundled fallback using a deterministic order and apply the committed role-face identifiers to it.
 
@@ -762,11 +770,11 @@ Do not add font downloading. Keep role-specific face resolution limited to quota
 
 Background identifiers, registration requirements, and default-pool validation are defined in [Background registry](CONTENT_FORMAT.md#background-registry). Selection precedence and recovery behavior are defined in [Presentation and rendering](ARCHITECTURE.md#presentation-and-rendering).
 
-Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode without requiring source dimensions to match the output. Use deterministic aspect-preserving centred cover scaling and cropping. Preserve transparency over the paper-white base.
+Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Use deterministic aspect-preserving centered cover scaling and cropping on the working canvas. Preserve transparency over the paper-white base.
 
 Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background identifier before committing the snapshot; do not select backgrounds in rendering or independently for reveal stages.
 
-Keep background composition outside the shared quotation renderer. Compose the committed background over a paper-white base, preserving RGBA transparency, then render the literary composition. Resolve and compose once per complete preparation operation and reuse the result for every stage. Use Pillow resampling suitable for reduction and enlargement, and avoid unnecessary full-resolution copies or retained decoded resources.
+Keep background composition outside the shared quotation renderer. Compose the committed background over a paper-white base, preserving RGBA transparency. Resolve and compose once per complete preparation operation, downsample the graphic composition once, then reuse it for every stage. Use a high-quality Pillow resampling filter for reduction, retain deterministic geometry, and close decoded resources promptly.
 
 `prepare_daily_images(snapshot, stages, font_registry, background_registry=None)` and `recover_prepared_daily_images(state, artifact_store, stages, font_registry, background_registry=None)` require the effective background registry when the committed background identifier is not `"none"`. Omission or `None` in that case is a caller error and raises `DailyImagePreparationError`, including before artifact reuse. Callers should pass the configuration's effective registry for both bundled and custom backgrounds. A supplied empty registry represents unavailable resources and retains the paper-white recovery policy. For committed `"none"` backgrounds, the registry may be omitted.
 
@@ -774,21 +782,25 @@ When regeneration cannot resolve or decode a committed background, report a warn
 
 ### Decoration loading and composition
 
-Decoration identifiers, manifest requirements, default-pool validation, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate images as readable, single-frame RGBA PNGs without requiring source dimensions to match the output. Use deterministic aspect-preserving centred contain scaling, preserve transparency, and do not crop artwork.
+Decoration identifiers, format-2 manifest requirements, ordered layers, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
 
-Resolve decoration, font, background, and effective region before committing the snapshot. Keep selection outside rendering. Compose the selected decoration over the already composed background and before literary rendering, once per preparation; use that complete composition for every reveal stage. A missing or unusable committed decoration is warned about and omitted during regeneration, without changing its identifier or the committed region. Do not recalculate geometry from current decoration metadata.
+Resolve decoration, font, background, output dimensions, insets, QR enablement, and layer transforms before committing the snapshot. Keep selection outside rendering. Process eligible layers in manifest order over the background at working resolution, before literary text. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
+
+Test nine-slice source boundaries, uniform corner scaling, preserved corner proportions, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling. Verify that a missing committed decoration resource follows the existing fallback policy without changing committed geometry or selecting a replacement.
+
+Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. Preserve each layer's source alpha when applying the single committed decoration color. A tintable layer does not require that a tint be selected. Reuse valid prepared artifacts before resolving resources so later manifest or image changes do not invalidate a valid set.
 
 `prepare_daily_images` and `recover_prepared_daily_images` accept the effective decoration registry independently of the background registry. Reuse valid prepared artifacts before resolving image resources, so registry or file changes do not invalidate a valid set.
 
-### Mandatory QR composition
+### QR composition
 
-Generate exactly one QR symbol for each literary presentation using the shared QR encoder and rasterizer. Reuse the standalone diagnostic's QR encoding, capacity checks, integer-module rasterization, and footprint calculation; keep diagnostic canvas generation, reporting, file saving, and publication outside the production helpers.
+Resolve the explicit presentation-level QR policy and the selected decoration's `qr_ready` value before preparation. Apply conditional layer selection from that resolved state. Generate a symbol only when effective QR enablement is true, using the shared QR encoder and rasterizer. Keep diagnostic canvas generation, reporting, file saving, and publication outside production helpers.
 
-Resolve the complete QR footprint once per image-preparation operation and composite the same opaque RGB footprint onto every reveal stage after the literary renderer finishes. Use exact square integer-pixel modules, black foreground, and a solid-white quiet zone without antialiasing, resampling, transparency, or resizing. Resolve all QR parameters from the committed snapshot during regeneration; do not generate or alter QR images during scheduling, cache loading, or backend publication.
+Generate QR output at final output resolution after literary text. Resolve its complete footprint once per preparation and composite identical pixels onto every reveal stage. Use integer-pixel modules and the complete quiet zone, without antialiasing, later resizing, resampling, or transparency. Resolve all generation and placement parameters from the committed snapshot during regeneration; do not generate QR images during scheduling, cache loading, or backend publication.
 
-Validate the requested fixed QR version and destination-fit geometry. Capacity and fit failures must raise an actionable preparation error rather than changing the version or module size or producing a QR-free image. Do not check QR overlap with the literary region or modify typography or region geometry to reserve QR space. The information view remains outside this pipeline and must not gain a QR code.
+Resolve QR dimensions and offsets from final output geometry. Validate capacity and fit; failures must produce an actionable error rather than silently changing the version, resizing the symbol, or altering committed enablement. Do not perform automatic collision avoidance or modify literary insets or artwork slices to reserve QR space. The information view remains outside this pipeline.
 
-Test default and explicit URLs, fallback URL resolution, fixed version and error correction, module and footprint pixels, quiet-zone opacity, bottom-right offsets, exact-fit and non-fitting destinations, capacity errors, and composition after text over backgrounds and decorations. Verify identical QR pixels across reveal stages and unchanged QR inputs during snapshot reload and artifact regeneration.
+Test both enabled and disabled presentations, `qr_ready: false`, all three layer conditions, integer module and footprint pixels, quiet-zone opacity, placement at different output dimensions, exact-fit and non-fitting destinations, capacity errors, and composition after text. Verify identical QR pixels across reveal stages and unchanged committed inputs during snapshot reload and regeneration.
 
 Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
 
@@ -796,9 +808,9 @@ Wheel and source-distribution tests must verify that bundled manifests, referenc
 
 The initial release provides one configurable presentation layout.
 
-Use the normalized presentation region and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
+Use the configurable output dimensions, reference-pixel presentation insets, and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
 
-Convert normalized coordinates into pixel geometry using the actual output-image dimensions.
+Resolve reference measurements deterministically against the configured aspect ratio and output dimensions. Keep output, working, and reference canvases distinct; use one output resolution per application instance.
 
 The shared quotation renderer is responsible for arranging and drawing the quotation and its optional source and attribution within that region.
 
@@ -812,7 +824,7 @@ Text measurement must account for:
 - line spacing;
 - preserved line breaks;
 - paragraph spacing;
-- the complete presentation region;
+- the complete effective literary rectangle;
 - space occupied by source and attribution;
 - the effective presentation style.
 
@@ -824,7 +836,7 @@ Prefer a straightforward deterministic fitting procedure over a general-purpose 
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
-The initial layout need only be validated at the resolution and color capabilities required for Version 0.1.
+Validate the supported aspect-ratio and resolution matrix, including the Waveshare's native 1600 × 1200 output and representative 16:9 and 16:10 resolutions. Exercise 1080p and 4K working/output cases without treating hardware-independent results as physical display validation.
 
 Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
 
@@ -1075,7 +1087,7 @@ Do not modify vendor driver behavior without understanding the relevant hardware
 
 When modifications are necessary, keep them reviewable and explain why they are required.
 
-The physical backend uses Linux hardware SPI and GPIO character-device access through its optional `hardware` dependencies. Configure the required SPI overlay, `/dev/spidev0.0`, GPIO lines, and service-identity device permissions as documented in the README. Keep the application process under the minimum practical privileges rather than running it as root. The transport must remain lazy-loaded so non-hardware development and other display backends do not require these dependencies.
+The physical backend uses Linux hardware SPI and GPIO character-device access through its optional `hardware` dependencies. Configure the required SPI overlay, `/dev/spidev0.0`, GPIO lines, and service-identity device permissions according to the project's deployment and permissions guidance. Keep the application process under the minimum practical privileges rather than running it as root. The transport must remain lazy-loaded so non-hardware development and other display backends do not require these dependencies.
 
 ### Hardware isolation
 
@@ -1300,7 +1312,7 @@ Verify that the PNG is created exclusively in the current working directory befo
 
 ### QR calibration diagnostic tests
 
-Test QR generation at each supported error-correction level, automatic version selection, exact integer-pixel module rendering, quiet-zone and footprint geometry, and placement boundaries. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
+Test enabled and disabled QR policies, decoration `qr_ready`, each conditional layer state, exact integer-pixel modules, complete quiet-zone and footprint geometry, and placement across the supported output matrix. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
 
 ### Decoration diagnostic tests
 
@@ -1330,8 +1342,9 @@ Automated testing should cover:
 - preservation of repetition history when content discovery fails or no valid quotations remain;
 - recovery of committed selections independently of current content-library availability;
 - recovery and regeneration when a previously selected custom font becomes unavailable;
-- format-5 snapshot round trips with committed text colors, palette-change regeneration, and legacy rendering without color metadata;
-- format-5 snapshot round trips, recovery of legacy snapshots without face metadata, and unchanged rejection of state versions 1 through 4;
+- format-7 snapshot round trips with committed text colors, geometry, QR enablement, ordered layers, and palette-change regeneration;
+- version-6 snapshot recovery without migration, including reuse of valid old artifacts and regeneration from legacy committed geometry and QR parameters;
+- unchanged rejection of state versions 1 through 5;
 - committed background recovery without reselection or changes to the effective layout;
 - stable entry and quotation identities;
 - normalized quotation matching;
@@ -1366,7 +1379,9 @@ Where practical, test recovery using a newly initialized application instance ra
 
 ### Rendering tests
 
-Verify rendered-image dimensions, stage completeness, and stable layout geometry.
+Verify rendered-image dimensions, stage completeness, stable layout geometry, and equality of all reveal-stage output dimensions.
+
+Exercise 4:3, 16:9, and 16:10 configurations, including 1600 × 1200, 1920 × 1080, 3840 × 2160, and 1920 × 1200. Verify the associated reference and working canvases, maximum-envelope bounds, exact-ratio validation, deterministic half-up rounding, and rejection of degenerate insets and unsupported dimensions.
 
 Use representative quotations of different lengths and combinations of optional metadata.
 
@@ -1379,7 +1394,9 @@ Test automatic text fitting with:
 - quotations requiring a smaller permitted font size;
 - quotations that cannot fit at the minimum permitted size.
 
-Verify that all rendered literary content stays within the configured presentation region.
+Verify that all rendered literary content stays within the effective rectangle derived from reference-pixel insets, at final output resolution.
+
+Verify that artwork is composed at working resolution and downsampled once before final-resolution typography and QR generation. Confirm no later resize or resampling changes text or QR pixels.
 
 Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
 
@@ -1406,9 +1423,9 @@ Test font configuration and selection behavior, including:
 
 Use deterministic random sources where required.
 
-Test background and decoration layer ordering, RGBA transparency, consistent composition across reveal stages, and plain output for `"none"`. Verify warning-based recovery for missing or unusable committed resources, preservation of committed identifiers and effective geometry, and reuse of valid artifacts after resource changes.
+Test ordered multi-layer decoration composition, all QR conditions, RGBA transparency, decoration-wide AND per-layer tintability, the untinted-accent case, consistent composition across reveal stages, and plain output for `"none"`. Verify warning-based recovery for missing or unusable committed resources, preservation of committed identifiers and effective geometry, and reuse of valid artifacts after resource changes.
 
-Test background cover scaling and centred cropping and decoration contain scaling and centring for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results.
+Test background cover scaling and centered cropping and decoration `contain` scaling for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results. Test nine-slice corners, edge stretching, centered edge cropping, center stretching, source-pixel bounds, destinations too small for preserved corners, crop destinations longer than available source segments, and deterministic rounding without gaps or overlaps.
 
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 
@@ -1424,7 +1441,9 @@ Hardware validation should include:
 
 - driver initialization;
 - complete image transfer and refresh;
+- unchanged automated coverage of the native 1600 × 1200 output and portrait orientation;
 - correct landscape orientation and representative color rendering;
+- representative resolution-independent output on a non-e-paper destination;
 - repeated scheduled updates;
 - controller sleep and subsequent use;
 - retention of the displayed image after sleep;
@@ -1440,9 +1459,7 @@ Do not claim a Raspberry Pi model is supported solely because it uses a compatib
 
 ### Resource validation
 
-Measure memory use, processing time, and storage requirements on representative hardware when those characteristics materially affect supported deployment targets.
-
-In particular, validate the Raspberry Pi Zero 2 W before declaring it supported.
+Measure memory use, image-preparation time, and storage requirements on the Raspberry Pi 3B+ when those characteristics materially affect supported deployment targets. Do not reject rendering-quality decisions solely because they add work to infrequent daily image preparation.
 
 Do not introduce caching, concurrency, or performance optimization without evidence that it improves an observed limitation.
 
