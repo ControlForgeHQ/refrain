@@ -215,6 +215,32 @@ def test_existing_nonfatal_manifest_warnings_do_not_prevent_inspection(workspace
             image.close()
 
 
+def test_reload_updates_font_face_background_and_colours(workspace):
+    config, package = workspace
+    before = diagnostic._load_configuration(config)
+    manifest = before.decorations["a-custom"].manifest
+    first, first_snapshot = diagnostic._render(before, "a-custom", manifest, 0, False)
+    updated = (
+        _MANIFEST.replace("font: lora", "font: alegreya")
+        .replace("quotation: italic", "quotation: bold")
+        .replace("background: none", "background: canvas")
+        .replace("text_color: red", "text_color: black")
+        .replace("decoration_color: blue", "decoration_color: red")
+    )
+    (package / "decoration.yaml").write_text(updated, encoding="utf-8")
+    after = diagnostic._load_configuration(config)
+    second, second_snapshot = diagnostic._render(after, "a-custom", manifest, 0, False)
+    assert first_snapshot.font_identifier == "lora"
+    assert second_snapshot.font_identifier == "alegreya"
+    assert second_snapshot.presentation_metadata["font_faces"]["quotation"] == "bold"
+    assert second_snapshot.background_identifier == "canvas"
+    assert second_snapshot.presentation_metadata["text_color_rgb"] == (0, 0, 0)
+    assert second_snapshot.presentation_metadata["decoration_color_rgb"] == (255, 0, 0)
+    assert first.tobytes() != second.tobytes()
+    first.close()
+    second.close()
+
+
 @pytest.mark.parametrize(
     "mode", ["--once", "--demo=1", "--show-entry=x", "--test-qr", "--initialize", "--reset", "--purge"]
 )
