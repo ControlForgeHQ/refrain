@@ -1298,6 +1298,12 @@ Verify that the PNG is created exclusively in the current working directory befo
 
 Test QR generation at each supported error-correction level, automatic version selection, exact integer-pixel module rendering, quiet-zone and footprint geometry, and placement boundaries. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
 
+### Decoration diagnostic tests
+
+Use the production snapshot and image-preparation pipeline with fixed fully revealed compositions and stable presentation choices. Freeze the sorted identifiers for the session, revalidate the selected package on each presentation, and do not publish a fallback when its decoration cannot be read. Keep input separate from presentation, restore terminal settings on exit, and publish sequentially through the existing coordinator without touching production persistence.
+
+Test navigation and wrapping, terminal input and restoration, manifest and artwork reload including invalid-file recovery, preference and debug-region changes, deterministic output, QR composition, identical multi-backend publication, resource cleanup, and operational-state isolation. Hardware-independent tests do not establish physical display behavior.
+
 ### Core test coverage
 
 Automated testing should cover:

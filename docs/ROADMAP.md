@@ -117,6 +117,7 @@ The first release should be useful in normal household operation without dependi
 - Verify recovery of committed selections and prepared images after application restarts.
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
+- Provide interactive, state-isolated visual inspection of discovered decorations with short and long literary compositions.
 - Validate QR encoding, exact raster geometry, placement, reveal-stage consistency, and prepared-image recovery without display hardware.
 - Validate bundled and user-supplied background and decoration resources, selection precedence, and recovery behaviour.
 - Verify that decoration-defined presentation regions preserve complete literary content without overlap or clipping.

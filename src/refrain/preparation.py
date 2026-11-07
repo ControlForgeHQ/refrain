@@ -188,11 +188,15 @@ def _apply_daily_decoration(
     identifier: str,
     registry: Mapping[str, DecorationResource],
     tint_rgb: tuple[int, int, int] | None = None,
+    *,
+    strict: bool = False,
 ) -> Image.Image:
     if identifier == "none":
         return background
     resource = registry.get(identifier)
     if resource is None:
+        if strict:
+            raise DailyImagePreparationError(f"decoration {identifier!r} is unavailable")
         _LOGGER.warning("Committed decoration %r is unavailable; omitting the overlay", identifier)
         return background
     try:
@@ -218,6 +222,10 @@ def _apply_daily_decoration(
                 if tinted is not None:
                     tinted.close()
     except Exception as error:
+        if strict:
+            raise DailyImagePreparationError(
+                f"decoration {identifier!r} is unavailable or unusable: {error}"
+            ) from error
         _LOGGER.warning(
             "Committed decoration %r is unavailable or unusable; omitting the overlay: %s",
             identifier,
@@ -312,6 +320,8 @@ def prepare_daily_images(
     font_registry: Mapping[str, FontResource],
     background_registry: Mapping[str, BackgroundResource] | None = None,
     decoration_registry: Mapping[str, DecorationResource] | None = None,
+    *,
+    strict_decoration: bool = False,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -360,13 +370,14 @@ def prepare_daily_images(
         background = _generate_daily_background(
             image_size, snapshot.background_identifier, {} if background_registry is None else background_registry
         )
-        background = _apply_daily_decoration(
-            background,
-            snapshot.decoration_identifier,
-            {} if decoration_registry is None else decoration_registry,
-            decoration_tint,
-        )
         try:
+            background = _apply_daily_decoration(
+                background,
+                snapshot.decoration_identifier,
+                {} if decoration_registry is None else decoration_registry,
+                decoration_tint,
+                strict=strict_decoration,
+            )
             images = render_reveal_stages(
                 background,
                 fonts["quotation"],

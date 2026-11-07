@@ -94,6 +94,7 @@ class DecorationResource:
     text_color: tuple[str, ...] | None = None
     tintable: bool = False
     decoration_color: tuple[str, ...] | None = None
+    manifest: Union[Path, Traversable, None] = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
