@@ -120,6 +120,107 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     assert not list(config.parent.glob("*.json"))
 
 
+def test_variants_share_visual_choices_across_navigation_and_reload(workspace, monkeypatch):
+    config, package = workspace
+    config.write_text(
+        _CONFIG.replace("default: [lora]", "default: [lora, alegreya, source-sans-3]")
+        .replace("default: [none]\n  decorations:", "default: [none, canvas, cloth]\n  decorations:")
+        .replace("    min_font_size:", "    colors: [black, red, blue]\n    min_font_size:"),
+        encoding="utf-8",
+    )
+    manifest = (
+        _MANIFEST.replace("font: lora\n", "")
+        .replace("background: none\n", "")
+        .replace("text_color: red", "text_color: [black, red, blue]")
+        .replace("decoration_color: blue", "decoration_color: [black, red, blue]")
+    )
+    manifest_file = package / "decoration.yaml"
+    manifest_file.write_text(manifest, encoding="utf-8")
+    other = package.parent / "other"
+    other.mkdir()
+    (other / "decoration.yaml").write_text(manifest.replace("a-custom", "b-custom"), encoding="utf-8")
+    with Image.new("RGBA", (80, 60), (0, 0, 0, 64)) as image:
+        image.save(package / "artwork.png")
+        image.save(other / "artwork.png")
+
+    snapshots = []
+    render = diagnostic._render
+
+    def capture(*args):
+        image, snapshot = render(*args)
+        snapshots.append(snapshot)
+        return image, snapshot
+
+    monkeypatch.setattr(diagnostic, "_render", capture)
+    backends = {name: RecordingBackend() for name in ("window", "image-server")}
+
+    @contextmanager
+    def reader():
+        keys = iter([" ", "b", "r", " ", " ", " ", "b", "b", "b", "r", " ", "q"])
+        count = 0
+
+        def read():
+            nonlocal count
+            count += 1
+            if count == 10:
+                updated = (
+                    manifest.replace("font_faces:", "font: alegreya\nbackground: canvas\nfont_faces:")
+                    .replace("text_color: [black, red, blue]", "text_color: red")
+                    .replace("decoration_color: [black, red, blue]", "decoration_color: blue")
+                )
+                manifest_file.write_text(updated, encoding="utf-8")
+            return next(keys)
+
+        yield read
+
+    diagnostic.run_decoration_diagnostic(
+        config, backend_factory=lambda settings: backends[settings.type], input_factory=reader
+    )
+
+    def choices(snapshot):
+        metadata = snapshot.presentation_metadata
+        return (
+            snapshot.font_identifier,
+            snapshot.background_identifier,
+            metadata["font_faces"],
+            metadata["text_color_identifier"],
+            metadata["text_color_rgb"],
+            metadata["decoration_color_identifier"],
+            metadata["decoration_color_rgb"],
+        )
+
+    assert [s.decoration_identifier for s in snapshots] == [
+        "a-custom",
+        "a-custom",
+        "a-custom",
+        "a-custom",
+        "a-custom",
+        "b-custom",
+        "b-custom",
+        "b-custom",
+        "a-custom",
+        "a-custom",
+        "a-custom",
+        "a-custom",
+    ]
+    assert all(choices(snapshots[index]) == choices(snapshots[0]) for index in (1, 2, 3, 4, 8, 9))
+    assert choices(snapshots[5]) != choices(snapshots[0])
+    assert choices(snapshots[5]) == choices(snapshots[6]) == choices(snapshots[7])
+    assert choices(snapshots[10]) == choices(snapshots[11])
+    assert snapshots[10].font_identifier == "alegreya"
+    assert snapshots[10].background_identifier == "canvas"
+    assert snapshots[10].presentation_metadata["text_color_identifier"] == "red"
+    assert snapshots[10].presentation_metadata["decoration_color_identifier"] == "blue"
+    assert snapshots[0].quotation_text != snapshots[1].quotation_text
+    assert snapshots[0].presentation_metadata["source"] != snapshots[1].presentation_metadata["source"]
+    for backend in backends.values():
+        assert backend.images[0].tobytes() != backend.images[1].tobytes()
+        assert backend.images[0].tobytes() == backend.images[2].tobytes() == backend.images[3].tobytes()
+        assert backend.images[1].tobytes() == backend.images[4].tobytes() == backend.images[8].tobytes()
+        for image in backend.images:
+            image.close()
+
+
 def test_reload_invalid_recover_image_manifest_and_debug_region(workspace, capsys):
     config, package = workspace
     manifest = package / "decoration.yaml"

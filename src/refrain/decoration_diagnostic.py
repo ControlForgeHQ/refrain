@@ -131,9 +131,7 @@ def _render(configuration, identifier, manifest, variant, debug_layout, initial_
         attribution=attribution,
         decoration=identifier,
     )
-    snapshot = _build_snapshot(
-        configuration, entry, quotation, date(2000, 1, 1), _StableChoices(f"{identifier}:{variant}")
-    )
+    snapshot = _build_snapshot(configuration, entry, quotation, date(2000, 1, 1), _StableChoices(identifier))
     stages = resolve_reveal_stages(snapshot)
     image = prepare_daily_images(
         snapshot,
