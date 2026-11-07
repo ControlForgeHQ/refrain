@@ -98,21 +98,18 @@ def test_qr_generation_preserves_error_correction_and_exact_module_pixels(level:
                     symbol_top + (row_index + 1) * parameters.module_size,
                 )
                 expected_pixel = (0, 0, 0) if dark else (255, 255, 255)
-            assert result.image.crop(box).getcolors() == [(parameters.module_size**2, expected_pixel)]
+                with result.image.crop(box) as module:
+                    assert module.getcolors() == [(parameters.module_size**2, expected_pixel)]
         quiet = geometry.quiet_zone_pixels
         left, top, right, bottom = geometry.bounds
-        assert result.image.crop((left, top, right + 1, top + quiet)).getcolors() == [
-            ((right - left + 1) * quiet, (255, 255, 255))
-        ]
-        assert result.image.crop((left, top, left + quiet, bottom + 1)).getcolors() == [
-            (quiet * (bottom - top + 1), (255, 255, 255))
-        ]
-        assert result.image.crop((left, bottom - quiet + 1, right + 1, bottom + 1)).getcolors() == [
-            ((right - left + 1) * quiet, (255, 255, 255))
-        ]
-        assert result.image.crop((right - quiet + 1, top, right + 1, bottom + 1)).getcolors() == [
-            (quiet * (bottom - top + 1), (255, 255, 255))
-        ]
+        with result.image.crop((left, top, right + 1, top + quiet)) as top_quiet_zone:
+            assert top_quiet_zone.getcolors() == [((right - left + 1) * quiet, (255, 255, 255))]
+        with result.image.crop((left, top, left + quiet, bottom + 1)) as left_quiet_zone:
+            assert left_quiet_zone.getcolors() == [(quiet * (bottom - top + 1), (255, 255, 255))]
+        with result.image.crop((left, bottom - quiet + 1, right + 1, bottom + 1)) as bottom_quiet_zone:
+            assert bottom_quiet_zone.getcolors() == [((right - left + 1) * quiet, (255, 255, 255))]
+        with result.image.crop((right - quiet + 1, top, right + 1, bottom + 1)) as right_quiet_zone:
+            assert right_quiet_zone.getcolors() == [(quiet * (bottom - top + 1), (255, 255, 255))]
     finally:
         result.image.close()
 
