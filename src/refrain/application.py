@@ -211,6 +211,52 @@ def _resolve_text_color(
     return "black", (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
 
 
+def _resolve_decoration_color(
+    configuration: ApplicationConfiguration,
+    entry: ContentEntry,
+    decoration: DecorationResource | None,
+    chooser: random.Random,
+) -> tuple[str, tuple[int, int, int]] | None:
+    if decoration is None or not decoration.tintable:
+        return None
+
+    preference_levels = (
+        ("content entry", entry.decoration_color),
+        ("selected decoration", decoration.decoration_color),
+        ("layout.decorations.colors", configuration.default_decoration_colors),
+        ("built-in fallback", ("black",)),
+    )
+    for source, candidates in preference_levels:
+        if candidates is None:
+            continue
+        usable: list[str] = []
+        seen: set[str] = set()
+        for identifier in candidates:
+            if not valid_identifier(identifier):
+                _LOGGER.warning("Decoration colour identifier %r from %s is invalid; excluding it", identifier, source)
+            elif identifier not in configuration.palette:
+                _LOGGER.warning(
+                    "Decoration colour identifier %r from %s is unavailable; excluding it", identifier, source
+                )
+            elif identifier in seen:
+                _LOGGER.warning(
+                    "Decoration colour identifier %r from %s is duplicated; ignoring the duplicate", identifier, source
+                )
+            else:
+                usable.append(identifier)
+                seen.add(identifier)
+        if usable:
+            identifier = usable[0] if len(usable) == 1 else chooser.choice(tuple(usable))
+            value = configuration.palette[identifier]
+            return identifier, (
+                int(value[1:3], 16),
+                int(value[3:5], 16),
+                int(value[5:7], 16),
+            )
+    value = configuration.palette.get("black", "#000000")
+    return "black", (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
+
+
 def _select_snapshot(
     configuration: ApplicationConfiguration,
     display_date: date,
@@ -257,6 +303,10 @@ def _build_snapshot(
         metadata["attribution"] = entry.attribution
     decoration_identifier = _resolve_decoration(configuration, entry.decoration, chooser)
     decoration = configuration.decorations.get(decoration_identifier)
+    decoration_color = _resolve_decoration_color(configuration, entry, decoration, chooser)
+    metadata["decoration_tint_enabled"] = decoration_color is not None
+    if decoration_color is not None:
+        metadata["decoration_color_identifier"], metadata["decoration_color_rgb"] = decoration_color
     font_preference = entry.font
     if font_preference is not None and font_preference not in configuration.fonts:
         _LOGGER.warning("Requested font %r is not available; checking decoration preference", font_preference)

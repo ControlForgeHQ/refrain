@@ -186,10 +186,55 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
     assert decoration.font is None
     assert decoration.background is None
     assert dict(decoration.font_faces) == {"source": "handwritten"}
+    assert decoration.tintable is False
+    assert decoration.decoration_color is None
     assert config.default_fonts == ("lora",)
     assert config.default_decorations == ("none",)
     assert "font preference 'missing-font' is unavailable" in caplog.text
     assert "background preference 'missing-background' is unavailable" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("tintable", "include_tintable", "color", "expected_tintable", "expected_color"),
+    [
+        (True, True, ["sage-green", "burnt-orange"], True, ("sage-green", "burnt-orange")),
+        (False, True, "red", False, ("red",)),
+        ("true", True, ["sage-green"], False, ("sage-green",)),
+        (1, True, ["sage-green", 1], False, ("sage-green",)),
+        (None, False, [], False, None),
+        (None, True, None, False, None),
+    ],
+)
+def test_decoration_tintability_and_color_preference_are_optional(
+    tmp_path: Path,
+    caplog,
+    tintable: object,
+    include_tintable: bool,
+    color: object,
+    expected_tintable: bool,
+    expected_color: tuple[str, ...] | None,
+) -> None:
+    package = tmp_path / "assets" / "decorations" / "border"
+    _write_png(package / "border.png", "RGBA")
+    manifest: dict[str, object] = {
+        "format": 1,
+        "id": "border",
+        "image": "border.png",
+        "decoration_color": color,
+    }
+    if include_tintable:
+        manifest["tintable"] = tintable
+    _write_manifest(package, "decoration.yaml", manifest)
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    decoration = config.decorations["border"]
+    assert decoration.tintable is expected_tintable
+    assert decoration.decoration_color == expected_color
+    if include_tintable and type(tintable) is not bool:
+        assert "tintable" in caplog.text
+    if color is None or color == [] or color == ["sage-green", 1]:
+        assert "decoration_color" in caplog.text
 
 
 @pytest.mark.parametrize(

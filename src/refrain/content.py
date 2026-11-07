@@ -28,6 +28,7 @@ _ENTRY_FIELDS = {
     "background",
     "decoration",
     "text_color",
+    "decoration_color",
     "presentation_style",
     "eligibility",
     "reveal",
@@ -110,6 +111,7 @@ class ContentEntry:
     decoration: Optional[str] = None
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     text_color: tuple[str, ...] | None = None
+    decoration_color: tuple[str, ...] | None = None
 
 
 def normalize_quotation(text: str) -> str:
@@ -337,6 +339,24 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
                 "must be a palette identifier or a nonempty sequence of palette identifiers",
             )
 
+    decoration_color: tuple[str, ...] | None = None
+    if "decoration_color" in data:
+        value = data["decoration_color"]
+        if isinstance(value, str):
+            decoration_color = (value,)
+        elif isinstance(value, list) and value:
+            if all(isinstance(identifier, str) for identifier in value):
+                decoration_color = tuple(value)
+            else:
+                _diagnose(diagnostics, file, "decoration_color", "must contain only palette-identifier strings")
+        else:
+            _diagnose(
+                diagnostics,
+                file,
+                "decoration_color",
+                "must be a palette identifier or a nonempty sequence of palette identifiers",
+            )
+
     priority = data.get("priority", 0)
     if isinstance(priority, bool) or not isinstance(priority, int):
         _diagnose(diagnostics, file, "priority", "must be a signed integer (booleans are not valid priorities)")
@@ -372,6 +392,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         decoration=decoration,  # type: ignore[arg-type]
         font_faces=font_faces,  # type: ignore[arg-type]
         text_color=text_color,
+        decoration_color=decoration_color,
     )
 
 

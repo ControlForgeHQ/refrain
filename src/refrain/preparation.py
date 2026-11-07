@@ -116,6 +116,31 @@ def _resolve_text_color(snapshot: DailySnapshot) -> tuple[int, int, int] | None:
     return value[0], value[1], value[2]
 
 
+def _resolve_decoration_tint(snapshot: DailySnapshot) -> tuple[int, int, int] | None:
+    metadata = _require_mapping(snapshot.presentation_metadata, "presentation_metadata")
+    enabled = metadata.get("decoration_tint_enabled", False)
+    if type(enabled) is not bool:
+        raise DailyImagePreparationError("snapshot.presentation_metadata.decoration_tint_enabled must be a boolean")
+    if not enabled:
+        return None
+
+    identifier = metadata.get("decoration_color_identifier")
+    value = metadata.get("decoration_color_rgb")
+    if not valid_identifier(identifier):
+        raise DailyImagePreparationError(
+            "snapshot.presentation_metadata.decoration_color_identifier must be a valid identifier"
+        )
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 3
+        or any(type(channel) is not int or not 0 <= channel <= 255 for channel in value)
+    ):
+        raise DailyImagePreparationError(
+            "snapshot.presentation_metadata.decoration_color_rgb must contain three integers from 0 through 255"
+        )
+    return value[0], value[1], value[2]
+
+
 def _generate_daily_background(
     image_size: tuple[int, int],
     identifier: str,
@@ -148,6 +173,7 @@ def _apply_daily_decoration(
     background: Image.Image,
     identifier: str,
     registry: Mapping[str, DecorationResource],
+    tint_rgb: tuple[int, int, int] | None = None,
 ) -> Image.Image:
     if identifier == "none":
         return background
@@ -157,12 +183,26 @@ def _apply_daily_decoration(
         return background
     try:
         with load_decoration_image(resource) as image:
-            contained = ImageOps.contain(image, background.size, method=Image.Resampling.LANCZOS)
+            source = image
+            tinted: Image.Image | None = None
             try:
-                position = ((background.width - contained.width) // 2, (background.height - contained.height) // 2)
-                background.paste(contained, position, contained)
+                if tint_rgb is not None:
+                    alpha = image.getchannel("A")
+                    try:
+                        tinted = Image.new("RGBA", image.size, (*tint_rgb, 0))
+                        tinted.putalpha(alpha)
+                    finally:
+                        alpha.close()
+                    source = tinted
+                contained = ImageOps.contain(source, background.size, method=Image.Resampling.LANCZOS)
+                try:
+                    position = ((background.width - contained.width) // 2, (background.height - contained.height) // 2)
+                    background.paste(contained, position, contained)
+                finally:
+                    contained.close()
             finally:
-                contained.close()
+                if tinted is not None:
+                    tinted.close()
     except Exception as error:
         _LOGGER.warning(
             "Committed decoration %r is unavailable or unusable; omitting the overlay: %s",
@@ -287,6 +327,7 @@ def prepare_daily_images(
 
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(snapshot)
     text_color = _resolve_text_color(snapshot)
+    decoration_tint = _resolve_decoration_tint(snapshot)
     fonts = _resolve_fonts(snapshot, font_registry)
     try:
         layout = layout_composition(
@@ -308,6 +349,7 @@ def prepare_daily_images(
             background,
             snapshot.decoration_identifier,
             {} if decoration_registry is None else decoration_registry,
+            decoration_tint,
         )
         try:
             return render_reveal_stages(

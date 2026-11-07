@@ -205,6 +205,70 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
             image.close()
 
 
+def test_committed_decoration_tint_preserves_alpha_and_does_not_modify_source(tmp_path: Path) -> None:
+    decoration_path = tmp_path / "overlay.png"
+    with Image.new("RGBA", _IMAGE_SIZE, (20, 40, 60, 255)) as decoration:
+        decoration.putpixel((0, 0), (0, 0, 0, 0))
+        decoration.putpixel((1, 0), (255, 255, 255, 128))
+        decoration.putpixel((2, 0), (0, 0, 0, 255))
+        decoration.putpixel((3, 0), (40, 80, 120, 128))
+        decoration.save(decoration_path)
+    original_bytes = decoration_path.read_bytes()
+    snapshot = replace(
+        make_snapshot(
+            "lora",
+            source=None,
+            attribution=None,
+            metadata={
+                "presentation_style": "centered",
+                "decoration_tint_enabled": True,
+                "decoration_color_identifier": "burnt-orange",
+                "decoration_color_rgb": (200, 100, 50),
+            },
+        ),
+        decoration_identifier="overlay",
+    )
+
+    images = prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(), CompositionVisibility()),
+        _FONT_REGISTRY,
+        decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=False)},
+    )
+    try:
+        for image in images:
+            assert image.getpixel((0, 0)) == (255, 255, 255)
+            assert image.getpixel((1, 0)) == (227, 177, 152)
+            assert image.getpixel((2, 0)) == (200, 100, 50)
+            assert image.getpixel((3, 0)) == (227, 177, 152)
+        assert images[0].tobytes() == images[1].tobytes()
+        assert decoration_path.read_bytes() == original_bytes
+    finally:
+        for image in images:
+            image.close()
+
+
+def test_legacy_snapshot_does_not_infer_tinting_from_current_manifest(tmp_path: Path) -> None:
+    decoration_path = tmp_path / "overlay.png"
+    with Image.new("RGBA", _IMAGE_SIZE, (255, 255, 255, 255)) as decoration:
+        decoration.putpixel((0, 0), (40, 80, 120, 255))
+        decoration.save(decoration_path)
+    snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration_identifier="overlay")
+
+    images = prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(),),
+        _FONT_REGISTRY,
+        decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=True)},
+    )
+    try:
+        assert images[0].getpixel((0, 0)) == (40, 80, 120)
+        assert images[0].getpixel((10, 10)) == (255, 255, 255)
+    finally:
+        for image in images:
+            image.close()
+
+
 def test_background_cover_scaling_crops_center(tmp_path: Path) -> None:
     path = tmp_path / "wide.png"
     with Image.new("RGB", (8, 2), (240, 20, 10)) as source:

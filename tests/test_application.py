@@ -35,7 +35,7 @@ from refrain import (
     run_startup,
 )
 from refrain.__main__ import main
-from refrain.config import DisplayBackendConfiguration
+from refrain.config import DecorationResource, DisplayBackendConfiguration
 from refrain.display import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
@@ -278,6 +278,106 @@ def test_text_color_precedence_deduplicates_candidates_and_commits_rgb(workspace
     assert application._resolve_text_color(
         black_fallback, without_entry_preference, unavailable_decoration, chooser
     ) == ("black", (18, 52, 86))
+
+
+def test_decoration_color_precedence_uses_distinct_candidates_and_only_tints_enabled_art(
+    workspace: Workspace, caplog
+) -> None:
+    ordinary(workspace)
+    configuration = application.load_application_config(workspace.config)
+    configuration = replace(
+        configuration,
+        palette={**configuration.palette, "burnt-orange": "#C65A20"},
+        default_decoration_colors=("black", "burnt-orange"),
+    )
+    entry = replace(
+        application.load_content_library(workspace.content)[0],
+        decoration_color=("missing", "red", "red", "burnt-orange"),
+    )
+    decoration = DecorationResource(
+        "custom",
+        workspace.root / "overlay.png",
+        False,
+        tintable=True,
+        decoration_color=("blue", "burnt-orange"),
+    )
+
+    class RecordingChooser:
+        members: tuple[str, ...] = ()
+
+        def choice(self, members):
+            self.members = tuple(members)
+            return self.members[-1]
+
+    chooser = RecordingChooser()
+    assert application._resolve_decoration_color(configuration, entry, decoration, chooser) == (
+        "burnt-orange",
+        (198, 90, 32),
+    )
+    assert chooser.members == ("red", "burnt-orange")
+    assert "missing" in caplog.text
+
+    without_entry_preference = replace(entry, decoration_color=None)
+    assert application._resolve_decoration_color(configuration, without_entry_preference, decoration, chooser) == (
+        "burnt-orange",
+        (198, 90, 32),
+    )
+    assert chooser.members == ("blue", "burnt-orange")
+    unavailable_decoration_preference = replace(decoration, decoration_color=("missing",))
+    assert application._resolve_decoration_color(
+        configuration, without_entry_preference, unavailable_decoration_preference, chooser
+    ) == ("burnt-orange", (198, 90, 32))
+    assert chooser.members == ("black", "burnt-orange")
+    assert application._resolve_decoration_color(
+        replace(configuration, default_decoration_colors=()),
+        without_entry_preference,
+        unavailable_decoration_preference,
+        chooser,
+    ) == ("black", (0, 0, 0))
+
+    class RejectChoice:
+        def choice(self, members):
+            raise AssertionError("non-tintable decorations must not select a colour")
+
+    assert (
+        application._resolve_decoration_color(configuration, entry, replace(decoration, tintable=False), RejectChoice())
+        is None
+    )
+    assert application._resolve_decoration_color(configuration, entry, None, RejectChoice()) is None
+
+
+def test_tinting_decision_and_resolved_color_are_committed_in_snapshot(workspace: Workspace) -> None:
+    package = workspace.root / "assets" / "decorations" / "custom"
+    package.mkdir(parents=True)
+    with Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)) as decoration:
+        decoration.putpixel((0, 0), (255, 255, 255, 255))
+        decoration.save(package / "overlay.png")
+    write_decoration_manifest(package, "custom", tintable=True, decoration_color="green")
+    workspace.config.write_text(
+        'palette:\n  red: "#C82F32"\n  green: "#00FF00"\n'
+        + _CONFIG.replace("  fonts:", '  decorations: {default: ["none"], colors: ["black"]}\n  fonts:')
+    )
+    ordinary(workspace, extra='decoration: "custom"\ndecoration_color: "red"\n')
+
+    first, first_display = workspace.run(at(10, 7))
+    committed = first.state.snapshot.presentation_metadata
+    assert committed["decoration_tint_enabled"] is True
+    assert committed["decoration_color_identifier"] == "red"
+    assert committed["decoration_color_rgb"] == (200, 47, 50)
+    assert committed["text_color_identifier"] == "black"
+    assert committed["text_color_rgb"] == (0, 0, 0)
+    assert first_display.images[-1].getpixel((0, 0)) == (200, 47, 50)
+    state_bytes = workspace.state.read_bytes()
+
+    write_decoration_manifest(package, "custom", tintable=False, decoration_color="green")
+    workspace.config.write_text('palette:\n  red: "#00FF00"\n' + _CONFIG, encoding="utf-8")
+    for artifact in png_files(workspace.artifacts):
+        artifact.unlink()
+    second, second_display = workspace.run(at(10, 7))
+
+    assert second.state == first.state
+    assert workspace.state.read_bytes() == state_bytes
+    assert second_display.images[-1].getpixel((0, 0)) == (200, 47, 50)
 
 
 def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
@@ -540,6 +640,7 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
         "font_faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
         "text_color_identifier": "black",
         "text_color_rgb": (0, 0, 0),
+        "decoration_tint_enabled": False,
     }
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert snapshot.layout["image_size"] == (1600, 1200) or list(snapshot.layout["image_size"]) == [1600, 1200]
