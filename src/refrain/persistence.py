@@ -17,12 +17,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .content import normalize_quotation
-from .qr import (
-    PRODUCTION_QR_PARAMETERS,
-    QRCodeGenerationError,
-    qr_parameters_from_metadata,
-    qr_parameters_to_metadata,
-)
+from .qr import QRCodeGenerationError, qr_parameters_from_metadata
 from .selection import SelectionProposal
 
 _FORMAT_VERSION = 6
@@ -156,13 +151,12 @@ class DailySnapshot:
                 raise TypeError(f"{field} must be a mapping")
             if field == "presentation_metadata":
                 value = dict(value)
+                if "qr_code" not in value:
+                    raise ValueError("presentation_metadata.qr_code is required")
                 try:
-                    qr_parameters = qr_parameters_from_metadata(
-                        value.get("qr_code", qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS))
-                    )
+                    qr_parameters_from_metadata(value["qr_code"])
                 except QRCodeGenerationError as error:
                     raise ValueError(f"presentation_metadata.qr_code is invalid: {error}") from error
-                value["qr_code"] = qr_parameters_to_metadata(qr_parameters)
             object.__setattr__(self, field, _freeze_json(value, field))
 
     @property

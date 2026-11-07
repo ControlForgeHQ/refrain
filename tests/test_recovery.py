@@ -30,6 +30,7 @@ from refrain import (
     recover_prepared_daily_images,
 )
 from refrain.config import BackgroundResource
+from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 _STAGES = (
     CompositionVisibility(),
@@ -56,6 +57,7 @@ def committed_state(tmp_path: Path):
             "source": "Committed source",
             "attribution": "Committed author",
             "presentation_style": "centered",
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
         },
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout={
@@ -378,7 +380,11 @@ def test_rejects_reveals_for_fields_absent_from_snapshot(committed_state, artifa
         state,
         snapshot=replace(
             state.snapshot,
-            presentation_metadata={"attribution": "Committed author", "presentation_style": "centered"},
+            presentation_metadata={
+                "attribution": "Committed author",
+                "presentation_style": "centered",
+                "qr_code": state.snapshot.presentation_metadata["qr_code"],
+            },
         ),
     )
 

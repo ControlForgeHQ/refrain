@@ -18,6 +18,7 @@ from refrain import (
     prepare_daily_images,
     select_quotation,
 )
+from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 
 def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_path: Path) -> None:
@@ -72,6 +73,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
             "source": entry.source,
             "attribution": entry.attribution,
             "presentation_style": entry.presentation_style,
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
         },
         reveal_schedule={
             "quotation": config.day_start.strftime("%H:%M"),
@@ -186,6 +188,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
             "source": entry.source,
             "attribution": entry.attribution,
             "presentation_style": entry.presentation_style,
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
         },
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         layout={

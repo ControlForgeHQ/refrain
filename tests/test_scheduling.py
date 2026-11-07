@@ -21,6 +21,7 @@ from refrain import (
     normalize_quotation,
     resolve_reveal_stages,
 )
+from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 from refrain.renderer import CompositionVisibility
 
 
@@ -53,8 +54,10 @@ def make_state(
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
         font_identifier="test-font",
-        presentation_metadata=metadata
-        or {"presentation_style": "centered", "source": "Source", "attribution": "Author"},
+        presentation_metadata={
+            **(metadata or {"presentation_style": "centered", "source": "Source", "attribution": "Author"}),
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
+        },
         reveal_schedule=reveal_schedule or {"quotation": day_start, "source": "12:00", "attribution": "18:00"},
         layout={},
         scheduling=SchedulingContext(display_date, day_start),

@@ -30,6 +30,7 @@ from refrain import (
     normalize_quotation,
     select_quotation,
 )
+from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 
 def make_candidate(text: str) -> QuotationCandidate:
@@ -71,6 +72,7 @@ def make_snapshot(
             "source": "Resolved source",
             "attribution": "Resolved author",
             "presentation_style": "centered",
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
         },
         reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
         layout={
@@ -141,13 +143,15 @@ def test_format_six_snapshot_without_face_metadata_remains_unchanged(tmp_path: P
 
 def test_committed_role_face_identifiers_survive_restart(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
+    base_snapshot = make_snapshot("Role faces.")
     snapshot = replace(
-        make_snapshot("Role faces."),
+        base_snapshot,
         presentation_metadata={
             "source": "Resolved source",
             "attribution": "Resolved author",
             "presentation_style": "centered",
             "font_faces": {"quotation": "handwritten", "source": "regular", "attribution": "italic"},
+            "qr_code": base_snapshot.presentation_metadata["qr_code"],
         },
     )
     committed = store.commit(make_proposal("Role faces."), snapshot)
@@ -164,14 +168,16 @@ def test_committed_role_face_identifiers_survive_restart(tmp_path: Path) -> None
 
 def test_committed_text_color_survives_format_six_restart(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
+    base_snapshot = make_snapshot("Committed color.")
     snapshot = replace(
-        make_snapshot("Committed color."),
+        base_snapshot,
         presentation_metadata={
             "source": "Resolved source",
             "attribution": "Resolved author",
             "presentation_style": "centered",
             "text_color_identifier": "burnt-orange",
             "text_color_rgb": (198, 90, 32),
+            "qr_code": base_snapshot.presentation_metadata["qr_code"],
         },
     )
     committed = store.commit(make_proposal("Committed color."), snapshot)
@@ -335,7 +341,11 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
         quotation_text=candidate.text,
         quotation_identity=candidate.identity,
         font_identifier="stable-font",
-        presentation_metadata={"source": candidate.entry.source, "attribution": candidate.entry.attribution},
+        presentation_metadata={
+            "source": candidate.entry.source,
+            "attribution": candidate.entry.attribution,
+            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
+        },
         reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
         layout={"text_size": 42},
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
@@ -398,6 +408,15 @@ def test_missing_committed_qr_parameters_are_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(StateRecoveryError, match="snapshot.presentation_metadata.qr_code is required"):
         store.load()
+
+
+def test_daily_snapshot_rejects_missing_qr_metadata() -> None:
+    snapshot = make_snapshot("Missing QR metadata.")
+    metadata = dict(snapshot.presentation_metadata)
+    del metadata["qr_code"]
+
+    with pytest.raises(ValueError, match="presentation_metadata.qr_code is required"):
+        replace(snapshot, presentation_metadata=metadata)
 
 
 def test_state_v6_excludes_timezone_global_history_and_font_contents(tmp_path: Path) -> None:

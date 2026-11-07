@@ -19,7 +19,7 @@ from refrain import (
     resolve_reveal_stages,
 )
 from refrain.config import BackgroundResource, DecorationResource
-from refrain.qr import QRCodeParameters, qr_parameters_to_metadata
+from refrain.qr import PRODUCTION_QR_PARAMETERS, QRCodeParameters, qr_parameters_to_metadata
 
 _IMAGE_SIZE = (320, 240)
 _LAYOUT = {
@@ -61,6 +61,10 @@ def make_snapshot(
             metadata["source"] = source
         if attribution is not None:
             metadata["attribution"] = attribution
+    metadata = {
+        **metadata,
+        "qr_code": metadata.get("qr_code", qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS)),
+    }
     return DailySnapshot(
         quotation_text="A small thought, carefully kept.",
         quotation_identity="A small thought, carefully kept.",
