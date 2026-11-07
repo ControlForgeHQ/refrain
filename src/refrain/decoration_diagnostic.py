@@ -83,12 +83,11 @@ class _StableChoices(random.Random):
         return sequence[int.from_bytes(digest, "big") % len(sequence)]
 
 
-def _validated_decoration(configuration, identifier, manifest):
+def _discover(configuration):
     problems = []
 
     def report(field, message, severity=0):
-        if field == str(manifest) or field.startswith(f"{manifest}.") or field.startswith(f"{manifest}["):
-            problems.append(f"{field}: {message}")
+        problems.append((field, message))
 
     registry = discover_decorations(
         files("refrain").joinpath("assets", "decorations"),
@@ -99,6 +98,17 @@ def _validated_decoration(configuration, identifier, manifest):
         report,
         _parse_presentation_region,
     )
+    return registry, problems
+
+
+def _validated_decoration(configuration, identifier, manifest, initial_warnings=()):
+    registry, warnings = _discover(configuration)
+    problems = [
+        f"{field}: {message}"
+        for field, message in warnings
+        if (field == str(manifest) or field.startswith(f"{manifest}.") or field.startswith(f"{manifest}["))
+        and (field, message) not in initial_warnings
+    ]
     resource = registry.get(identifier)
     if problems:
         raise ApplicationError("; ".join(problems))
@@ -107,8 +117,8 @@ def _validated_decoration(configuration, identifier, manifest):
     return resource
 
 
-def _render(configuration, identifier, manifest, variant, debug_layout):
-    resource = _validated_decoration(configuration, identifier, manifest)
+def _render(configuration, identifier, manifest, variant, debug_layout, initial_warnings=()):
+    resource = _validated_decoration(configuration, identifier, manifest, initial_warnings)
     registry = dict(configuration.decorations)
     registry[identifier] = resource
     configuration = replace(configuration, decorations=registry)
@@ -149,6 +159,7 @@ def run_decoration_diagnostic(
     if not identifiers:
         raise ApplicationError("no usable decorations found; add valid packages under assets/decorations and restart")
     manifests = {identifier: configuration.decorations[identifier].manifest for identifier in identifiers}
+    _, initial_warnings = _discover(configuration)
     position = 0
     serial = 0
     with input_factory() as read_key:
@@ -167,7 +178,9 @@ def run_decoration_diagnostic(
                 )
                 try:
                     configuration = _load_configuration(config_file)
-                    image, snapshot = _render(configuration, identifier, manifests[identifier], variant, debug_layout)
+                    image, snapshot = _render(
+                        configuration, identifier, manifests[identifier], variant, debug_layout, initial_warnings
+                    )
                     region = snapshot.layout["presentation_region"]
                     print(
                         f"Presentation region: x={region['x']} y={region['y']} "

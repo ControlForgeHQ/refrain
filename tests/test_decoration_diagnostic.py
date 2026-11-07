@@ -188,6 +188,33 @@ def test_snapshot_preferences_qr_and_fully_revealed(workspace, monkeypatch):
     assert all(stages[0].quotation and stages[0].source and stages[0].attribution for _, stages in captured)
 
 
+def test_existing_nonfatal_manifest_warnings_do_not_prevent_inspection(workspace, capsys):
+    config, package = workspace
+    manifest = package / "decoration.yaml"
+    manifest.write_text(_MANIFEST + "future_field: value\n", encoding="utf-8")
+    backends = {name: RecordingBackend() for name in ("window", "image-server")}
+
+    @contextmanager
+    def reader():
+        def change():
+            manifest.write_text(
+                _MANIFEST.replace("tintable: true", "tintable: broken") + "future_field: value\n", encoding="utf-8"
+            )
+            return "r"
+
+        keys = iter([change, lambda: "q"])
+        yield lambda: next(keys)()
+
+    diagnostic.run_decoration_diagnostic(
+        config, backend_factory=lambda settings: backends[settings.type], input_factory=reader
+    )
+    assert "Cannot present decoration" in capsys.readouterr().err
+    assert all(len(backend.images) == 1 for backend in backends.values())
+    for backend in backends.values():
+        for image in backend.images:
+            image.close()
+
+
 @pytest.mark.parametrize(
     "mode", ["--once", "--demo=1", "--show-entry=x", "--test-qr", "--initialize", "--reset", "--purge"]
 )
