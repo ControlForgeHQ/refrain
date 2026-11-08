@@ -66,7 +66,7 @@ from .scheduling import (
     resolve_reveal_stages,
 )
 from .selection import SelectionProposal, select_quotation
-from .timekeeping import DisplayDayBoundaryObserver, next_scheduling_deadline, wait_for_scheduling_event
+from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
 
 _LOGGER = logging.getLogger(__name__)
 _IMAGE_SIZE = (1600, 1200)
@@ -787,34 +787,28 @@ def run_startup(
         wall_clock() if now is None and wall_clock is not None else (datetime.now(timezone.utc) if now is None else now)
     )
 
+    def read_current_time() -> datetime:
+        if wall_clock is not None:
+            return wall_clock()
+        if now is not None:
+            return now
+        return datetime.now(timezone.utc)
+
     state = _reload(store)
+    chooser = random_source if random_source is not None else random.Random()
     try:
         decision = evaluate_scheduling(current_time, configuration, state)
         initial = decision.action is SchedulingAction.INITIAL_SELECTION
-        if initial:
+        while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
             assert decision.display_date is not None
-            proposal, snapshot = _select_snapshot(
-                configuration, decision.display_date, random_source or random.Random()
-            )
+            proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
             state = _commit_selection(store, proposal, snapshot)
             _record_selection_history(history_store, state)
+            current_time = read_current_time()
             decision = evaluate_scheduling(current_time, configuration, state)
-        elif decision.action is SchedulingAction.NEW_SELECTION:
-            raise ApplicationError("a new daily selection is not supported by one-shot startup")
-        assert state is not None and decision.required_reveal_stage is not None
-        stage = decision.required_reveal_stage
     except SchedulingEvaluationError as error:
         raise ApplicationError(f"scheduling evaluation failed: {error}") from error
 
-    if stage > state.highest_reveal_stage:
-        state = _persist_reveal_progress(store, state, stage)
-    artifacts = _recover_images(
-        state,
-        artifact_store,
-        configuration.fonts,
-        configuration.backgrounds,
-        configuration.decorations,
-    )
     coordinator = DisplayPublicationCoordinator(
         configuration.display_backends,
         backend_factory,
@@ -843,32 +837,58 @@ def run_startup(
                         "Information view was not published within the initial attempt period; "
                         "proceeding to daily presentation"
                     )
-            current_time = wall_clock() if wall_clock is not None else datetime.now(timezone.utc)
+        while True:
+            current_time = read_current_time()
             try:
                 decision = evaluate_scheduling(current_time, configuration, state)
-                assert decision.required_reveal_stage is not None
-                stage = decision.required_reveal_stage
+                while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
+                    assert decision.display_date is not None
+                    proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
+                    state = _commit_selection(store, proposal, snapshot)
+                    _record_selection_history(history_store, state)
+                    current_time = read_current_time()
+                    decision = evaluate_scheduling(current_time, configuration, state)
             except SchedulingEvaluationError as error:
-                raise ApplicationError(f"scheduling evaluation failed after information view: {error}") from error
-        if stage > state.highest_reveal_stage:
-            state = _persist_reveal_progress(store, state, stage)
-        try:
-            image = artifacts.load_stage(stage)
-        except ArtifactStoreError as error:
-            raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-        image = _stage_publication_image(image, state.snapshot, debug_layout)
-        identity = (state.revision, stage)
-        coordinator.publish(identity, image)
-        if not coordinator.wait_for_publication(identity):
-            raise ApplicationError("all configured display destinations are unavailable")
-        if keep_open is not None:
-            for backend_configuration in configuration.display_backends:
-                if (
-                    backend_configuration.type in {"window", "image-server"}
-                    and coordinator.acknowledgements[backend_configuration.type] == identity
-                ):
-                    keep_open(backend_configuration.type)
-                    break
+                raise ApplicationError(f"scheduling evaluation failed before daily presentation: {error}") from error
+            assert state is not None and decision.required_reveal_stage is not None
+            stage = decision.required_reveal_stage
+            if stage > state.highest_reveal_stage:
+                state = _persist_reveal_progress(store, state, stage)
+            artifacts = _recover_images(
+                state,
+                artifact_store,
+                configuration.fonts,
+                configuration.backgrounds,
+                configuration.decorations,
+            )
+            try:
+                image = artifacts.load_stage(stage)
+            except ArtifactStoreError as error:
+                raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
+            image = _stage_publication_image(image, state.snapshot, debug_layout)
+            try:
+                final_decision = evaluate_scheduling(read_current_time(), configuration, state)
+            except SchedulingEvaluationError as error:
+                image.close()
+                raise ApplicationError(f"scheduling evaluation failed before daily publication: {error}") from error
+            if final_decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION) or (
+                final_decision.required_reveal_stage != stage
+            ):
+                image.close()
+                continue
+            identity = (state.revision, stage)
+            coordinator.publish(identity, image)
+            if not coordinator.wait_for_publication(identity):
+                raise ApplicationError("all configured display destinations are unavailable")
+            if keep_open is not None:
+                for backend_configuration in configuration.display_backends:
+                    if (
+                        backend_configuration.type in {"window", "image-server"}
+                        and coordinator.acknowledgements[backend_configuration.type] == identity
+                    ):
+                        keep_open(backend_configuration.type)
+                        break
+            break
     finally:
         coordinator.close()
     return StartupResult(state=state, presented_stage=stage, selected_initial_quotation=initial)
@@ -900,7 +920,6 @@ def run_application(
     store = PersistentStateStore(Path(state_path).absolute())
     history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
-    observer = DisplayDayBoundaryObserver(configuration)
     shutdown = shutdown_event if shutdown_event is not None else Event()
     chooser = random_source if random_source is not None else random.Random()
     coordinator: DisplayPublicationCoordinator | None = None
@@ -922,7 +941,7 @@ def run_application(
             try:
                 if coordinator is not None and information_view_requested and information_view_started is None:
                     information_view_started = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
-                # Reload before observing time, including after uncertain publication.
+                # Reload before scheduling, including after uncertain publication.
                 state = _reload(store)
                 if pending_history is not None and state is not None:
                     revision, snapshot, repetition_history = pending_history
@@ -934,8 +953,7 @@ def run_application(
                         _record_selection_history(history_store, state)
                         pending_history = None
                 now = wall_clock()
-                boundary = observer.observe(now, monotonic_clock(), None if state is None else state.revision)
-                decision = evaluate_scheduling(now, configuration, state, boundary)
+                decision = evaluate_scheduling(now, configuration, state)
                 if decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
                     assert decision.display_date is not None
                     proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
@@ -948,7 +966,7 @@ def run_application(
                     _record_selection_history(history_store, state)
                     pending_history = None
                     _LOGGER.info("Committed selection %s for %s", state.revision, state.snapshot.display_date)
-                    # Reobserve after potentially slow I/O; never present obsolete intermediate stages.
+                    # Reevaluate after potentially slow I/O; never present an obsolete daily image.
                     continue
                 assert state is not None and decision.required_reveal_stage is not None
                 stage = decision.required_reveal_stage

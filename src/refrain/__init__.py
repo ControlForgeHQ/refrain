@@ -78,7 +78,6 @@ from .renderer import (
     render_reveal_stages,
 )
 from .scheduling import (
-    DisplayDayBoundary,
     SchedulingAction,
     SchedulingDecision,
     SchedulingEvaluationError,
@@ -86,7 +85,7 @@ from .scheduling import (
     resolve_reveal_stages,
 )
 from .selection import SelectionProposal, select_quotation
-from .timekeeping import DisplayDayBoundaryObserver, next_scheduling_deadline, wait_for_scheduling_event
+from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
 
 __all__ = [
     "ApplicationError",
@@ -138,8 +137,6 @@ __all__ = [
     "PersistentStateStore",
     "ResolvedFont",
     "SelectionProposal",
-    "DisplayDayBoundary",
-    "DisplayDayBoundaryObserver",
     "SchedulingAction",
     "SchedulingDecision",
     "SchedulingEvaluationError",

@@ -164,7 +164,6 @@ class DemoWorkspace:
         monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
         monkeypatch.setattr(application, "DisplayPublicationCoordinator", RecordingCoordinator)
         monkeypatch.setattr(application, "prepare_information_view", self.forbidden)
-        monkeypatch.setattr(application, "DisplayDayBoundaryObserver", self.forbidden)
         monkeypatch.setattr(application, "wait_for_scheduling_event", self.forbidden)
 
     @staticmethod

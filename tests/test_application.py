@@ -788,6 +788,30 @@ def test_one_shot_startup_advances_reveal_due_during_information_interval(worksp
     assert state.revision == 1 and len(workspace.history_records()) == 1
 
 
+def test_one_shot_startup_selects_current_date_after_information_interval(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
+    elapsed = [0.0]
+    current_time = [at(10, 5, 59)]
+
+    def wait(duration: float) -> None:
+        elapsed[0] += duration
+        current_time[0] = at(10, 6, 1)
+
+    result, display = workspace.run(
+        at(10, 5, 59),
+        wall_clock=lambda: current_time[0],
+        monotonic_clock=lambda: elapsed[0],
+        wait=wait,
+    )
+
+    assert result.state.revision == 2
+    assert result.state.snapshot.display_date == date(2026, 3, 10)
+    assert result.presented_stage == 0
+    assert len(display.sizes) == 2
+    assert [record["display_date"][-2:] for record in workspace.history_records()] == ["09", "10"]
+
+
 def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
     workspace.config.write_text(
@@ -1061,14 +1085,14 @@ def test_repeated_startup_preserves_selection_and_artifacts(workspace: Workspace
     assert len(display.sizes) == 1
 
 
-def test_calendar_mismatch_and_missing_content_do_not_reselect(workspace: Workspace) -> None:
+def test_matching_logical_date_and_missing_content_do_not_reselect(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.run(at(10, 8))
     first = workspace.load()
     for path in workspace.content.iterdir():
         path.unlink()
     workspace.content.rmdir()
-    result, display = workspace.run(at(14, 9))
+    result, display = workspace.run(at(10, 9))
     state = workspace.load()
     assert (state.revision, state.snapshot, state.repetition_history) == (
         first.revision,
@@ -1103,7 +1127,25 @@ def test_backward_clock_does_not_hide_reached_stage(workspace: Workspace) -> Non
     reference = workspace.run(at(10, 19))[1]
     assert display.images[0].tobytes() == reference.images[0].tobytes()
     result, _ = workspace.run(at(9, 7))
-    assert result.presented_stage == 2
+    assert result.presented_stage == 0
+    assert result.state.revision == 2 and result.state.snapshot.display_date == date(2026, 3, 9)
+
+
+def test_restart_into_previously_displayed_date_creates_new_revision(workspace: Workspace) -> None:
+    workspace.entry("many", 'quotations:\n  - "First."\n  - "Second."\n  - "Third."\n')
+
+    first, _ = workspace.run(at(10, 7))
+    second, _ = workspace.run(at(11, 7))
+    third, _ = workspace.run(at(10, 7))
+
+    assert [first.state.revision, second.state.revision, third.state.revision] == [1, 2, 3]
+    assert [first.state.snapshot.display_date, second.state.snapshot.display_date, third.state.snapshot.display_date] == [
+        date(2026, 3, 10),
+        date(2026, 3, 11),
+        date(2026, 3, 10),
+    ]
+    assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "11", "10"]
+    assert third.state.highest_reveal_stage == 0
 
 
 def test_no_eligible_content_commits_nothing(workspace: Workspace) -> None:
@@ -1896,12 +1938,16 @@ def test_continuous_forward_jump_selects_only_current_date(workspace, monkeypatc
     assert state.snapshot.quotation_text == "Special."
 
 
-def test_continuous_backward_jump_preserves_reveal_until_new_boundary(workspace, monkeypatch) -> None:
+def test_continuous_backward_jump_reconciles_each_current_logical_date(workspace, monkeypatch) -> None:
     ordinary(workspace)
     clock = RuntimeClock(at(15, 19), [at(12, 4), at(12, 5), at(12, 6)])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
-    assert stages == [(1, 2), (2, 0)]
-    assert [record["display_date"] for record in workspace.history_records()] == ["2026-03-15", "2026-03-12"]
+    assert stages == [(1, 2), (2, 0), (3, 0)]
+    assert [record["display_date"] for record in workspace.history_records()] == [
+        "2026-03-15",
+        "2026-03-11",
+        "2026-03-12",
+    ]
 
 
 @pytest.mark.parametrize("published", [False, True])
@@ -1946,7 +1992,7 @@ def test_continuous_later_boundary_supersedes_failed_transition(workspace, monke
     assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "14"]
 
 
-def test_continuous_pending_boundary_survives_backward_adjustment_during_retry(workspace, monkeypatch) -> None:
+def test_continuous_retry_reconciles_latest_date_after_backward_adjustment(workspace, monkeypatch) -> None:
     ordinary(workspace)
     original = PersistentStateStore.commit
     attempts = []
@@ -1961,8 +2007,8 @@ def test_continuous_pending_boundary_survives_backward_adjustment_during_retry(w
     clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: clock.move(at(9, 7))])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0), (2, 0)]
-    assert attempts == [date(2026, 3, day) for day in (10, 11, 11)]
-    assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "11"]
+    assert attempts == [date(2026, 3, day) for day in (10, 11, 9)]
+    assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "09"]
 
 
 def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(workspace, monkeypatch) -> None:

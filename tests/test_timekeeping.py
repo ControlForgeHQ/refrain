@@ -12,14 +12,11 @@ from refrain import (
     ApplicationConfiguration,
     DailySnapshot,
     DisplayBackendConfiguration,
-    DisplayDayBoundary,
-    DisplayDayBoundaryObserver,
     PersistentState,
     PresentationRegion,
     RevealSchedule,
     SchedulingAction,
     SchedulingContext,
-    StateCommitError,
     evaluate_scheduling,
     next_scheduling_deadline,
     normalize_quotation,
@@ -73,184 +70,6 @@ def make_state(
     )
 
 
-def test_observer_recognizes_one_ordinary_day_start_boundary() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    zone = ZoneInfo("America/New_York")
-
-    assert observer.observe(datetime(2026, 10, 26, 5, 59, tzinfo=zone), 100.0, 4) is None
-    boundary = observer.observe(datetime(2026, 10, 26, 6, 0, tzinfo=zone), 160.0, 4)
-
-    assert boundary == DisplayDayBoundary(date(2026, 10, 26), 4)
-    assert observer.observe(datetime(2026, 10, 26, 6, 1, tzinfo=zone), 220.0, 4) == boundary
-    assert observer.observe(datetime(2026, 10, 26, 6, 2, tzinfo=zone), 280.0, 5) is None
-
-
-def test_uncommitted_boundary_is_reused_until_selection_revision_advances() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    zone = ZoneInfo("America/New_York")
-    state = make_state(display_date=date(2026, 10, 25))
-    observer.observe(datetime(2026, 10, 26, 5, 59, tzinfo=zone), 100.0, state.revision)
-    boundary = observer.observe(datetime(2026, 10, 26, 6, 0, tzinfo=zone), 160.0, state.revision)
-    assert boundary == DisplayDayBoundary(date(2026, 10, 26), state.revision)
-
-    with pytest.raises(StateCommitError, match="simulated selection failure"):
-        raise StateCommitError("simulated selection failure")
-    failed_commit_state = state
-    assert failed_commit_state.revision == state.revision
-    first_decision = evaluate_scheduling(
-        datetime(2026, 10, 26, 6, 1, tzinfo=zone), make_configuration(), state, boundary
-    )
-    repeated_boundary = observer.observe(datetime(2026, 10, 26, 6, 1, tzinfo=zone), 220.0, failed_commit_state.revision)
-    retry_decision = evaluate_scheduling(
-        datetime(2026, 10, 26, 6, 1, tzinfo=zone), make_configuration(), failed_commit_state, repeated_boundary
-    )
-
-    assert first_decision == retry_decision
-    assert retry_decision.action is SchedulingAction.NEW_SELECTION
-    assert retry_decision.display_date == date(2026, 10, 26)
-    assert repeated_boundary == boundary
-
-    committed_state = replace(state, revision=state.revision + 1)
-    assert observer.observe(datetime(2026, 10, 26, 6, 2, tzinfo=zone), 280.0, committed_state.revision) is None
-    stale_decision = evaluate_scheduling(
-        datetime(2026, 10, 26, 6, 2, tzinfo=zone), make_configuration(), committed_state, boundary
-    )
-    assert stale_decision.action is not SchedulingAction.NEW_SELECTION
-
-
-def test_newer_forward_boundary_supersedes_pending_boundary_after_failed_commit() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    configuration = make_configuration()
-    zone = ZoneInfo("America/New_York")
-    state = make_state(display_date=date(2026, 10, 26))
-
-    observer.observe(datetime(2026, 10, 27, 5, 59, tzinfo=zone), 100.0, state.revision)
-    october_27 = observer.observe(datetime(2026, 10, 27, 6, 0, tzinfo=zone), 160.0, state.revision)
-    assert october_27 == DisplayDayBoundary(date(2026, 10, 27), state.revision)
-
-    with pytest.raises(StateCommitError, match="simulated selection failure"):
-        raise StateCommitError("simulated selection failure")
-    failed_commit_state = state
-    failed_decision = evaluate_scheduling(
-        datetime(2026, 10, 27, 6, 1, tzinfo=zone), configuration, failed_commit_state, october_27
-    )
-    assert failed_decision.action is SchedulingAction.NEW_SELECTION
-    assert failed_decision.display_date == date(2026, 10, 27)
-
-    october_29 = observer.observe(datetime(2026, 10, 29, 7, 0, tzinfo=zone), 220.0, state.revision)
-    assert october_29 == DisplayDayBoundary(date(2026, 10, 29), state.revision)
-    assert observer.observe(datetime(2026, 10, 29, 7, 1, tzinfo=zone), 280.0, state.revision) == october_29
-    current_decision = evaluate_scheduling(
-        datetime(2026, 10, 29, 7, 1, tzinfo=zone), configuration, failed_commit_state, october_29
-    )
-
-    assert current_decision.action is SchedulingAction.NEW_SELECTION
-    assert current_decision.display_date == date(2026, 10, 29)
-
-
-def test_observer_forward_jump_selects_current_date_without_replaying_skipped_days() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    zone = ZoneInfo("America/New_York")
-    observer.observe(datetime(2026, 10, 26, 5, 55, tzinfo=zone), 100.0, 4)
-
-    boundary = observer.observe(datetime(2026, 10, 29, 7, 0, tzinfo=zone), 160.0, 4)
-
-    assert boundary == DisplayDayBoundary(date(2026, 10, 29), 4)
-    assert observer.observe(datetime(2026, 10, 29, 7, 1, tzinfo=zone), 220.0, 4) == boundary
-
-
-def test_observer_backward_adjustment_waits_for_a_later_observed_boundary() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    zone = ZoneInfo("America/New_York")
-    observer.observe(datetime(2026, 10, 26, 6, 1, tzinfo=zone), 100.0, 4)
-
-    assert observer.observe(datetime(2026, 10, 12, 4, 0, tzinfo=zone), 101.0, 4) is None
-    boundary = observer.observe(datetime(2026, 10, 12, 6, 0, tzinfo=zone), 7301.0, 4)
-
-    assert boundary == DisplayDayBoundary(date(2026, 10, 12), 4)
-
-
-def test_backward_adjustment_does_not_replace_a_pending_boundary() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    zone = ZoneInfo("America/New_York")
-    observer.observe(datetime(2026, 10, 26, 5, 59, tzinfo=zone), 100.0, 4)
-    boundary = observer.observe(datetime(2026, 10, 26, 6, 0, tzinfo=zone), 160.0, 4)
-
-    backward_observation = observer.observe(datetime(2026, 10, 25, 4, 0, tzinfo=zone), 161.0, 4)
-
-    assert backward_observation == boundary
-
-
-def test_first_observation_after_startup_does_not_infer_a_historical_boundary() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-
-    assert observer.observe(datetime(2026, 10, 27, 8, 0, tzinfo=ZoneInfo("America/New_York")), 100.0, 4) is None
-
-
-def test_host_timezone_change_does_not_create_a_display_boundary(set_local_timezone) -> None:
-    configuration = make_configuration(day_start="00:00")
-    observer = DisplayDayBoundaryObserver(configuration)
-    observer.observe(datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc), 100.0, 4)
-    set_local_timezone(timezone(timedelta(hours=14)))
-
-    assert observer.observe(datetime(2026, 10, 26, 10, 1, tzinfo=timezone.utc), 160.0, 4) is None
-    assert observer.observe(datetime(2026, 10, 26, 10, 2, tzinfo=timezone.utc), 220.0, 4) is None
-
-
-@pytest.mark.parametrize(
-    ("before", "after", "expected"),
-    [
-        (
-            datetime(2026, 3, 8, 5, 59, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 3, 8, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-            date(2026, 3, 8),
-        ),
-        (
-            datetime(2026, 11, 1, 5, 59, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 11, 1, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-            date(2026, 11, 1),
-        ),
-        (
-            datetime(2026, 12, 31, 5, 59, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 12, 31, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-            date(2026, 12, 31),
-        ),
-        (
-            datetime(2026, 12, 31, 23, 59, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2027, 1, 1, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-            date(2027, 1, 1),
-        ),
-    ],
-)
-def test_observer_recognizes_dst_and_calendar_boundaries(before: datetime, after: datetime, expected: date) -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration())
-    observer.observe(before, 100.0, 4)
-
-    assert observer.observe(after, 160.0, 4) == DisplayDayBoundary(expected, 4)
-
-
-def test_observer_does_not_duplicate_a_fall_back_ambiguous_day_start() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration(day_start="01:30"))
-    zone = ZoneInfo("America/New_York")
-    observer.observe(datetime(2026, 11, 1, 1, 29, fold=0, tzinfo=zone), 100.0, 4)
-
-    first_occurrence = observer.observe(datetime(2026, 11, 1, 1, 31, fold=0, tzinfo=zone), 220.0, 4)
-    assert observer.observe(datetime(2026, 11, 1, 1, 0, fold=1, tzinfo=zone), 1960.0, 4) == first_occurrence
-    assert observer.observe(datetime(2026, 11, 1, 1, 30, fold=1, tzinfo=zone), 3760.0, 5) is None
-    second_occurrence = observer.observe(datetime(2026, 11, 1, 1, 31, fold=1, tzinfo=zone), 3820.0, 5)
-
-    assert first_occurrence == DisplayDayBoundary(date(2026, 11, 1), 4)
-    assert second_occurrence is None
-
-
-def test_restart_during_second_fold_does_not_recognize_ambiguous_boundary_again() -> None:
-    observer = DisplayDayBoundaryObserver(make_configuration(day_start="01:30"))
-    zone = ZoneInfo("America/New_York")
-
-    assert observer.observe(datetime(2026, 11, 1, 1, 0, fold=1, tzinfo=zone), 100.0, 5) is None
-    assert observer.observe(datetime(2026, 11, 1, 1, 31, fold=1, tzinfo=zone), 1960.0, 5) is None
-
-
 def test_next_deadline_uses_committed_reveal_schedule_before_day_boundary() -> None:
     zone = ZoneInfo("America/New_York")
     state = make_state()
@@ -264,6 +83,12 @@ def test_missing_state_requests_immediate_initial_scheduling() -> None:
     current_time = datetime(2026, 10, 26, 10, 0, tzinfo=ZoneInfo("America/New_York"))
 
     assert next_scheduling_deadline(current_time, make_configuration(), None) == current_time
+
+
+def test_logical_date_mismatch_requests_immediate_scheduling() -> None:
+    current_time = datetime(2026, 10, 27, 7, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    assert next_scheduling_deadline(current_time, make_configuration(), make_state()) == current_time
 
 
 def test_missed_reveal_time_is_due_immediately_and_simultaneous_events_share_deadline() -> None:
