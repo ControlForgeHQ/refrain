@@ -1,3 +1,5 @@
 format: 1
 id: ethereal
-image: ethereal.png
+layers:
+  - image: ethereal.png
+    method: contain

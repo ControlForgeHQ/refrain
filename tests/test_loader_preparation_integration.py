@@ -128,7 +128,15 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
         encoding="utf-8",
     )
     (decoration_path.parent / "decoration.yaml").write_text(
-        yaml.safe_dump({"format": 1, "id": "border", "image": "Border.png"}, sort_keys=False),
+        yaml.safe_dump(
+            {
+                "format": 1,
+                "id": "border",
+                "tintable": False,
+                "layers": [{"image": "Border.png", "method": "contain"}],
+            },
+            sort_keys=False,
+        ),
         encoding="utf-8",
     )
 
@@ -192,7 +200,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
 
     assert config.fonts["family-serif"].path == font_path
     assert config.backgrounds["paper"].path == background_path
-    assert config.decorations["border"].path == decoration_path
+    assert config.decorations["border"].layers[0].image == decoration_path
     assert image.size == (1920, 1080)
     assert image.getpixel((0, 0)) == (255, 0, 0)
     assert image.getpixel((375, 90)) == (0, 0, 255)

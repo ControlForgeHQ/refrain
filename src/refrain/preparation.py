@@ -6,18 +6,27 @@ import io
 import logging
 import random
 from collections.abc import Callable, Mapping, Sequence
+from fractions import Fraction
 
 from PIL import Image, ImageFont, ImageOps
 
 from .config import (
     ApplicationConfiguration,
     BackgroundResource,
+    DecorationLayerResource,
     DecorationResource,
     FontResource,
     load_background_image,
-    load_decoration_image,
+    load_decoration_layer_image,
 )
-from .geometry import PixelBounds, PresentationGeometry, PresentationGeometryError, resolve_presentation_geometry
+from .geometry import (
+    REFERENCE_SIZE,
+    PixelBounds,
+    PresentationGeometry,
+    PresentationGeometryError,
+    resolve_presentation_geometry,
+    round_half_up,
+)
 from .persistence import DailySnapshot, ResolvedFont
 from .qr import (
     PRODUCTION_QR_PARAMETERS,
@@ -120,8 +129,9 @@ def _resolve_decoration_tint(
     snapshot: DailySnapshot,
     decoration: DecorationResource | None,
     chooser: random.Random,
+    layers: Sequence[DecorationLayerResource],
 ) -> tuple[int, int, int] | None:
-    if decoration is None or not decoration.tintable:
+    if decoration is None or not any(decoration.tintable and layer.tintable for layer in layers):
         return None
 
     identifier, color = _resolve_palette_preference(
@@ -172,6 +182,8 @@ def _apply_daily_decoration(
     tint_rgb: tuple[int, int, int] | None = None,
     *,
     strict: bool = False,
+    qr_available: bool = True,
+    eligible_layers: Sequence[DecorationLayerResource] | None = None,
 ) -> Image.Image:
     if identifier == "none":
         return background
@@ -181,39 +193,230 @@ def _apply_daily_decoration(
             raise DailyImagePreparationError(f"decoration {identifier!r} is unavailable")
         _LOGGER.warning("Committed decoration %r is unavailable; omitting the overlay", identifier)
         return background
-    try:
-        with load_decoration_image(resource) as image:
-            source = image
-            tinted: Image.Image | None = None
-            try:
-                if tint_rgb is not None:
-                    alpha = image.getchannel("A")
-                    try:
-                        tinted = Image.new("RGBA", image.size, (*tint_rgb, 0))
-                        tinted.putalpha(alpha)
-                    finally:
-                        alpha.close()
-                    source = tinted
-                contained = ImageOps.contain(source, background.size, method=Image.Resampling.LANCZOS)
+    layers = _eligible_decoration_layers(resource, qr_available) if eligible_layers is None else tuple(eligible_layers)
+    layer_indexes = {id(layer): index for index, layer in enumerate(resource.layers)}
+    for index, layer in enumerate(layers):
+        try:
+            with load_decoration_layer_image(layer) as image:
+                source = image
+                tinted: Image.Image | None = None
                 try:
-                    position = ((background.width - contained.width) // 2, (background.height - contained.height) // 2)
-                    background.paste(contained, position, contained)
+                    if tint_rgb is not None and _decoration_layer_is_tintable(resource, layer):
+                        if image.mode == "RGBA":
+                            alpha = image.getchannel("A")
+                            try:
+                                tinted = Image.new("RGBA", image.size, (*tint_rgb, 0))
+                                tinted.putalpha(alpha)
+                            finally:
+                                alpha.close()
+                        else:
+                            tinted = Image.new("RGB", image.size, tint_rgb)
+                        source = tinted
+                    if layer.method == "contain":
+                        contained = ImageOps.contain(source, background.size, method=Image.Resampling.LANCZOS)
+                        try:
+                            position = (
+                                (background.width - contained.width) // 2,
+                                (background.height - contained.height) // 2,
+                            )
+                            _paste_decoration_region(background, contained, position)
+                        finally:
+                            contained.close()
+                    else:
+                        _compose_nine_slice(background, source, layer)
                 finally:
-                    contained.close()
-            finally:
-                if tinted is not None:
-                    tinted.close()
-    except Exception as error:
-        if strict:
-            raise DailyImagePreparationError(
-                f"decoration {identifier!r} is unavailable or unusable: {error}"
-            ) from error
-        _LOGGER.warning(
-            "Committed decoration %r is unavailable or unusable; omitting the overlay: %s",
-            identifier,
-            error,
-        )
+                    if tinted is not None:
+                        tinted.close()
+        except Exception as error:
+            manifest_index = layer_indexes.get(id(layer), index)
+            message = (
+                f"decoration {identifier!r} layer {manifest_index} ({layer.image}) is unavailable or unusable: {error}"
+            )
+            if strict:
+                raise DailyImagePreparationError(message) from error
+            _LOGGER.warning("%s; omitting this layer", message)
     return background
+
+
+def _eligible_decoration_layers(
+    decoration: DecorationResource | None,
+    qr_available: bool,
+) -> tuple[DecorationLayerResource, ...]:
+    if decoration is None:
+        return ()
+    return tuple(
+        layer
+        for layer in decoration.layers
+        if layer.condition == "always"
+        or (layer.condition == "qr" and qr_available)
+        or (layer.condition == "no-qr" and not qr_available)
+    )
+
+
+def _decoration_layer_is_tintable(decoration: DecorationResource, layer: DecorationLayerResource) -> bool:
+    return decoration.tintable and layer.tintable
+
+
+def _paste_decoration_region(background: Image.Image, region: Image.Image, position: tuple[int, int]) -> None:
+    if region.mode == "RGBA":
+        background.paste(region, position, region)
+    else:
+        background.paste(region, position)
+
+
+def _rounded_fraction(value: Fraction) -> int:
+    return (2 * value.numerator + value.denominator) // (2 * value.denominator)
+
+
+def _mapped_boundaries(size: tuple[int, int], nine_slice) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    source_width, source_height = size
+    scale = min(Fraction(REFERENCE_SIZE[0], source_width), Fraction(REFERENCE_SIZE[1], source_height))
+    offset_x = (REFERENCE_SIZE[0] - source_width * scale) / 2
+    offset_y = (REFERENCE_SIZE[1] - source_height * scale) / 2
+    source_x = (0, nine_slice.left, source_width - nine_slice.right, source_width)
+    source_y = (0, nine_slice.top, source_height - nine_slice.bottom, source_height)
+    return (
+        tuple(_rounded_fraction(offset_x + coordinate * scale) for coordinate in source_x),
+        tuple(_rounded_fraction(offset_y + coordinate * scale) for coordinate in source_y),
+    )
+
+
+def _resize_source_region(
+    source: Image.Image,
+    bounds: tuple[int, int, int, int],
+    size: tuple[int, int],
+) -> Image.Image | None:
+    width, height = size
+    if width <= 0 or height <= 0:
+        return None
+    region = source.crop(bounds)
+    try:
+        if region.width <= 0 or region.height <= 0:
+            raise ValueError("a nonempty destination region has no source artwork")
+        return region.resize(size, Image.Resampling.LANCZOS)
+    finally:
+        region.close()
+
+
+def _compose_nine_slice(
+    background: Image.Image,
+    source: Image.Image,
+    layer: DecorationLayerResource,
+) -> None:
+    parameters = layer.nine_slice
+    if parameters is None:
+        raise ValueError("nine-slice parameters are missing")
+    x_bounds, y_bounds = _mapped_boundaries(source.size, parameters)
+    left_width, center_width, right_width = (
+        x_bounds[1] - x_bounds[0],
+        x_bounds[2] - x_bounds[1],
+        x_bounds[3] - x_bounds[2],
+    )
+    top_height, center_height, bottom_height = (
+        y_bounds[1] - y_bounds[0],
+        y_bounds[2] - y_bounds[1],
+        y_bounds[3] - y_bounds[2],
+    )
+    canvas_width, canvas_height = background.size
+    if left_width + right_width > canvas_width or top_height + bottom_height > canvas_height:
+        raise ValueError(
+            f"preserved corners ({left_width} + {right_width} by {top_height} + {bottom_height}) "
+            f"do not fit the {canvas_width} x {canvas_height} working canvas"
+        )
+    destination_center_width = canvas_width - left_width - right_width
+    destination_center_height = canvas_height - top_height - bottom_height
+    if destination_center_width and center_width == 0:
+        raise ValueError("the mapped source has no center region to fill the destination width")
+    if destination_center_height and center_height == 0:
+        raise ValueError("the mapped source has no center region to fill the destination height")
+
+    source_x = (0, parameters.left, source.width - parameters.right, source.width)
+    source_y = (0, parameters.top, source.height - parameters.bottom, source.height)
+    regions = (
+        (0, 0, 1, 1, 0, 0, left_width, top_height, None),
+        (
+            1,
+            0,
+            2,
+            1,
+            left_width,
+            0,
+            destination_center_width,
+            top_height,
+            f"horizontal-{parameters.horizontal}",
+        ),
+        (2, 0, 3, 1, canvas_width - right_width, 0, right_width, top_height, None),
+        (0, 1, 1, 2, 0, top_height, left_width, destination_center_height, f"vertical-{parameters.vertical}"),
+        (1, 1, 2, 2, left_width, top_height, destination_center_width, destination_center_height, "center"),
+        (
+            2,
+            1,
+            3,
+            2,
+            canvas_width - right_width,
+            top_height,
+            right_width,
+            destination_center_height,
+            f"vertical-{parameters.vertical}",
+        ),
+        (0, 2, 1, 3, 0, canvas_height - bottom_height, left_width, bottom_height, None),
+        (
+            1,
+            2,
+            2,
+            3,
+            left_width,
+            canvas_height - bottom_height,
+            destination_center_width,
+            bottom_height,
+            f"horizontal-{parameters.horizontal}",
+        ),
+        (
+            2,
+            2,
+            3,
+            3,
+            canvas_width - right_width,
+            canvas_height - bottom_height,
+            right_width,
+            bottom_height,
+            None,
+        ),
+    )
+    for x0, y0, x1, y1, dest_x, dest_y, dest_width, dest_height, mode in regions:
+        if dest_width <= 0 or dest_height <= 0:
+            continue
+        source_bounds = (source_x[x0], source_y[y0], source_x[x1], source_y[y1])
+        mapped_width = x_bounds[x1] - x_bounds[x0]
+        mapped_height = y_bounds[y1] - y_bounds[y0]
+        if mode == "horizontal-crop":
+            if dest_width > mapped_width:
+                raise ValueError(
+                    f"horizontal crop destination length {dest_width} exceeds source edge length {mapped_width}"
+                )
+            resized = _resize_source_region(source, source_bounds, (mapped_width, dest_height))
+            crop_left = round_half_up(mapped_width - dest_width, 2)
+            transformed = resized.crop((crop_left, 0, crop_left + dest_width, dest_height)) if resized else None
+            if resized is not None:
+                resized.close()
+        elif mode == "vertical-crop":
+            if dest_height > mapped_height:
+                raise ValueError(
+                    f"vertical crop destination length {dest_height} exceeds source edge length {mapped_height}"
+                )
+            resized = _resize_source_region(source, source_bounds, (dest_width, mapped_height))
+            crop_top = round_half_up(mapped_height - dest_height, 2)
+            transformed = resized.crop((0, crop_top, dest_width, crop_top + dest_height)) if resized else None
+            if resized is not None:
+                resized.close()
+        else:
+            transformed = _resize_source_region(source, source_bounds, (dest_width, dest_height))
+        if transformed is None:
+            continue
+        try:
+            _paste_decoration_region(background, transformed, (dest_x, dest_y))
+        finally:
+            transformed.close()
 
 
 def _resample_graphical_composition(image: Image.Image, output_size: tuple[int, int]) -> Image.Image:
@@ -398,7 +601,6 @@ def prepare_daily_images(
         raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
     chooser = chooser if chooser is not None else random.Random()
     decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser)
-    background_identifier = _resolve_background(snapshot, decoration, configuration, chooser)
     composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
         snapshot, configuration, decoration
     )
@@ -412,11 +614,13 @@ def prepare_daily_images(
             )
         except QRCodePlacementError as error:
             _LOGGER.warning("QR generation is disabled for this preparation: %s", error)
+    decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
+    background_identifier = _resolve_background(snapshot, decoration, configuration, chooser)
     if on_resolved_bounds is not None:
         on_resolved_bounds(geometry.output_region)
     text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
     qr_parameters = PRODUCTION_QR_PARAMETERS
-    decoration_tint = _resolve_decoration_tint(configuration, snapshot, decoration, chooser)
+    decoration_tint = _resolve_decoration_tint(configuration, snapshot, decoration, chooser, decoration_layers)
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser)
     try:
         layout = layout_composition(
@@ -439,6 +643,8 @@ def prepare_daily_images(
                 configuration.decorations,
                 decoration_tint,
                 strict=strict_decoration,
+                qr_available=qr_placement is not None,
+                eligible_layers=decoration_layers,
             )
             background = _resample_graphical_composition(background, image_size)
             images = render_reveal_stages(

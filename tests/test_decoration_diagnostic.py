@@ -32,7 +32,9 @@ layout:
 _MANIFEST = """\
 format: 1
 id: a-custom
-image: artwork.png
+layers:
+  - image: artwork.png
+    method: contain
 presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
 font: lora
 font_faces: {quotation: italic}

@@ -143,7 +143,7 @@ def _manifest_path(package: AssetPath, value: object, formats: set[str]) -> Asse
             package_root = package.resolve(strict=True)
             resolved = candidate.resolve(strict=True)
             resolved.relative_to(package_root)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, NotImplementedError) as error:
             raise ValueError("resource path is missing or resolves outside its asset package") from error
         candidate = resolved
     elif not _exists(candidate):
@@ -154,7 +154,7 @@ def _manifest_path(package: AssetPath, value: object, formats: set[str]) -> Asse
 
 
 def _unknown_fields(data: Mapping[str, object], allowed: set[str], field: str, report: Report) -> None:
-    for key in sorted(data.keys() - allowed):
+    for key in sorted(data.keys() - allowed, key=str):
         report(f"{field}.{key}", "is not a supported manifest field; it is ignored", logging.WARNING)
 
 
@@ -185,7 +185,7 @@ def _parse_manifest(
     image = data.get("image")
     try:
         image_path = _manifest_path(manifest_path.parent, image, {".png"})
-    except (OSError, ValueError) as error:
+    except Exception as error:
         report(f"{field}.image", f"is invalid; the asset is excluded: {error}", logging.WARNING)
         return None
     return image_path, data
@@ -200,7 +200,7 @@ def _font_validation_error(path: AssetPath) -> str | None:
     return None
 
 
-def _validate_image_metadata(path: AssetPath, category: str) -> None:
+def _validate_image_metadata(path: AssetPath, category: str) -> tuple[int, int]:
     image_kind = category.removesuffix("s")
     with path.open("rb") as stream:
         with Image.open(stream) as image:
@@ -210,11 +210,13 @@ def _validate_image_metadata(path: AssetPath, category: str) -> None:
                 raise ValueError(f"{image_kind} must be a single-frame PNG image")
             if image_kind == "background" and image.mode not in {"RGB", "RGBA"}:
                 raise ValueError("background mode must be RGB or RGBA")
-            if image_kind == "decoration" and image.mode != "RGBA":
-                raise ValueError("decoration mode must be RGBA")
+            if image_kind == "decoration" and image.mode not in {"RGB", "RGBA"}:
+                raise ValueError("decoration mode must be RGB or RGBA")
             if image.width <= 0 or image.height <= 0:
                 raise ValueError(f"{image_kind} dimensions must be positive")
+            size = image.size
             image.verify()
+    return size
 
 
 def _validate_candidate(
@@ -372,19 +374,23 @@ def discover_decorations(
     report: Report,
     parse_insets: Callable[..., object],
 ) -> dict[str, object]:
-    from .config import DecorationResource
+    from .config import DecorationLayerResource, DecorationResource, NineSliceParameters
 
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
         for package, manifest in _walk_packages(root, "decoration.yaml", report, "decorations"):
             field = str(manifest)
-            parsed = _parse_manifest(
-                manifest,
-                "decoration",
+            try:
+                data = _read_manifest(manifest)
+            except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
+                report(field, f"manifest is invalid and the decoration is excluded: {error}", logging.WARNING)
+                continue
+            _unknown_fields(
+                data,
                 {
                     "format",
                     "id",
-                    "image",
+                    "layers",
                     "presentation_insets",
                     "font",
                     "font_faces",
@@ -399,11 +405,154 @@ def discover_decorations(
                     "qr_from_bottom",
                     "qr_centered",
                 },
+                field,
                 report,
             )
-            if parsed is None:
+            if type(data.get("format")) is not int or data.get("format") != 1:
+                report(
+                    f"{field}.format",
+                    "must be the supported integer manifest version 1; decoration excluded",
+                    logging.WARNING,
+                )
                 continue
-            image_path, data = parsed
+            identifier = data.get("id")
+            if not valid_identifier(identifier):
+                report(f"{field}.id", "must be a nonempty ASCII identifier; decoration excluded", logging.WARNING)
+                continue
+            definitions = data.get("layers")
+            if not isinstance(definitions, list) or not definitions:
+                report(f"{field}.layers", "must be a nonempty ordered sequence; decoration excluded", logging.WARNING)
+                continue
+            layers: list[DecorationLayerResource] = []
+            invalid_layers = False
+            for index, definition in enumerate(definitions):
+                layer_field = f"{field}.layers[{index}]"
+                if not isinstance(definition, dict):
+                    report(layer_field, "must be a mapping; decoration excluded", logging.WARNING)
+                    invalid_layers = True
+                    continue
+                _unknown_fields(
+                    definition,
+                    {"image", "method", "nine_slice", "condition", "tintable"},
+                    layer_field,
+                    report,
+                )
+                method = definition.get("method")
+                if not isinstance(method, str) or method not in {"contain", "nine-slice"}:
+                    report(
+                        f"{layer_field}.method",
+                        "must be 'contain' or 'nine-slice'; decoration excluded",
+                        logging.WARNING,
+                    )
+                    invalid_layers = True
+                    continue
+                condition = definition.get("condition", "always")
+                if not isinstance(condition, str) or condition not in {"always", "qr", "no-qr"}:
+                    report(
+                        f"{layer_field}.condition",
+                        "must be 'always', 'qr', or 'no-qr'; decoration excluded",
+                        logging.WARNING,
+                    )
+                    invalid_layers = True
+                    continue
+                layer_tintable = definition.get("tintable", True)
+                if "tintable" in definition and type(layer_tintable) is not bool:
+                    report(f"{layer_field}.tintable", "must be a YAML boolean; using true", logging.WARNING)
+                    layer_tintable = True
+                nine_slice: NineSliceParameters | None = None
+                if method == "contain" and "nine_slice" in definition:
+                    report(
+                        f"{layer_field}.nine_slice",
+                        "is not supported with method 'contain'; decoration excluded",
+                        logging.WARNING,
+                    )
+                    invalid_layers = True
+                    continue
+                if method == "nine-slice":
+                    parameters = definition.get("nine_slice")
+                    if not isinstance(parameters, dict):
+                        report(
+                            f"{layer_field}.nine_slice",
+                            "is required and must be a mapping; decoration excluded",
+                            logging.WARNING,
+                        )
+                        invalid_layers = True
+                        continue
+                    allowed_parameters = {"left", "right", "top", "bottom", "horizontal", "vertical"}
+                    invalid_parameter = False
+                    for key in sorted(parameters.keys() - allowed_parameters, key=str):
+                        report(
+                            f"{layer_field}.nine_slice.{key}",
+                            "is not a supported parameter; decoration excluded",
+                            logging.WARNING,
+                        )
+                        invalid_parameter = True
+                    measurements = {}
+                    for key in ("left", "right", "top", "bottom"):
+                        value = parameters.get(key)
+                        if type(value) is not int or value < 0:
+                            report(
+                                f"{layer_field}.nine_slice.{key}",
+                                "must be a nonnegative source-pixel integer; decoration excluded",
+                                logging.WARNING,
+                            )
+                            invalid_parameter = True
+                        else:
+                            measurements[key] = value
+                    horizontal = parameters.get("horizontal", "stretch")
+                    vertical = parameters.get("vertical", "stretch")
+                    if not isinstance(horizontal, str) or horizontal not in {"stretch", "crop"}:
+                        report(
+                            f"{layer_field}.nine_slice.horizontal",
+                            "must be 'stretch' or 'crop'; decoration excluded",
+                            logging.WARNING,
+                        )
+                        invalid_parameter = True
+                    if not isinstance(vertical, str) or vertical not in {"stretch", "crop"}:
+                        report(
+                            f"{layer_field}.nine_slice.vertical",
+                            "must be 'stretch' or 'crop'; decoration excluded",
+                            logging.WARNING,
+                        )
+                        invalid_parameter = True
+                    if invalid_parameter:
+                        invalid_layers = True
+                        continue
+                    nine_slice = NineSliceParameters(
+                        **measurements,
+                        horizontal=horizontal,
+                        vertical=vertical,
+                    )
+                try:
+                    image_path = _manifest_path(package, definition.get("image"), {".png"})
+                    image_size = _validate_image_metadata(image_path, "decorations")
+                except (OSError, ValueError) as error:
+                    report(f"{layer_field}.image", f"is invalid; decoration excluded: {error}", logging.WARNING)
+                    invalid_layers = True
+                    continue
+                if nine_slice is not None and (
+                    nine_slice.left + nine_slice.right > image_size[0]
+                    or nine_slice.top + nine_slice.bottom > image_size[1]
+                ):
+                    report(
+                        f"{layer_field}.nine_slice",
+                        f"boundaries overlap or exceed the {image_size[0]} x {image_size[1]} image; "
+                        "decoration excluded",
+                        logging.WARNING,
+                    )
+                    invalid_layers = True
+                    continue
+                layers.append(
+                    DecorationLayerResource(
+                        image=image_path,
+                        method=method,
+                        nine_slice=nine_slice,
+                        condition=condition,
+                        tintable=layer_tintable,
+                    )
+                )
+            if invalid_layers or len(layers) != len(definitions):
+                continue
             identifier = data["id"]
             insets = None
             if "presentation_insets" in data:
@@ -447,10 +596,10 @@ def discover_decorations(
                 if "decoration_color" in data
                 else None
             )
-            tintable = data.get("tintable", False)
+            tintable = data.get("tintable", True)
             if "tintable" in data and type(tintable) is not bool:
-                report(f"{field}.tintable", "must be a YAML boolean; tinting is disabled", logging.WARNING)
-                tintable = False
+                report(f"{field}.tintable", "must be a YAML boolean; using true", logging.WARNING)
+                tintable = True
             qr_ready = data.get("qr_ready", True)
             if "qr_ready" in data and type(qr_ready) is not bool:
                 report(f"{field}.qr_ready", "must be a YAML boolean; QR generation remains enabled", logging.WARNING)
@@ -464,7 +613,7 @@ def discover_decorations(
             )
             resource = DecorationResource(
                 identifier=identifier,
-                path=image_path,
+                layers=tuple(layers),
                 bundled=is_bundled,
                 presentation_insets=insets,  # type: ignore[arg-type]
                 font=preferred_font,
@@ -477,16 +626,14 @@ def discover_decorations(
                 qr_positioning=qr_positioning,
                 manifest=manifest,
             )
-            _validate_image_candidate(
-                resource,
-                identifier,
-                is_bundled,
-                reserved,
-                candidates,
-                field,
-                report,
-                "decorations",
-            )
+            if identifier == "none":
+                report(
+                    f"{field}.id",
+                    "reserved identifier 'none' cannot be registered; decoration excluded",
+                    logging.WARNING,
+                )
+                continue
+            _validate_candidate(resource, identifier, is_bundled, reserved, candidates, field, report, field)
     return _register_candidates(candidates, reserved, "decorations", report)
 
 

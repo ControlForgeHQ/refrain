@@ -15,11 +15,12 @@ from PIL import Image
 from refrain import (
     ApplicationConfigurationError,
     BackgroundResource,
+    DecorationLayerResource,
     DecorationResource,
     PresentationInsets,
     load_application_config,
     load_background_image,
-    load_decoration_image,
+    load_decoration_layer_image,
 )
 
 
@@ -434,10 +435,10 @@ def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -
     assert not any(record.levelno >= 30 and "decoration" in record.message for record in caplog.records)
     for identifier, resource in config.decorations.items():
         assert resource.identifier == identifier
-        assert resource.path.name == f"{identifier}.png"
-        with load_decoration_image(resource) as image:
+        assert resource.layers[0].image.name == f"{identifier}.png"
+        with load_decoration_layer_image(resource.layers[0]) as image:
             assert image.size == (1600, 1200)
-            assert image.mode == "RGBA"
+            assert image.mode in {"RGB", "RGBA"}
     with pytest.raises(TypeError):
         config.decorations["other"] = config.decorations["hex"]
 
@@ -453,7 +454,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
         {
             "format": 1,
             "id": "custom-flourish",
-            "image": "flourish.png",
+            "layers": [{"image": "flourish.png", "method": "contain"}],
             "presentation_insets": {"left": 384, "right": 768, "top": 432, "bottom": 432},
             "font": "lora",
             "text_color": ["black", "burnt-orange"],
@@ -468,7 +469,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
 
     assert config.decorations["custom-flourish"] == DecorationResource(
         "custom-flourish",
-        path,
+        (DecorationLayerResource(path, "contain"),),
         False,
         PresentationInsets(384, 768, 432, 432),
         "lora",
@@ -478,7 +479,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
     assert config.default_decorations == ("custom-flourish",)
 
 
-@pytest.mark.parametrize("kind", ["rgb", "animation", "corrupt", "missing"])
+@pytest.mark.parametrize("kind", ["unsupported-mode", "animation", "corrupt", "missing"])
 def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: str, caplog) -> None:
     decorations = tmp_path / "assets" / "decorations"
     bad_package = decorations / "bad-package"
@@ -487,9 +488,9 @@ def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: st
     good_path = good_package / "good.png"
     good_path.parent.mkdir(parents=True)
     Image.new("RGBA", (37, 21)).save(good_path)
-    if kind == "rgb":
+    if kind == "unsupported-mode":
         bad_path.parent.mkdir(parents=True)
-        Image.new("RGB", (1600, 1200)).save(bad_path)
+        Image.new("L", (1600, 1200)).save(bad_path)
     elif kind == "animation":
         bad_path.parent.mkdir(parents=True)
         Image.new("RGBA", (1600, 1200)).save(
@@ -501,9 +502,17 @@ def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: st
     write_asset_manifest(
         bad_package,
         "decoration.yaml",
-        {"format": 1, "id": "bad", "image": "missing.png" if kind == "missing" else "bad.png"},
+        {
+            "format": 1,
+            "id": "bad",
+            "layers": [{"image": "missing.png" if kind == "missing" else "bad.png", "method": "contain"}],
+        },
     )
-    write_asset_manifest(good_package, "decoration.yaml", {"format": 1, "id": "good", "image": "good.png"})
+    write_asset_manifest(
+        good_package,
+        "decoration.yaml",
+        {"format": 1, "id": "good", "layers": [{"image": "good.png", "method": "contain"}]},
+    )
     data = decoration_configuration(
         default=["bad", "good"],
     )
@@ -513,10 +522,9 @@ def test_invalid_decorations_are_excluded_independently(tmp_path: Path, kind: st
     assert "bad" not in config.decorations
     assert "good" in config.decorations
     assert config.default_decorations == ("good",)
+    assert "decoration.yaml.layers[0]" in caplog.text
     if kind == "missing":
-        assert "decoration.yaml.image" in caplog.text
-    else:
-        assert "assets.decorations.bad" in caplog.text
+        assert "resource path is missing" in caplog.text
     assert "excluded" in caplog.text
 
 
@@ -532,11 +540,15 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
         {
             "format": 1,
             "id": "bad-region",
-            "image": "overlay.png",
+            "layers": [{"image": "overlay.png", "method": "contain"}],
             "presentation_insets": {"left": 3840, "right": 0, "top": 0, "bottom": 0},
         },
     )
-    write_asset_manifest(decorations / "valid", "decoration.yaml", {"format": 1, "id": "valid", "image": "overlay.png"})
+    write_asset_manifest(
+        decorations / "valid",
+        "decoration.yaml",
+        {"format": 1, "id": "valid", "layers": [{"image": "overlay.png", "method": "contain"}]},
+    )
     data = decoration_configuration(
         default=["bad-region", "valid"],
     )
@@ -565,7 +577,7 @@ def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(
         {
             "format": 1,
             "id": "usable",
-            "image": "overlay.png",
+            "layers": [{"image": "overlay.png", "method": "contain"}],
             "font": "missing-font",
             "background": "missing-paper",
             "text_color": [None],
@@ -603,7 +615,11 @@ def test_reserved_decoration_identifiers_cannot_be_overridden(tmp_path: Path, id
     package = tmp_path / "assets" / "decorations" / "conflicting"
     package.mkdir(parents=True)
     Image.new("RGBA", (8, 6)).save(package / "overlay.png")
-    write_asset_manifest(package, "decoration.yaml", {"format": 1, "id": identifier, "image": "overlay.png"})
+    write_asset_manifest(
+        package,
+        "decoration.yaml",
+        {"format": 1, "id": identifier, "layers": [{"image": "overlay.png", "method": "contain"}]},
+    )
     config = load_application_config(write_config(tmp_path / "config.yaml", decoration_configuration()))
 
     if identifier == "none":
@@ -984,7 +1000,11 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     Image.new("RGB", (1600, 1200)).save(background)
     Image.new("RGBA", (1600, 1200)).save(decoration)
     write_asset_manifest(font.parent, "font.yaml", {"format": 1, "id": "family", "faces": {"regular": "Regular.ttf"}})
-    write_asset_manifest(decoration.parent, "decoration.yaml", {"format": 1, "id": "border", "image": "Border.png"})
+    write_asset_manifest(
+        decoration.parent,
+        "decoration.yaml",
+        {"format": 1, "id": "border", "layers": [{"image": "Border.png", "method": "contain"}]},
+    )
 
     data = configuration_data(
         content={"directory": "entries"},
@@ -1005,7 +1025,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
 
     assert config.fonts["family"].path == font
     assert config.backgrounds["Paper"].path == background
-    assert config.decorations["border"].path == decoration
+    assert config.decorations["border"].layers[0].image == decoration
     assert config.content_directory == config_directory / "entries"
 
 

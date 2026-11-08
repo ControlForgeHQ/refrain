@@ -105,7 +105,7 @@ def test_image_discovery_checks_metadata_without_decoding_or_copying(tmp_path: P
     _write_manifest(
         root / "decorations" / "border",
         "decoration.yaml",
-        {"format": 1, "id": "border", "image": "border.png"},
+        {"format": 1, "id": "border", "layers": [{"image": "border.png", "method": "contain"}]},
     )
 
     def reject_decode_or_copy(*args, **kwargs):
@@ -123,9 +123,9 @@ def test_image_discovery_checks_metadata_without_decoding_or_copying(tmp_path: P
 def test_image_loaders_do_not_copy_decoded_source_images(tmp_path: Path, monkeypatch) -> None:
     from refrain.config import (
         BackgroundResource,
-        DecorationResource,
+        DecorationLayerResource,
         load_background_image,
-        load_decoration_image,
+        load_decoration_layer_image,
     )
 
     background_path = _write_png(tmp_path / "paper.png")
@@ -139,7 +139,7 @@ def test_image_loaders_do_not_copy_decoded_source_images(tmp_path: Path, monkeyp
     with load_background_image(BackgroundResource("paper", background_path, False)) as image:
         assert image.size == (19, 13)
         assert image.mode == "RGB"
-    with load_decoration_image(DecorationResource("border", decoration_path, False)) as image:
+    with load_decoration_layer_image(DecorationLayerResource(decoration_path, "contain")) as image:
         assert image.size == (19, 13)
         assert image.mode == "RGBA"
 
@@ -167,7 +167,7 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
         {
             "format": 1,
             "id": "botanical-border",
-            "image": "border.png",
+            "layers": [{"image": "border.png", "method": "contain"}],
             "presentation_insets": {"left": 461, "right": 461, "top": 346, "bottom": 346},
             "font": "missing-font",
             "background": "missing-background",
@@ -185,7 +185,7 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
     assert decoration.font is None
     assert decoration.background is None
     assert dict(decoration.font_faces) == {"source": "handwritten"}
-    assert decoration.tintable is False
+    assert decoration.tintable is True
     assert decoration.decoration_color is None
     assert config.default_fonts == ("lora",)
     assert config.default_decorations == ("none",)
@@ -198,10 +198,10 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
     [
         (True, True, ["sage-green", "burnt-orange"], True, ("sage-green", "burnt-orange")),
         (False, True, "red", False, ("red",)),
-        ("true", True, ["sage-green"], False, ("sage-green",)),
-        (1, True, ["sage-green", 1], False, ("sage-green",)),
-        (None, False, [], False, None),
-        (None, True, None, False, None),
+        ("true", True, ["sage-green"], True, ("sage-green",)),
+        (1, True, ["sage-green", 1], True, ("sage-green",)),
+        (None, False, [], True, None),
+        (None, True, None, True, None),
     ],
 )
 def test_decoration_tintability_and_color_preference_are_optional(
@@ -218,7 +218,7 @@ def test_decoration_tintability_and_color_preference_are_optional(
     manifest: dict[str, object] = {
         "format": 1,
         "id": "border",
-        "image": "border.png",
+        "layers": [{"image": "border.png", "method": "contain"}],
         "decoration_color": color,
     }
     if include_tintable:
@@ -236,6 +236,179 @@ def test_decoration_tintability_and_color_preference_are_optional(
         assert "decoration_color" in caplog.text
 
 
+def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp_path: Path) -> None:
+    root = tmp_path / "assets" / "decorations"
+    single = root / "single"
+    _write_png(single / "single.png", "RGB")
+    _write_manifest(
+        single,
+        "decoration.yaml",
+        {"format": 1, "id": "single", "layers": [{"image": "single.png", "method": "contain"}]},
+    )
+    multi = root / "multi"
+    _write_png(multi / "base.png", "RGBA")
+    _write_png(multi / "frame.png", "RGBA")
+    _write_manifest(
+        multi,
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "multi",
+            "layers": [
+                {"image": "base.png", "method": "contain", "condition": "always"},
+                {
+                    "image": "frame.png",
+                    "method": "nine-slice",
+                    "nine_slice": {"left": 5, "right": 5, "top": 3, "bottom": 3, "horizontal": "crop"},
+                    "condition": "qr",
+                    "tintable": False,
+                },
+            ],
+        },
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert len(config.decorations["single"].layers) == 1
+    assert config.decorations["single"].layers[0].method == "contain"
+    assert config.decorations["single"].layers[0].condition == "always"
+    assert config.decorations["single"].layers[0].tintable is True
+    assert tuple(layer.image.name for layer in config.decorations["multi"].layers) == ("base.png", "frame.png")
+    assert config.decorations["multi"].layers[1].nine_slice.horizontal == "crop"
+    assert config.decorations["multi"].layers[1].nine_slice.vertical == "stretch"
+    assert config.decorations["multi"].layers[1].condition == "qr"
+    assert config.decorations["multi"].layers[1].tintable is False
+
+
+@pytest.mark.parametrize(
+    ("layers", "diagnostic"),
+    [
+        (None, ".layers"),
+        ([], ".layers"),
+        ([{"method": "contain"}], ".image"),
+        ([{"image": "border.png"}], ".method"),
+        ([{"image": "border.png", "method": "fit"}], ".method"),
+        ([{"image": "border.png", "method": "contain", "condition": "sometimes"}], ".condition"),
+        (
+            [{"image": "border.png", "method": "contain", "nine_slice": {"left": 1}}],
+            ".nine_slice",
+        ),
+        (
+            [{"image": "border.png", "method": "nine-slice"}],
+            ".nine_slice",
+        ),
+        (
+            [
+                {
+                    "image": "border.png",
+                    "method": "nine-slice",
+                    "nine_slice": {"left": True, "right": 1, "top": 1, "bottom": 1},
+                }
+            ],
+            ".nine_slice.left",
+        ),
+        (
+            [
+                {
+                    "image": "border.png",
+                    "method": "nine-slice",
+                    "nine_slice": {"left": 1.5, "right": 1, "top": 1, "bottom": 1},
+                }
+            ],
+            ".nine_slice.left",
+        ),
+        (
+            [
+                {
+                    "image": "border.png",
+                    "method": "nine-slice",
+                    "nine_slice": {"left": -1, "right": 1, "top": 1, "bottom": 1},
+                }
+            ],
+            ".nine_slice.left",
+        ),
+        (
+            [
+                {
+                    "image": "border.png",
+                    "method": "nine-slice",
+                    "nine_slice": {
+                        "left": 1,
+                        "right": 1,
+                        "top": 1,
+                        "bottom": 1,
+                        "horizontal": "tile",
+                    },
+                }
+            ],
+            ".nine_slice.horizontal",
+        ),
+        (
+            [
+                {
+                    "image": "border.png",
+                    "method": "nine-slice",
+                    "nine_slice": {"left": 10, "right": 10, "top": 1, "bottom": 1},
+                }
+            ],
+            ".nine_slice",
+        ),
+        ([{"image": "../outside.png", "method": "contain"}], ".image"),
+        ([{"image": "/tmp/outside.png", "method": "contain"}], ".image"),
+        ([{"image": "C:/outside.png", "method": "contain"}], ".image"),
+        ([{"image": "border.png", "method": "contain", "tintable": "false"}], None),
+    ],
+)
+def test_invalid_layer_definitions_exclude_only_the_decoration(
+    tmp_path: Path,
+    caplog,
+    layers: object,
+    diagnostic: str | None,
+) -> None:
+    root = tmp_path / "assets" / "decorations"
+    bad = root / "bad"
+    good = root / "good"
+    _write_png(bad / "border.png")
+    _write_manifest(bad, "decoration.yaml", {"format": 1, "id": "bad", "layers": layers})
+    _write_png(good / "good.png")
+    _write_manifest(
+        good,
+        "decoration.yaml",
+        {"format": 1, "id": "good", "layers": [{"image": "good.png", "method": "contain"}]},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "good" in config.decorations
+    if diagnostic is None:
+        assert "bad" in config.decorations
+        assert config.decorations["bad"].layers[0].tintable is True
+        assert ".tintable" in caplog.text
+    else:
+        assert "bad" not in config.decorations
+        assert diagnostic in caplog.text
+
+
+def test_decoration_layer_symlink_cannot_escape_its_package(tmp_path: Path, caplog) -> None:
+    outside = _write_png(tmp_path / "outside.png")
+    package = tmp_path / "assets" / "decorations" / "linked"
+    package.mkdir(parents=True)
+    try:
+        (package / "escape.png").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+    _write_manifest(
+        package,
+        "decoration.yaml",
+        {"format": 1, "id": "linked", "layers": [{"image": "escape.png", "method": "contain"}]},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "linked" not in config.decorations
+    assert "resolves outside its asset package" in caplog.text
+
+
 def test_qr_placement_metadata_does_not_exclude_decoration_and_policy_is_loaded(tmp_path: Path, caplog) -> None:
     package = tmp_path / "assets" / "decorations" / "frame"
     _write_png(package / "frame.png", "RGBA")
@@ -245,7 +418,7 @@ def test_qr_placement_metadata_does_not_exclude_decoration_and_policy_is_loaded(
         {
             "format": 1,
             "id": "frame",
-            "image": "frame.png",
+            "layers": [{"image": "frame.png", "method": "contain"}],
             "qr_ready": False,
             "qr_from_left": True,
             "qr_centered": ["horizontal", "vertical"],
@@ -273,7 +446,12 @@ def test_malformed_qr_ready_uses_enabled_default_without_excluding_decoration(tm
     _write_manifest(
         package,
         "decoration.yaml",
-        {"format": 1, "id": "frame", "image": "frame.png", "qr_ready": "false"},
+        {
+            "format": 1,
+            "id": "frame",
+            "layers": [{"image": "frame.png", "method": "contain"}],
+            "qr_ready": "false",
+        },
     )
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
@@ -310,7 +488,7 @@ def test_invalid_role_face_preferences_do_not_exclude_font_or_decoration(
         {
             "format": 1,
             "id": "border",
-            "image": "border.png",
+            "layers": [{"image": "border.png", "method": "contain"}],
             "font_faces": font_faces,
         },
     )
