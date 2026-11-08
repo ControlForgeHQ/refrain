@@ -526,7 +526,7 @@ def discover_decorations(
                 try:
                     image_path = _manifest_path(package, definition.get("image"), {".png"})
                     image_size = _validate_image_metadata(image_path, "decorations")
-                except (OSError, ValueError) as error:
+                except Exception as error:
                     report(f"{layer_field}.image", f"is invalid; decoration excluded: {error}", logging.WARNING)
                     invalid_layers = True
                     continue

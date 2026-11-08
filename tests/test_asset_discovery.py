@@ -409,6 +409,42 @@ def test_decoration_layer_symlink_cannot_escape_its_package(tmp_path: Path, capl
     assert "resolves outside its asset package" in caplog.text
 
 
+def test_unreadable_decoration_layer_does_not_abort_unrelated_discovery(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    root = tmp_path / "assets" / "decorations"
+    bad = root / "oversized"
+    good = root / "usable"
+    bad_image = _write_png(bad / "image.png")
+    _write_manifest(
+        bad,
+        "decoration.yaml",
+        {"format": 1, "id": "oversized", "layers": [{"image": "image.png", "method": "contain"}]},
+    )
+    _write_png(good / "image.png")
+    _write_manifest(
+        good,
+        "decoration.yaml",
+        {"format": 1, "id": "usable", "layers": [{"image": "image.png", "method": "contain"}]},
+    )
+    original_open = Image.open
+
+    def reject_oversized(fp, *args, **kwargs):
+        if getattr(fp, "name", None) == str(bad_image):
+            raise Image.DecompressionBombError("test image exceeds configured pixel limit")
+        return original_open(fp, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", reject_oversized)
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "oversized" not in config.decorations
+    assert "usable" in config.decorations
+    assert "exceeds configured pixel limit" in caplog.text
+
+
 def test_qr_placement_metadata_does_not_exclude_decoration_and_policy_is_loaded(tmp_path: Path, caplog) -> None:
     package = tmp_path / "assets" / "decorations" / "frame"
     _write_png(package / "frame.png", "RGBA")
