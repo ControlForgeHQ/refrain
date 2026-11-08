@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import random
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from PIL import Image, ImageFont, ImageOps
 
@@ -243,14 +243,23 @@ def _resolve_fonts(
         tried.add(identifier)
         resource = configuration.fonts.get(identifier)
         if resource is None:
-            _LOGGER.warning("Requested font %r from %s is unavailable; checking the next preference", identifier, source)
+            _LOGGER.warning(
+                "Requested font %r from %s is unavailable; checking the next preference",
+                identifier,
+                source,
+            )
             continue
         try:
             regular = _read_font(resource)
             resolved_bundle = resource
             break
         except Exception as error:
-            _LOGGER.warning("Requested font %r from %s is unusable; checking the next preference: %s", identifier, source, error)
+            _LOGGER.warning(
+                "Requested font %r from %s is unusable; checking the next preference: %s",
+                identifier,
+                source,
+                error,
+            )
 
     if resolved_bundle is None:
         pool = tuple(identifier for identifier in configuration.default_fonts if identifier not in tried)
@@ -264,7 +273,11 @@ def _resolve_fonts(
                     resolved_bundle = resource
                     break
                 except Exception as error:
-                    _LOGGER.warning("Default font %r is unusable; trying another configured font: %s", identifier, error)
+                    _LOGGER.warning(
+                        "Default font %r is unusable; trying another configured font: %s",
+                        identifier,
+                        error,
+                    )
             pool = tuple(candidate for candidate in pool if candidate != identifier)
     if resolved_bundle is None or regular is None:
         raise DailyImagePreparationError(
@@ -337,7 +350,11 @@ def _resolve_background(
             continue
         if preferred == "none" or preferred in configuration.backgrounds:
             return preferred
-        _LOGGER.warning("Requested background %r from %s is unavailable; checking the next preference", preferred, source)
+        _LOGGER.warning(
+            "Requested background %r from %s is unavailable; checking the next preference",
+            preferred,
+            source,
+        )
     if not configuration.default_backgrounds:
         raise DailyImagePreparationError(
             "no usable background remains; add an available background preference or configure "
@@ -353,6 +370,7 @@ def prepare_daily_images(
     *,
     chooser: random.Random | None = None,
     strict_decoration: bool = False,
+    on_resolved_region: Callable[[PresentationRegion], None] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -371,6 +389,8 @@ def prepare_daily_images(
     composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(
         snapshot, configuration, decoration
     )
+    if on_resolved_region is not None:
+        on_resolved_region(region)
     text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
     qr_parameters = PRODUCTION_QR_PARAMETERS
     decoration_tint = _resolve_decoration_tint(configuration, snapshot, decoration, chooser)
@@ -388,9 +408,7 @@ def prepare_daily_images(
             source_font=fonts["source"],
             attribution_font=fonts["attribution"],
         )
-        background = _generate_daily_background(
-            image_size, background_identifier, configuration.backgrounds
-        )
+        background = _generate_daily_background(image_size, background_identifier, configuration.backgrounds)
         try:
             background = _apply_daily_decoration(
                 background,

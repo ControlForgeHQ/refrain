@@ -19,8 +19,10 @@ from refrain import (
     PresentationRegion,
     RevealSchedule,
     SchedulingContext,
-    prepare_daily_images as _prepare_daily_images,
     resolve_reveal_stages,
+)
+from refrain import (
+    prepare_daily_images as _prepare_daily_images,
 )
 from refrain.config import BackgroundResource, DecorationResource
 
@@ -523,7 +525,6 @@ def test_preparation_is_deterministic(embedded_font: str) -> None:
 
 
 def test_committed_color_is_rendered_for_all_literary_fields_and_reveal_stages() -> None:
-    color = (198, 90, 32)
     snapshot = make_snapshot(
         "lora",
         metadata={
@@ -787,12 +788,6 @@ def test_unusable_explicit_font_uses_configured_default_pool(tmp_path, caplog, m
 
 
 def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: str) -> None:
-    layout = {
-        "image_size": (100, 100),
-        "presentation_region": {"x": 0.49, "y": 0.49, "width": 0.02, "height": 0.02},
-        "min_font_size": 24,
-        "max_font_size": 28,
-    }
     snapshot = make_snapshot(embedded_font, source=None, attribution=None)
     original_snapshot = snapshot
 

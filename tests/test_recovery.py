@@ -22,13 +22,13 @@ from refrain import (
     EligibilityRule,
     FontResource,
     PersistentStateStore,
-    PresentationRegion,
     PreparedImageArtifactStore,
+    PresentationRegion,
     Quotation,
     QuotationCandidate,
+    RevealSchedule,
     SchedulingContext,
     SelectionProposal,
-    RevealSchedule,
     normalize_quotation,
     prepare_daily_images,
     recover_prepared_daily_images,
@@ -251,9 +251,7 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
             (old_set.directory / "manifest.json").write_bytes(b"{")
 
     result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
-    reloaded = PreparedImageArtifactStore(artifact_store.root).load(
-        state.revision, _STAGES
-    )
+    reloaded = PreparedImageArtifactStore(artifact_store.root).load(state.revision, _STAGES)
 
     assert result.revision == state.revision
     assert reloaded == result
@@ -377,9 +375,7 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: images)
 
     result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
-    reloaded = PreparedImageArtifactStore(artifact_store.root).load(
-        state.revision, _STAGES
-    )
+    reloaded = PreparedImageArtifactStore(artifact_store.root).load(state.revision, _STAGES)
 
     assert reloaded == result
     _assert_images_closed(images)

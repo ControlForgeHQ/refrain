@@ -479,7 +479,7 @@ def test_daily_snapshot_does_not_persist_qr_rendering_parameters(workspace: Work
     assert "quiet_zone" not in serialized
 
 
-def test_debug_layout_only_changes_published_copy_of_cached_image(workspace: Workspace) -> None:
+def test_debug_layout_does_not_guess_geometry_for_cached_images(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
     _, baseline_display = workspace.run(at(10, 7))
     cached = {path: path.read_bytes() for path in png_files(workspace.artifacts)}
@@ -488,7 +488,8 @@ def test_debug_layout_only_changes_published_copy_of_cached_image(workspace: Wor
     _, debug_display = workspace.run(at(10, 7), debug_layout=True)
 
     assert baseline_display.images[0].getpixel((160, 300)) == (255, 255, 255)
-    assert debug_display.images[0].getpixel((160, 300)) == (127, 127, 127)
+    assert debug_display.images[0].tobytes() == baseline_display.images[0].tobytes()
+    assert "resolved geometry is unavailable" in caplog.text
     assert {path: path.read_bytes() for path in png_files(workspace.artifacts)} == cached
     assert workspace.load() == committed
     for display in (baseline_display, debug_display):
@@ -496,7 +497,9 @@ def test_debug_layout_only_changes_published_copy_of_cached_image(workspace: Wor
             image.close()
 
 
-def test_debug_layout_uses_committed_region_after_configuration_and_manifest_change(workspace: Workspace) -> None:
+def test_debug_layout_does_not_guess_region_for_cached_artifact_after_resource_changes(
+    workspace: Workspace, caplog
+) -> None:
     package = workspace.root / "assets" / "decorations" / "custom"
     package.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)).save(package / "overlay.png")
@@ -508,6 +511,7 @@ def test_debug_layout_uses_committed_region_after_configuration_and_manifest_cha
     ordinary(workspace, extra='decoration: "custom"\n')
     _, baseline_display = workspace.run(at(10, 7))
     committed = workspace.load()
+    cached = {path: path.read_bytes() for path in png_files(workspace.artifacts)}
 
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
@@ -524,10 +528,55 @@ def test_debug_layout_uses_committed_region_after_configuration_and_manifest_cha
     _, debug_display = workspace.run(at(10, 7), debug_layout=True)
 
     assert committed.snapshot.decoration == "custom"
-    assert baseline_display.images[0].getpixel((320, 450)) == (255, 255, 255)
-    assert debug_display.images[0].getpixel((640, 600)) == (127, 127, 127)
+    assert debug_display.images[0].tobytes() == baseline_display.images[0].tobytes()
+    assert {path: path.read_bytes() for path in png_files(workspace.artifacts)} == cached
+    assert "resolved geometry is unavailable" in caplog.text
     assert workspace.load() == committed
     for display in (baseline_display, debug_display):
+        for image in display.images:
+            image.close()
+
+
+def test_debug_layout_uses_prepared_automatic_decoration_region_and_skips_unknown_cached_region(
+    workspace: Workspace, caplog
+) -> None:
+    package = workspace.root / "assets" / "decorations" / "custom"
+    package.mkdir(parents=True)
+    Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)).save(package / "overlay.png")
+    write_decoration_manifest(
+        package,
+        "custom",
+        presentation_region={"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+    )
+    workspace.config.write_text(
+        _CONFIG.replace(
+            "  fonts:",
+            '  decorations: {default: ["custom"]}\n  fonts:',
+        ),
+        encoding="utf-8",
+    )
+    ordinary(workspace)
+
+    first, first_display = workspace.run(at(10, 7), debug_layout=True)
+    assert first.state.snapshot.decoration is None
+    with Image.open(png_files(workspace.artifacts)[0]) as prepared:
+        assert first_display.images[0].getpixel((320, 360)) != prepared.getpixel((320, 360))
+        assert first_display.images[0].getpixel((160, 180)) == prepared.getpixel((160, 180))
+
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8")
+        .replace("x: 0.1, y: 0.15, width: 0.8, height: 0.55", "x: 0.3, y: 0.4, width: 0.4, height: 0.3")
+        .replace('default: ["custom"]', 'default: ["none"]'),
+        encoding="utf-8",
+    )
+    caplog.clear()
+    second, second_display = workspace.run(at(10, 7), debug_layout=True)
+    with Image.open(png_files(workspace.artifacts)[0]) as prepared:
+        assert second_display.images[0].tobytes() == prepared.tobytes()
+    assert second.state == first.state
+    assert "resolved geometry is unavailable" in caplog.text
+
+    for display in (first_display, second_display):
         for image in display.images:
             image.close()
 

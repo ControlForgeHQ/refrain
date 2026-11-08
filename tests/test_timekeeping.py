@@ -22,6 +22,8 @@ from refrain import (
     normalize_quotation,
     wait_for_scheduling_event,
 )
+
+
 def make_configuration(*, day_start: str = "06:00") -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),

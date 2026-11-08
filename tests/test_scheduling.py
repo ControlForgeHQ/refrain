@@ -271,9 +271,7 @@ def test_nonexistent_dst_reveal_time_becomes_due_after_the_clock_skips_it() -> N
         ),
     ],
 )
-def test_absent_optional_fields_do_not_add_reveal_stages(
-    metadata: dict[str, str | None], expected_stage: int
-) -> None:
+def test_absent_optional_fields_do_not_add_reveal_stages(metadata: dict[str, str | None], expected_stage: int) -> None:
     state = make_state(
         metadata=metadata,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},

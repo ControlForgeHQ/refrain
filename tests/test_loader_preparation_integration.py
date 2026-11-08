@@ -18,6 +18,8 @@ from refrain import (
     prepare_daily_images,
     select_quotation,
 )
+
+
 def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_path: Path) -> None:
     content_directory = tmp_path / "content"
     content_directory.mkdir()

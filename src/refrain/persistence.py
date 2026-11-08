@@ -347,9 +347,7 @@ class PersistentStateStore:
                 f"{error} State file: {self.path}. {_recovery_guidance(self.path)}"
             ) from error
         except StateRecoveryError as error:
-            raise StateRecoveryError(
-                f"{error} State file: {self.path}. {_recovery_guidance(self.path)}"
-            ) from error
+            raise StateRecoveryError(f"{error} State file: {self.path}. {_recovery_guidance(self.path)}") from error
         except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
             raise StateRecoveryError(
                 f"invalid persistent state at {self.path}: {error}. {_recovery_guidance(self.path)}"

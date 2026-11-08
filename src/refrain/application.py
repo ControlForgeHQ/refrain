@@ -8,7 +8,7 @@ import os
 import random
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +22,7 @@ from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
     DisplayBackendConfiguration,
+    PresentationRegion,
     load_application_config,
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library
@@ -40,9 +41,6 @@ from .persistence import (
     StateRecoveryError,
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
-from .qr import (
-    QRCodeParameters,
-)
 from .qr_diagnostic import (
     QRCalibrationError,
     QRCalibrationGeometry,
@@ -253,12 +251,19 @@ def run_show_entry(
             raise ApplicationError(f"content entry {entry_id!r} has no usable quotations to present")
         snapshot = _build_snapshot(configuration, entry, entry.quotations[0], date.today())
         stages = resolve_reveal_stages(snapshot)
+        resolved_region: PresentationRegion | None = None
+
+        def remember_region(region: PresentationRegion) -> None:
+            nonlocal resolved_region
+            resolved_region = region
+
         try:
             images = prepare_daily_images(
                 snapshot,
                 (stages[-1],),
                 configuration,
                 chooser=chooser,
+                on_resolved_region=remember_region,
             )
         except Exception as error:
             raise ApplicationError(f"cannot prepare diagnostic presentation for entry {entry_id!r}: {error}") from error
@@ -269,7 +274,7 @@ def run_show_entry(
     annotated_image: Image.Image | None = None
     try:
         if snapshot is not None and debug_layout:
-            annotated_image = _debug_layout_image(image, snapshot, configuration, True)
+            annotated_image = _debug_layout_image(image, resolved_region, True)
             image = annotated_image
         output = _save_diagnostic_png(image, entry_id)
         identity = _DIAGNOSTIC_PRESENTATION_IDENTITY
@@ -498,27 +503,24 @@ def _load_configuration(config_file: str | Path) -> ApplicationConfiguration:
 
 def _debug_layout_image(
     image: Image.Image,
-    snapshot: DailySnapshot,
-    configuration: ApplicationConfiguration,
+    region: PresentationRegion | None,
     enabled: bool,
 ) -> Image.Image:
     if not enabled:
         return image
-    decoration = configuration.decorations.get(snapshot.decoration) if snapshot.decoration is not None else None
-    region = configuration.presentation_region if decoration is None else decoration.presentation_region
     if region is None:
-        region = configuration.presentation_region
+        _LOGGER.warning("Cannot outline the presentation region because its resolved geometry is unavailable")
+        return image
     return annotate_presentation_region(image, region)
 
 
 def _stage_publication_image(
     image: Image.Image,
-    snapshot: DailySnapshot,
-    configuration: ApplicationConfiguration,
+    region: PresentationRegion | None,
     debug_layout: bool,
 ) -> Image.Image:
     try:
-        annotated = _debug_layout_image(image, snapshot, configuration, debug_layout)
+        annotated = _debug_layout_image(image, region, debug_layout)
     except Exception:
         image.close()
         raise
@@ -680,7 +682,7 @@ def run_startup(
                 image = artifacts.load_stage(stage)
             except ArtifactStoreError as error:
                 raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-            image = _stage_publication_image(image, state.snapshot, configuration, debug_layout)
+            image = _stage_publication_image(image, artifacts.presentation_region, debug_layout)
             try:
                 final_decision = evaluate_scheduling(read_current_time(), configuration, state)
             except SchedulingEvaluationError as error:
@@ -904,7 +906,7 @@ def run_application(
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(image, state.snapshot, configuration, debug_layout)
+                    image = _stage_publication_image(image, artifacts.presentation_region, debug_layout)
                     coordinator.publish(identity, image)
                     continue
                 if last_failure is not None:
@@ -1036,7 +1038,7 @@ def run_demo(
                         raise _RetryableApplicationError(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(image, state.snapshot, configuration, debug_layout)
+                    image = _stage_publication_image(image, artifacts.presentation_region, debug_layout)
                     coordinator.publish(identity, image)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
                     continue

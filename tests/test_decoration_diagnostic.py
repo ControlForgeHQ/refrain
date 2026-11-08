@@ -100,10 +100,7 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     assert ids == ["a-custom", "a-custom", "a-custom", "top-bottom-borders", "a-custom", "a-custom", "a-custom"]
     assert snapshots[0].quotation_text == snapshots[2].quotation_text == snapshots[4].quotation_text
     assert snapshots[0].quotation_text != snapshots[1].quotation_text
-    assert all(
-        snapshot.source and snapshot.attribution
-        for snapshot in snapshots
-    )
+    assert all(snapshot.source and snapshot.attribution for snapshot in snapshots)
     output = capsys.readouterr().out
     assert "Presentation: 1 of 12" in output
     assert "Quotation: SHORT" in output and "Quotation: LONG" in output

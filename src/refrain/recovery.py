@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import random
 from collections.abc import Sequence
+from dataclasses import replace
 
 from .artifacts import (
     ArtifactValidationError,
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
-from .config import ApplicationConfiguration
+from .config import ApplicationConfiguration, PresentationRegion
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -61,9 +62,22 @@ def recover_prepared_daily_images(
     if existing is not None:
         return existing
 
-    images = prepare_daily_images(state.snapshot, ordered_stages, configuration, chooser=chooser)
+    resolved_region = None
+
+    def remember_region(region: PresentationRegion) -> None:
+        nonlocal resolved_region
+        resolved_region = region
+
+    images = prepare_daily_images(
+        state.snapshot,
+        ordered_stages,
+        configuration,
+        chooser=chooser,
+        on_resolved_region=remember_region,
+    )
     try:
-        return artifact_store.store(state.revision, ordered_stages, images)
+        artifact_set = artifact_store.store(state.revision, ordered_stages, images)
+        return replace(artifact_set, presentation_region=resolved_region)
     finally:
         for image in images:
             image.close()
