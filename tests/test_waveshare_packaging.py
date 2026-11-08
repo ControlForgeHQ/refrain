@@ -12,7 +12,18 @@ import yaml
 
 _ROOT = Path(__file__).parent.parent
 _LIBRARIES = {f"DEV_Config_{bits}_{variant}.so" for bits in ("32", "64") for variant in ("b", "w")}
-_BACKGROUNDS = ("aged-paper", "canvas", "cloth", "ethereal", "hex")
+_BACKGROUNDS = (
+    "aged-paper",
+    "canvas",
+    "cloth",
+    "drafting-grid",
+    "handmade-paper",
+    "hex",
+    "isometric-grid",
+    "limestone",
+    "recursive-squares",
+    "vellum",
+)
 _DECORATIONS = ("ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders")
 
 
@@ -179,7 +190,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "stream=resource.open('rb'); "
                 "image=Image.open(stream); "
                 "assert image.format == 'PNG'; "
-                "assert image.size == (1600,1200); "
+                "assert image.size == (3840,2400); "
                 "assert image.mode in ('RGB','RGBA'); "
                 "assert image.n_frames == 1; "
                 "image.load(); "
@@ -204,7 +215,8 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "assert loaded.content_directory == paths.content_directory; "
                 "assert set(loaded.decorations) == "
                 "set(('ethereal','hex','lower-flourish','simple-border','top-bottom-borders')); "
-                "assert set(loaded.backgrounds) == set(('aged-paper','canvas','cloth','ethereal','hex')); "
+                "assert set(loaded.backgrounds) == set(('aged-paper','canvas','cloth','drafting-grid',"
+                "'handmade-paper','hex','isometric-grid','limestone','recursive-squares','vellum')); "
                 "assert set(loaded.fonts) == set(('alegreya','libre-baskerville','lora','orbitron','source-sans-3')); "
                 "assert len(load_content_library(paths.content_directory)) >= 3; "
                 "temporary.cleanup()"

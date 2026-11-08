@@ -185,7 +185,7 @@ def test_decoration_preferences_remain_semantic_content(workspace: Workspace) ->
         package,
         "custom",
         font="source-sans-3",
-        background="ethereal",
+        background="hex",
         presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
     )
     workspace.config.write_text(
@@ -239,7 +239,7 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
         package,
         "custom",
         font="source-sans-3",
-        background="ethereal",
+        background="hex",
         presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
     )
     workspace.config.write_text(

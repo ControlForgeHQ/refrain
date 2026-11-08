@@ -73,7 +73,18 @@ def decoration_configuration(**settings: object) -> dict[str, object]:
 def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
-    assert set(config.backgrounds) == {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
+    assert set(config.backgrounds) == {
+        "aged-paper",
+        "canvas",
+        "cloth",
+        "drafting-grid",
+        "handmade-paper",
+        "hex",
+        "isometric-grid",
+        "limestone",
+        "recursive-squares",
+        "vellum",
+    }
     assert config.default_backgrounds == ("none",)
     assert all(resource.bundled for resource in config.backgrounds.values())
     assert not any(record.levelno >= 30 and "background" in record.message for record in caplog.records)
@@ -81,7 +92,7 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
         assert resource.identifier == identifier
         assert resource.path.name == f"{identifier}.png"
         with load_background_image(resource) as image:
-            assert image.size == (1600, 1200)
+            assert image.size == (3840, 2400)
             assert image.mode in {"RGB", "RGBA"}
     with pytest.raises(TypeError):
         config.backgrounds["other"] = config.backgrounds["canvas"]
@@ -250,7 +261,22 @@ def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, c
     assert "excluded" in caplog.text
 
 
-@pytest.mark.parametrize("identifier", ["none", "aged-paper", "canvas", "cloth", "ethereal", "hex"])
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "none",
+        "aged-paper",
+        "canvas",
+        "cloth",
+        "drafting-grid",
+        "handmade-paper",
+        "hex",
+        "isometric-grid",
+        "limestone",
+        "recursive-squares",
+        "vellum",
+    ],
+)
 def test_reserved_background_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
     asset_path = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
     asset_path.parent.mkdir(parents=True, exist_ok=True)
@@ -288,7 +314,18 @@ def test_malformed_background_registrations_warn(tmp_path: Path, available: obje
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert set(config.backgrounds) == {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
+    assert set(config.backgrounds) == {
+        "aged-paper",
+        "canvas",
+        "cloth",
+        "drafting-grid",
+        "handmade-paper",
+        "hex",
+        "isometric-grid",
+        "limestone",
+        "recursive-squares",
+        "vellum",
+    }
     assert "layout.backgrounds.available" in caplog.text
 
 
@@ -645,7 +682,19 @@ def test_representative_configuration_example_loads() -> None:
 
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
     assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
-    assert config.default_backgrounds == ("none", "aged-paper", "canvas", "cloth", "ethereal", "hex")
+    assert config.default_backgrounds == (
+        "none",
+        "aged-paper",
+        "canvas",
+        "cloth",
+        "drafting-grid",
+        "handmade-paper",
+        "hex",
+        "isometric-grid",
+        "limestone",
+        "recursive-squares",
+        "vellum",
+    )
     assert config.default_decorations == (
         "none",
         "ethereal",
