@@ -244,14 +244,12 @@ class PreparedImageArtifactStore:
                 with path.open("rb") as stream:
                     digests.append(hashlib.file_digest(stream, "sha256").hexdigest())
             metadata = {
-                "format_version": 1,
                 "revision": revision,
                 "image_directory": payload.name,
                 "image_size": list(size),
                 "mode": images[0].mode,
                 "stages": [
-                    {"visibility": expected_stages[i], "file": f"stage-{i}.png", "sha256": digest}
-                    for i, digest in enumerate(digests)
+                    {"visibility": visibility, "sha256": digest} for visibility, digest in zip(expected_stages, digests)
                 ],
             }
             document = {"artifacts": metadata, "sha256": hashlib.sha256(_canonical_json(metadata)).hexdigest()}
@@ -311,7 +309,6 @@ class PreparedImageArtifactStore:
                 raise ValueError("manifest must contain artifacts and sha256")
             metadata = document["artifacts"]
             fields = {
-                "format_version",
                 "revision",
                 "image_directory",
                 "image_size",
@@ -322,8 +319,6 @@ class PreparedImageArtifactStore:
                 raise ValueError("manifest artifact fields are missing or unsupported")
             if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
                 raise ValueError("manifest checksum does not match")
-            if type(metadata["format_version"]) is not int or metadata["format_version"] != 1:
-                raise ValueError("unsupported artifact format_version")
             if type(metadata["revision"]) is not int or metadata["revision"] != revision:
                 raise ValueError("manifest revision does not match expected committed revision")
             if (
@@ -347,13 +342,12 @@ class PreparedImageArtifactStore:
             for index, stage in enumerate(stages):
                 if (
                     not isinstance(stage, dict)
-                    or set(stage) != {"visibility", "file", "sha256"}
+                    or set(stage) != {"visibility", "sha256"}
                     or stage["visibility"] != expected_stages[index]
-                    or stage["file"] != f"stage-{index}.png"
                     or not isinstance(stage["sha256"], str)
                     or not _DIGEST.fullmatch(stage["sha256"])
                 ):
-                    raise ValueError(f"manifest stage {index} has invalid filename or checksum")
+                    raise ValueError(f"manifest stage {index} has invalid visibility or checksum")
                 digests.append(stage["sha256"])
             paths = tuple(payload / f"stage-{i}.png" for i in range(stage_count))
             if {path.name for path in payload.iterdir()} != {path.name for path in paths}:
@@ -388,6 +382,21 @@ class PreparedImageArtifactStore:
                 if not revision and not temporary:
                     continue
                 if revision and int(revision[1]) == current_revision:
+                    if _is_link(path) or not path.is_dir():
+                        continue
+                    active_payload = _manifest_payload(path, current_revision)
+                    if active_payload is not None:
+                        for candidate in path.iterdir():
+                            if (
+                                candidate.name == active_payload
+                                or not _PAYLOAD.fullmatch(candidate.name)
+                                or _is_link(candidate)
+                                or not candidate.is_dir()
+                                or not _owned_tree(candidate, payload=True)
+                            ):
+                                continue
+                            shutil.rmtree(candidate)
+                            _sync_directory(path)
                     continue
                 if _is_link(path) or not path.is_dir():
                     continue
@@ -408,3 +417,37 @@ def _owned_tree(directory: Path, *, payload: bool) -> bool:
             continue
         return False
     return True
+
+
+def _manifest_payload(directory: Path, revision: int) -> str | None:
+    """Return the active owned payload only when its manifest association is intact."""
+    manifest = directory / "manifest.json"
+    try:
+        _require_file(manifest)
+        document = json.loads(manifest.read_bytes(), object_pairs_hook=_unique_object)
+        if not isinstance(document, dict) or set(document) != {"artifacts", "sha256"}:
+            return None
+        metadata = document["artifacts"]
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "revision",
+            "image_directory",
+            "image_size",
+            "mode",
+            "stages",
+        }:
+            return None
+        if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
+            return None
+        if type(metadata["revision"]) is not int or metadata["revision"] != revision:
+            return None
+        name = metadata["image_directory"]
+        if not isinstance(name, str) or not _PAYLOAD.fullmatch(name):
+            return None
+        _require_directory(directory / name)
+        return name
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise
+    except (ValueError, RecursionError, TypeError):
+        return None
