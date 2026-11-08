@@ -114,7 +114,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     font_path.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
     Image.new("RGB", (1600, 1200), (255, 0, 0)).save(background_path)
     decoration = Image.new("RGBA", (1600, 1200), (0, 0, 0, 0))
-    decoration.putpixel((1, 0), (0, 0, 255, 255))
+    decoration.paste((0, 0, 255, 255), (100, 50, 201, 151))
     decoration.save(decoration_path)
     (font_path.parent / "font.yaml").write_text(
         yaml.safe_dump(
@@ -195,5 +195,5 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     assert config.decorations["border"].path == decoration_path
     assert image.size == (1920, 1080)
     assert image.getpixel((0, 0)) == (255, 0, 0)
-    assert image.getpixel((1, 0)) == (0, 0, 255)
+    assert image.getpixel((375, 90)) == (0, 0, 255)
     image.close()

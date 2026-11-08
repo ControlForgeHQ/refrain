@@ -337,10 +337,11 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     def inspect_debug_image(image, region, enabled):
         annotated = annotate(image, region, enabled)
         if enabled:
+            left, top, right, bottom = region
             debug_pixels.append(
                 (
-                    {"x": region.x, "y": region.y, "width": region.width, "height": region.height},
-                    annotated.getpixel((320, 400)),
+                    {"x": left, "y": top, "width": right - left, "height": bottom - top},
+                    annotated.getpixel((left, top)),
                 )
             )
         return annotated
@@ -348,7 +349,7 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     def inspect_prepared_stage(_coordinator, _identity):
         if not pixels:
             with demo.prepared[0][2].load_stage(0) as image:
-                pixels.append(image.getpixel((10, 10)))
+                pixels.append(image.getpixel((320, 400)))
 
     monkeypatch.setattr(application, "_debug_layout_image", inspect_debug_image)
     demo.on_publish = inspect_prepared_stage
@@ -359,8 +360,8 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     assert state.snapshot.decoration is None
     assert pixels[0] == (227, 137, 147)
     assert debug_pixels == [
-        ({"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}, (113, 68, 73)),
-        ({"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}, (113, 68, 73)),
+        ({"x": 384, "y": 324, "width": 1152, "height": 432}, (113, 68, 73)),
+        ({"x": 384, "y": 324, "width": 1152, "height": 432}, (113, 68, 73)),
     ]
     demo.assert_clean()
 

@@ -11,6 +11,13 @@ import refrain.__main__ as cli
 import refrain.application as application
 from refrain import ApplicationError
 from refrain.display import DisplayBackendInitializationError
+from refrain.geometry import (
+    DEFAULT_OUTPUT_SIZE,
+    DEFAULT_PRESENTATION_INSETS,
+    PresentationInsets,
+    resolve_presentation_geometry,
+)
+from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code
 
 _CONFIG = """\
 general:
@@ -31,6 +38,24 @@ layout:
     default: ["lora"]
   text: {min_font_size: 28, max_font_size: 100}
 """
+
+
+def assert_default_literary_bounds(image: Image.Image) -> None:
+    bounds = resolve_presentation_geometry(
+        DEFAULT_OUTPUT_SIZE, PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
+    ).output_region
+    assert image.getpixel((bounds[0], bounds[1])) == (127, 127, 127)
+
+
+def assert_production_qr_geometry(image: Image.Image) -> None:
+    qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size)
+    try:
+        left, top, _, _ = qr.geometry.bounds
+        quiet_zone = qr.geometry.quiet_zone_pixels
+        assert image.getpixel((left, top)) == (255, 255, 255)
+        assert image.getpixel((left + quiet_zone, top + quiet_zone)) == (0, 0, 0)
+    finally:
+        qr.image.close()
 
 
 class RecordingBackend:
@@ -116,9 +141,8 @@ quotations:
         assert saved.mode == backend.images[0].mode
         assert saved.size == backend.images[0].size
         assert saved.tobytes() == backend.images[0].tobytes()
-        assert saved.getpixel((160, 300)) == (127, 127, 127)
-        assert saved.getpixel((1437, 1037)) == (255, 255, 255)
-        assert saved.getpixel((1449, 1049)) == (0, 0, 0)
+        assert_default_literary_bounds(saved)
+        assert_production_qr_geometry(saved)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -287,7 +311,8 @@ def test_every_configured_backend_receives_the_same_diagnostic_image(
     assert backends["window"].images[0].tobytes() == backends["image-server"].images[0].tobytes()
     with Image.open(output) as saved:
         assert saved.tobytes() == backends["window"].images[0].tobytes()
-        assert saved.getpixel((160, 300)) == (127, 127, 127)
+        assert_default_literary_bounds(saved)
+        assert_production_qr_geometry(saved)
     for backend in backends.values():
         for image in backend.images:
             image.close()
@@ -404,7 +429,7 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
     assert state.read_bytes() == b"unchanged state"
     assert history.read_bytes() == b"unchanged history"
     assert (artifacts / "production.png").read_bytes() == b"unchanged artifact"
-    assert backend.images[0].getpixel((160, 300)) == (127, 127, 127)
+    assert_default_literary_bounds(backend.images[0])
     assert backend.closed
     for image in backend.images:
         image.close()
