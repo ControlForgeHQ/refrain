@@ -194,6 +194,8 @@ Refrain discovers bundled resources through package resources and user resources
 
 Fonts, packaged backgrounds, and decorations use YAML manifests whose referenced files are relative to the manifest directory and confined to that package. Standalone background PNGs use their filename stem as the identifier. See the [asset registries](#font-registry) for manifest schemas and validation.
 
+Custom visual resources are selected by registered identifier; there is no arbitrary absolute-path resource registration interface. The configuration-file, content-directory, and operational-path rules above remain separate.
+
 When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly.
 
 The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
@@ -378,6 +380,8 @@ The optional `presentation.qr` mapping controls QR generation for literary prese
 
 When `enabled` is `false`, no QR code is generated for literary presentations. Effective enablement is also suppressed when the selected decoration declares `qr_ready: false`. Resolve the result for each complete image preparation. This setting does not affect the standalone information view.
 
+For Version 0.1, an enabled literary QR code always encodes `https://github.com/ControlForgeHQ/refrain`, independently of content, display date, and reveal stage. Its production encoding and raster contract is defined in [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork). The destination is not configurable, and no content-entry QR field exists.
+
 Boolean values are required when the field is present; strings, integers, and other YAML types are invalid. An omitted setting enables QR generation. An invalid optional value produces a warning and uses the default `true`.
 
 QR enablement is configured at the presentation level only. Content entries have no QR override; a decoration's `qr_ready` field may suppress generation for that selected decoration.
@@ -481,7 +485,7 @@ layout:
 
 Each opposing pair must leave a positive width or height on the active working canvas for the configured aspect ratio. A missing required edge, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
 
-The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage.
+The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage. This fitting guarantee does not prevent the text rectangle from overlapping independently composited artwork or QR output. The default configuration and bundled artwork must avoid undesirable overlap; custom configuration and decoration authors are responsible for checking their composition. Refrain does not detect or correct graphical overlap.
 
 YAML supplies the configured output dimensions, working-canvas pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Working-canvas dimensions and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
 
@@ -544,7 +548,7 @@ Unavailable, unregistered, or otherwise invalid font identifiers are excluded fr
 
 Duplicate identifiers are ignored after their first occurrence, with a warning.
 
-The effective default pool must contain at least one usable font whenever Refrain needs to perform a new selection.
+The effective default pool must contain at least one usable font only when image preparation requires automatic font selection after explicit content-entry and decoration preferences are unavailable.
 
 The default pool is explicitly configured. Refrain must not automatically add bundled or newly discovered fonts to the pool.
 
@@ -554,11 +558,9 @@ A registered font need not appear in the default pool. Fonts outside the default
 
 The effective default pool identifies the fonts eligible for automatic selection when a content entry has no available preferred font.
 
-An empty or unusable configured default pool cannot be repaired by silently substituting an unrelated bundled font pool.
+An empty or unusable effective default pool does not prevent use of an otherwise usable explicit content-entry or decoration preference. When automatic selection is required and the effective pool is empty, preparation fails with an actionable diagnostic; Refrain does not substitute an unrelated bundled font pool.
 
-Bundled fallback during image preparation is independent of automatic font selection and is defined in `docs/ARCHITECTURE.md`.
-
-Automatic font selection during image preparation is defined in `docs/ARCHITECTURE.md`.
+Font-selection precedence, cache reuse, face fallback, and preparation failures are defined in `docs/ARCHITECTURE.md`.
 
 ### Background registry
 
@@ -640,6 +642,8 @@ text_color:
   - burnt-orange
 background: aged-paper
 qr_ready: true
+qr_right: 20
+qr_bottom: 20
 tintable: true
 decoration_color:
   - sky-blue
@@ -677,6 +681,8 @@ layers:
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 | `background` | Background identifier or `"none"` | No | None |
 | `qr_ready` | Boolean | No | `true` |
+| `qr_right` | Nonnegative working-canvas pixel integer | No | `20` |
+| `qr_bottom` | Nonnegative working-canvas pixel integer | No | `20` |
 | `tintable` | Boolean | No | `true` |
 | `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 
@@ -688,9 +694,13 @@ An unavailable or invalid optional font/background preference produces a warning
 
 The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints decoration images. It accepts the same scalar-or-nonempty-list syntax as the content-entry field. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
-The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when tinting is selected, and has no effect if all layers are effectively non-tintable. It accepts a palette identifier or nonempty sequence. Invalid or unavailable members are diagnosed during selection and ignored without invalidating the decoration.
+The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when at least one layer is effectively tintable. It accepts a palette identifier or nonempty sequence. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
 `qr_ready` must be a YAML boolean and defaults to `true`. When false, QR generation is suppressed for this selected decoration regardless of the presentation-level QR setting. A malformed value produces a warning and uses the default.
+
+The optional `qr_right` and `qr_bottom` fields are nonnegative integer offsets in ratio-specific working-canvas pixels, measured inward from the corresponding right and bottom working-canvas edges. Each field defaults independently to `20`, including when no decoration is selected. Booleans are not valid integers for these fields. A malformed value produces a warning and uses the default for that offset. The offsets are independent of `presentation_insets` and decoration slice geometry; they are not final-output pixel distances. Refrain scales them to final-output coordinates using the established working-canvas-to-output rules.
+
+These fields specify placement offsets only. A decoration does not define a QR region or allocation dimensions, and does not configure the QR payload or encoding. The application-level allocation dimensions and detailed geometry remain deliberately undecided; see [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork).
 
 Each `layers` item is a mapping with the following fields:
 
@@ -717,7 +727,7 @@ The four insets partition the source image into nine regions in its actual sourc
 
 `condition: always` includes the layer whether QR is enabled or not; `qr` includes it only when QR is enabled; `no-qr` includes it only when QR is disabled. A condition never changes the order of the remaining layers. Invalid conditions, methods, parameter combinations, paths, or source images exclude the containing decoration with an actionable diagnostic. A malformed `tintable` value produces a warning and uses `true`.
 
-The effective tintability of each layer is `decoration.tintable AND layer.tintable`. Both values default to `true`. Effective tintability permits applying the single selected decoration tint; it does not require that tinting occur. Per-layer palette selection is not supported. Tinting replaces RGB while preserving source alpha.
+The effective tintability of each layer is `decoration.tintable AND layer.tintable`. Both values default to `true`. When any layer is effectively tintable, Refrain selects one decoration color according to the precedence below; successful selection activates tinting. There is no separate activation setting or field. Artwork intended to retain authored RGB must set `tintable: false` at the decoration or layer level. Per-layer palette selection is not supported. Tinting replaces RGB while preserving source alpha.
 
 #### Default decoration pool
 
@@ -803,14 +813,14 @@ The literary text color is resolved after the decoration has been selected, usin
 
 Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. Resolve the selected palette identifier and RGB value for the complete image preparation.
 
-Decoration colour is resolved once for the selected decoration when at least one layer has effective tintability (`decoration.tintable AND layer.tintable`) and tinting is selected, using the first level with usable candidates:
+Decoration colour is resolved once for the selected decoration when at least one layer has effective tintability (`decoration.tintable AND layer.tintable`), using the first level with usable candidates:
 
 1. The content entry's `decoration_color`.
 2. The selected decoration's `decoration_color`.
 3. The effective `layout.decorations.colors` pool.
 4. The built-in `black` fallback.
 
-Invalid and unavailable identifiers are excluded with diagnostics. Duplicate identifiers do not add selection weight. The first level with usable candidates is selected uniformly without combining levels. Effective tintability permits a tint but does not require that one be selected. If no tint is selected, no color is resolved and each layer retains its authored colors.
+Invalid and unavailable identifiers are excluded with diagnostics. Duplicate identifiers do not add selection weight. The first level with usable candidates is selected uniformly without combining levels. A successful selection activates tinting; if no layer is effectively tintable, no color is resolved.
 
 Tinting replaces RGB only on effectively tintable layers with the single palette colour selected for the complete preparation and preserves each original alpha channel. No per-layer palette selection is supported.
 
@@ -927,10 +937,10 @@ Each quotation is a separate selection candidate.
 | `source` | String | No | Absent |
 | `attribution` | String | No | Absent |
 | `priority` | Integer | No | `0` |
-| `font` | String | No | Automatic selection from default font pool |
+| `font` | String | No | Selected decoration preference, then automatic selection from default font pool |
 | `font_faces` | Mapping of literary roles to face identifiers | No | No role preferences |
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | Decoration preference, then global text-color pool |
-| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | Selected decoration preference, then global decoration-color pool |
+| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | Selected decoration preference, then global pool, then built-in black |
 | `background` | String | No | Decoration preference, then default background pool |
 | `decoration` | String | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
@@ -1105,7 +1115,7 @@ An unregistered font identifier is permitted and does not invalidate an otherwis
 
 This allows content libraries to be shared between installations that have different font collections.
 
-An absent `font` field means that no specific content-entry font preference is expressed. An available preferred font from the selected decoration applies when present; otherwise Refrain selects from the effective default font pool.
+An absent `font` field means that no specific content-entry font preference is expressed. An available preferred font from the selected decoration applies when present; otherwise Refrain selects from the effective default font pool. A valid explicit content-entry or decoration font can be used even when the effective default pool has no usable members. The pool is required only when automatic selection is reached.
 
 An explicit empty string or invalid field type is a validation error.
 
