@@ -10,7 +10,6 @@ from refrain import (
     ApplicationConfiguration,
     DailySnapshot,
     DisplayBackendConfiguration,
-    DisplayDayBoundary,
     PersistentState,
     PresentationRegion,
     RevealSchedule,
@@ -283,11 +282,11 @@ def test_absent_optional_fields_do_not_add_reveal_stages(
     assert decision.required_reveal_stage == expected_stage
 
 
-def test_committed_reveal_progress_never_regresses_after_backward_clock_change() -> None:
+def test_committed_reveal_progress_never_regresses_within_the_logical_date() -> None:
     state = make_state(highest_reveal_stage=2)
 
     decision = evaluate_scheduling(
-        datetime(2026, 10, 25, 4, 0, tzinfo=ZoneInfo("America/New_York")),
+        datetime(2026, 10, 26, 10, 0, tzinfo=ZoneInfo("America/New_York")),
         make_configuration(),
         state,
     )
@@ -297,93 +296,52 @@ def test_committed_reveal_progress_never_regresses_after_backward_clock_change()
     assert decision.display_date is None
 
 
-def test_forward_date_mismatch_does_not_reselect_without_boundary_observation() -> None:
+@pytest.mark.parametrize(
+    ("current_time", "committed_date", "expected_date"),
+    [
+        (
+            datetime(2026, 10, 26, 7, 0, tzinfo=ZoneInfo("America/New_York")),
+            date(2026, 10, 25),
+            date(2026, 10, 26),
+        ),
+        (
+            datetime(2026, 10, 26, 3, 0, tzinfo=ZoneInfo("America/New_York")),
+            date(2026, 10, 26),
+            date(2026, 10, 25),
+        ),
+        (
+            datetime(2026, 10, 27, 7, 0, tzinfo=ZoneInfo("America/New_York")),
+            date(2026, 10, 26),
+            date(2026, 10, 27),
+        ),
+    ],
+)
+def test_logical_date_mismatch_requests_selection_for_current_date(
+    current_time: datetime, committed_date: date, expected_date: date
+) -> None:
     decision = evaluate_scheduling(
-        datetime(2026, 10, 27, 7, 0, tzinfo=ZoneInfo("America/New_York")),
+        current_time,
         make_configuration(),
-        make_state(),
+        make_state(display_date=committed_date),
     )
 
-    assert decision.action is SchedulingAction.ADVANCE_REVEAL
-    assert decision.required_reveal_stage == 2
-    assert decision.display_date is None
-
-
-def test_observed_boundary_can_select_an_earlier_display_date() -> None:
-    state = make_state()
-    boundary = DisplayDayBoundary(date(2026, 10, 12), state.revision)
-
-    decision = evaluate_scheduling(
-        datetime(2026, 10, 12, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-        make_configuration(),
-        state,
-        boundary,
-    )
-
-    assert decision == evaluate_scheduling(
-        datetime(2026, 10, 12, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-        make_configuration(),
-        state,
-        boundary,
-    )
     assert decision.action is SchedulingAction.NEW_SELECTION
-    assert decision.display_date == date(2026, 10, 12)
+    assert decision.display_date == expected_date
+    assert decision.required_reveal_stage is None
 
 
-def test_later_boundary_is_recognized_after_backward_clock_adjustment() -> None:
-    state = make_state()
-    current_time = datetime(2026, 10, 12, 4, 0, tzinfo=ZoneInfo("America/New_York"))
-
-    before_boundary = evaluate_scheduling(current_time, make_configuration(), state)
-    at_boundary = evaluate_scheduling(
-        datetime(2026, 10, 12, 6, 0, tzinfo=ZoneInfo("America/New_York")),
-        make_configuration(),
-        state,
-        DisplayDayBoundary(date(2026, 10, 12), state.revision),
-    )
-
-    assert before_boundary.action is SchedulingAction.NO_ACTION
-    assert before_boundary.display_date is None
-    assert at_boundary.action is SchedulingAction.NEW_SELECTION
-    assert at_boundary.display_date == date(2026, 10, 12)
-
-
-def test_repeated_boundary_observation_is_stale_after_selection_revision_changes() -> None:
-    boundary = DisplayDayBoundary(date(2026, 10, 12), state_revision=1)
-    state_after_selection = make_state(display_date=date(2026, 10, 12), revision=2)
+def test_matching_logical_date_retains_selection_and_reveal_progress() -> None:
+    state = make_state(highest_reveal_stage=2)
 
     decision = evaluate_scheduling(
-        datetime(2026, 10, 12, 6, 0, tzinfo=ZoneInfo("America/New_York")),
+        datetime(2026, 10, 26, 15, 0, tzinfo=ZoneInfo("America/New_York")),
         make_configuration(),
-        state_after_selection,
-        boundary,
+        state,
     )
 
     assert decision.action is SchedulingAction.NO_ACTION
     assert decision.display_date is None
-
-
-def test_boundary_observation_with_different_revision_is_not_recognized() -> None:
-    decision = evaluate_scheduling(
-        datetime(2026, 10, 26, 7, 0, tzinfo=ZoneInfo("America/New_York")),
-        make_configuration(),
-        make_state(),
-        DisplayDayBoundary(date(2026, 10, 27), state_revision=0),
-    )
-
-    assert decision.action is SchedulingAction.NO_ACTION
-
-
-def test_initial_selection_uses_current_calendar_date_not_unmatched_boundary() -> None:
-    decision = evaluate_scheduling(
-        datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc),
-        make_configuration(),
-        None,
-        DisplayDayBoundary(date(2026, 10, 20), state_revision=0),
-    )
-
-    assert decision.action is SchedulingAction.INITIAL_SELECTION
-    assert decision.display_date == date(2026, 10, 26)
+    assert decision.required_reveal_stage == 2
 
 
 def test_naive_timestamp_is_rejected() -> None:

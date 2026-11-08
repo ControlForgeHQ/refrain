@@ -30,25 +30,6 @@ class SchedulingAction(Enum):
 
 
 @dataclass(frozen=True)
-class DisplayDayBoundary:
-    """A boundary observed by the runtime for the specified selection revision.
-
-    ``state_revision`` is the committed selection revision active when the
-    boundary was observed. Once that selection is replaced, the observation is
-    stale and cannot authorize another selection.
-    """
-
-    display_date: date
-    state_revision: int
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.display_date, date) or isinstance(self.display_date, datetime):
-            raise ValueError("display_date must be a date")
-        if type(self.state_revision) is not int or self.state_revision < 0:
-            raise ValueError("state_revision must be a nonnegative integer")
-
-
-@dataclass(frozen=True)
 class SchedulingDecision:
     """An immutable scheduling result for the application coordinator."""
 
@@ -167,14 +148,8 @@ def evaluate_scheduling(
     current_time: datetime,
     configuration: ApplicationConfiguration,
     state: PersistentState | None,
-    observed_boundary: DisplayDayBoundary | None = None,
 ) -> SchedulingDecision:
-    """Evaluate scheduling requirements without changing state or performing I/O.
-
-    An observed boundary is accepted only for the selection revision that was
-    current when the runtime observed it. Without a matching observation, a
-    display-date mismatch never invalidates committed state.
-    """
+    """Evaluate scheduling requirements without changing state or performing I/O."""
     if not isinstance(current_time, datetime) or current_time.tzinfo is None:
         raise SchedulingEvaluationError("current_time must be timezone-aware")
     try:
@@ -195,15 +170,14 @@ def evaluate_scheduling(
         raise SchedulingEvaluationError("state must be a PersistentState or None")
     if state is not None and (type(state.revision) is not int or state.revision < 1):
         raise SchedulingEvaluationError("state revision must be a positive integer")
-    if observed_boundary is not None and not isinstance(observed_boundary, DisplayDayBoundary):
-        raise SchedulingEvaluationError("observed_boundary must be a DisplayDayBoundary or None")
 
     if state is None:
         display_date = _local_display_date(current_time, configuration.day_start)
         return SchedulingDecision(SchedulingAction.INITIAL_SELECTION, display_date=display_date)
 
-    if observed_boundary is not None and observed_boundary.state_revision == state.revision:
-        return SchedulingDecision(SchedulingAction.NEW_SELECTION, display_date=observed_boundary.display_date)
+    display_date = _local_display_date(current_time, configuration.day_start)
+    if display_date != state.snapshot.display_date:
+        return SchedulingDecision(SchedulingAction.NEW_SELECTION, display_date=display_date)
 
     required_stage = _required_stage(state, current_time)
     action = (

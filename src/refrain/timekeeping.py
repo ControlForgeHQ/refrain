@@ -11,13 +11,7 @@ from typing import Callable
 from . import local_time
 from .config import ApplicationConfiguration
 from .persistence import PersistentState
-from .scheduling import (
-    DisplayDayBoundary,
-    SchedulingEvaluationError,
-    _local_display_date,
-    _required_stage,
-    _resolve_reveal_stages,
-)
+from .scheduling import SchedulingEvaluationError, _local_display_date, _required_stage, _resolve_reveal_stages
 
 _CLOCK_ADJUSTMENT_TOLERANCE = 1.0
 _DEFAULT_MAX_CLOCK_CHECK_INTERVAL = 300.0
@@ -71,8 +65,12 @@ def next_scheduling_deadline(
     current_utc = _validate_timekeeping_inputs(current_time, configuration)
     if state is None:
         return current_utc
+    if not isinstance(state, PersistentState):
+        raise SchedulingEvaluationError("state must be a PersistentState or None")
     try:
         display_date = _local_display_date(current_utc, configuration.day_start)
+        if display_date != state.snapshot.display_date:
+            return current_utc
         boundary_date = display_date + timedelta(days=1)
     except (OverflowError, OSError, ValueError) as error:
         raise SchedulingEvaluationError("cannot calculate the next display-day boundary") from error
@@ -85,123 +83,21 @@ def next_scheduling_deadline(
     except (OverflowError, OSError, ValueError) as error:
         raise SchedulingEvaluationError("cannot calculate the next display-day boundary") from error
     deadlines = [boundary_deadline]
-    if state is not None:
-        if not isinstance(state, PersistentState):
-            raise SchedulingEvaluationError("state must be a PersistentState or None")
-        required_stage = _required_stage(state, current_utc)
-        if required_stage > state.highest_reveal_stage:
-            return current_utc
-        event_times, _ = _resolve_reveal_stages(state.snapshot)
-        try:
-            for stage_index, event_time in enumerate(event_times):
-                if stage_index <= state.highest_reveal_stage:
-                    continue
-                reveal_deadline = _local_datetime(state.snapshot.display_date, event_time)
-                if reveal_deadline > current_utc:
-                    deadlines.append(reveal_deadline)
-        except (OverflowError, OSError, ValueError) as error:
-            raise SchedulingEvaluationError("cannot calculate the next reveal deadline") from error
+    required_stage = _required_stage(state, current_utc)
+    if required_stage > state.highest_reveal_stage:
+        return current_utc
+    event_times, _ = _resolve_reveal_stages(state.snapshot)
+    try:
+        for stage_index, event_time in enumerate(event_times):
+            if stage_index <= state.highest_reveal_stage:
+                continue
+            reveal_deadline = _local_datetime(state.snapshot.display_date, event_time)
+            if reveal_deadline > current_utc:
+                deadlines.append(reveal_deadline)
+    except (OverflowError, OSError, ValueError) as error:
+        raise SchedulingEvaluationError("cannot calculate the next reveal deadline") from error
 
     return min(deadlines)
-
-
-class DisplayDayBoundaryObserver:
-    """Recognize boundaries crossed while this process continuously observes time.
-
-    The first observation establishes a baseline only. Clock discontinuities
-    backward reset that baseline without creating a boundary; an existing
-    pending boundary remains available while its selection revision is current.
-    Forward jumps produce at most one observation for the currently appropriate
-    date.
-    """
-
-    def __init__(self, configuration: ApplicationConfiguration) -> None:
-        _validate_configuration(configuration)
-        self._configuration = configuration
-        self._previous_wall_utc: datetime | None = None
-        self._previous_local_wall: datetime | None = None
-        self._previous_monotonic: float | None = None
-        self._previous_display_date: date | None = None
-        self._pending_boundary: DisplayDayBoundary | None = None
-        self._last_boundary_date: date | None = None
-
-    def observe(
-        self,
-        current_time: datetime,
-        monotonic_time: float,
-        state_revision: int | None,
-    ) -> DisplayDayBoundary | None:
-        """Return one revision-bound boundary when continuously observed.
-
-        ``state_revision`` is the committed selection revision at this
-        observation. ``None`` is appropriate before the initial selection;
-        startup never infers a historical boundary from its first timestamp.
-        """
-        current_utc = _validate_timekeeping_inputs(current_time, self._configuration)
-        if isinstance(monotonic_time, bool) or not isinstance(monotonic_time, (int, float)):
-            raise ValueError("monotonic_time must be a finite number")
-        if not math.isfinite(monotonic_time) or monotonic_time < 0:
-            raise ValueError("monotonic_time must be a finite nonnegative number")
-        if state_revision is not None and (type(state_revision) is not int or state_revision < 0):
-            raise ValueError("state_revision must be a nonnegative integer or None")
-
-        display_date = _local_display_date(current_utc, self._configuration.day_start)
-        try:
-            local_wall = local_time.local_wall_time(current_utc)
-        except (OverflowError, OSError, ValueError) as error:
-            raise SchedulingEvaluationError(
-                "current_time cannot be converted to operating-system local time"
-            ) from error
-        previous_wall_utc = self._previous_wall_utc
-        previous_local_wall = self._previous_local_wall
-        previous_monotonic = self._previous_monotonic
-        previous_display_date = self._previous_display_date
-        if (
-            previous_wall_utc is None
-            or previous_local_wall is None
-            or previous_monotonic is None
-            or previous_display_date is None
-        ):
-            self._record(current_utc, local_wall, monotonic_time, display_date)
-            return None
-
-        elapsed_monotonic = monotonic_time - previous_monotonic
-        if elapsed_monotonic < 0:
-            raise ValueError("monotonic_time must not move backward")
-        elapsed_wall = (current_utc - previous_wall_utc).total_seconds()
-        backward_adjustment = elapsed_wall < elapsed_monotonic - _CLOCK_ADJUSTMENT_TOLERANCE
-        local_rules_changed = local_time.local_wall_time(previous_wall_utc) != previous_local_wall
-        self._record(current_utc, local_wall, monotonic_time, display_date)
-
-        if self._pending_boundary is not None:
-            if self._pending_boundary.state_revision == state_revision:
-                if (
-                    not local_rules_changed
-                    and not backward_adjustment
-                    and display_date > previous_display_date
-                    and display_date > self._pending_boundary.display_date
-                ):
-                    self._pending_boundary = DisplayDayBoundary(display_date, state_revision)
-                return self._pending_boundary
-            self._last_boundary_date = self._pending_boundary.display_date
-            self._pending_boundary = None
-
-        if backward_adjustment or local_rules_changed:
-            self._last_boundary_date = None
-            return None
-        if state_revision is None or display_date <= previous_display_date:
-            return None
-        if display_date == self._last_boundary_date:
-            return None
-
-        self._pending_boundary = DisplayDayBoundary(display_date, state_revision)
-        return self._pending_boundary
-
-    def _record(self, wall_utc: datetime, local_wall: datetime, monotonic: float, display_date: date) -> None:
-        self._previous_wall_utc = wall_utc
-        self._previous_local_wall = local_wall
-        self._previous_monotonic = monotonic
-        self._previous_display_date = display_date
 
 
 def wait_for_scheduling_event(
