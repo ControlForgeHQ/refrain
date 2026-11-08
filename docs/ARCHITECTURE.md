@@ -67,16 +67,15 @@ These capabilities must not be implemented merely to demonstrate extensibility.
 
 ## Target platform
 
-The initial deployment targets:
+The initial hardware deployment targets:
 
 - Raspberry Pi OS Lite;
 - Python;
-- Waveshare 13.3-inch e-Paper HAT+ (E);
-- Waveshare-native 1600 × 1200 landscape output.
+- Waveshare 13.3-inch e-Paper HAT+ (E), with its native 1600 × 1200 landscape panel.
 
 The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1 and the initial hardware-validation platform.
 
-The application must not depend on performance, memory capacity, peripheral availability, or other characteristics exclusive to the Raspberry Pi 3 B+.
+The application must not depend on performance, memory capacity, peripheral availability, or other characteristics exclusive to the Raspberry Pi 3B+.
 
 The display uses Spectra 6 color e-paper technology.
 
@@ -84,7 +83,7 @@ The intended presentation is predominantly black typography on a paper-white bac
 
 The initial display is a full-frame output device. Refrain must not depend on partial refresh, animation, or frequent screen updates.
 
-The renderer must produce images independently of the display backend.
+The renderer must produce images independently of the display backend and physical display characteristics. Backend-specific orientation and pixel format do not constrain the renderer's landscape working canvases or globally configured output resolution.
 
 Hardware-independent content, selection, scheduling, persistence, and rendering components must remain portable across operating systems supported by the Python runtime and required dependencies, without unnecessary operating-system-specific assumptions. This permits their development and testing on non-Linux systems but does not imply that full application deployment has been validated or is supported there.
 
@@ -978,17 +977,23 @@ Daily-image preparation separates graphical composition from the shared literary
 
 #### Output and working canvases
 
-Output dimensions are configured once per application instance. All configured display backends receive the same complete final-resolution image; a backend does not select or resize an independent resolution. A backend that cannot accept the configured dimensions reports that incompatibility. The Waveshare 13.3-inch HAT+ (E) uses its native 1600 × 1200 landscape or 1200 × 1600 portrait dimensions.
+Each application instance has one globally configured final output resolution. The reference canvas is always 3840 × 2400 pixels, a fixed 16:10 authoring envelope independent of output resolution and display hardware. Supported landscape output aspect ratios are 4:3, 16:9, and 16:10. The reference envelope must not be scaled or redefined to match a physical display.
 
-The initial supported aspect ratios are 4:3, 16:9, and 16:10, within a maximum 3840 × 2400 raster envelope. The reference canvas is 1600 pixels wide, with height derived from the selected ratio: 1200, 900, or 1000 pixels respectively. The reference canvas expresses design measurements; it is not an output or working image.
+Derive the largest working canvas for the configured aspect ratio by reducing only the dimension that exceeds that ratio, centered within the reference envelope:
 
-The working canvas is the largest integer-sized canvas within the envelope that preserves the configured aspect ratio. Its dimensions are 3200 × 2400 for 4:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. Raster background and decoration composition takes place at working-canvas resolution, then is reduced to final output dimensions when necessary. Do not upscale a raster resource beyond what its destination geometry requires.
+| Aspect ratio | Working canvas | Centered reference-envelope crop |
+|---|---:|---|
+| 4:3 | 3200 × 2400 | 320 pixels from each horizontal edge |
+| 16:9 | 3840 × 2160 | 120 pixels from each vertical edge |
+| 16:10 | 3840 × 2400 | None |
 
-Reference measurements are mapped with one uniform scale for each resolved canvas. Convert each nonnegative measurement to the nearest integer pixel, with exact half-pixel values rounded upward. Compute opposing edges independently, then derive the remaining width or height by subtraction so the resolved rectangle has no rounding gap. Reject non-finite, negative, out-of-range, or degenerate geometry before rendering.
+Compose raster artwork on this working canvas. Scale the completed graphical composition to the configured output dimensions; this may reduce or enlarge it. Final-resolution literary typography and enabled QR output are rendered after that scaling. These three sizes—the fixed reference canvas, ratio-specific working canvas, and configured final output—are distinct. A hardware destination does not select them or constrain the renderer's supported ratios or resolutions.
+
+For working geometry, intersect reference-space rectangles with the centered working-canvas crop, then translate by the crop origin; do not independently rescale the reference dimensions. Map working-canvas coordinates to final output with one uniform ratio-preserving scale. Convert mapped edges to the nearest integer pixel, rounding exact half-pixel values upward. Compute opposing edges independently and derive remaining widths or heights by subtraction so resolved rectangles have no rounding gaps. Reject non-finite, negative, out-of-envelope, or degenerate geometry before rendering.
 
 #### Literary presentation geometry
 
-The literary region is defined by four independent reference-canvas insets: `left`, `right`, `top`, and `bottom`. Each inset is measured inward from its corresponding edge and is multiplied by the uniform reference-to-canvas scale. The effective rectangle is the area remaining after those resolved insets are removed.
+The literary region is defined by four independent reference-canvas insets: `left`, `right`, `top`, and `bottom`. Each inset is measured inward from its corresponding edge of the fixed 3840 × 2400 reference canvas. These authored values do not change with output resolution or aspect ratio. The reference-space literary rectangle is intersected with the selected working-canvas viewport; the intersection is translated to working-canvas coordinates and uniformly scaled to final output coordinates.
 
 Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the committed presentation. The resulting rectangle must have positive width and height and contain the complete literary composition. It remains unchanged across every reveal stage.
 
@@ -1009,13 +1014,13 @@ Every decoration PNG is behind all literary text and QR output. This pipeline do
 
 #### Decoration layers
 
-A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The initial methods are `contain`, which aspect-preservingly scales the image to fit the working canvas, and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. No other methods or independent positioning are defined.
+A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The initial methods are `contain`, which aspect-preservingly scales the image to fit the working canvas, and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
 
-For `nine-slice`, source dimensions are mapped into the reference canvas using one uniform contain scale; that same uniform reference-space scale preserves corner proportions on the working canvas. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
+For `nine-slice`, 3840 × 2400 PNGs are the reference-quality authoring size. Smaller or differently proportioned custom PNGs remain measured in their actual source pixels: fit the complete source uniformly within the fixed reference canvas using centered `contain`, with scale `min(3840 / source_width, 2400 / source_height)`, and apply that same scale and centered offset to its slice boundaries. Round transformed boundaries to the nearest integer, rounding exact half-pixel values upward. This does not create an alternate reference coordinate system. Upscaling a smaller source cannot restore detail and may visibly soften artwork; cropping or stretching edges can further affect its appearance. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
 
-Place the four corner regions at the corresponding destination canvas corners without changing their proportions. Horizontal edges preserve their thickness and adapt along their horizontal length; vertical edges preserve their thickness and adapt along their vertical length. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
+Place the four corner regions at the corresponding working-canvas corners without changing their proportions. Scale corners uniformly by the smaller of the working-width/reference-width and working-height/reference-height ratios. Horizontal edges preserve their thickness and adapt along their horizontal length; vertical edges preserve their thickness and adapt along their vertical length. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
 
-Use the deterministic reference-space scaling and nearest-integer, half-up rounding rule defined above for all slice boundaries and corner dimensions. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
+Use the deterministic source-to-reference contain scale and nearest-integer, half-up rounding rule defined above for slice boundaries and corner dimensions. Then apply the uniform reference-to-working corner scale. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
 
 #### Decoration tinting
 
@@ -1208,7 +1213,7 @@ The byline retains its applicable leading dash and separator punctuation through
 
 Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
-The presentation insets are configured in reference-canvas pixels and uniformly scaled to resolved canvas dimensions.
+The presentation insets are configured in reference-canvas pixels. Intersect the reference-space rectangle with the working-canvas viewport, translate to working coordinates, then uniformly scale the resulting geometry to final output dimensions.
 
 Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
@@ -1319,7 +1324,7 @@ A daily snapshot must contain the selected quotation, its presentation metadata,
 
 - `output_size`: configured final dimensions as positive integer width and height;
 - `working_size`: the resolved high-resolution composition dimensions;
-- `reference_size`: the reference-canvas dimensions associated with the selected aspect ratio;
+- `reference_size`: the fixed `[3840, 2400]` reference-envelope dimensions;
 - `presentation_insets`: the four resolved reference-pixel inset values;
 - `literary_region`: the effective integer-pixel rectangle at final output resolution;
 - `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
@@ -1409,7 +1414,7 @@ Version 0.1 provides three built-in display backends:
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
 - `image-server`: Makes the current complete image available to network clients through a read-only HTTP service.
 
-All configured backends receive the same prepared presentation image. Backend selection does not introduce independent content selection, reveal scheduling, rendering, layout, or resolution.
+All configured backends receive the same complete, globally prepared final-resolution image for each reveal stage. Backend selection does not introduce independent content selection, reveal scheduling, or core presentation geometry.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
 
@@ -1426,13 +1431,13 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare backend accepts complete RGB images at its native 1200 × 1600 portrait and 1600 × 1200 landscape resolutions; images with alpha or palette transparency are unsupported. It rejects other dimensions rather than independently rescaling a backend image. It converts the complete image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare panel's native output is 1600 × 1200 landscape. The backend adapts the shared final-resolution image to that destination as needed; its policy may scale, crop, pad, rotate, dither, or convert colors without changing the prepared image or the committed global presentation geometry. This physical destination does not require portrait support in the core renderer. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
 
-The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations.
+The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. Each backend owns any transformation required to adapt the shared prepared image to its destination, including scaling, cropping, padding, rotation, dithering, or color conversion. It must not mutate the image supplied by the coordinator. A backend unable to perform its required transformation reports a backend-specific update failure; that failure does not alter global geometry, persistent state, selection, or publication to other backends.
 
-Each backend validates image compatibility with its destination rather than silently resizing or otherwise changing the prepared presentation.
+The image-server backend serves the globally prepared image without unnecessary transformation. Backend transformation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
 
 A completed `update()` indicates that the individual backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
 

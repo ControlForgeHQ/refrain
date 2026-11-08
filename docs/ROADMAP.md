@@ -74,7 +74,7 @@ The first release should be useful in normal household operation without dependi
 ### Visual presentation
 
 - Configure one presentation output resolution per application instance.
-- Support 4:3, 16:9, and 16:10 output aspect ratios within a maximum 3840 × 2400 reference raster envelope.
+- Support configurable output resolutions at 4:3, 16:9, and 16:10 aspect ratios, using the fixed 3840 × 2400 reference envelope to derive each high-resolution working canvas; the reference envelope does not limit final output dimensions.
 - Compose raster artwork at high resolution, then render literary text and QR output at final output resolution.
 - Provide one attractive, typography-first default layout.
 - Separate view-specific background composition from shared quotation rendering.
@@ -107,6 +107,7 @@ The first release should be useful in normal household operation without dependi
 - Support simultaneous presentation through multiple configured display backends.
 - Allow each supported backend type to be configured at most once.
 - Distribute the same prepared presentation image to every configured backend.
+- Allow each backend to adapt that shared image to its physical destination without constraining core rendering capabilities or global output geometry.
 - Update display backends independently so that slow or unavailable destinations do not delay other destinations.
 - Isolate backend failures and provide bounded recovery without interrupting otherwise functional destinations.
 - Perform complete physical display updates at the configured reveal stages and display-day boundary.

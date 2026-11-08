@@ -153,12 +153,12 @@ display:
       port: 8080
 
 layout:
-  output_size: [1600, 1200]
+  output_size: [1920, 1080]
   presentation_insets:
-    left: 160
-    right: 160
-    top: 180
-    bottom: 240
+    left: 320
+    right: 320
+    top: 200
+    bottom: 200
 
   fonts:
     default:
@@ -454,9 +454,9 @@ A fixed quotation font size is not required.
 
 The optional `layout.output_size` is a two-item sequence of positive integer pixel dimensions in width, height order. It defaults to `[1600, 1200]`.
 
-The configured output must use exactly one of the supported aspect ratios, 4:3, 16:9, or 16:10, and fit within the 3840 × 2400 maximum raster envelope. Thus the largest supported output sizes are 3200 × 2400, 3840 × 2160, and 3840 × 2400 respectively. For example, `[1920, 1080]` and `[3840, 2160]` are valid 16:9 sizes.
+The configured output must use exactly one of the supported landscape aspect ratios: 4:3, 16:9, or 16:10. Its dimensions must be positive integers, but the 3840 × 2400 reference envelope does not limit final output dimensions. For example, `[1920, 1080]` and `[3840, 2160]` are valid 16:9 sizes. Output may be smaller or larger than the ratio-specific working canvas.
 
-Boolean values, non-integer dimensions, zero or negative values, unsupported aspect ratios, and dimensions outside the envelope are invalid. An omitted value uses the documented default. An invalid optional value produces a warning and falls back to `[1600, 1200]`. A configured backend that cannot accept the selected dimensions reports an actionable incompatibility; it must not receive an independently resized image.
+Boolean values, non-integer dimensions, zero or negative values, and unsupported aspect ratios are invalid. An omitted value uses the documented default. An invalid optional value produces a warning and falls back to `[1600, 1200]`. The backend adapts the globally prepared output to its destination; display hardware does not constrain the output-size options or cause core rendering to select another resolution.
 
 The `layout.presentation_insets` mapping is required and defines the default literary rectangle as four independent reference-canvas pixel measurements:
 
@@ -467,7 +467,7 @@ The `layout.presentation_insets` mapping is required and defines the default lit
 | `layout.presentation_insets.top` | Nonnegative integer | Yes |
 | `layout.presentation_insets.bottom` | Nonnegative integer | Yes |
 
-The reference canvas is 1600 pixels wide; its height is derived from the configured aspect ratio. Insets are measured inward from their corresponding reference-canvas edges and uniformly scaled to working and output dimensions. They are not normalized coordinates. Boolean values and non-integer values are invalid.
+The reference canvas is always 3840 × 2400 pixels, regardless of output or display hardware. Insets are measured inward from their corresponding reference-envelope edges. They are not normalized coordinates and are not scaled to fit the physical display. Boolean values and non-integer values are invalid.
 
 For example:
 
@@ -475,17 +475,17 @@ For example:
 layout:
   output_size: [1920, 1080]
   presentation_insets:
-    left: 160
-    right: 160
-    top: 100
-    bottom: 100
+    left: 320
+    right: 320
+    top: 200
+    bottom: 200
 ```
 
-Each opposing pair must leave a positive width or height on the reference canvas. A missing required edge, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
+Each opposing pair must leave a positive width or height within the 3840 × 2400 reference envelope. Each value must be within the extent of its corresponding edge. The resulting reference-space rectangle must intersect the ratio-specific centered working-canvas viewport with positive width and height; otherwise it is invalid. A missing required edge, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
 
 The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage.
 
-YAML supplies the configured output dimensions, reference-pixel insets, and source-image slice measurements. The working-canvas dimensions, converted pixel geometry, and effective layer transformations are resolved runtime values and are committed separately in the daily snapshot as defined by `docs/ARCHITECTURE.md`; they are not additional YAML fields.
+YAML supplies the configured output dimensions, fixed-reference-pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. The working-canvas dimensions, centered crop, converted pixel geometry, and effective layer transformations are resolved runtime values and are committed separately in the daily snapshot as defined by `docs/ARCHITECTURE.md`; they are not additional YAML fields.
 
 A content entry cannot directly specify presentation insets.
 
@@ -708,7 +708,7 @@ Each `layers` item is a mapping with the following fields:
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-`contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. It accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
+For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
@@ -719,7 +719,7 @@ Each `layers` item is a mapping with the following fields:
 | `nine_slice.horizontal` | `"stretch"` or `"crop"` | No | `"stretch"` |
 | `nine_slice.vertical` | `"stretch"` or `"crop"` | No | `"stretch"` |
 
-The four insets partition the source image into nine regions. Booleans and non-integer measurements are invalid. Left and right insets may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Destinations too small to preserve both opposing corners are invalid. Geometry and rounding follow the deterministic architecture contract.
+The four insets partition the source image into nine regions in its actual source-pixel coordinates, regardless of its dimensions. Booleans and non-integer measurements are invalid. Left and right insets may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. The architecture defines how source artwork and boundaries map to the fixed reference and working canvases; smaller images do not change that coordinate system. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Destinations too small to preserve both opposing corners are invalid. Geometry and rounding follow the deterministic architecture contract.
 
 `condition: always` includes the layer whether QR is enabled or not; `qr` includes it only when QR is enabled; `no-qr` includes it only when QR is disabled. A condition never changes the order of the remaining layers. Invalid conditions, methods, parameter combinations, paths, or source images exclude the containing decoration with an actionable diagnostic. A malformed `tintable` value produces a warning and uses `true`.
 
@@ -888,9 +888,9 @@ Decorations may define presentation insets, but content entries reference decora
 
 Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
-Output resolution is configured through `layout.output_size`. A selected backend must accept the shared output dimensions; independent per-backend resolutions are not supported.
+Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared final-resolution image; independent per-backend resolutions are not supported. Each backend is responsible for adapting that image to its physical or network destination. A backend's destination dimensions or capabilities do not constrain core rendering.
 
-Reference-pixel insets are uniformly scaled to the configured output while retaining the same supported aspect ratio.
+The renderer derives a centered working canvas by cropping the fixed reference envelope to the configured landscape aspect ratio. It intersects reference-space inset geometry with that crop, translates it into working-canvas coordinates, and uniformly scales the resulting geometry to final output dimensions.
 
 ## Content entries
 

@@ -722,7 +722,7 @@ Do not allow the renderer to depend directly on Waveshare-specific objects or AP
 
 ### Output geometry and diagnostics
 
-Use Pillow for high-resolution raster composition and downsampling. Keep configured output dimensions, reference-canvas measurements, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images; use one deterministic uniform scale and the architecture's nearest-integer, half-up rounding rule for coordinate and slice conversion.
+Use Pillow for high-resolution raster composition and downsampling. Keep configured output dimensions, fixed reference-canvas measurements, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images. Intersect reference-space geometry with the centered working viewport and translate it before applying the uniform working-to-output scale; transform nine-slice source coordinates using the fixed-reference mapping. Apply the architecture's deterministic nearest-integer, half-up rounding rule.
 
 Compose backgrounds and decorations on the resolved working canvas, then downsample the graphical result once to final output dimensions. Avoid unnecessary raster upscaling and full-canvas copies. Render literary typography and the QR symbol only after downsampling, at final output resolution.
 
@@ -836,7 +836,7 @@ Prefer a straightforward deterministic fitting procedure over a general-purpose 
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
-Validate the supported aspect-ratio and resolution matrix, including the Waveshare's native 1600 × 1200 output and representative 16:9 and 16:10 resolutions. Exercise 1080p and 4K working/output cases without treating hardware-independent results as physical display validation.
+Validate the renderer's supported aspect-ratio and resolution matrix, including 1600 × 1200 and representative 16:9 and 16:10 outputs. Exercise 1080p and 4K working/output cases without treating hardware-independent results as physical display validation. Separately test the Waveshare backend's adaptation to its native 1600 × 1200 destination.
 
 Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
 
@@ -1381,7 +1381,7 @@ Where practical, test recovery using a newly initialized application instance ra
 
 Verify rendered-image dimensions, stage completeness, stable layout geometry, and equality of all reveal-stage output dimensions.
 
-Exercise 4:3, 16:9, and 16:10 configurations, including 1600 × 1200, 1920 × 1080, 3840 × 2160, and 1920 × 1200. Verify the associated reference and working canvases, maximum-envelope bounds, exact-ratio validation, deterministic half-up rounding, and rejection of degenerate insets and unsupported dimensions.
+Exercise 4:3, 16:9, and 16:10 configurations, including 1600 × 1200, 1920 × 1080, 3840 × 2160, and 1920 × 1200. Verify the fixed 3840 × 2400 reference envelope, centered working-canvas crops (320 pixels from each side for 4:3, 120 pixels from top and bottom for 16:9), output aspect validation without a reference-envelope output-size limit, deterministic half-up rounding, and rejection of degenerate insets and unsupported dimensions.
 
 Use representative quotations of different lengths and combinations of optional metadata.
 
@@ -1394,7 +1394,7 @@ Test automatic text fitting with:
 - quotations requiring a smaller permitted font size;
 - quotations that cannot fit at the minimum permitted size.
 
-Verify that all rendered literary content stays within the effective rectangle derived from reference-pixel insets, at final output resolution.
+Verify that all rendered literary content stays within the effective rectangle derived from fixed-reference-pixel insets, after viewport intersection, translation, and uniform working-to-output scaling.
 
 Verify that artwork is composed at working resolution and downsampled once before final-resolution typography and QR generation. Confirm no later resize or resampling changes text or QR pixels.
 
@@ -1435,14 +1435,14 @@ Visual inspection remains appropriate for typography and layout quality.
 
 ### Hardware validation
 
-Validate hardware-dependent behavior on the supported display.
+Validate hardware-dependent behavior on the supported display, and verify that destination adaptation remains a backend responsibility independent of the renderer's global output geometry.
 
 Hardware validation should include:
 
 - driver initialization;
 - complete image transfer and refresh;
-- unchanged automated coverage of the native 1600 × 1200 output and portrait orientation;
-- correct landscape orientation and representative color rendering;
+- backend adaptation of globally prepared images to the Waveshare's native 1600 × 1200 landscape panel, including any selected scaling, cropping, padding, rotation, dithering, or color conversion policy;
+- correct destination orientation and representative color rendering;
 - representative resolution-independent output on a non-e-paper destination;
 - repeated scheduled updates;
 - controller sleep and subsequent use;
