@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 from qrcode.constants import ERROR_CORRECT_H, ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q
 from qrcode.exceptions import DataOverflowError
 
-from .geometry import round_half_up, working_canvas_for_output
+from .geometry import round_half_up, validate_output_size, working_canvas_for_output
 
 REPOSITORY_URL = "https://github.com/ControlForgeHQ/refrain"
 QR_ALLOCATION_SIZE = 246
@@ -96,6 +96,10 @@ def resolve_qr_placement(
     metadata = {} if positioning is None else positioning
     if not isinstance(metadata, Mapping):
         raise QRCodePlacementError("QR positioning metadata must be a mapping")
+    try:
+        output_size = validate_output_size(output_size)
+    except ValueError as error:
+        raise QRCodePlacementError(f"cannot resolve QR placement for the configured output size: {error}") from error
 
     allowed = {
         "qr_from_left",

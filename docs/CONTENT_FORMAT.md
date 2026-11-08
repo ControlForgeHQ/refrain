@@ -378,11 +378,11 @@ The optional `presentation.qr` mapping controls QR generation for literary prese
 |---|---|---|---|
 | `presentation.qr.enabled` | Boolean | No | `true` |
 
-When `enabled` is `false`, no QR code is generated for literary presentations. Effective enablement is also suppressed when the selected decoration declares `qr_ready: false`. Resolve the result for each complete image preparation. This setting does not affect the standalone information view.
+When `enabled` is `false`, no QR code is generated for literary presentations. A selected decoration's `qr_ready: false` also suppresses QR generation. Valid positioning that places the complete QR allocation outside the working canvas, or output resolution too small for a complete one-pixel-per-module symbol, suppresses QR with an actionable warning but does not invalidate the decoration or literary presentation. Resolve effective availability once for each complete image preparation, before selecting conditional decoration artwork. This setting does not affect the standalone information view.
 
 For Version 0.1, an enabled literary QR code always encodes `https://github.com/ControlForgeHQ/refrain`, independently of content, display date, and reveal stage. Its production encoding and raster contract is defined in [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork). The destination is not configurable, and no content-entry QR field exists.
 
-Boolean values are required when the field is present; strings, integers, and other YAML types are invalid. An omitted setting enables QR generation. An invalid optional value produces a warning and uses the default `true`.
+Boolean values are required when the field is present; strings, integers, and other YAML types are invalid. An omitted setting enables QR generation. An invalid optional value produces a warning and uses the default `true`. Intentional policy or `qr_ready: false` suppression does not require a warning.
 
 QR enablement is configured at the presentation level only. Content entries have no QR override; a decoration's `qr_ready` field may suppress generation for that selected decoration.
 
@@ -642,8 +642,8 @@ text_color:
   - burnt-orange
 background: aged-paper
 qr_ready: true
-qr_right: 20
-qr_bottom: 20
+qr_from_right: 20
+qr_from_bottom: 20
 tintable: true
 decoration_color:
   - sky-blue
@@ -681,8 +681,11 @@ layers:
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 | `background` | Background identifier or `"none"` | No | None |
 | `qr_ready` | Boolean | No | `true` |
-| `qr_right` | Nonnegative working-canvas pixel integer | No | `20` |
-| `qr_bottom` | Nonnegative working-canvas pixel integer | No | `20` |
+| `qr_from_left` | Nonnegative working-canvas pixel integer | No | — |
+| `qr_from_right` | Nonnegative working-canvas pixel integer | No | `20` when no horizontal method is supplied |
+| `qr_from_top` | Nonnegative working-canvas pixel integer | No | — |
+| `qr_from_bottom` | Nonnegative working-canvas pixel integer | No | `20` when no vertical method is supplied |
+| `qr_centered` | Scalar string: `horizontal` or `vertical` | No | — |
 | `tintable` | Boolean | No | `true` |
 | `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 
@@ -696,11 +699,13 @@ The optional `text_color` is a preference for the literary composition's text wh
 
 The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when at least one layer is effectively tintable. It accepts a palette identifier or nonempty sequence. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
-`qr_ready` must be a YAML boolean and defaults to `true`. When false, QR generation is suppressed for this selected decoration regardless of the presentation-level QR setting. A malformed value produces a warning and uses the default.
+`qr_ready` must be a YAML boolean and defaults to `true`. When false, QR generation is intentionally suppressed for this selected decoration regardless of the presentation-level QR setting. A malformed value produces a warning and uses the default.
 
-The optional `qr_right` and `qr_bottom` fields are nonnegative integer offsets in ratio-specific working-canvas pixels, measured inward from the corresponding right and bottom working-canvas edges. Each field defaults independently to `20`, including when no decoration is selected. Booleans are not valid integers for these fields. A malformed value produces a warning and uses the default for that offset. The offsets are independent of `presentation_insets` and decoration slice geometry; they are not final-output pixel distances. Refrain scales them to final-output coordinates using the established working-canvas-to-output rules.
+The optional directional offsets are nonnegative integer distances in ratio-specific working-canvas pixels, measured inward from their named edges. Booleans, strings, fractional values, nulls, and other types are invalid. `qr_centered` accepts only one scalar YAML string, `horizontal` or `vertical`; lists, mappings, null, and other values are invalid. Horizontally, at most one of `qr_from_left`, `qr_from_right`, or `qr_centered: horizontal` may be supplied. Vertically, at most one of `qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical` may be supplied. Simultaneous horizontal and vertical centering is not supported. An unspecified horizontal axis defaults to `qr_from_right: 20`; an unspecified vertical axis defaults to `qr_from_bottom: 20`. These defaults apply independently, including when there is no selected decoration.
 
-These fields specify placement offsets only. A decoration does not define a QR region or allocation dimensions, and does not configure the QR payload or encoding. The application-level allocation dimensions and detailed geometry remain deliberately undecided; see [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork).
+Offsets and centering position the complete QR allocation from the selected working canvas's edges or center. They are independent of `presentation_insets` and decoration slice geometry; they are not final-output pixel distances. A malformed value, conflicting anchors, or out-of-bounds allocation disables QR for that preparation with an actionable warning. Refrain does not infer precedence, fall back to another position, clamp the allocation, or exclude the otherwise valid decoration. A valid position that maps to insufficient final-output pixels also disables QR with a warning while allowing literary preparation to continue.
+
+The application owns a fixed 246 × 246 working-canvas allocation, including the complete four-module quiet zone. Decorations position this allocation but cannot change its dimensions, define a separate QR region, or configure the payload or encoding. Refrain maps all allocation edges independently to final output coordinates and chooses the largest integer module size that fits the resulting rectangle. See [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork) for the production raster contract.
 
 Each `layers` item is a mapping with the following fields:
 

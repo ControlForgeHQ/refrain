@@ -373,6 +373,27 @@ def test_invalid_qr_placement_warns_before_artwork_and_preserves_decoration(monk
             image.close()
 
 
+def test_insufficient_output_pixels_warn_and_keep_literary_preparation(caplog) -> None:
+    snapshot = make_snapshot("lora", source=None, attribution=None)
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        output_size=(80, 60),
+        insets=PresentationInsets(0, 0, 0, 0),
+        min_font_size=1,
+        max_font_size=1,
+    )
+
+    images = _prepare_daily_images(snapshot, (CompositionVisibility(),), configuration)
+    try:
+        assert len(images) == 1
+        assert images[0].size == (80, 60)
+        assert "complete 41-module QR footprint" in caplog.text
+        assert snapshot.quotation_text == "A small thought, carefully kept."
+    finally:
+        for image in images:
+            image.close()
+
+
 def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_path: Path) -> None:
     background_path = tmp_path / "paper.png"
     decoration_path = tmp_path / "overlay.png"

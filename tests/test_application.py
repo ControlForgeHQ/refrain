@@ -465,8 +465,8 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert state.repetition_history == {snapshot.quotation_identity}
     assert len(workspace.history_records()) == 1
     assert display.sizes == [(1920, 1080)] and display.closed == 1
-    assert display.images[0].getpixel((1757, 917)) == (255, 255, 255)
-    assert display.images[0].getpixel((1769, 929)) == (0, 0, 0)
+    assert display.images[0].getpixel((1787, 947)) == (255, 255, 255)
+    assert display.images[0].getpixel((1799, 959)) == (0, 0, 0)
     assert len(png_files(workspace.artifacts)) == 3
 
 

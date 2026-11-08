@@ -183,6 +183,26 @@ def test_qr_positioning_methods_resolve_each_axis_independently(
 
 
 @pytest.mark.parametrize(
+    ("output_size", "horizontal_bounds", "vertical_bounds"),
+    [
+        ((1600, 1200), (1477, 20, 1723, 266), (20, 1077, 266, 1323)),
+        ((1920, 1080), (1797, 20, 2043, 266), (20, 957, 266, 1203)),
+        ((3840, 2400), (1797, 20, 2043, 266), (20, 1077, 266, 1323)),
+    ],
+)
+def test_centering_uses_the_ratio_specific_working_canvas(
+    output_size: tuple[int, int],
+    horizontal_bounds: tuple[int, int, int, int],
+    vertical_bounds: tuple[int, int, int, int],
+) -> None:
+    horizontal = resolve_qr_placement(output_size, {"qr_centered": "horizontal", "qr_from_top": 20})
+    vertical = resolve_qr_placement(output_size, {"qr_from_left": 20, "qr_centered": "vertical"})
+
+    assert horizontal.working_bounds == horizontal_bounds
+    assert vertical.working_bounds == vertical_bounds
+
+
+@pytest.mark.parametrize(
     "positioning",
     [
         {"qr_from_left": -1},
@@ -232,5 +252,33 @@ def test_production_raster_uses_resolved_integer_fit_and_allocation() -> None:
         assert result.geometry.allocation_bounds == (1467, 1067, 1590, 1190)
         assert result.image.mode == "RGB"
         assert set(result.image.get_flattened_data()) <= {(0, 0, 0), (255, 255, 255)}
+    finally:
+        result.image.close()
+
+
+def test_production_raster_encodes_the_fixed_repository_payload() -> None:
+    placement = resolve_qr_placement((1920, 1080))
+    result = render_qr_code(PRODUCTION_QR_PARAMETERS, (1920, 1080), placement)
+    expected = qrcode.QRCode(version=4, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=0)
+    expected.add_data(REPOSITORY_URL.encode("utf-8"), optimize=0)
+    expected.make(fit=False)
+    try:
+        assert result.geometry.version == 4
+        assert result.geometry.symbol_modules == expected.modules_count == 33
+        assert result.geometry.module_size == 3
+        assert result.image.size == result.geometry.footprint_size == (123, 123)
+        quiet = result.geometry.quiet_zone_pixels
+        for row_index, row in enumerate(expected.modules):
+            for column_index, dark in enumerate(row):
+                x = quiet + column_index * 3
+                y = quiet + row_index * 3
+                color = (0, 0, 0) if dark else (255, 255, 255)
+                assert all(result.image.getpixel((x + dx, y + dy)) == color for dx in range(3) for dy in range(3))
+        assert result.image.getpixel((0, 0)) == (255, 255, 255)
+        for coordinate in range(quiet):
+            assert all(result.image.getpixel((x, coordinate)) == (255, 255, 255) for x in range(123))
+            assert all(result.image.getpixel((x, 122 - coordinate)) == (255, 255, 255) for x in range(123))
+            assert all(result.image.getpixel((coordinate, y)) == (255, 255, 255) for y in range(123))
+            assert all(result.image.getpixel((122 - coordinate, y)) == (255, 255, 255) for y in range(123))
     finally:
         result.image.close()
