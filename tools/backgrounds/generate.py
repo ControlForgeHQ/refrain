@@ -3,6 +3,7 @@
 Requires Python, NumPy and Pillow. Run with --help for output options.
 The accepted masters were verified with NumPy 2.3.5 and Pillow 13.0.0.
 """
+
 import argparse
 from pathlib import Path
 
@@ -34,9 +35,7 @@ def field(rng, sx, sy=None):
     nx = max(1, round(W / sx))
     ny = max(1, round(H / sy))
     knots = rng.standard_normal((ny + 4, nx + 4), dtype=np.float32)
-    return np.array(Image.fromarray(knots).resize(
-        SIZE, Image.Resampling.BICUBIC, box=(2, 2, nx + 2, ny + 2)
-    ))
+    return np.array(Image.fromarray(knots).resize(SIZE, Image.Resampling.BICUBIC, box=(2, 2, nx + 2, ny + 2)))
 
 
 def light(height, dx=1, dy=2):
@@ -45,7 +44,7 @@ def light(height, dx=1, dy=2):
     upper = np.roll(height, dy, axis=0)
     left[:, :dx] = height[:, :dx]
     upper[:dy, :] = height[:dy, :]
-    return .35 * (left - height) + .65 * (upper - height)
+    return 0.35 * (left - height) + 0.65 * (upper - height)
 
 
 def marks(rng, count, lengths, widths, angles, tones, soft=0.0):
@@ -56,7 +55,7 @@ def marks(rng, count, lengths, widths, angles, tones, soft=0.0):
     ys = rng.uniform(-lengths[1], H + lengths[1], count)
     dxs = spans * np.cos(directions)
     dys = spans * np.sin(directions)
-    bends = rng.uniform(-.22, .22, count)
+    bends = rng.uniform(-0.22, 0.22, count)
     values = rng.uniform(*tones, count)
     line_widths = rng.integers(widths[0], widths[1] + 1, count)
     image = Image.new("L", SIZE, 128)
@@ -64,24 +63,24 @@ def marks(rng, count, lengths, widths, angles, tones, soft=0.0):
     for x, y, dx, dy, bend, value, width in zip(xs, ys, dxs, dys, bends, values, line_widths):
         points = (
             (x, y),
-            (x + dx * .23 - dy * bend * .7, y + dy * .23 + dx * bend * .7),
-            (x + dx * .56 - dy * bend, y + dy * .56 + dx * bend),
-            (x + dx * .83 - dy * bend * .43, y + dy * .83 + dx * bend * .43),
+            (x + dx * 0.23 - dy * bend * 0.7, y + dy * 0.23 + dx * bend * 0.7),
+            (x + dx * 0.56 - dy * bend, y + dy * 0.56 + dx * bend),
+            (x + dx * 0.83 - dy * bend * 0.43, y + dy * 0.83 + dx * bend * 0.43),
             (x + dx, y + dy),
         )
-        for a, b, weight in zip(points, points[1:], (.48, 1, .93, .42)):
+        for a, b, weight in zip(points, points[1:], (0.48, 1, 0.93, 0.42)):
             draw.line((a, b), fill=round(128 + value * weight), width=int(width))
     if soft:
         image = image.filter(ImageFilter.GaussianBlur(soft))
     return np.asarray(image).astype(np.float32) - 128
 
 
-def dots(rng, count, radius, tone, soft, shape=(1., 1.)):
+def dots(rng, count, radius, tone, soft, shape=(1.0, 1.0)):
     x = rng.uniform(-6, W + 6, count)
     y = rng.uniform(-6, H + 6, count)
     r = rng.uniform(*radius, count)
-    dx = r * rng.uniform(.58, 1.25, count) * shape[0]
-    dy = r * rng.uniform(.58, 1.25, count) * shape[1]
+    dx = r * rng.uniform(0.58, 1.25, count) * shape[0]
+    dy = r * rng.uniform(0.58, 1.25, count) * shape[1]
     v = rng.uniform(*tone, count)
     image = Image.new("L", SIZE, 128)
     draw = ImageDraw.Draw(image)
@@ -92,9 +91,9 @@ def dots(rng, count, radius, tone, soft, shape=(1., 1.)):
 
 def paper_tooth(rng, amount=1.0):
     # Follow narrow, irregular ridges in a crushed pulp height field.
-    noise = field(rng, 9, 7) + .38 * field(rng, 4, 4)
+    noise = field(rng, 9, 7) + 0.38 * field(rng, 4, 4)
     relief = 1 - np.tanh(1.3 * np.abs(noise))
-    return amount * (7.4 * light(relief, 2, 2) + 1.65 * (relief - .51) + 1.7 * field(rng, 3, 3))
+    return amount * (7.4 * light(relief, 2, 2) + 1.65 * (relief - 0.51) + 1.7 * field(rng, 3, 3))
 
 
 def aged_paper(rng):
@@ -106,11 +105,11 @@ def aged_paper(rng):
     tooth = paper_tooth(rng, 1.57)
     compressed = field(rng, 17, 13)
     tooth += 2.7 * light(compressed, 3, 3) + 1.4 * compressed
-    pulp = marks(rng, 45000, (5, 22), (2, 5), (-3.14, 3.14), (-8, 8), .7)
-    specks = dots(rng, 21000, (.7, 2.3), (-10, 5), .65)
-    toast = -8.2 * edge - .7 * field(rng, 30)
+    pulp = marks(rng, 45000, (5, 22), (2, 5), (-3.14, 3.14), (-8, 8), 0.7)
+    specks = dots(rng, 21000, (0.7, 2.3), (-10, 5), 0.65)
+    toast = -8.2 * edge - 0.7 * field(rng, 30)
     tone = tooth + pulp + specks + toast
-    return tone, .62 * toast + .28 * np.minimum(tooth + pulp, 0)
+    return tone, 0.62 * toast + 0.28 * np.minimum(tooth + pulp, 0)
 
 
 def yarn_coords(rng, pitch_x, pitch_y, irregularity):
@@ -119,71 +118,71 @@ def yarn_coords(rng, pitch_x, pitch_y, irregularity):
     ny = round(H / pitch_y) + 4
     xpos = np.cumsum(pitch_x * (1 + rng.uniform(-irregularity, irregularity, nx))) - 2 * pitch_x
     ypos = np.cumsum(pitch_y * (1 + rng.uniform(-irregularity, irregularity, ny))) - 2 * pitch_y
-    warp = np.interp(X, xpos, np.arange(nx)).astype(np.float32) + .48 * irregularity * field(rng, 36, 83)
-    weft = np.interp(Y, ypos, np.arange(ny)).astype(np.float32) + .48 * irregularity * field(rng, 76, 32)
-    warp_center = np.floor(warp + .5)
-    weft_center = np.floor(weft + .5)
+    warp = np.interp(X, xpos, np.arange(nx)).astype(np.float32) + 0.48 * irregularity * field(rng, 36, 83)
+    weft = np.interp(Y, ypos, np.arange(ny)).astype(np.float32) + 0.48 * irregularity * field(rng, 76, 32)
+    warp_center = np.floor(warp + 0.5)
+    weft_center = np.floor(weft + 0.5)
     return warp - warp_center, weft - weft_center, warp_center + weft_center
 
 
 def canvas(rng):
-    u, v, crossings = yarn_coords(rng, 15.6, 15.1, .16)
+    u, v, crossings = yarn_coords(rng, 15.6, 15.1, 0.16)
     # Smooth rounded tops crest at alternate crossings in a plain weave.
     ww = np.exp(-9.6 * u**2)
     ff = np.exp(-10.6 * v**2)
     crest = np.cos(np.pi * crossings)
-    warp = ww * (.91 + .45 * crest * np.cos(np.pi * v) + .10 * field(rng, 11, 57))
-    weft = ff * (.92 - .46 * crest * np.cos(np.pi * u) + .10 * field(rng, 64, 11))
+    warp = ww * (0.91 + 0.45 * crest * np.cos(np.pi * v) + 0.10 * field(rng, 11, 57))
+    weft = ff * (0.92 - 0.46 * crest * np.cos(np.pi * u) + 0.10 * field(rng, 64, 11))
     top = np.maximum(warp, weft)
-    yarn_fuzz = .95 * field(rng, 2.8, 3.1)
-    tone = 15.4 * (top - .74) + 33 * light(top, 2, 2) + yarn_fuzz
-    tone += marks(rng, 21000, (3, 16), (1, 3), (-.22, .22), (-9, 7), .65)
-    tone += marks(rng, 17000, (3, 16), (1, 3), (1.35, 1.79), (-7, 8), .65)
+    yarn_fuzz = 0.95 * field(rng, 2.8, 3.1)
+    tone = 15.4 * (top - 0.74) + 33 * light(top, 2, 2) + yarn_fuzz
+    tone += marks(rng, 21000, (3, 16), (1, 3), (-0.22, 0.22), (-9, 7), 0.65)
+    tone += marks(rng, 17000, (3, 16), (1, 3), (1.35, 1.79), (-7, 8), 0.65)
     return tone, 0
 
 
 def cloth(rng):
-    u, v, crossings = yarn_coords(rng, 10.4, 12.9, .24)
+    u, v, crossings = yarn_coords(rng, 10.4, 12.9, 0.24)
     # Skinny, uneven strands and small slubs in a tighter fabric.
-    slub_u = np.clip(1 + .22 * field(rng, 9, 41), .64, 1.45)
-    slub_v = np.clip(1 + .23 * field(rng, 57, 10), .65, 1.48)
-    warp = np.exp(-21.5 * (u / slub_u)**2)
-    weft = np.exp(-19.5 * (v / slub_v)**2)
+    slub_u = np.clip(1 + 0.22 * field(rng, 9, 41), 0.64, 1.45)
+    slub_v = np.clip(1 + 0.23 * field(rng, 57, 10), 0.65, 1.48)
+    warp = np.exp(-21.5 * (u / slub_u) ** 2)
+    weft = np.exp(-19.5 * (v / slub_v) ** 2)
     alternation = np.cos(np.pi * crossings)
-    warp *= (.81 + .16 * alternation + .18 * field(rng, 10, 37))
-    weft *= (.72 - .16 * alternation + .16 * field(rng, 44, 10))
-    top = warp + .86 * weft - .40 * warp * weft
-    tone = 16.8 * (top - .58) + 24.5 * light(top, 2, 2)
+    warp *= 0.81 + 0.16 * alternation + 0.18 * field(rng, 10, 37)
+    weft *= 0.72 - 0.16 * alternation + 0.16 * field(rng, 44, 10)
+    top = warp + 0.86 * weft - 0.40 * warp * weft
+    tone = 16.8 * (top - 0.58) + 24.5 * light(top, 2, 2)
     tone += 2.4 * field(rng, 4, 3) + 1.45 * field(rng, 3, 10)
-    tone += marks(rng, 43000, (6, 36), (1, 3), (1.42, 1.72), (-13, 13), .60)
-    tone += marks(rng, 38000, (5, 28), (1, 3), (-.14, .14), (-12, 11), .60)
-    return tone, .1 * tone
+    tone += marks(rng, 43000, (6, 36), (1, 3), (1.42, 1.72), (-13, 13), 0.60)
+    tone += marks(rng, 38000, (5, 28), (1, 3), (-0.14, 0.14), (-12, 11), 0.60)
+    return tone, 0.1 * tone
 
 
 def handmade(rng):
-    pulp = marks(rng, 30200, (10, 47), (2, 5), (-3.14, 3.14), (-21, 14), .60)
-    longer = marks(rng, 2900, (30, 82), (2, 4), (-3.14, 3.14), (-24, 12), .7)
-    mottles = dots(rng, 24000, (.6, 3.2), (-14, 9), .7)
+    pulp = marks(rng, 30200, (10, 47), (2, 5), (-3.14, 3.14), (-21, 14), 0.60)
+    longer = marks(rng, 2900, (30, 82), (2, 4), (-3.14, 3.14), (-24, 12), 0.7)
+    mottles = dots(rng, 24000, (0.6, 3.2), (-14, 9), 0.7)
     tone = 1.05 * paper_tooth(rng) + pulp + longer + mottles
-    return tone, .36 * np.minimum(pulp + longer, 0)
+    return tone, 0.36 * np.minimum(pulp + longer, 0)
 
 
 def vellum(rng):
     # Fine, rounded pores and embossed wrinkles across a smooth matte ground.
     pore = dots(rng, 112000, (1.4, 4.3), (-18, 12), 1.05)
-    wrinkles = marks(rng, 42000, (7, 24), (2, 4), (-2.65, .32), (-8, 8), 1.25)
-    touch = field(rng, 5.3, 4.1) + .28 * field(rng, 3, 2.7)
+    wrinkles = marks(rng, 42000, (7, 24), (2, 4), (-2.65, 0.32), (-8, 8), 1.25)
+    touch = field(rng, 5.3, 4.1) + 0.28 * field(rng, 3, 2.7)
     ridges = np.tanh(1.55 * touch)
-    tone = .79 * pore + 6.2 * light(ridges, 2, 2) + 1.3 * ridges + .65 * wrinkles
-    return tone, .16 * pore
+    tone = 0.79 * pore + 6.2 * light(ridges, 2, 2) + 1.3 * ridges + 0.65 * wrinkles
+    return tone, 0.16 * pore
 
 
 def limestone(rng):
-    grain = dots(rng, 132000, (.9, 4.2), (-15, 14), .78)
+    grain = dots(rng, 132000, (0.9, 4.2), (-15, 14), 0.78)
     chips = dots(rng, 19000, (2.4, 7.0), (-26, 13), 1.1)
     fine = field(rng, 4, 3.7)
     tone = grain + chips + 1.8 * fine + 2.3 * light(fine, 1, 1)
-    return tone, .22 * chips
+    return tone, 0.22 * chips
 
 
 def layers(rng, *specs):
@@ -206,8 +205,8 @@ def honeycomb(rng):
     a = np.maximum(ya, np.sqrt(3) / 2 * xa + ya / 2)
     b = np.maximum(yb, np.sqrt(3) / 2 * xb + yb / 2)
     edge = np.clip(2.7 - (h - np.minimum(a, b)), 0, 1)
-    tone = layers(rng, (.6, 340, 290), (.45, 9, 8), (.38, 2, 2))
-    return tone - 12.5 * edge, -.9 * edge
+    tone = layers(rng, (0.6, 340, 290), (0.45, 9, 8), (0.38, 2, 2))
+    return tone - 12.5 * edge, -0.9 * edge
 
 
 def drafting(rng):
@@ -220,8 +219,8 @@ def drafting(rng):
     major_y = np.abs((Y + 24 + pitch / 2) % pitch - pitch / 2)
     major = np.clip(2.45 - np.minimum(major_x, major_y), 0, 1)
     rule = 7.2 * line + 4.2 * major
-    tone = layers(rng, (.65, 370, 280), (.5, 7, 6), (.37, 2, 2))
-    return tone - rule, .18 * rule
+    tone = layers(rng, (0.65, 370, 280), (0.5, 7, 6), (0.37, 2, 2))
+    return tone - rule, 0.18 * rule
 
 
 def centered_wrap(value, period):
@@ -264,14 +263,14 @@ def recursive_squares():
 
 # Fixed seeds keep each accepted design independent of generation order.
 SURFACES = {
-    "aged-paper": (302773, aged_paper, .48),
-    "canvas": (302774, canvas, .48),
-    "cloth": (302775, cloth, .48),
-    "hex": (371904, honeycomb, .55),
-    "handmade-paper": (302777, handmade, .48),
-    "vellum": (302778, vellum, .48),
-    "limestone": (302779, limestone, .48),
-    "drafting-grid": (371908, drafting, .55),
+    "aged-paper": (302773, aged_paper, 0.48),
+    "canvas": (302774, canvas, 0.48),
+    "cloth": (302775, cloth, 0.48),
+    "hex": (371904, honeycomb, 0.55),
+    "handmade-paper": (302777, handmade, 0.48),
+    "vellum": (302778, vellum, 0.48),
+    "limestone": (302779, limestone, 0.48),
+    "drafting-grid": (371908, drafting, 0.55),
 }
 
 RULES = {
@@ -285,7 +284,7 @@ def surface_pixels(base, seed, texture, grain_strength):
     tone, chroma = texture(rng)
     tone += grain_strength * rng.standard_normal((H, W), dtype=np.float32)
     rgb = np.empty((H, W, 3), dtype=np.uint8)
-    for channel, (color, tint) in enumerate(zip(base, (.46, .03, -.72))):
+    for channel, (color, tint) in enumerate(zip(base, (0.46, 0.03, -0.72))):
         rgb[:, :, channel] = np.rint(np.clip(color + tone + tint * chroma, 0, 255))
     return rgb
 
@@ -293,10 +292,9 @@ def surface_pixels(base, seed, texture, grain_strength):
 def ruled_pixels(base, seed, pattern):
     rng = np.random.default_rng(seed)
     rule = pattern()
-    grain = .38 * rng.standard_normal((H, W), dtype=np.float32)
+    grain = 0.38 * rng.standard_normal((H, W), dtype=np.float32)
     channels = [
-        np.rint(value + grain - weight * rule).astype(np.uint8)
-        for value, weight in zip(base, (1.02, 1.0, .94))
+        np.rint(value + grain - weight * rule).astype(np.uint8) for value, weight in zip(base, (1.02, 1.0, 0.94))
     ]
     return np.stack(channels, axis=2)
 
