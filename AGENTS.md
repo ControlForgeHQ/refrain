@@ -41,6 +41,27 @@ If documentation is inconsistent, identify the conflict rather than silently cho
 
 If a requested change requires a material architectural decision, raise that decision for review before implementing it.
 
+## Keep the root README stable
+
+The root `README.md` is a deliberately minimal introduction to Refrain, not a technical manual or a record of implementation progress.
+
+Do not modify the root `README.md` unless the assigned GitHub issue or an explicit instruction from the project maintainer specifically requests a README change.
+
+This prohibition applies even when:
+
+- implementing new features or changing existing behavior;
+- modifying public configuration interfaces;
+- changing installation, deployment, or diagnostic procedures;
+- updating other project documentation;
+- preparing a release;
+- responding to general requirements to update documentation.
+
+Do not propose README updates merely to reflect implementation changes or maintain consistency with technical documentation.
+
+Instead, update the authoritative document responsible for the affected information, when documentation changes are required.
+
+This restriction applies only to the repository root `README.md`. Other README files may be updated when relevant to their established responsibilities and the assigned scope.
+
 ## Follow the assigned scope
 
 Implement only the behavior requested by the assigned GitHub issue or explicit instruction.

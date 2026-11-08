@@ -63,7 +63,7 @@ Distinguish between:
 
 - validated source content;
 - uncommitted selection candidates;
-- authoritative operational state, including committed daily snapshots, selection revisions, active repetition history, and reveal progress;
+- authoritative operational state, including the current daily selection, selection revision, active repetition history, and reveal progress;
 - independently retained global selection history;
 - prepared presentation artifacts;
 - backend-owned presentation state.
@@ -83,16 +83,14 @@ In particular:
 - selection failure must not create an incomplete committed selection;
 - rendering failure must not trigger reselection;
 - display failure must not alter quotation history;
-- restart must not discard a valid committed snapshot;
+- restart must not discard valid current-format selection state;
 - recovery must not hide previously reached reveal stages.
 
 Do not add an elaborate recovery framework when a simple, bounded retry or restart-safe operation is sufficient.
 
 ### Respect resource-constrained hardware
 
-The initial development target is the Raspberry Pi 3 B+.
-
-The Raspberry Pi Zero 2 W is a candidate for compact deployment.
+The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1.
 
 Favor implementations that can operate within modest memory, CPU, and storage budgets.
 
@@ -125,11 +123,15 @@ Each project document has one authoritative responsibility.
 
 ### README.md
 
-The project README is the user-facing entry point.
+The root `README.md` is a concise, user-facing introduction to Refrain.
 
-It describes what Refrain does, its current capabilities, installation, basic usage, and links to deeper documentation.
+It describes the project's purpose, general direction, development status, and where interested users can follow progress.
 
-It does not own runtime architecture or future release requirements.
+It is not an installation guide, configuration reference, technical manual, feature inventory, or implementation history.
+
+Routine development work must not trigger updates to the root README. It is changed only when the project maintainer explicitly requests a README change.
+
+Technical information belongs in its authoritative project document. Implementation details and validation outcomes belong in the relevant issues and pull requests.
 
 ### docs/ROADMAP.md
 
@@ -192,6 +194,8 @@ When a change affects documentation:
 4. Replace duplicated requirements with references where appropriate.
 
 A normal change should require edits to as few authoritative documents as practical.
+
+Routine development work must not trigger updates to the root README; update the authoritative technical document instead.
 
 ## Python development
 
@@ -406,7 +410,7 @@ A nonempty effective content library may be used for new selections even when in
 
 Do not treat missing or inaccessible sources, unsuccessful discovery, or an empty effective content library as successful content removal for repetition-history cleanup.
 
-Resolve effective per-entry configuration, including font and background selection, before committing a daily snapshot.
+Preserve content-level presentation preferences in the daily selection record when needed to interpret or present the selected quotation. Resolve visual resources and rendering settings during image preparation, not before selection commitment.
 
 After commitment, the selected presentation must not depend on changes to the original content or configuration files.
 
@@ -443,7 +447,7 @@ The architectural commitment and recovery requirements determine the storage des
 
 ### Atomic selection commitment
 
-A daily selection becomes authoritative when its complete snapshot, updated repetition history, next selection revision, and required scheduling context have been committed consistently.
+A daily selection becomes authoritative when the selected content record, updated repetition history, next selection revision, initial reveal progress, and required scheduling context have been committed consistently.
 
 These operational-state values have one logical commit point.
 
@@ -459,60 +463,17 @@ A failure before publication leaves the previous operational state authoritative
 
 Do not require a global-history append to succeed before recognizing a committed selection.
 
-### Recovery
+### Recovery and prerelease state
 
-Persistent operational state must be validated when loaded.
+Persistent operational state must be validated when loaded. Incomplete, invalid, or integrity-check-failing state must not be silently accepted. An interrupted state publication must not produce a partially committed selection or inconsistent repetition history. A failure after selection commitment must preserve the committed quotation. Global-history failures must not prevent operational recovery, and global history must not be used to reconstruct repetition state or determine the next revision.
 
-Incomplete, invalid, checksum-invalid, or unsupported state must not be silently accepted.
+Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. Incompatible or invalid state must produce a clear diagnostic directing the developer to `refrain --reset`, without silently replacing selected content or modifying the state file.
 
-An interrupted state publication must not produce a partially committed selection or inconsistent repetition history.
+The current state need only preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Do not persist derived rendering geometry, selected fonts or face identifiers, resolved colors, selected image resources, tinting decisions, QR placement, or layer transformation plans solely to reproduce pixels.
 
-A failure after selection commitment must preserve the committed quotation.
+Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries. Valid current-format state must remain recoverable across restarts.
 
-Missing or invalid prepared images must be regenerated from the committed snapshot using available presentation resources, without changing selection or repetition history.
-
-Global-history failures must not prevent operational recovery.
-
-Global history is not used to reconstruct operational state, determine the next revision, or restore repetition history.
-
-Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries.
-
-### Persistent state versioning
-
-Persistent operational state uses an explicitly versioned representation.
-
-Format version 6 is the supported operational-state format.
-
-Formats 1 through 5 are unsupported development formats. They must produce a clear, actionable compatibility error without modifying the existing file.
-
-No migration implementation is provided for these pre-release development formats.
-
-Existing prerelease development state must be reset before starting the revised application, using `python -m refrain --reset`.
-
-Future format changes must consider compatibility deliberately. Migration facilities should be introduced only when a supported release or demonstrated requirement makes them necessary.
-
-Role-specific typography is stored as the optional `presentation_metadata.font_faces` mapping. A version-6 snapshot also requires `presentation_metadata.qr_code`, containing the resolved URL, fixed QR version, error-correction level, integer module size, quiet-zone width, and right and bottom offsets. These parameters are committed inputs rather than current-configuration defaults; malformed or missing QR metadata makes the persisted snapshot invalid. No migration from earlier prerelease formats is provided.
-
-### Version 0.1 operational state file
-
-The authoritative operational state is stored in one UTF-8 JSON file.
-
-Its envelope contains `format_version`, a complete state payload, and a SHA-256 checksum of the canonical payload.
-
-Format version 6 contains:
-
-- `revision`: the positive, monotonically increasing committed selection revision;
-- `snapshot`: the current committed daily snapshot;
-- `repetition_history`: sorted normalized quotation identities belonging to active repetition cycles;
-- `highest_reveal_stage`: the highest reveal-stage ordinal reached for the current committed selection.
-
-The snapshot contains the selected quotation, normalized identity, `font_identifier`, `background_identifier`, `decoration_identifier`, presentation metadata, reveal schedule, effective layout, and scheduling context. New snapshots include all three resolved face identifiers in `presentation_metadata.font_faces`; absence means regular for every role. The required `presentation_metadata.qr_code` stores the resolved URL and all QR rendering and placement parameters. The scheduling context contains only the display date and day-start time. The effective presentation region is stored in the existing `layout.presentation_region` representation. No migration from development formats 1 through 5 is provided; unsupported files remain unchanged and must not be silently replaced. The snapshot does not contain resource bytes, paths, or image hashes.
-
-Global selection history is not included in the operational-state document.
-
-The configured state-file path must be absolute.
-
-A missing state file represents an uninitialized installation. Malformed, incomplete, inconsistent, checksum-invalid, or unsupported state raises a recovery error and is never replaced automatically.
+Global selection history is not included in the operational-state document. The configured state-file path must be absolute. A missing state file represents an uninitialized installation.
 
 ### Selection revisions and commitment
 
@@ -572,13 +533,13 @@ The standard-library implementation does not synchronize directory metadata on W
 
 If directory synchronization fails after replacement, the operation reports that publication occurred. Callers must reload authoritative state before deciding whether to retry.
 
-`PersistentStateStore.commit(proposal, snapshot, initial_reveal_stage=0)` initializes reveal progress for a new selection independently of its predecessor.
+The selection-state commit initializes reveal progress for a new selection independently of its predecessor.
 
 `PersistentStateStore.advance_reveal_progress(expected_revision, stage)` requires the current committed revision and accepts nonnegative integer stage ordinals.
 
 Missing state and stale revisions raise a state-commit error without publishing a change.
 
-Reveal advancement replaces only `highest_reveal_stage`. It preserves the complete snapshot, repetition history, and selection revision.
+Reveal advancement replaces only `highest_reveal_stage`. It preserves the selected content record, repetition history, and selection revision.
 
 Requests for the current or an earlier stage do not advance progress or rewrite the state document.
 
@@ -597,7 +558,7 @@ Each record includes:
 - the UTC timestamp of the selection event;
 - the selected quotation's original text;
 - its normalized repetition identity;
-- the selected font identifier.
+- any non-rendering selection metadata required by the history contract.
 
 Records must not contain embedded font files or rendered images.
 
@@ -649,7 +610,7 @@ History rotation and retention apply only to global-history files. They do not d
 
 Persist all images required for the current committed selection.
 
-Prepared files must be associated with the correct snapshot.
+Prepared files must be associated with the current selection revision and expected reveal stages.
 
 Incomplete or invalid image files must not be treated as valid artifacts.
 
@@ -661,48 +622,27 @@ Generated image files should be managed separately from user-authored content.
 
 Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
-#### Revision-scoped artifact representation
+#### Complete-set cache
 
-`PreparedImageArtifactStore` owns a caller-specified absolute root, separate from the authoritative state file. Its artifact-set identifier is the existing positive committed state revision; the store neither reads global history nor changes persistent state. Callers supply the snapshot and complete ordered image sequence on storage, and the snapshot and expected positive stage count on loading. Stage ordinals are supplied by the caller, not derived from schedules.
+The prepared-image cache is derived output, not authoritative state. Associate a set with the committed selection revision and expected ordered reveal stages; do not fingerprint every visual choice or serialize a rendering plan. Each stage is a complete, independently displayable lossless PNG. All files in a set must be readable, have consistent dimensions and mode, and pass the integrity checks used to detect truncation or damage.
 
-The internal layout is:
+During ordinary operation, reuse a complete valid set without checking whether configuration, fonts, palette, or image assets have changed. If the set is absent, incomplete, damaged, or otherwise unusable, resolve current configuration and resources and prepare all stages together. Publish the replacement safely only after the complete new set is ready. A replacement may look different from the prior set.
 
-```text
-<artifact-root>/
-  revision-1/
-    manifest.json
-    images-<transaction-suffix>/
-      stage-0.png
-      stage-1.png
-  .tmp-revision-2-<transaction-suffix>/
-    ...
-```
+### Prerelease implementation simplification
 
-The suffix is a random filesystem transaction name, not a second snapshot or artifact-set identity. A revision directory has one authoritative manifest pointing to one immutable image directory. This indirection permits atomic replacement of an existing complete set using standard file replacement on both POSIX and Windows, without attempting to replace a nonempty directory. Every stage is an independently readable, complete lossless PNG. Supported modes are `1`, `L`, `LA`, `RGB`, and `RGBA`; dimensions must match the committed snapshot's `layout.image_size`, and every stage must have the same mode. No image conversion or resizing occurs.
+Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes rendering-plan fields and snapshot validation, snapshot construction devoted to resolved presentation metadata, artifact identities and fingerprints over visual decisions, cache invalidation when settings or assets change, regeneration rules that preserve old font/palette/QR/resource choices, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration.
 
-
-The version 1 UTF-8 JSON manifest contains an `artifacts` object and its canonical JSON SHA-256 checksum. Metadata records `format_version`, `revision`, `snapshot_sha256`, the relative `image_directory`, `image_size`, `mode`, and an ordered `stages` array containing exact filenames and PNG-file SHA-256 digests.
-
-The snapshot fingerprint covers quotation text and identity, the selected font identifier, presentation metadata, reveal schedule, layout, and the complete format-5 scheduling context (display date and day-start time). It excludes reveal progress, repetition history, and global history.
-
-The fingerprint does not include font-file contents or font-content hashes. Changes to installed font resources do not independently invalidate existing prepared images.
-
-A revision reused after state replacement does not suffice to establish snapshot association. Checksums detect accidental damage; they do not authenticate files against a malicious writer.
-
-
-Loading rejects missing metadata, unsupported or inconsistent manifest fields, checksum failures, snapshot mismatches, unexpected stage sequences/counts or extra payload entries, incorrect dimensions/modes, non-PNG or multi-frame images, unreadable files, and PNG verification/decoding failures. Manifest-derived paths must match fixed owned names, not arbitrary paths. Files and directories must be real regular files/directories rather than symbolic links or junctions, including ancestors of the artifact root. Validation checks and closes each decoded stage before proceeding to the next; the returned handle retains only metadata and paths. Individual stage loading revalidates the file rather than trusting earlier validation.
+Retain only the machinery needed to atomically commit selected content and scheduling state, protect repetition identity and monotonic reveal progress, associate complete image sets with the right selection and stages, detect damaged cache files, safely replace a complete set, reuse it during ordinary operation, and regenerate all stages after cache failure. Do not introduce replacement abstractions unless implementation evidence demonstrates they are necessary.
 
 #### Artifact publication and cleanup
 
-Storage writes every PNG and its manifest into a unique root-level `.tmp-revision-<revision>-<suffix>` directory, flushing and synchronizing each file. After synchronizing that directory, it renames the complete directory into the revision directory as `images-<suffix>` and synchronizes the affected directories. The single publication point is `os.replace` of the prepared manifest into `revision-<revision>/manifest.json`. Before that point, the previous manifest and all its images remain untouched. Afterward, the complete new set is visible. The image directory and revision directory are synchronized again after publication.
+Storage writes every PNG and its small association/integrity manifest into a unique temporary directory, flushing and synchronizing each file. Publish the complete prepared set atomically so an interrupted write leaves the previous complete set or no usable cache, never a partial set presented as valid.
 
-Directory entries, including the root's ancestor chain, are synchronized in their parents on every storage attempt, so retries also confirm entries left by interrupted directory creation. POSIX directory synchronization strengthens power-loss durability; the standard-library implementation does not synchronize directory metadata on Windows, so its directory-entry durability guarantee is weaker. Filesystem and storage-device guarantees still apply. `ArtifactWriteError.published` reports whether manifest replacement occurred; failure afterward means a complete set was published but durability could not be confirmed, not that the old set remains current. Reload before retrying.
+Use atomic file replacement and appropriate synchronization where supported. Cache durability need only protect safe reuse and replacement; loss of a cache is recoverable from current operational state.
 
-No automatic cleanup is coupled to storage or loading. Interrupted writes can leave root-level temporary directories or unreferenced image directories. Replaced image directories also remain intact, allowing existing handles to retain their original paths until explicitly coordinated cleanup. `cleanup(current_revision)` removes recognized obsolete revision trees, including their abandoned payloads, and recognized root-level temporary transactions. It preserves the entire current revision directory, even if incomplete or invalid; unreferenced payloads within it remain until that revision becomes obsolete.
+Remove obsolete cache files without disturbing active readers or the complete set being published. Keep cleanup simple and bounded; artifact retention must not become a second source of application state.
 
-Cleanup inspects tree contents before removal. It skips unrelated root entries, noncanonical revision/transaction names, trees with unrecognized children, and any symbolic links or junctions, without following them. Removal and directory-synchronization errors raise `ArtifactCleanupError`; they do not invalidate a successfully published current set. Cleanup can partially remove obsolete artifacts before reporting a failure and may be retried. The root is an owned storage directory, not a general-purpose directory for user files.
-
-Callers must serialize artifact operations and coordinate cleanup with every reader still using a returned stage handle or path. The no-follow checks assume no concurrent hostile filesystem mutation; this is not a cross-process locking or adversarial filesystem sandbox. Cleanup never inspects or modifies authoritative state outside the owned root. `recover_prepared_daily_images` orchestrates reuse and full regeneration from the supplied committed state; only absence or `ArtifactValidationError` triggers regeneration. Artifact-root access and publication errors remain visible, and the operation closes generated images without changing persistent state.
+The cache store must not modify authoritative selection state. Cache errors are reported and handled by regeneration from the valid daily selection; they must never authorize reselection or reveal regression.
 
 ## Rendering and image preparation
 
@@ -716,6 +656,14 @@ Display-specific conversion belongs at the boundary between prepared images and 
 
 Do not allow the renderer to depend directly on Waveshare-specific objects or APIs.
 
+### Output geometry and diagnostics
+
+Use Pillow for high-resolution raster composition and resampling. Keep configured output dimensions, the fixed 3840 × 2400 authoring envelope, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images. Apply literary insets directly from the selected working canvas's edges, then uniformly scale the resulting rectangle to final output dimensions with deterministic nearest-integer, half-up rounding. Map nine-slice source coordinates into working-space measurements according to the fixed-reference artwork rules, then preserve resolved corner dimensions across supported aspect ratios.
+
+Compose backgrounds and decorations on the resolved working canvas, then resample the graphical result to final output dimensions when needed, whether reducing or enlarging it. Do not resample when working and output dimensions already match. Avoid unnecessary upscaling of source raster resources and unnecessary full-canvas copies; enlargement of the completed composition is permitted when required by output dimensions. Render literary typography and the QR symbol only after this step, at final output resolution, without subsequent resizing or resampling.
+
+Keep visual diagnostics resolution-aware: derive their canvas and placement from the configured output geometry, and do not assume one fixed canvas size. A diagnostic must not mutate committed presentation state or generated daily artifacts.
+
 ### Font loading and resolution
 
 Use Pillow-compatible font files for text rendering.
@@ -728,63 +676,61 @@ Validate all manifest-declared font faces when loading application configuration
 
 Validation must establish that each registered file exists, is readable, and can be loaded by the renderer.
 
-Validate the syntax of content-entry face preferences during content-library loading. Report a valid but unavailable winning face once when the selected bundle and preferences are resolved for a daily snapshot.
+Validate the syntax of content-entry face preferences during content-library loading. Report a valid but unavailable winning face when the selected bundle and preferences are resolved for a complete image preparation.
 
 Use a controlled random source for deterministic testing of automatic font selection.
 
-Select the single font bundle using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. Resolve all three effective face identifiers before committing the daily snapshot. An unavailable winning face warns and resolves directly to the bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
+Select one font bundle using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence during image preparation. An unavailable winning face warns and resolves directly to the bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
-Store the selected bundle identifier and the three effective face identifiers in the snapshot, not the font bytes, filesystem paths, or content digests. Keep the existing state format version by storing face identifiers in the optional snapshot presentation metadata. A pre-feature format-5 snapshot without the metadata remains recoverable and uses regular for all roles; do not infer new preferences or alter the snapshot.
-
-During image preparation, resolve the committed bundle and each committed face against the effective font registry. If a face is unavailable or unusable, use `regular` from that bundle. If the bundle itself is unavailable or unusable, choose an available bundled fallback using a deterministic order and apply the committed role-face identifiers to it.
-
-Resolve the committed bundle once per complete image-preparation operation, then resolve its committed role faces and use them for every reveal stage prepared together. If a committed face is missing, use that bundle's regular face; if the entire bundle is unavailable, apply the committed role-face identifiers to the deterministic bundled fallback and use its regular face for unavailable faces.
+Do not store selected bundle identifiers, effective face identifiers, font bytes, filesystem paths, or content digests in operational state. Resolve current preferences once per complete stage preparation and use those faces consistently for all generated stages.
 
 Do not independently select fonts for individual reveal stages.
 
-Do not alter the committed snapshot or stored bundle/face identifiers when regeneration uses a fallback.
-
-Existing valid prepared images remain reusable even when a selected face or font file has changed or become unavailable.
+Existing complete prepared images remain reusable even when a selected face or font file has changed or become unavailable. If regeneration is needed, resolve the current preferences and apply the established fallback diagnostics.
 
 If no usable bundled fallback exists, report an actionable preparation error.
 
-Font substitution during regeneration may change the rendered appearance, including line wrapping or typography. It must not change the committed quotation, metadata, reveal schedule, face identifiers, or layout configuration.
+Font substitution during regeneration may change the rendered appearance, including line wrapping or typography. It must not change the committed quotation, content identity, reveal schedule, or reveal progression.
 
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
-Do not add font downloading. Keep role-specific face resolution limited to quotation, source, and attribution within the one committed bundle.
+Do not add font downloading. Keep role-specific face resolution limited to quotation, source, and attribution within the single bundle selected for each preparation.
 
 ### Background loading and composition
 
 Background identifiers, registration requirements, and default-pool validation are defined in [Background registry](CONTENT_FORMAT.md#background-registry). Selection precedence and recovery behavior are defined in [Presentation and rendering](ARCHITECTURE.md#presentation-and-rendering).
 
-Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode without requiring source dimensions to match the output. Use deterministic aspect-preserving centred cover scaling and cropping. Preserve transparency over the paper-white base.
+Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Use deterministic aspect-preserving centered cover scaling and cropping on the working canvas. Preserve transparency over the paper-white base.
 
-Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background identifier before committing the snapshot; do not select backgrounds in rendering or independently for reveal stages.
+Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background for a complete image-preparation operation, not during selection commitment or independently for reveal stages.
 
-Keep background composition outside the shared quotation renderer. Compose the committed background over a paper-white base, preserving RGBA transparency, then render the literary composition. Resolve and compose once per complete preparation operation and reuse the result for every stage. Use Pillow resampling suitable for reduction and enlargement, and avoid unnecessary full-resolution copies or retained decoded resources.
+Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base, preserving RGBA transparency. Resolve and compose once per complete preparation operation, resample the graphic composition to final output dimensions only when needed, then reuse it for every stage. Use an appropriate high-quality Pillow resampling filter when dimensions differ, retain deterministic geometry, and close decoded resources promptly.
 
-`prepare_daily_images(snapshot, stages, font_registry, background_registry=None)` and `recover_prepared_daily_images(state, artifact_store, stages, font_registry, background_registry=None)` require the effective background registry when the committed background identifier is not `"none"`. Omission or `None` in that case is a caller error and raises `DailyImagePreparationError`, including before artifact reuse. Callers should pass the configuration's effective registry for both bundled and custom backgrounds. A supplied empty registry represents unavailable resources and retains the paper-white recovery policy. For committed `"none"` backgrounds, the registry may be omitted.
+Daily-image preparation accepts the selected content, effective reveal stages, and current resource registries. It resolves a background from current preferences or pool configuration for the whole generated set. A supplied empty registry represents unavailable resources and applies the paper-white fallback policy.
 
-When regeneration cannot resolve or decode a committed background, report a warning and continue with paper-white. Do not reselect another background, mutate the committed identifier or effective layout, or invalidate an otherwise valid prepared image set merely because resources changed. Keep resource reads bounded and close decoded images when no longer needed.
+When preparation cannot resolve or decode an optional background, report a warning and continue with paper-white according to the established fallback policy. Do not change the selected quotation or reveal progression. Keep resource reads bounded and close decoded images when no longer needed.
 
 ### Decoration loading and composition
 
-Decoration identifiers, manifest requirements, default-pool validation, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate images as readable, single-frame RGBA PNGs without requiring source dimensions to match the output. Use deterministic aspect-preserving centred contain scaling, preserve transparency, and do not crop artwork.
+Decoration identifiers, the initial ordered-layer manifest schema, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
 
-Resolve decoration, font, background, and effective region before committing the snapshot. Keep selection outside rendering. Compose the selected decoration over the already composed background and before literary rendering, once per preparation; use that complete composition for every reveal stage. A missing or unusable committed decoration is warned about and omitted during regeneration, without changing its identifier or the committed region. Do not recalculate geometry from current decoration metadata.
+Resolve decoration, font, background, output dimensions, working-canvas insets, QR enablement, and layer transforms once per complete preparation. Keep selection outside rendering. Process eligible layers in manifest order over the background at working resolution, before literary text. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
 
-`prepare_daily_images` and `recover_prepared_daily_images` accept the effective decoration registry independently of the background registry. Reuse valid prepared artifacts before resolving image resources, so registry or file changes do not invalidate a valid set.
+Test nine-slice source boundaries, preserved corner dimensions across 4:3, 16:9, and 16:10 working canvases, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. For example, verify that a resolved 240 × 180 corner remains 240 × 180 where it fits. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
 
-### Mandatory QR composition
+Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. Preserve each layer's source alpha when applying the single preparation-wide decoration color. A tintable layer does not require that a tint be selected. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
 
-Generate exactly one QR symbol for each literary presentation using the shared QR encoder and rasterizer. Reuse the standalone diagnostic's QR encoding, capacity checks, integer-module rasterization, and footprint calculation; keep diagnostic canvas generation, reporting, file saving, and publication outside the production helpers.
+Image preparation accepts the effective decoration registry independently of the background registry. Reuse a complete valid set before resolving image resources, so registry or file changes do not invalidate it.
 
-Resolve the complete QR footprint once per image-preparation operation and composite the same opaque RGB footprint onto every reveal stage after the literary renderer finishes. Use exact square integer-pixel modules, black foreground, and a solid-white quiet zone without antialiasing, resampling, transparency, or resizing. Resolve all QR parameters from the committed snapshot during regeneration; do not generate or alter QR images during scheduling, cache loading, or backend publication.
+### QR composition
 
-Validate the requested fixed QR version and destination-fit geometry. Capacity and fit failures must raise an actionable preparation error rather than changing the version or module size or producing a QR-free image. Do not check QR overlap with the literary region or modify typography or region geometry to reserve QR space. The information view remains outside this pipeline and must not gain a QR code.
+Resolve the explicit presentation-level QR policy and the selected decoration's `qr_ready` value once per complete preparation. Apply conditional layer selection from that resolved state. Generate a symbol only when effective QR enablement is true, using the shared QR encoder and rasterizer. Keep diagnostic canvas generation, reporting, file saving, and publication outside production helpers.
 
-Test default and explicit URLs, fallback URL resolution, fixed version and error correction, module and footprint pixels, quiet-zone opacity, bottom-right offsets, exact-fit and non-fitting destinations, capacity errors, and composition after text over backgrounds and decorations. Verify identical QR pixels across reveal stages and unchanged QR inputs during snapshot reload and artifact regeneration.
+Generate QR output at final output resolution after literary text. Resolve its complete footprint once per preparation and composite identical pixels onto every reveal stage. Use integer-pixel modules and the complete quiet zone, without antialiasing, later resizing, resampling, or transparency. Do not generate QR images during scheduling, cache loading, or backend publication.
+
+Resolve QR dimensions and offsets from final output geometry during preparation. Validate capacity and fit; failures must produce an actionable error rather than silently changing the version or resizing the symbol. Do not perform automatic collision avoidance or modify literary insets or artwork slices to reserve QR space. The information view remains outside this pipeline.
+
+Test both enabled and disabled presentations, `qr_ready: false`, all three layer conditions, integer module and footprint pixels, quiet-zone opacity, placement at different output dimensions, exact-fit and non-fitting destinations, capacity errors, and composition after text. Verify identical QR pixels across all stages generated together and that cache reuse does not depend on configuration or asset fingerprints.
 
 Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
 
@@ -792,9 +738,9 @@ Wheel and source-distribution tests must verify that bundled manifests, referenc
 
 The initial release provides one configurable presentation layout.
 
-Use the normalized presentation region and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
+Use the configurable output dimensions, working-canvas pixel presentation insets, and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
 
-Convert normalized coordinates into pixel geometry using the actual output-image dimensions.
+Resolve artwork reference measurements deterministically against the selected working canvas. Apply literary insets directly in working-canvas pixels, then scale to final output dimensions. Keep output, working, and reference canvases distinct; use one output resolution per application instance.
 
 The shared quotation renderer is responsible for arranging and drawing the quotation and its optional source and attribution within that region.
 
@@ -808,7 +754,7 @@ Text measurement must account for:
 - line spacing;
 - preserved line breaks;
 - paragraph spacing;
-- the complete presentation region;
+- the complete effective literary rectangle;
 - space occupied by source and attribution;
 - the effective presentation style.
 
@@ -820,7 +766,7 @@ Prefer a straightforward deterministic fitting procedure over a general-purpose 
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
-The initial layout need only be validated at the resolution and color capabilities required for Version 0.1.
+Validate the renderer's supported aspect-ratio and resolution matrix, including 1600 × 1200 and representative 16:9 and 16:10 outputs. Exercise 1080p and 4K working/output cases without treating hardware-independent results as physical display validation. Separately test the Waveshare backend's adaptation to its native 1600 × 1200 destination.
 
 Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
 
@@ -848,7 +794,7 @@ If the complete composition cannot fit within the supported presentation region,
 
 ### Preparation and validation
 
-Prepare the complete set of required reveal-stage images from the committed daily snapshot.
+Prepare the complete set of required reveal-stage images from the durable daily selection and current presentation inputs.
 
 Resolve the complete composition layout once and reuse it for every required cumulative visibility stage.
 
@@ -862,7 +808,7 @@ The same rendering facilities must support preparation of a single fully visible
 
 Test image dimensions, supported output formats, presentation styles, field visibility, layout stability, and significant fitting constraints without physical display hardware.
 
-Tests must verify that all present quotation, source, and attribution text remains within the configured presentation region without overlap or clipping.
+Tests must Verify that all present quotation, source, and attribution text remains within the configured working-canvas presentation region without overlap or clipping.
 
 Visual inspection remains appropriate for typography and layout quality.
 
@@ -888,7 +834,7 @@ Use the existing display publication coordinator to distribute the prepared info
 
 Distinguish information-view publication identity from committed daily presentation identity without exposing view semantics to display backend implementations.
 
-The startup information-view interval is transient application state. It does not require durable storage or modification of the committed daily snapshot.
+The startup information-view interval is transient application state. It does not require durable storage or modification of the committed daily selection.
 
 Use a monotonic clock for the configured display duration. Begin timing when the first backend successfully acknowledges publication of the information view.
 
@@ -1071,7 +1017,7 @@ Do not modify vendor driver behavior without understanding the relevant hardware
 
 When modifications are necessary, keep them reviewable and explain why they are required.
 
-The physical backend uses Linux hardware SPI and GPIO character-device access through its optional `hardware` dependencies. Configure the required SPI overlay, `/dev/spidev0.0`, GPIO lines, and service-identity device permissions as documented in the README. Keep the application process under the minimum practical privileges rather than running it as root. The transport must remain lazy-loaded so non-hardware development and other display backends do not require these dependencies.
+The physical backend uses Linux hardware SPI and GPIO character-device access through its optional `hardware` dependencies. Configure the required SPI overlay, `/dev/spidev0.0`, GPIO lines, and service-identity device permissions according to the project's deployment and permissions guidance. Keep the application process under the minimum practical privileges rather than running it as root. The transport must remain lazy-loaded so non-hardware development and other display backends do not require these dependencies.
 
 ### Hardware isolation
 
@@ -1180,7 +1126,7 @@ Do not use fixed-duration sleeps as a substitute for correct calendar-boundary c
 
 The scheduler should ordinarily wait until the next meaningful event rather than polling continuously.
 
-The hardware-independent `DisplayDayBoundaryObserver` receives explicit wall-clock and monotonic observations. `next_scheduling_deadline()` derives reveal deadlines from the committed snapshot and combines them with the configured display-day boundary. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline.
+The hardware-independent `DisplayDayBoundaryObserver` receives explicit wall-clock and monotonic observations. `next_scheduling_deadline()` derives reveal deadlines from the committed selection's effective schedule and combines them with the configured display-day boundary. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline.
 
 ### Wall-clock changes
 
@@ -1208,7 +1154,7 @@ Boundary observations held by `DisplayDayBoundaryObserver` are process-local. It
 
 `run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Ignore production persistence paths in the CLI rather than resolving or opening them. Determine the initial display date through the existing OS-local/day-start calculation once; do not create synthetic boundary observations or reevaluate wall time to drive demo stages.
 
-Reuse the application selection, resource resolution, snapshot commitment, reveal-progress persistence, image recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the committed snapshot without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
+Reuse the application selection, resource resolution, daily-selection commitment, reveal-progress persistence, image-cache recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the durable daily selection without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
 
 Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement, then measure the viewing interval from `first_successful_publication_time()` using the same monotonic clock supplied to the coordinator. An unacknowledged stage cannot advance. Initialization, preparation, failed publications, and wall-clock adjustments must not consume or alter the interval. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
 
@@ -1262,7 +1208,7 @@ Do not log every scheduler iteration or repeatedly emit identical errors during 
 
 Log messages must be concise, human-readable, and useful for diagnosing unattended operation.
 
-Do not unnecessarily log entire quotation libraries, large serialized snapshots, or sensitive configuration values.
+Do not unnecessarily log entire quotation libraries, large serialized daily selections, or sensitive configuration values.
 
 ### Diagnostic behavior
 
@@ -1296,11 +1242,11 @@ Verify that the PNG is created exclusively in the current working directory befo
 
 ### QR calibration diagnostic tests
 
-Test QR generation at each supported error-correction level, automatic version selection, exact integer-pixel module rendering, quiet-zone and footprint geometry, and placement boundaries. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
+Test enabled and disabled QR policies, decoration `qr_ready`, each conditional layer state, exact integer-pixel modules, complete quiet-zone and footprint geometry, and placement across the supported output matrix. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
 
 ### Decoration diagnostic tests
 
-Use the production snapshot and image-preparation pipeline with fixed fully revealed compositions and stable presentation choices. Freeze the sorted identifiers for the session, revalidate the selected package on each presentation, and do not publish a fallback when its decoration cannot be read. Keep input separate from presentation, restore terminal settings on exit, and publish sequentially through the existing coordinator without touching production persistence.
+Use the production image-preparation pipeline with fixed fully revealed compositions and stable presentation choices. Freeze the sorted identifiers for the session, revalidate the selected package on each presentation, and do not publish a fallback when its decoration cannot be read. Keep input separate from presentation, restore terminal settings on exit, and publish sequentially through the existing coordinator without touching production persistence.
 
 Test navigation and wrapping, terminal input and restoration, manifest and artwork reload including invalid-file recovery, preference and debug-region changes, deterministic output, QR composition, identical multi-backend publication, resource cleanup, and operational-state isolation. Hardware-independent tests do not establish physical display behavior.
 
@@ -1324,11 +1270,11 @@ Automated testing should cover:
 - missing, inaccessible, and empty content libraries;
 - repetition-history cleanup using accepted content only;
 - preservation of repetition history when content discovery fails or no valid quotations remain;
-- recovery of committed selections independently of current content-library availability;
-- recovery and regeneration when a previously selected custom font becomes unavailable;
-- format-5 snapshot round trips with committed text colors, palette-change regeneration, and legacy rendering without color metadata;
-- format-5 snapshot round trips, recovery of legacy snapshots without face metadata, and unchanged rejection of state versions 1 through 4;
-- committed background recovery without reselection or changes to the effective layout;
+- recovery of valid current-format daily selections independently of current content-library availability;
+- clear rejection of incompatible current state with a `refrain --reset` diagnostic and no modification of the state file;
+- current selection-record round trips containing selected content, effective schedule, day context, and required repetition/reveal state, without derived rendering decisions;
+- recovery of the selected quotation and monotonic reveal progress after image preparation or cache failure;
+- no legacy development-schema readers, migrations, normalization, or historical-format recovery tests;
 - stable entry and quotation identities;
 - normalized quotation matching;
 - date-specificity precedence;
@@ -1338,7 +1284,7 @@ Automated testing should cover:
 - pool exhaustion and selective reset;
 - atomic selection commitment;
 - recovery from interrupted writes;
-- committed snapshot recovery;
+- current daily-selection recovery;
 - preparation and recovery of reveal-stage images;
 - cumulative reveal progression;
 - forward and backward clock adjustments;
@@ -1362,7 +1308,9 @@ Where practical, test recovery using a newly initialized application instance ra
 
 ### Rendering tests
 
-Verify rendered-image dimensions, stage completeness, and stable layout geometry.
+Verify rendered-image dimensions, stage completeness, stable layout geometry, and equality of all reveal-stage output dimensions.
+
+Exercise 4:3, 16:9, and 16:10 configurations, including 1600 × 1200, 1920 × 1080, 3840 × 2160, and 1920 × 1200. Verify the fixed 3840 × 2400 reference envelope and working canvases of 3200 × 2400, 3840 × 2160, and 3840 × 2400. Apply inset values directly from each working canvas's edges: for example, `left: 180` resolves to 180 working pixels for every aspect ratio. Verify final-output scaling, deterministic half-up rounding, and rejection of degenerate insets and unsupported dimensions.
 
 Use representative quotations of different lengths and combinations of optional metadata.
 
@@ -1375,11 +1323,13 @@ Test automatic text fitting with:
 - quotations requiring a smaller permitted font size;
 - quotations that cannot fit at the minimum permitted size.
 
-Verify that all rendered literary content stays within the configured presentation region.
+Verify that all rendered literary content stays within the effective rectangle derived from working-canvas insets, uniformly scaled to final output dimensions.
+
+Verify that artwork is composed at working resolution and resampled to final output dimensions when needed, for both reduction and enlargement; confirm no resampling occurs when dimensions match. Then verify final-resolution typography and QR generation, with no later resizing or resampling of text or QR pixels.
 
 Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
 
-Verify that committed literary text colors are identical for the quotation, source, attribution, and punctuation across reveal stages. Confirm legacy snapshots retain the existing attribution distinction and that the information view's typography is unchanged.
+Verify that literary text colors are consistent for the quotation, source, attribution, and punctuation across reveal stages generated together, and that the information view's typography is unchanged.
 
 Test font configuration and selection behavior, including:
 
@@ -1390,21 +1340,21 @@ Test font configuration and selection behavior, including:
 - explicit content-entry font preferences;
 - `font_faces` parsing and invalid-value handling at all four configuration/content/manifest levels;
 - role-face precedence, explicit-regular overrides, unavailable winning-face fallback without lower-level preference lookup, and decoration preferences applied to an entry-selected bundle;
-- committed effective face identifiers, legacy snapshot and prepared-artifact recovery, and artifact fingerprint changes for typography changes;
+- consistent face resolution across stages generated together and reuse of complete caches despite later typography configuration or asset changes;
 - unregistered content-entry fonts and their warnings;
 - randomized selection from the default pool;
-- persistence of the selected font identifier in committed state and global history, without embedded font bytes or digests;
-- image regeneration using the originally selected font when available;
-- deterministic bundled fallback when the committed font identifier is unavailable or unusable;
+- absence of resolved font identifiers and face choices from operational state and global history;
+- image regeneration using current font preferences and available assets after cache invalidation;
+- documented font fallback and diagnostics when a requested font is unavailable;
 - consistent font use across every reveal stage prepared together;
 - reuse of valid prepared images independently of subsequent font-file changes;
 - actionable failure when no usable font resource can be resolved.
 
 Use deterministic random sources where required.
 
-Test background and decoration layer ordering, RGBA transparency, consistent composition across reveal stages, and plain output for `"none"`. Verify warning-based recovery for missing or unusable committed resources, preservation of committed identifiers and effective geometry, and reuse of valid artifacts after resource changes.
+Test ordered multi-layer decoration composition, all QR conditions, RGBA transparency, decoration-wide AND per-layer tintability, the untinted-accent case, consistent composition across reveal stages, and plain output for `"none"`. Verify diagnostics and established fallbacks for missing or unusable resources, and that a valid cached set is reused without checking resource changes.
 
-Test background cover scaling and centred cropping and decoration contain scaling and centring for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results.
+Test background cover scaling and centered cropping and decoration `contain` scaling for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results. Test nine-slice corners, preservation of resolved corner dimensions across 4:3, 16:9, and 16:10 canvases, edge stretching, centered edge cropping, center stretching, source-pixel bounds, destinations too small for preserved corners, crop destinations longer than available source segments, and deterministic rounding without gaps or overlaps.
 
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 
@@ -1414,13 +1364,15 @@ Visual inspection remains appropriate for typography and layout quality.
 
 ### Hardware validation
 
-Validate hardware-dependent behavior on the supported display.
+Validate hardware-dependent behavior on the supported display, and verify that destination adaptation remains a backend responsibility independent of the renderer's global output geometry.
 
 Hardware validation should include:
 
 - driver initialization;
 - complete image transfer and refresh;
-- correct landscape orientation and representative color rendering;
+- backend adaptation of globally prepared images to the Waveshare's native 1600 × 1200 landscape panel, including any selected scaling, cropping, padding, rotation, dithering, or color conversion policy;
+- correct destination orientation and representative color rendering;
+- representative resolution-independent output on a non-e-paper destination;
 - repeated scheduled updates;
 - controller sleep and subsequent use;
 - retention of the displayed image after sleep;
@@ -1436,9 +1388,7 @@ Do not claim a Raspberry Pi model is supported solely because it uses a compatib
 
 ### Resource validation
 
-Measure memory use, processing time, and storage requirements on representative hardware when those characteristics materially affect supported deployment targets.
-
-In particular, validate the Raspberry Pi Zero 2 W before declaring it supported.
+Measure memory use, image-preparation time, and storage requirements on the Raspberry Pi 3B+ when those characteristics materially affect supported deployment targets. Do not reject rendering-quality decisions solely because they add work to infrequent daily image preparation.
 
 Do not introduce caching, concurrency, or performance optimization without evidence that it improves an observed limitation.
 
@@ -1501,7 +1451,7 @@ User-authored content and configuration should not require write access from the
 
 Keep user-authored content separate from application code and generated state.
 
-Persistent snapshots, histories, and prepared images must survive application restarts and ordinary software updates.
+Valid current-format selection state and histories must survive application restarts. Prepared images are disposable and may be regenerated. During prerelease development, incompatible state schemas may require `refrain --reset`; compatibility with internal schemas from prior development is not required.
 
 Avoid writing runtime state into the installed Python package directory.
 
@@ -1509,9 +1459,9 @@ Define and document platform-standard per-user paths rather than assuming a part
 
 ### Runtime updates
 
-Application updates must not silently discard committed selections or histories.
+Application updates must not silently discard valid current-format selections or histories. Incompatible state from earlier prerelease development may require the explicit reset described above.
 
-Changes to persistent-state or content schemas require compatibility review.
+Persistent-state changes before the first release do not require migration from prior development schemas. Reassess compatibility when Refrain has released a public format; changes to public YAML schemas still require review against the documented interface.
 
 The initial release does not require automatic updates or remote deployment management.
 
