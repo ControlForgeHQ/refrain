@@ -9,7 +9,7 @@ from PIL import Image
 import refrain.__main__ as cli
 import refrain.application as application
 import refrain.decoration_diagnostic as diagnostic
-from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code
+from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code, resolve_qr_placement
 
 _CONFIG = """\
 display:
@@ -287,7 +287,7 @@ def test_snapshot_preferences_qr_and_fully_revealed(workspace, monkeypatch):
         assert snapshot.background is None
         assert snapshot.text_color is None
         assert snapshot.decoration_color is None
-        qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size)
+        qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size, resolve_qr_placement(image.size))
         try:
             left, top, _, _ = qr.geometry.bounds
             quiet_zone = qr.geometry.quiet_zone_pixels

@@ -236,6 +236,52 @@ def test_decoration_tintability_and_color_preference_are_optional(
         assert "decoration_color" in caplog.text
 
 
+def test_qr_placement_metadata_does_not_exclude_decoration_and_policy_is_loaded(tmp_path: Path, caplog) -> None:
+    package = tmp_path / "assets" / "decorations" / "frame"
+    _write_png(package / "frame.png", "RGBA")
+    _write_manifest(
+        package,
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "frame",
+            "image": "frame.png",
+            "qr_ready": False,
+            "qr_from_left": True,
+            "qr_centered": ["horizontal", "vertical"],
+        },
+    )
+    config_data = _config_data()
+    config_data["presentation"] = {"qr": {"enabled": False}}
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml", config_data))
+
+    assert config.qr_enabled is False
+    decoration = config.decorations["frame"]
+    assert decoration.qr_ready is False
+    assert decoration.qr_positioning == {
+        "qr_from_left": True,
+        "qr_centered": ["horizontal", "vertical"],
+    }
+    assert "frame" in config.decorations
+    assert "qr_from_left" not in caplog.text
+
+
+def test_malformed_qr_ready_uses_enabled_default_without_excluding_decoration(tmp_path: Path, caplog) -> None:
+    package = tmp_path / "assets" / "decorations" / "frame"
+    _write_png(package / "frame.png", "RGBA")
+    _write_manifest(
+        package,
+        "decoration.yaml",
+        {"format": 1, "id": "frame", "image": "frame.png", "qr_ready": "false"},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert config.decorations["frame"].qr_ready is True
+    assert "qr_ready" in caplog.text
+
+
 @pytest.mark.parametrize(
     "font_faces",
     [None, [], "bad", {"byline": "italic"}, {"source": None}, {"quotation": ""}, {"source": "bad face"}],

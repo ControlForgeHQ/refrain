@@ -85,7 +85,7 @@ def validate_presentation_insets(insets: PresentationInsets, working_size: tuple
     return bounds
 
 
-def _round_half_up(numerator: int, denominator: int) -> int:
+def round_half_up(numerator: int, denominator: int) -> int:
     return (2 * numerator + denominator) // (2 * denominator)
 
 
@@ -104,10 +104,10 @@ def resolve_presentation_geometry(
 
     left, top, right, bottom = working_region
     output_region = (
-        _round_half_up(left * output_width, width),
-        _round_half_up(top * output_height, height),
-        _round_half_up(right * output_width, width),
-        _round_half_up(bottom * output_height, height),
+        round_half_up(left * output_width, width),
+        round_half_up(top * output_height, height),
+        round_half_up(right * output_width, width),
+        round_half_up(bottom * output_height, height),
     )
     if (
         output_region[0] < 0
@@ -137,6 +137,7 @@ __all__ = [
     "PresentationGeometryError",
     "PresentationInsets",
     "REFERENCE_SIZE",
+    "round_half_up",
     "resolve_presentation_geometry",
     "validate_output_size",
     "validate_presentation_insets",

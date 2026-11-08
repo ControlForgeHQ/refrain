@@ -91,6 +91,7 @@ def _configuration(
     default_fonts: tuple[str, ...] | None = None,
     default_backgrounds: tuple[str, ...] = ("none",),
     default_decorations: tuple[str, ...] = ("none",),
+    qr_enabled: bool = True,
 ) -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),
@@ -104,6 +105,7 @@ def _configuration(
         default_fonts=tuple(fonts) if default_fonts is None else default_fonts,
         min_font_size=min_font_size,
         max_font_size=max_font_size,
+        qr_enabled=qr_enabled,
         backgrounds={} if backgrounds is None else backgrounds,
         default_backgrounds=default_backgrounds,
         decorations={} if decorations is None else decorations,
@@ -295,10 +297,77 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
         assert all(image.mode == "RGB" and image.size == (1600, 1200) for image in images)
         assert images[0].getpixel((10, 10)) == (200, 20, 40)
         for image in images[1:]:
-            assert image.crop((1437, 1037, 1560, 1160)).tobytes() == images[0].crop((1437, 1037, 1560, 1160)).tobytes()
-        assert images[0].getpixel((1437, 1037)) == (255, 255, 255)
-        assert images[0].getpixel((1449, 1049)) == (0, 0, 0)
+            assert image.crop((1467, 1067, 1590, 1190)).tobytes() == images[0].crop((1467, 1067, 1590, 1190)).tobytes()
+        assert images[0].getpixel((1467, 1067)) == (255, 255, 255)
+        assert images[0].getpixel((1479, 1079)) == (0, 0, 0)
         assert snapshot.decoration == "overlay"
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize("reason", ["policy", "decoration"])
+def test_intentional_qr_disabling_skips_placement_without_warning(monkeypatch, caplog, reason: str) -> None:
+    snapshot = replace(
+        make_snapshot("lora"),
+        decoration="frame" if reason == "decoration" else None,
+    )
+    decoration = DecorationResource("frame", Path("/unused.png"), False, qr_ready=reason != "decoration")
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        decorations={"frame": decoration},
+        qr_enabled=reason != "policy",
+    )
+    monkeypatch.setattr(
+        preparation,
+        "resolve_qr_placement",
+        lambda *_: pytest.fail("disabled QR must not resolve placement"),
+    )
+    images = _prepare_daily_images(snapshot, (CompositionVisibility(),), configuration)
+    try:
+        assert len(images) == 1
+        assert "QR generation is disabled" not in caplog.text
+    finally:
+        for image in images:
+            image.close()
+
+
+def test_invalid_qr_placement_warns_before_artwork_and_preserves_decoration(monkeypatch, caplog) -> None:
+    snapshot = replace(make_snapshot("lora"), decoration="frame")
+    decoration = DecorationResource(
+        "frame",
+        Path("/unused.png"),
+        False,
+        qr_positioning={"qr_from_left": -1},
+    )
+    configuration = _configuration(_FONT_REGISTRY, decorations={"frame": decoration})
+    events: list[str] = []
+    resolve_placement = preparation.resolve_qr_placement
+    apply_decoration = preparation._apply_daily_decoration
+
+    def record_placement(*args, **kwargs):
+        events.append("placement")
+        return resolve_placement(*args, **kwargs)
+
+    def record_artwork(*args, **kwargs):
+        events.append("artwork")
+        return apply_decoration(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "resolve_qr_placement", record_placement)
+    monkeypatch.setattr(preparation, "_apply_daily_decoration", record_artwork)
+    monkeypatch.setattr(
+        preparation,
+        "render_qr_code",
+        lambda *_args, **_kwargs: pytest.fail("suppressed QR must not be rasterized"),
+    )
+
+    images = _prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), configuration)
+    try:
+        assert len(images) == 3
+        assert events == ["placement", "artwork"]
+        assert snapshot.decoration == "frame"
+        assert "QR generation is disabled for this preparation" in caplog.text
+        assert "qr_from_left must be a nonnegative integer" in caplog.text
     finally:
         for image in images:
             image.close()

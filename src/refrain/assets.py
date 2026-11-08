@@ -392,6 +392,12 @@ def discover_decorations(
                     "text_color",
                     "tintable",
                     "decoration_color",
+                    "qr_ready",
+                    "qr_from_left",
+                    "qr_from_right",
+                    "qr_from_top",
+                    "qr_from_bottom",
+                    "qr_centered",
                 },
                 report,
             )
@@ -445,6 +451,17 @@ def discover_decorations(
             if "tintable" in data and type(tintable) is not bool:
                 report(f"{field}.tintable", "must be a YAML boolean; tinting is disabled", logging.WARNING)
                 tintable = False
+            qr_ready = data.get("qr_ready", True)
+            if "qr_ready" in data and type(qr_ready) is not bool:
+                report(f"{field}.qr_ready", "must be a YAML boolean; QR generation remains enabled", logging.WARNING)
+                qr_ready = True
+            qr_positioning = MappingProxyType(
+                {
+                    key: data[key]
+                    for key in ("qr_from_left", "qr_from_right", "qr_from_top", "qr_from_bottom", "qr_centered")
+                    if key in data
+                }
+            )
             resource = DecorationResource(
                 identifier=identifier,
                 path=image_path,
@@ -456,6 +473,8 @@ def discover_decorations(
                 text_color=preferred_text_color,
                 tintable=tintable,
                 decoration_color=preferred_decoration_color,
+                qr_ready=qr_ready,
+                qr_positioning=qr_positioning,
                 manifest=manifest,
             )
             _validate_image_candidate(

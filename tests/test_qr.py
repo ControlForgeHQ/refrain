@@ -5,12 +5,15 @@ import qrcode
 
 from refrain.qr import (
     PRODUCTION_QR_PARAMETERS,
+    QR_ALLOCATION_SIZE,
     REPOSITORY_URL,
     QRCodeGenerationError,
     QRCodeParameters,
+    QRCodePlacementError,
     qr_parameters_from_metadata,
     qr_parameters_to_metadata,
     render_qr_code,
+    resolve_qr_placement,
 )
 from refrain.qr_diagnostic import QRCalibrationParameters, create_qr_calibration_image
 
@@ -128,3 +131,106 @@ def test_qr_geometry_and_capacity_failures_are_actionable() -> None:
             QRCodeParameters("x" * 300, 4, "M", 3, 4, 40, 40),
             (1600, 1200),
         )
+
+
+@pytest.mark.parametrize(
+    ("output_size", "working_size", "allocation_bounds", "module_size"),
+    [
+        ((1600, 1200), (3200, 2400), (1467, 1067, 1590, 1190), 3),
+        ((1920, 1080), (3840, 2160), (1787, 947, 1910, 1070), 3),
+        ((800, 600), (3200, 2400), (734, 534, 795, 595), 1),
+        ((3840, 2160), (3840, 2160), (3574, 1894, 3820, 2140), 6),
+        ((3840, 2400), (3840, 2400), (3574, 2134, 3820, 2380), 6),
+    ],
+)
+def test_fixed_working_allocation_maps_to_output_and_selects_largest_module(
+    output_size: tuple[int, int],
+    working_size: tuple[int, int],
+    allocation_bounds: tuple[int, int, int, int],
+    module_size: int,
+) -> None:
+    placement = resolve_qr_placement(output_size)
+
+    assert QR_ALLOCATION_SIZE == 246
+    assert (placement.working_bounds[2] - placement.working_bounds[0]) == 246
+    assert (placement.working_bounds[3] - placement.working_bounds[1]) == 246
+    assert placement.image_size == output_size
+    assert placement.allocation_bounds == allocation_bounds
+    assert placement.module_size == module_size
+    assert placement.footprint_size == (module_size * 41, module_size * 41)
+    assert placement.working_bounds[2] <= working_size[0]
+    assert placement.working_bounds[3] <= working_size[1]
+
+
+@pytest.mark.parametrize(
+    ("positioning", "expected"),
+    [
+        ({"qr_from_left": 20, "qr_from_top": 20}, (20, 20, 266, 266)),
+        ({"qr_from_right": 20, "qr_from_top": 20}, (2934, 20, 3180, 266)),
+        ({"qr_from_left": 20, "qr_from_bottom": 20}, (20, 2134, 266, 2380)),
+        ({"qr_centered": "horizontal", "qr_from_top": 20}, (1477, 20, 1723, 266)),
+        ({"qr_centered": "horizontal", "qr_from_bottom": 20}, (1477, 2134, 1723, 2380)),
+        ({"qr_centered": "vertical", "qr_from_left": 20}, (20, 1077, 266, 1323)),
+        ({"qr_centered": "vertical", "qr_from_right": 20}, (2934, 1077, 3180, 1323)),
+        ({"qr_from_left": 0, "qr_from_top": 0}, (0, 0, 246, 246)),
+        ({"qr_from_left": 2954, "qr_from_top": 2154}, (2954, 2154, 3200, 2400)),
+    ],
+)
+def test_qr_positioning_methods_resolve_each_axis_independently(
+    positioning: dict[str, object], expected: tuple[int, int, int, int]
+) -> None:
+    assert resolve_qr_placement((1600, 1200), positioning).working_bounds == expected
+
+
+@pytest.mark.parametrize(
+    "positioning",
+    [
+        {"qr_from_left": -1},
+        {"qr_from_right": True},
+        {"qr_from_top": 1.5},
+        {"qr_from_bottom": "20"},
+        {"qr_from_left": None},
+        {"qr_from_left": 20, "qr_from_right": 20},
+        {"qr_centered": "horizontal", "qr_from_left": 20},
+        {"qr_centered": "vertical", "qr_from_bottom": 20},
+        {"qr_centered": ["horizontal", "vertical"]},
+        {"qr_centered": {"horizontal": True}},
+        {"qr_centered": None},
+        {"qr_centered": "both"},
+        {"qr_from_right": 2955},
+        {"qr_from_bottom": 2155},
+    ],
+)
+def test_invalid_or_conflicting_qr_positioning_is_rejected(positioning: dict[str, object]) -> None:
+    with pytest.raises(QRCodePlacementError):
+        resolve_qr_placement((1600, 1200), positioning)
+
+
+def test_small_valid_allocation_centers_footprint_with_half_up_rounding() -> None:
+    placement = resolve_qr_placement((548, 411), {"qr_from_left": 1, "qr_from_top": 3})
+
+    assert placement.allocation_bounds == (0, 1, 42, 43)
+    assert placement.allocation_size == (42, 42)
+    assert placement.module_size == 1
+    assert placement.bounds == (1, 2, 41, 42)
+
+
+def test_insufficient_output_resolution_suppresses_complete_symbol() -> None:
+    with pytest.raises(QRCodePlacementError, match="complete 41-module"):
+        resolve_qr_placement((80, 60))
+
+
+def test_production_raster_uses_resolved_integer_fit_and_allocation() -> None:
+    placement = resolve_qr_placement((1600, 1200))
+    result = render_qr_code(PRODUCTION_QR_PARAMETERS, (1600, 1200), placement)
+    try:
+        assert result.geometry.version == 4
+        assert result.geometry.symbol_modules == 33
+        assert result.geometry.module_size == 3
+        assert result.geometry.footprint_size == (123, 123)
+        assert result.geometry.bounds == (1467, 1067, 1589, 1189)
+        assert result.geometry.allocation_bounds == (1467, 1067, 1590, 1190)
+        assert result.image.mode == "RGB"
+        assert set(result.image.get_flattened_data()) <= {(0, 0, 0), (255, 255, 255)}
+    finally:
+        result.image.close()
