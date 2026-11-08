@@ -60,7 +60,7 @@ display:
 information_view:
   duration: 0
 layout:
-  presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.55}
+  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
     default: ["lora"]
   text: {min_font_size: 28, max_font_size: 100}
@@ -186,7 +186,7 @@ def test_decoration_preferences_remain_semantic_content(workspace: Workspace) ->
         "custom",
         font="source-sans-3",
         background="hex",
-        presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
+        presentation_insets={"left": 461, "right": 691, "top": 389, "bottom": 475},
     )
     workspace.config.write_text(
         _CONFIG.replace(
@@ -240,7 +240,7 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
         "custom",
         font="source-sans-3",
         background="hex",
-        presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
+        presentation_insets={"left": 461, "right": 691, "top": 389, "bottom": 475},
     )
     workspace.config.write_text(
         _CONFIG.replace(
@@ -371,7 +371,7 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
     write_decoration_manifest(
         package,
         "custom",
-        presentation_region={"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+        presentation_insets={"left": 768, "right": 768, "top": 648, "bottom": 648},
     )
     workspace.config.write_text(
         _CONFIG.replace(
@@ -383,7 +383,7 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
     first, first_display = workspace.run(at(10, 7))
     snapshot = first.state.snapshot
     assert snapshot.decoration is None
-    assert first_display.images[-1].getpixel((10, 10)) == (227, 137, 147)
+    assert first_display.images[-1].getpixel((250, 10)) == (227, 137, 147)
 
     overlay.unlink()
     for artifact in png_files(workspace.artifacts):
@@ -391,7 +391,7 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
     second, second_display = workspace.run(at(10, 7))
 
     assert second.state == first.state
-    assert second_display.images[-1].getpixel((10, 10)) == (255, 255, 255)
+    assert second_display.images[-1].getpixel((250, 10)) == (255, 255, 255)
     assert "decoration identifier 'custom' is unavailable" in caplog.text
 
 
@@ -464,9 +464,9 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert state.repetition_history == {snapshot.quotation_identity}
     assert len(workspace.history_records()) == 1
-    assert display.sizes == [(1600, 1200)] and display.closed == 1
-    assert display.images[0].getpixel((1437, 1037)) == (255, 255, 255)
-    assert display.images[0].getpixel((1449, 1049)) == (0, 0, 0)
+    assert display.sizes == [(1920, 1080)] and display.closed == 1
+    assert display.images[0].getpixel((1757, 917)) == (255, 255, 255)
+    assert display.images[0].getpixel((1769, 929)) == (0, 0, 0)
     assert len(png_files(workspace.artifacts)) == 3
 
 
@@ -506,7 +506,7 @@ def test_debug_layout_does_not_guess_region_for_cached_artifact_after_resource_c
     write_decoration_manifest(
         package,
         "custom",
-        presentation_region={"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+        presentation_insets={"left": 768, "right": 768, "top": 648, "bottom": 648},
     )
     ordinary(workspace, extra='decoration: "custom"\n')
     _, baseline_display = workspace.run(at(10, 7))
@@ -523,7 +523,7 @@ def test_debug_layout_does_not_guess_region_for_cached_artifact_after_resource_c
     write_decoration_manifest(
         package,
         "custom",
-        presentation_region={"x": 0.4, "y": 0.5, "width": 0.5, "height": 0.4},
+        presentation_insets={"left": 1536, "right": 384, "top": 1080, "bottom": 216},
     )
     _, debug_display = workspace.run(at(10, 7), debug_layout=True)
 
@@ -546,7 +546,7 @@ def test_debug_layout_uses_prepared_automatic_decoration_region_and_skips_unknow
     write_decoration_manifest(
         package,
         "custom",
-        presentation_region={"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
+        presentation_insets={"left": 768, "right": 768, "top": 648, "bottom": 648},
     )
     workspace.config.write_text(
         _CONFIG.replace(
@@ -560,12 +560,15 @@ def test_debug_layout_uses_prepared_automatic_decoration_region_and_skips_unknow
     first, first_display = workspace.run(at(10, 7), debug_layout=True)
     assert first.state.snapshot.decoration is None
     with Image.open(png_files(workspace.artifacts)[0]) as prepared:
-        assert first_display.images[0].getpixel((320, 360)) != prepared.getpixel((320, 360))
+        assert first_display.images[0].getpixel((384, 324)) != prepared.getpixel((384, 324))
         assert first_display.images[0].getpixel((160, 180)) == prepared.getpixel((160, 180))
 
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8")
-        .replace("x: 0.1, y: 0.15, width: 0.8, height: 0.55", "x: 0.3, y: 0.4, width: 0.4, height: 0.3")
+        .replace(
+            "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}",
+            "presentation_insets: {left: 100, right: 100, top: 100, bottom: 100}",
+        )
         .replace('default: ["custom"]', 'default: ["none"]'),
         encoding="utf-8",
     )
@@ -597,10 +600,10 @@ def test_one_shot_debug_layout_only_outlines_the_daily_presentation(workspace: W
     result, display = workspace.run(at(10, 7), debug_layout=True)
 
     assert result.state.revision == 1
-    assert display.sizes == [(1600, 1200), (1600, 1200)]
+    assert display.sizes == [(1920, 1080), (1920, 1080)]
     assert display.images[0].tobytes() != display.images[1].tobytes()
     assert display.images[0].tobytes() == prepared_information[0].tobytes()
-    assert display.images[1].getpixel((160, 300)) == (127, 127, 127)
+    assert display.images[1].getpixel((192, 162)) == (127, 127, 127)
     assert len(workspace.history_records()) == 1
     prepared_information[0].close()
     for image in display.images:
@@ -627,7 +630,7 @@ def test_one_shot_startup_advances_reveal_due_during_information_interval(worksp
     state = workspace.load()
     assert result.presented_stage == 1
     assert state.highest_reveal_stage == 1
-    assert [image.size for image in display.images] == [(1600, 1200), (1600, 1200)]
+    assert [image.size for image in display.images] == [(1920, 1080), (1920, 1080)]
     assert display.images[0].tobytes() != display.images[1].tobytes()
     assert state.revision == 1 and len(workspace.history_records()) == 1
 
@@ -699,9 +702,9 @@ def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspa
     )
 
     assert result.state.revision == 1
-    assert all(display.sizes == [(1600, 1200)] and display.closed == 1 for display in displays.values())
+    assert all(display.sizes == [(1920, 1080)] and display.closed == 1 for display in displays.values())
     assert displays["window"].images[0].tobytes() == displays["image-server"].images[0].tobytes()
-    assert displays["window"].images[0].getpixel((160, 300)) == (127, 127, 127)
+    assert displays["window"].images[0].getpixel((192, 162)) == (127, 127, 127)
     for display in displays.values():
         for image in display.images:
             image.close()
@@ -720,7 +723,7 @@ def test_history_write_failure_does_not_interrupt_startup_presentation(
     result, display = workspace.run(at(10, 7))
 
     assert result.state.revision == 1
-    assert display.sizes == [(1600, 1200)]
+    assert display.sizes == [(1920, 1080)]
     assert len(png_files(workspace.artifacts)) == 3
     assert "was not recorded in global history" in caplog.text
 
@@ -959,7 +962,7 @@ def test_missing_or_corrupt_artifacts_are_recovered(workspace: Workspace, damage
         png_files(workspace.artifacts)[0].write_bytes(b"not a png")
     _, display = workspace.run(at(10, 9))
     assert workspace.load() == first
-    assert display.sizes == [(1600, 1200)]
+    assert display.sizes == [(1920, 1080)]
     assert len(png_files(workspace.artifacts)) >= 3
 
 
@@ -1499,14 +1502,14 @@ def test_information_view_preparation_failure_falls_back_to_daily_presentation(
         deadline = monotonic() + 2
         while not display.sizes and monotonic() < deadline:
             sleep(0.01)
-        assert display.sizes == [(1600, 1200)]
+        assert display.sizes == [(1920, 1080)]
         clock.set()
         return True
 
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, display, scheduling_wait=wait_for_daily_image)
 
     assert stages == [(1, 0)]
-    assert display.sizes == [(1600, 1200)]
+    assert display.sizes == [(1920, 1080)]
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
 
@@ -1578,7 +1581,7 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert clock.deadlines[:2] == [at(10, 12), at(10, 18)]
     assert workspace.load().highest_reveal_stage == 2
     assert len(workspace.history_records()) == 1
-    assert [image.getpixel((160, 300)) for image in display.images] == [(127, 127, 127)] * 3
+    assert [image.getpixel((192, 162)) for image in display.images] == [(127, 127, 127)] * 3
     for image in display.images:
         image.close()
 
@@ -1668,7 +1671,7 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
     assert wait_count == 2
     assert workspace.load().highest_reveal_stage == 1
     assert len(slow_updates) == 2 and slow_closed.is_set()
-    assert all(update.size == (1600, 1200) for update in slow_updates)
+    assert all(update.size == (1920, 1080) for update in slow_updates)
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="requires a graphical display")

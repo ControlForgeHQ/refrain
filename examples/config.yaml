@@ -22,11 +22,12 @@ display:
       port: 8080
 
 layout:
-  presentation_region:
-    x: 0.10
-    y: 0.15
-    width: 0.80
-    height: 0.70
+  output_size: [1920, 1080]
+  presentation_insets:
+    left: 384
+    right: 384
+    top: 324
+    bottom: 324
 
   fonts:
     default:

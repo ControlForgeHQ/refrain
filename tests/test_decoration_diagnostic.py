@@ -9,6 +9,7 @@ from PIL import Image
 import refrain.__main__ as cli
 import refrain.application as application
 import refrain.decoration_diagnostic as diagnostic
+from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code
 
 _CONFIG = """\
 display:
@@ -16,7 +17,7 @@ display:
     - type: window
     - type: image-server
 layout:
-  presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.7}
+  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
     default: [lora]
   backgrounds:
@@ -32,7 +33,7 @@ _MANIFEST = """\
 format: 1
 id: a-custom
 image: artwork.png
-presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.7}
+presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
 font: lora
 font_faces: {quotation: italic}
 background: none
@@ -104,7 +105,7 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     output = capsys.readouterr().out
     assert "Presentation: 1 of 12" in output
     assert "Quotation: SHORT" in output and "Quotation: LONG" in output
-    assert "Presentation region:" in output
+    assert "Literary output bounds: (192, 162, 1728, 918)" in output
     first, second = backends.values()
     assert len(first.images) == len(second.images) == len(snapshots)
     assert [image.tobytes() for image in first.images] == [image.tobytes() for image in second.images]
@@ -231,13 +232,19 @@ def test_reload_invalid_recover_image_manifest_and_debug_region(workspace, capsy
             if count == 1:
                 manifest.write_text("invalid: [", encoding="utf-8")
             elif count == 2:
-                manifest.write_text(_MANIFEST.replace("x: 0.1", "x: 0.2"), encoding="utf-8")
+                manifest.write_text(
+                    _MANIFEST.replace(
+                        "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}",
+                        "presentation_insets: {left: 768, right: 768, top: 648, bottom: 648}",
+                    ),
+                    encoding="utf-8",
+                )
                 with Image.new("RGBA", (80, 60), (255, 255, 255, 0)) as image:
                     image.save(package / "artwork.png")
             elif count == 3:
                 (package / "artwork.png").unlink()
             elif count == 4:
-                with Image.new("RGBA", (80, 60), (255, 0, 0, 255)) as image:
+                with Image.new("RGBA", (1600, 1200), (255, 0, 0, 255)) as image:
                     image.save(package / "artwork.png")
             return next(actions)
 
@@ -248,11 +255,14 @@ def test_reload_invalid_recover_image_manifest_and_debug_region(workspace, capsy
     )
     captured = capsys.readouterr()
     assert captured.out.count("Presentation: 1 of 12") == 5
-    assert "x=0.1" in captured.out and "x=0.2" in captured.out
+    assert "Literary output bounds: (192, 162, 1728, 918)" in captured.out
+    assert "Literary output bounds: (384, 324, 1536, 756)" in captured.out
     assert captured.err.count("Cannot present decoration") == 2
     assert len(backend.images) == 6
     assert backend.images[0].tobytes() != backend.images[2].tobytes()
-    assert backend.images[2].getpixel((320, 180)) == (127, 127, 127)
+    assert backend.images[2].getpixel((384, 324)) == (127, 127, 127)
+    assert backend.images[4].getpixel((320, 180)) == (0, 0, 255)
+    assert backend.images[4].getpixel((384, 324)) == (0, 0, 127)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -277,8 +287,14 @@ def test_snapshot_preferences_qr_and_fully_revealed(workspace, monkeypatch):
         assert snapshot.background is None
         assert snapshot.text_color is None
         assert snapshot.decoration_color is None
-        assert image.getpixel((1437, 1037)) == (255, 255, 255)
-        assert image.getpixel((1449, 1049)) == (0, 0, 0)
+        qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size)
+        try:
+            left, top, _, _ = qr.geometry.bounds
+            quiet_zone = qr.geometry.quiet_zone_pixels
+            assert image.getpixel((left, top)) == (255, 255, 255)
+            assert image.getpixel((left + quiet_zone, top + quiet_zone)) == (0, 0, 0)
+        finally:
+            qr.image.close()
         image.close()
     assert all(stages[0].quotation and stages[0].source and stages[0].attribution for _, stages in captured)
 

@@ -24,7 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 class WaveshareDisplayBackend:
     """Present complete Pillow images on the Waveshare 13.3-inch E panel."""
 
-    _SUPPORTED_SIZES = {(1200, 1600), (1600, 1200)}
+    _NATIVE_SIZE = (1600, 1200)
     _SUPPORTED_MODES = {"RGB"}
     _BUFFER_LENGTH = 960_000
 
@@ -61,10 +61,6 @@ class WaveshareDisplayBackend:
         """Synchronously present a complete image without changing the caller's image."""
         if not isinstance(image, Image.Image):
             raise DisplayBackendUpdateError("image must be a Pillow Image.Image instance")
-        if image.size not in self._SUPPORTED_SIZES:
-            raise DisplayBackendUpdateError(
-                f"image dimensions must be 1200 x 1600 or 1600 x 1200; got {image.width} x {image.height}"
-            )
         if image.mode not in self._SUPPORTED_MODES:
             raise DisplayBackendUpdateError(
                 f"image mode must be RGB; got {image.mode!r}. Alpha and palette transparency are unsupported"
@@ -78,9 +74,14 @@ class WaveshareDisplayBackend:
                     "cannot update a Waveshare display after an unrecoverable hardware failure", recoverable=False
                 )
             try:
-                driver_image = image.copy()
+                if image.size == self._NATIVE_SIZE:
+                    driver_image = image.copy()
+                else:
+                    driver_image = image.resize(self._NATIVE_SIZE, Image.Resampling.LANCZOS)
             except Exception as error:
-                raise DisplayBackendUpdateError(f"could not copy the image for display: {error}") from error
+                raise DisplayBackendUpdateError(
+                    f"could not adapt the image to the 1600 x 1200 Waveshare display: {error}"
+                ) from error
 
             try:
                 buffer = self._invoke(

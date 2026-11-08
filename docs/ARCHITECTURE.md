@@ -1334,7 +1334,7 @@ Version 0.1 provides three built-in display backends:
 
 All configured backends receive the same complete, globally prepared final-resolution image for each reveal stage. Backend selection does not introduce independent content selection, reveal scheduling, or core presentation geometry.
 
-The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux.
+The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux. Its image-display area matches the supplied image dimensions and presents the image at native pixel size. A later update with different dimensions resizes the display area; it does not resample, crop, or letterbox the image.
 
 The window backend owns its GUI event loop and keeps the window responsive between synchronous image updates. It replaces the existing image in one window and releases that window when `close()` returns.
 
@@ -1349,13 +1349,13 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare panel's native output is 1600 × 1200 landscape. The backend adapts the shared final-resolution image to that destination as needed; its policy may scale, crop, pad, rotate, dither, or convert colors without changing the prepared image or global renderer configuration. This physical destination does not require portrait support in the core renderer. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare panel's native output is 1600 × 1200 landscape. The backend passes an already native-size image through without resizing. Otherwise, it resizes the complete image directly to 1600 × 1200, scaling each axis independently without preserving aspect ratio, cropping, padding, or letterboxing. This destination adaptation never changes the prepared image or global renderer configuration. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
 
-The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. Each backend owns any transformation required to adapt the shared prepared image to its destination, including scaling, cropping, padding, rotation, dithering, or color conversion. It must not mutate the image supplied by the coordinator. A backend unable to perform its required transformation reports a backend-specific update failure; that failure does not alter global geometry, persistent state, selection, or publication to other backends.
+The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. The Waveshare backend owns the direct resize and hardware color conversion described above. The window backend displays at native pixel size, and the image-server backend exposes the prepared image without resizing or cropping. No backend may mutate the image supplied by the coordinator. A backend unable to perform its required operation reports a backend-specific update failure; that failure does not alter global geometry, persistent state, selection, or publication to other backends.
 
-The image-server backend serves the globally prepared image without unnecessary transformation. Backend transformation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
+The image-server backend serves the globally prepared image with its dimensions and pixel content unchanged. Backend adaptation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
 
 A completed `update()` indicates that the individual backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
 

@@ -11,7 +11,8 @@ from .artifacts import (
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
-from .config import ApplicationConfiguration, PresentationRegion
+from .config import ApplicationConfiguration
+from .geometry import PixelBounds
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -62,22 +63,22 @@ def recover_prepared_daily_images(
     if existing is not None:
         return existing
 
-    resolved_region = None
+    resolved_bounds: PixelBounds | None = None
 
-    def remember_region(region: PresentationRegion) -> None:
-        nonlocal resolved_region
-        resolved_region = region
+    def remember_bounds(bounds: PixelBounds) -> None:
+        nonlocal resolved_bounds
+        resolved_bounds = bounds
 
     images = prepare_daily_images(
         state.snapshot,
         ordered_stages,
         configuration,
         chooser=chooser,
-        on_resolved_region=remember_region,
+        on_resolved_bounds=remember_bounds,
     )
     try:
         artifact_set = artifact_store.store(state.revision, ordered_stages, images)
-        return replace(artifact_set, presentation_region=resolved_region)
+        return replace(artifact_set, literary_bounds=resolved_bounds)
     finally:
         for image in images:
             image.close()

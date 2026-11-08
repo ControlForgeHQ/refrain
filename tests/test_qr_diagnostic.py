@@ -38,7 +38,7 @@ display:
 information_view:
   duration: 0
 layout:
-  presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.55}
+  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
     default: ["lora"]
   text: {min_font_size: 28, max_font_size: 100}
@@ -88,7 +88,7 @@ def test_qr_generation_preserves_error_correction_and_exact_module_pixels(level:
         assert geometry.version == expected.version
         assert geometry.symbol_modules == expected.modules_count
         assert result.image.mode == "RGB"
-        assert result.image.size == (1600, 1200)
+        assert result.image.size == (1920, 1080)
         assert {color for _, color in result.image.getcolors(maxcolors=3)} <= {(0, 0, 0), (255, 255, 255)}
 
         symbol_left = geometry.bounds[0] + geometry.quiet_zone_pixels
@@ -166,11 +166,11 @@ def test_default_and_configured_geometry_uses_complete_footprint() -> None:
             (default.geometry.symbol_modules + 8) * 4,
             (default.geometry.symbol_modules + 8) * 4,
         )
-        assert default.geometry.bounds[2] == 1600 - 40 - 1
-        assert default.geometry.bounds[3] == 1200 - 40 - 1
+        assert default.geometry.bounds[2] == default.geometry.image_size[0] - 40 - 1
+        assert default.geometry.bounds[3] == default.geometry.image_size[1] - 40 - 1
         assert configured.geometry.quiet_zone_pixels == 3
-        assert configured.geometry.bounds[2] == 1600 - 17 - 1
-        assert configured.geometry.bounds[3] == 1200 - 9 - 1
+        assert configured.geometry.bounds[2] == configured.geometry.image_size[0] - 17 - 1
+        assert configured.geometry.bounds[3] == configured.geometry.image_size[1] - 9 - 1
     finally:
         default.image.close()
         configured.image.close()
@@ -180,7 +180,8 @@ def test_zero_offsets_and_exact_fit_boundary() -> None:
     exact = create_qr_calibration_image(
         QRCalibrationParameters(
             payload="https://example.com/", module_size=48, quiet_zone=0, right_offset=0, bottom_offset=0
-        )
+        ),
+        output_size=(1600, 1200),
     )
     try:
         assert exact.geometry.version == 2
@@ -193,11 +194,13 @@ def test_zero_offsets_and_exact_fit_boundary() -> None:
         create_qr_calibration_image(
             QRCalibrationParameters(
                 payload="https://example.com/", module_size=49, quiet_zone=0, right_offset=0, bottom_offset=0
-            )
+            ),
+            output_size=(1600, 1200),
         )
     with pytest.raises(QRCalibrationError, match=r"1239 x 1239.*available.*1600 x 1200"):
         create_qr_calibration_image(
-            QRCalibrationParameters(version=40, module_size=7, quiet_zone=0, right_offset=0, bottom_offset=0)
+            QRCalibrationParameters(version=40, module_size=7, quiet_zone=0, right_offset=0, bottom_offset=0),
+            output_size=(1600, 1200),
         )
 
 
@@ -348,8 +351,8 @@ def test_qr_diagnostic_uses_no_content_or_production_persistence_and_publishes_e
 
     assert output == tmp_path / "refrain-qr-test.png"
     assert output.is_file()
-    assert geometry.bounds[2] == 1600 - 13 - 1
-    assert geometry.bounds[3] == 1200 - 7 - 1
+    assert geometry.bounds[2] == geometry.image_size[0] - 13 - 1
+    assert geometry.bounds[3] == geometry.image_size[1] - 7 - 1
     assert f"QR requested version: {version if version is not None else 'auto'}" in caplog.text
     assert f"QR resolved version: {version if version is not None else geometry.version}" in caplog.text
     assert "QR footprint pixel bounds (inclusive)" in caplog.text

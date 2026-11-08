@@ -23,7 +23,7 @@ from refrain import (
     FontResource,
     PersistentStateStore,
     PreparedImageArtifactStore,
-    PresentationRegion,
+    PresentationInsets,
     Quotation,
     QuotationCandidate,
     RevealSchedule,
@@ -53,7 +53,8 @@ _CONFIGURATION = ApplicationConfiguration(
     day_start=time(6),
     content_directory=Path("/content"),
     reveal=RevealSchedule(time(12), time(18)),
-    presentation_region=PresentationRegion(0.1, 0.1, 0.8, 0.8),
+    output_size=(1920, 1080),
+    presentation_insets=PresentationInsets(384, 384, 216, 216),
     fonts=_FONT_REGISTRY,
     default_fonts=("committed-font",),
     min_font_size=12,
@@ -189,6 +190,21 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
     assert PersistentStateStore(state_path).load() == state
 
 
+def test_output_size_change_does_not_invalidate_a_complete_cached_set(
+    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, _state_path = committed_state
+    expected = _store_images(artifact_store, state)
+    changed_configuration = replace(_CONFIGURATION, output_size=(3840, 2400))
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected regeneration"))
+
+    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, changed_configuration)
+
+    assert recovered == expected
+    with recovered.load_stage(0) as image:
+        assert image.size == (1920, 1080)
+
+
 def test_valid_artifacts_are_reused_after_font_resource_changes(
     committed_state, artifact_store, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -262,7 +278,7 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
     try:
         for index, expected in enumerate(expected_images):
             with result.load_stage(index) as image:
-                assert image.size == (1600, 1200)
+                assert image.size == _CONFIGURATION.output_size
                 assert image.mode == "RGB"
                 assert image.tobytes() == expected.tobytes()
     finally:

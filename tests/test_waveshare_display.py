@@ -35,6 +35,7 @@ class SimulatedDriver:
     ) -> None:
         self.calls: list[str] = []
         self.images: list[Image.Image] = []
+        self.image_bytes: list[bytes] = []
         self.buffer = SimulatedBuffer(960_000) if buffer is None else buffer
         self.outcomes = outcomes or {}
         self.hooks = hooks or {}
@@ -55,6 +56,7 @@ class SimulatedDriver:
     def getbuffer(self, image: Image.Image) -> Any:
         self.images.append(image)
         image.putpixel((0, 0), (0, 0, 0))
+        self.image_bytes.append(image.tobytes())
         return self._call("getbuffer", self.buffer)
 
     def display(self, buffer: Any) -> Any:
@@ -87,6 +89,7 @@ def test_factory_constructs_waveshare_backend_and_updates_both_orientations(
 
     assert driver.calls == ["getbuffer", "Init", "display", "sleep"] * 2
     assert len(driver.images) == 2
+    assert all(driver_image.size == (1600, 1200) for driver_image in driver.images)
     assert all(driver_image is not original for driver_image, original in zip(driver.images, images, strict=True))
     assert [image.tobytes() for image in images] == original_pixels
     backend.close()
@@ -107,12 +110,47 @@ def test_invalid_images_are_rejected_before_hardware_operations(monkeypatch: pyt
 
     with pytest.raises(DisplayBackendUpdateError, match="Pillow Image.Image"):
         backend.update(object())  # type: ignore[arg-type]
-    with pytest.raises(DisplayBackendUpdateError, match="1200 x 1600 or 1600 x 1200"):
-        backend.update(Image.new("RGB", (1024, 768)))
     with pytest.raises(DisplayBackendUpdateError, match="mode must be RGB.*transparency"):
         backend.update(Image.new("RGBA", (1200, 1600), (1, 2, 3, 255)))
 
     assert driver.calls == []
+
+
+def test_non_native_landscape_image_is_stretched_directly_to_panel_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    driver = SimulatedDriver()
+    install_simulated_driver(monkeypatch, driver)
+    backend = create_display_backend("waveshare-13in3-e")
+    image = Image.new("RGB", (1920, 1080), "red")
+    image.putpixel((1919, 1079), (0, 0, 255))
+    expected = image.resize((1600, 1200), Image.Resampling.LANCZOS)
+    original = image.tobytes()
+
+    backend.update(image)
+
+    expected.putpixel((0, 0), (0, 0, 0))
+    assert driver.images[0].size == (1600, 1200)
+    assert driver.image_bytes[0] == expected.tobytes()
+    assert image.tobytes() == original
+    expected.close()
+    image.close()
+    backend.close()
+
+
+def test_native_size_image_skips_resizing(monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = SimulatedDriver()
+    install_simulated_driver(monkeypatch, driver)
+    backend = create_display_backend("waveshare-13in3-e")
+
+    def fail_resize(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("native-size images must not be resized")
+
+    monkeypatch.setattr(Image.Image, "resize", fail_resize)
+    backend.update(Image.new("RGB", (1600, 1200)))
+
+    assert driver.images[0].size == (1600, 1200)
+    backend.close()
 
 
 @pytest.mark.parametrize("buffer", [SimulatedBuffer(959_999), SimulatedBuffer(960_001), object()])

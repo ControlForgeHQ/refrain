@@ -13,18 +13,10 @@ from typing import Literal, Protocol
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-PixelBounds = tuple[int, int, int, int]
+from .geometry import PixelBounds
+
 PixelPosition = tuple[int, int]
 PresentationStyle = Literal["centered", "left-aligned"]
-
-
-class PresentationRegion(Protocol):
-    """Normalized presentation rectangle supplied by the caller."""
-
-    x: float
-    y: float
-    width: float
-    height: float
 
 
 class ResolvedFontData(Protocol):
@@ -108,24 +100,13 @@ class _MeasuredField:
     height: int
 
 
-def _validate_region(region: PresentationRegion) -> None:
-    try:
-        values = (region.x, region.y, region.width, region.height)
-    except AttributeError as error:
-        raise QuotationRenderError("presentation_region must provide x, y, width, and height") from error
-    if any(
-        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values
-    ):
-        raise QuotationRenderError("presentation_region coordinates must be finite numbers")
-    if (
-        region.x < 0
-        or region.y < 0
-        or region.width <= 0
-        or region.height <= 0
-        or region.x + region.width > 1
-        or region.y + region.height > 1
-    ):
-        raise QuotationRenderError("presentation_region must be a positive normalized rectangle inside the image")
+def _validate_region(region: PixelBounds, image_size: tuple[int, int]) -> None:
+    if not isinstance(region, tuple) or len(region) != 4 or any(type(value) is not int for value in region):
+        raise QuotationRenderError("literary bounds must contain four integer output-pixel edges")
+    left, top, right, bottom = region
+    width, height = image_size
+    if left < 0 or top < 0 or right > width or bottom > height or right <= left or bottom <= top:
+        raise QuotationRenderError("literary bounds must be a positive rectangle inside the output image")
 
 
 def _validate_sizes(min_font_size: int, max_font_size: int) -> None:
@@ -137,23 +118,12 @@ def _validate_sizes(min_font_size: int, max_font_size: int) -> None:
         raise QuotationRenderError("max_font_size must be greater than or equal to min_font_size")
 
 
-def _pixel_region(region: PresentationRegion, image_size: tuple[int, int]) -> PixelBounds:
-    _validate_region(region)
-    width, height = image_size
-    return (
-        math.floor(region.x * width),
-        math.floor(region.y * height),
-        math.ceil((region.x + region.width) * width),
-        math.ceil((region.y + region.height) * height),
-    )
-
-
-def annotate_presentation_region(image: Image.Image, region: PresentationRegion) -> Image.Image:
+def annotate_literary_region(image: Image.Image, region: PixelBounds) -> Image.Image:
     """Return a copy with a translucent outline around the literary presentation region."""
-    bounds = _pixel_region(region, image.size)
+    _validate_region(region, image.size)
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    left, top, right, bottom = bounds
+    left, top, right, bottom = region
     draw.rectangle((left, top, right - 1, bottom - 1), outline=(0, 0, 0, 128), width=2)
     background = image.convert("RGBA")
     try:
@@ -554,7 +524,7 @@ def _layout_at_size(
 def layout_composition(
     composition: LiteraryComposition,
     font: ResolvedFontData,
-    presentation_region: PresentationRegion,
+    literary_bounds: PixelBounds,
     image_size: tuple[int, int],
     min_font_size: int,
     max_font_size: int,
@@ -578,7 +548,7 @@ def layout_composition(
     width, height = image_size
     if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in image_size):
         raise QuotationRenderError("image dimensions must be positive integers")
-    _validate_region(presentation_region)
+    _validate_region(literary_bounds, image_size)
     _validate_sizes(min_font_size, max_font_size)
     if not isinstance(presentation_style, str) or presentation_style not in _STYLE_LAYOUTS:
         raise QuotationRenderError("presentation_style must be 'centered' or 'left-aligned'")
@@ -587,9 +557,7 @@ def layout_composition(
     attribution_font = font if attribution_font is None else attribution_font
     _validate_font(source_font)
     _validate_font(attribution_font)
-    pixel_region = _pixel_region(presentation_region, image_size)
-    if pixel_region[2] <= pixel_region[0] or pixel_region[3] <= pixel_region[1]:
-        raise QuotationRenderError("presentation_region is smaller than one pixel at the supplied image dimensions")
+    pixel_region = literary_bounds
 
     low, high = min_font_size, max_font_size
     best = _layout_at_size(
@@ -605,7 +573,7 @@ def layout_composition(
     )
     if best is None:
         raise QuotationRenderError(
-            f"literary composition does not fit within region {pixel_region} at "
+            f"literary composition does not fit within literary bounds {pixel_region} at "
             f"the minimum quotation font size {min_font_size}"
         )
     authored_line_count = len(composition.quotation.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
@@ -826,7 +794,6 @@ __all__ = [
     "CompositionVisibility",
     "BylineLayout",
     "LiteraryComposition",
-    "PresentationRegion",
     "PresentationStyle",
     "QuotationRenderError",
     "ResolvedFontData",

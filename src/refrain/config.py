@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import math
 import re
 from dataclasses import dataclass, field
 from datetime import time
@@ -19,6 +18,14 @@ from PIL import Image
 
 from ._yaml import load_yaml, yaml_error_location
 from .assets import parse_font_faces, valid_identifier
+from .geometry import (
+    DEFAULT_OUTPUT_SIZE,
+    DEFAULT_PRESENTATION_INSETS,
+    PresentationGeometryError,
+    PresentationInsets,
+    resolve_presentation_geometry,
+    validate_output_size,
+)
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view", "palette"}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
@@ -98,7 +105,7 @@ class DecorationResource:
     identifier: str
     path: Union[Path, Traversable]
     bundled: bool
-    presentation_region: PresentationRegion | None = None
+    presentation_insets: PresentationInsets | None = None
     font: str | None = None
     background: str | None = None
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
@@ -114,16 +121,6 @@ class RevealSchedule:
 
     source: time
     attribution: time
-
-
-@dataclass(frozen=True)
-class PresentationRegion:
-    """Normalized rectangle reserved for a literary composition."""
-
-    x: float
-    y: float
-    width: float
-    height: float
 
 
 @dataclass(frozen=True)
@@ -144,7 +141,8 @@ class ApplicationConfiguration:
     day_start: time
     content_directory: Path
     reveal: RevealSchedule
-    presentation_region: PresentationRegion
+    output_size: tuple[int, int]
+    presentation_insets: PresentationInsets
     fonts: Mapping[str, FontResource]
     default_fonts: tuple[str, ...]
     min_font_size: int
@@ -182,43 +180,60 @@ def _mapping(value: object, field: str, report: Callable[..., None]) -> dict[str
     return value
 
 
-def _parse_presentation_region(
+def _parse_output_size(value: object, field: str, report: Callable[..., None]) -> tuple[int, int]:
+    try:
+        return validate_output_size(value)
+    except PresentationGeometryError as error:
+        report(
+            field,
+            f"{error}; expected [width, height] in landscape 4:3, 16:9, or 16:10",
+            logging.ERROR,
+        )
+        return DEFAULT_OUTPUT_SIZE
+
+
+def _parse_presentation_insets(
     value: object,
     field: str,
     report: Callable[..., None],
     severity: int = logging.ERROR,
-) -> PresentationRegion | None:
+) -> PresentationInsets | None:
     if not isinstance(value, dict):
         report(field, "must be a mapping", severity)
         return None
-    _known_fields(value, {"x", "y", "width", "height"}, field, report)
-    values: dict[str, float] = {}
-    for coordinate in ("x", "y", "width", "height"):
-        coordinate_value = value.get(coordinate)
-        try:
-            finite = math.isfinite(coordinate_value)  # type: ignore[arg-type]
-        except (OverflowError, TypeError):
-            finite = False
-        if isinstance(coordinate_value, bool) or not isinstance(coordinate_value, (int, float)) or not finite:
-            report(f"{field}.{coordinate}", "is required and must be a finite number", severity)
+    _known_fields(value, {"left", "right", "top", "bottom"}, field, report)
+    values: dict[str, int] = {}
+    for edge in ("left", "right", "top", "bottom"):
+        edge_value = value.get(edge)
+        if type(edge_value) is not int or edge_value < 0:
+            report(
+                f"{field}.{edge}",
+                "is required and must be a nonnegative integer working-canvas pixel value",
+                severity,
+            )
         else:
-            values[coordinate] = float(coordinate_value)
+            values[edge] = edge_value
     if len(values) != 4:
         return None
-    x, y, width, height = (values[key] for key in ("x", "y", "width", "height"))
-    valid = True
-    for coordinate, condition, message in (
-        ("x", 0 <= x < 1, "must satisfy 0 <= x < 1"),
-        ("y", 0 <= y < 1, "must satisfy 0 <= y < 1"),
-        ("width", 0 < width <= 1, "must satisfy 0 < width <= 1"),
-        ("height", 0 < height <= 1, "must satisfy 0 < height <= 1"),
-        ("width", x + width <= 1, "x + width must not exceed 1"),
-        ("height", y + height <= 1, "y + height must not exceed 1"),
-    ):
-        if not condition:
-            report(f"{field}.{coordinate}", message, severity)
-            valid = False
-    return PresentationRegion(x=x, y=y, width=width, height=height) if valid else None
+    return PresentationInsets(**values)
+
+
+def _parse_decoration_insets(
+    value: object,
+    field: str,
+    report: Callable[..., None],
+    severity: int,
+    output_size: tuple[int, int],
+) -> PresentationInsets | None:
+    insets = _parse_presentation_insets(value, field, report, severity)
+    if insets is None:
+        return None
+    try:
+        resolve_presentation_geometry(output_size, insets)
+    except PresentationGeometryError as error:
+        report(field, f"is invalid for the configured output size: {error}", severity)
+        return None
+    return insets
 
 
 def _parse_time(value: object, field: str, report: Callable[..., None], *, fallback: str | None = None) -> time | None:
@@ -470,10 +485,28 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     reveal = RevealSchedule(reveal_times["source"], reveal_times["attribution"])
 
     layout = _mapping(data.get("layout", {}), "layout", report)
-    _known_fields(layout, {"presentation_region", "fonts", "backgrounds", "decorations", "text"}, "layout", report)
-    presentation_region = _parse_presentation_region(
-        layout.get("presentation_region", {}), "layout.presentation_region", report
+    _known_fields(
+        layout,
+        {"output_size", "presentation_insets", "fonts", "backgrounds", "decorations", "text"},
+        "layout",
+        report,
     )
+    if "output_size" not in layout:
+        use_default("layout.output_size", "[1920, 1080]")
+    output_size = _parse_output_size(layout.get("output_size", DEFAULT_OUTPUT_SIZE), "layout.output_size", report)
+    if "presentation_insets" not in layout:
+        use_default("layout.presentation_insets", "{left: 384, right: 384, top: 324, bottom: 324}")
+        presentation_insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
+    else:
+        presentation_insets = _parse_presentation_insets(
+            layout["presentation_insets"], "layout.presentation_insets", report
+        )
+    if presentation_insets is None:
+        presentation_insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
+    try:
+        resolve_presentation_geometry(output_size, presentation_insets)
+    except PresentationGeometryError as error:
+        report("layout.presentation_insets", str(error), logging.ERROR)
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
     _known_fields(fonts_data, {"default", "available", "font_faces"}, "layout.fonts", report)
@@ -582,7 +615,9 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         set(font_registry),
         set(background_registry),
         report,
-        _parse_presentation_region,
+        lambda value, field, reporter, severity=logging.ERROR: _parse_decoration_insets(
+            value, field, reporter, severity, output_size
+        ),
     )
 
     default_decorations = ("none",)
@@ -688,7 +723,8 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     if fatal_diagnostics:
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
 
-    assert presentation_region is not None
+    assert output_size is not None
+    assert presentation_insets is not None
     assert display_backends
     return ApplicationConfiguration(
         file=file,
@@ -696,7 +732,8 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         day_start=day_start,
         content_directory=content_directory,
         reveal=reveal,
-        presentation_region=presentation_region,
+        output_size=output_size,
+        presentation_insets=presentation_insets,
         fonts=MappingProxyType(font_registry),
         default_fonts=default_fonts,
         min_font_size=sizes["min_font_size"],

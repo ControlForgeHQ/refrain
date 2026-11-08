@@ -129,6 +129,7 @@ class WindowDisplayBackend:
             photo_image = self._image_tk.PhotoImage(image=image)
             self._label.configure(image=photo_image)
             self._photo_image = photo_image
+            self._root.geometry(f"{image.width}x{image.height}")
 
         with self._lock:
             if self._closed:

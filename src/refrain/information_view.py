@@ -8,7 +8,6 @@ import os
 import platform
 import re
 import sys
-from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 
@@ -19,7 +18,7 @@ from .persistence import ResolvedFont
 from .renderer import CompositionVisibility, LiteraryComposition, layout_composition, render_reveal_stages
 
 _LOGGER = logging.getLogger(__name__)
-_IMAGE_SIZE = (1600, 1200)
+_DESIGN_SIZE = (1600, 1200)
 _PAPER = "#FAF9F5"
 _INK = "#26332E"
 _MUTED = "#65716B"
@@ -36,14 +35,6 @@ _ATTRIBUTION = "Forge, Refrain Development Team"
 
 class InformationViewPreparationError(ValueError):
     """Raised when the complete information view cannot be rendered."""
-
-
-@dataclass(frozen=True)
-class _Region:
-    x: float
-    y: float
-    width: float
-    height: float
 
 
 def _read_font(name: str) -> ResolvedFont:
@@ -157,7 +148,7 @@ def _draw_fitted_text(
 
 
 def prepare_information_view(configuration: ApplicationConfiguration) -> Image.Image:
-    """Render one complete 1600 × 1200 information image without consulting daily content or state."""
+    """Render one complete information image at the configured output dimensions."""
     if not isinstance(configuration, ApplicationConfiguration):
         raise InformationViewPreparationError("configuration must be an ApplicationConfiguration")
 
@@ -168,12 +159,12 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
     try:
         quotation_font = _read_font("lora")
         supporting_font = _read_font("source-sans-3")
-        background = Image.new("RGB", _IMAGE_SIZE, _PAPER)
+        background = Image.new("RGB", _DESIGN_SIZE, _PAPER)
         draw = ImageDraw.Draw(background)
 
         top = _REGION_MARGIN
         left = _REGION_MARGIN
-        right = _IMAGE_SIZE[0] - _REGION_MARGIN
+        right = _DESIGN_SIZE[0] - _REGION_MARGIN
         corner_width = 530
 
         # Upper-left corner
@@ -288,8 +279,8 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         layout = layout_composition(
             composition,
             quotation_font,
-            _Region(0.10, 0.25, 0.80, 0.50),
-            _IMAGE_SIZE,
+            (160, 300, 1440, 900),
+            _DESIGN_SIZE,
             min_font_size=42,
             max_font_size=56,
             presentation_style="centered",
@@ -303,6 +294,10 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         background.close()
         background = None
         image = rendered[0]
+        if image.size != configuration.output_size:
+            resized = image.resize(configuration.output_size, Image.Resampling.LANCZOS)
+            image.close()
+            image = resized
         draw = ImageDraw.Draw(image)
 
         return image

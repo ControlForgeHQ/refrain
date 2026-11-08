@@ -31,9 +31,13 @@ class FakeRoot:
         self.destroyed = False
         self.title_text = ""
         self.close_protocol: Any = None
+        self.window_geometry: list[str] = []
 
     def title(self, value: str) -> None:
         self.title_text = value
+
+    def geometry(self, value: str) -> None:
+        self.window_geometry.append(value)
 
     def protocol(self, _name: str, callback: Any) -> None:
         self.close_protocol = callback
@@ -145,6 +149,7 @@ def test_window_updates_replace_image_and_preserve_caller_image(monkeypatch: pyt
     assert len(roots) == 1
     assert roots[0].mainloop_running
     assert roots[0].title_text == "Refrain"
+    assert roots[0].window_geometry == ["4x3", "2x5"]
     assert len(backend._label.images) == 2
     assert presented_images == [first, second]
     assert [(image.mode, image.size, image.tobytes()) for image in (first, second)] == before

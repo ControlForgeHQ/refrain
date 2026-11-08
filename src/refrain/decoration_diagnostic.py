@@ -21,9 +21,10 @@ from .application import (
     _stage_publication_image,
 )
 from .assets import discover_decorations
-from .config import _BUNDLED_DECORATION_IDS, PresentationRegion, _parse_presentation_region
+from .config import _BUNDLED_DECORATION_IDS, _parse_presentation_insets
 from .content import ContentEntry, Quotation, normalize_quotation
 from .display.coordinator import DisplayPublicationCoordinator
+from .geometry import PixelBounds, resolve_presentation_geometry
 from .preparation import prepare_daily_images
 from .scheduling import resolve_reveal_stages
 
@@ -96,7 +97,7 @@ def _discover(configuration):
         set(configuration.fonts),
         set(configuration.backgrounds),
         report,
-        _parse_presentation_region,
+        lambda value, field, reporter, severity=0: _parse_presentation_insets(value, field, reporter, severity),
     )
     return registry, problems
 
@@ -133,11 +134,11 @@ def _render(configuration, identifier, manifest, variant, debug_layout, initial_
     )
     snapshot = _build_snapshot(configuration, entry, quotation, date(2000, 1, 1))
     stages = resolve_reveal_stages(snapshot)
-    resolved_region: PresentationRegion | None = None
+    resolved_bounds: PixelBounds | None = None
 
-    def remember_region(region: PresentationRegion) -> None:
-        nonlocal resolved_region
-        resolved_region = region
+    def remember_bounds(bounds: PixelBounds) -> None:
+        nonlocal resolved_bounds
+        resolved_bounds = bounds
 
     image = prepare_daily_images(
         snapshot,
@@ -145,9 +146,9 @@ def _render(configuration, identifier, manifest, variant, debug_layout, initial_
         configuration,
         chooser=_StableChoices(identifier),
         strict_decoration=True,
-        on_resolved_region=remember_region,
+        on_resolved_bounds=remember_bounds,
     )[0]
-    return _stage_publication_image(image, resolved_region, debug_layout), snapshot
+    return _stage_publication_image(image, resolved_bounds, debug_layout), snapshot
 
 
 def run_decoration_diagnostic(
@@ -186,14 +187,15 @@ def run_decoration_diagnostic(
                         configuration, identifier, manifests[identifier], variant, debug_layout, initial_warnings
                     )
                     decoration = configuration.decorations.get(snapshot.decoration)
-                    region = (
-                        configuration.presentation_region
-                        if decoration is None or decoration.presentation_region is None
-                        else decoration.presentation_region
+                    insets = (
+                        configuration.presentation_insets
+                        if decoration is None or decoration.presentation_insets is None
+                        else decoration.presentation_insets
                     )
+                    geometry = resolve_presentation_geometry(configuration.output_size, insets)
                     print(
-                        f"Presentation region: x={region.x} y={region.y} "
-                        f"width={region.width} height={region.height}",
+                        f"Literary output bounds: {geometry.output_region} "
+                        f"(working canvas {geometry.working_size[0]} x {geometry.working_size[1]})",
                         flush=True,
                     )
                     serial += 1

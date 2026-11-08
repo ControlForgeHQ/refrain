@@ -15,7 +15,6 @@ from pathlib import Path
 
 from PIL import Image
 
-from .config import PresentationRegion
 from .renderer import CompositionVisibility
 
 _MODES = {"1", "L", "LA", "RGB", "RGBA"}
@@ -140,7 +139,7 @@ class PreparedImageArtifactSet:
     mode: str
     stage_paths: tuple[Path, ...]
     _digests: tuple[str, ...]
-    presentation_region: PresentationRegion | None = field(default=None, compare=False, repr=False)
+    literary_bounds: tuple[int, int, int, int] | None = field(default=None, compare=False, repr=False)
 
     def load_stage(self, stage: int) -> Image.Image:
         """Decode one independent image, rechecking integrity since initial validation."""

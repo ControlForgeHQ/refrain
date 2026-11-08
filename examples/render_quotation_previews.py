@@ -11,12 +11,18 @@ from PIL import Image
 from refrain import (
     CompositionVisibility,
     LiteraryComposition,
-    PresentationRegion,
+    PresentationInsets,
     ResolvedFont,
     layout_composition,
     render_reveal_stages,
+    resolve_presentation_geometry,
 )
 
+_OUTPUT_SIZE = (1920, 1080)
+_LITERARY_BOUNDS = resolve_presentation_geometry(
+    _OUTPUT_SIZE,
+    PresentationInsets(left=384, right=384, top=324, bottom=324),
+).output_region
 _COMPOSITIONS = {
     "both-fields": (
         LiteraryComposition(
@@ -66,7 +72,6 @@ def main() -> None:
     output_directory = parser.parse_args().output_directory
     output_directory.mkdir(parents=True, exist_ok=True)
 
-    region = PresentationRegion(x=0.1, y=0.225, width=0.8, height=0.55)
     for font_identifier, filename in _FONTS.items():
         font_resource = files("refrain").joinpath("assets", "fonts", font_identifier, filename)
         with font_resource.open("rb") as font_file:
@@ -76,11 +81,11 @@ def main() -> None:
 
         for composition_name, (composition, stages) in _COMPOSITIONS.items():
             for style in _STYLES:
-                background = Image.new("RGB", (1600, 1200), "#FFFFFF")
+                background = Image.new("RGB", _OUTPUT_SIZE, "#FFFFFF")
                 layout = layout_composition(
                     composition,
                     font,
-                    region,
+                    _LITERARY_BOUNDS,
                     background.size,
                     min_font_size=32,
                     max_font_size=104,

@@ -48,7 +48,7 @@ def test_prepares_complete_application_owned_image_without_user_content(tmp_path
     image = information_view.prepare_information_view(configuration)
     try:
         assert image.mode == "RGB"
-        assert image.size == (1600, 1200)
+        assert image.size == configuration.output_size
         assert image.getpixel((0, 0)) == (250, 249, 245)
 
         with Image.new("RGB", image.size, image.getpixel((0, 0))) as blank:
@@ -121,7 +121,7 @@ def test_missing_logo_does_not_prevent_information_view_rendering(
     image = information_view.prepare_information_view(configuration)
     try:
         assert image.mode == "RGB"
-        assert image.size == (1600, 1200)
+        assert image.size == configuration.output_size
     finally:
         image.close()
 
@@ -161,7 +161,7 @@ def test_omits_unavailable_optional_runtime_details(tmp_path: Path, monkeypatch)
     image = information_view.prepare_information_view(configuration)
     try:
         assert image.mode == "RGB"
-        assert image.size == (1600, 1200)
+        assert image.size == configuration.output_size
 
         assert "Version 0.1.0" in fitted_text
         assert not any("build" in text for text in fitted_text)
@@ -268,4 +268,15 @@ def test_preview_example_writes_complete_png_without_application_state(tmp_path:
     assert result.returncode == 0, result.stderr
     with Image.open(output) as image:
         assert image.format == "PNG"
-        assert image.size == (1600, 1200)
+        assert image.size == (1920, 1080)
+
+
+def test_information_view_uses_an_explicit_configured_output_size(tmp_path: Path) -> None:
+    configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
+    configuration = replace(configuration, output_size=(1600, 1200))
+
+    image = information_view.prepare_information_view(configuration)
+    try:
+        assert image.size == configuration.output_size
+    finally:
+        image.close()

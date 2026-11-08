@@ -74,7 +74,7 @@ def test_explicit_url_and_absent_url_fallback_match_standalone_qr() -> None:
         ),
         (1600, 1200),
     )
-    diagnostic = create_qr_calibration_image(
+    default_diagnostic = create_qr_calibration_image(
         QRCalibrationParameters(
             payload=parameters.url,
             version=parameters.version,
@@ -85,7 +85,21 @@ def test_explicit_url_and_absent_url_fallback_match_standalone_qr() -> None:
             bottom_offset=parameters.bottom_offset,
         )
     )
+    diagnostic = create_qr_calibration_image(
+        QRCalibrationParameters(
+            payload=parameters.url,
+            version=parameters.version,
+            error_correction=parameters.error_correction,
+            module_size=parameters.module_size,
+            quiet_zone=parameters.quiet_zone,
+            right_offset=parameters.right_offset,
+            bottom_offset=parameters.bottom_offset,
+        ),
+        output_size=(1600, 1200),
+    )
     try:
+        assert default_diagnostic.geometry.image_size == (1920, 1080)
+        assert diagnostic.geometry.image_size == (1600, 1200)
         assert explicit.geometry.version == fallback.geometry.version == 4
         with diagnostic.image.crop(
             (
@@ -102,6 +116,7 @@ def test_explicit_url_and_absent_url_fallback_match_standalone_qr() -> None:
     finally:
         explicit.image.close()
         fallback.image.close()
+        default_diagnostic.image.close()
         diagnostic.image.close()
 
 
