@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import weakref
-from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from refrain import (
     ArtifactCleanupError,
     ArtifactValidationError,
     ArtifactWriteError,
+    CompositionVisibility,
     ContentEntry,
     DailySnapshot,
     PersistentStateStore,
@@ -28,23 +28,35 @@ from refrain import (
     SchedulingContext,
     SelectionProposal,
 )
-from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
+
+_STAGES = (
+    CompositionVisibility(),
+    CompositionVisibility(source=True),
+    CompositionVisibility(source=True, attribution=True),
+)
 
 
 @pytest.fixture
-def snapshot() -> DailySnapshot:
+def snapshot():
+    return _STAGES
+
+
+@pytest.fixture
+def selected_snapshot() -> DailySnapshot:
     return DailySnapshot(
+        entry_id="test-entry",
         quotation_text="A thought worth keeping.",
         quotation_identity="A thought worth keeping.",
-        font_identifier="test",
-        presentation_metadata={
-            "source": "Collection",
-            "attribution": "Author",
-            "presentation_style": "centered",
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
+        source="Collection",
+        attribution="Author",
+        presentation_style="centered",
+        font="test",
+        font_faces={},
+        background=None,
+        decoration=None,
+        text_color=None,
+        decoration_color=None,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-        layout={"image_size": (32, 24), "nested": {"values": [1, True, None]}},
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
 
@@ -76,7 +88,7 @@ def rewrite_manifest(result: PreparedImageArtifactSet, mutate) -> None:
 
 @pytest.mark.parametrize("count", [1, 3])
 def test_complete_sets_survive_restart_and_have_independently_readable_pngs(store, snapshot, images, count) -> None:
-    result = store.store(1, snapshot, images[:count])
+    result = store.store(1, snapshot[:count], images[:count])
     assert result.directory == store.root / "revision-1"
     assert tuple(path.name for path in result.stage_paths) == tuple(f"stage-{i}.png" for i in range(count))
     for path, original in zip(result.stage_paths, images):
@@ -85,7 +97,7 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
             assert image.size == original.size
             assert image.mode == original.mode
             assert image.tobytes() == original.tobytes()
-    reloaded = PreparedImageArtifactStore(store.root).load(1, snapshot, stage_count=count)
+    reloaded = PreparedImageArtifactStore(store.root).load(1, snapshot[:count])
     assert reloaded == result
     with reloaded.load_stage(count - 1) as image:
         assert image.tobytes() == images[count - 1].tobytes()
@@ -94,7 +106,7 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA"])
 def test_supported_modes_are_preserved_losslessly(store, snapshot, mode) -> None:
     with Image.new(mode, (32, 24)) as image:
-        result = store.store(1, snapshot, (image,))
+        result = store.store(1, snapshot[:1], (image,))
         with result.load_stage(0) as loaded:
             assert loaded.mode == mode
             assert loaded.tobytes() == image.tobytes()
@@ -104,49 +116,23 @@ def test_revisions_have_distinct_locations(store, snapshot, images) -> None:
     first = store.store(1, snapshot, images)
     second = store.store(2, snapshot, images)
     assert first.directory != second.directory
-    assert store.load(1, snapshot, stage_count=3) == first
-    assert store.load(2, snapshot, stage_count=3) == second
+    assert store.load(1, snapshot) == first
+    assert store.load(2, snapshot) == second
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"quotation_text": "Another thought.", "quotation_identity": "Another thought."},
-        {"font_identifier": "another-identifier"},
-        {
-            "presentation_metadata": {
-                "source": "Collection",
-                "attribution": "Author",
-                "presentation_style": "centered",
-                "font_faces": {"quotation": "italic", "source": "regular", "attribution": "regular"},
-                "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-            }
-        },
-        {"background_identifier": "canvas"},
-        {
-            "presentation_metadata": {
-                "source": "Changed",
-                "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-            }
-        },
-        {"reveal_schedule": {"quotation": "07:00"}},
-        {"layout": {"image_size": (32, 24), "other": 1}},
-        {"scheduling": SchedulingContext(date(2026, 10, 27), "06:00")},
-        {"scheduling": SchedulingContext(date(2026, 10, 26), "07:00")},
-    ],
-)
-def test_same_revision_does_not_override_snapshot_association(store, snapshot, images, changes) -> None:
+def test_artifact_association_uses_revision_and_expected_stages(store, snapshot, images) -> None:
     store.store(1, snapshot, images)
-    with pytest.raises(ArtifactValidationError, match="expected committed snapshot"):
-        store.load(1, replace(snapshot, **changes), stage_count=3)
+    different_stages = (CompositionVisibility(), CompositionVisibility(attribution=True))
+    with pytest.raises(ArtifactValidationError, match="exactly 2 stages"):
+        store.load(1, different_stages)
 
 
 def test_missing_revision_is_distinct_from_incomplete_set(store, snapshot) -> None:
-    assert store.load(1, snapshot, stage_count=1) is None
+    assert store.load(1, snapshot[:1]) is None
     directory = store.root / "revision-1"
     directory.mkdir(parents=True)
     with pytest.raises(ArtifactValidationError, match="manifest.json"):
-        store.load(1, snapshot, stage_count=1)
+        store.load(1, snapshot[:1])
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt", "truncated"])
@@ -160,7 +146,7 @@ def test_missing_or_damaged_stage_is_rejected(store, snapshot, images, damage) -
     else:
         path.write_bytes(path.read_bytes()[:45])
     with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, stage_count=3)
+        store.load(1, snapshot)
     with pytest.raises(ArtifactValidationError):
         result.load_stage(1)
 
@@ -182,7 +168,7 @@ def test_missing_or_corrupt_manifest_is_rejected(store, snapshot, images, damage
     else:
         path.write_bytes(b"null")
     with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, stage_count=3)
+        store.load(1, snapshot)
 
 
 @pytest.mark.parametrize(
@@ -209,7 +195,7 @@ def test_inconsistent_manifest_is_rejected_even_with_recomputed_checksum(store, 
     result = store.store(1, snapshot, images)
     rewrite_manifest(result, mutation)
     with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, stage_count=3)
+        store.load(1, snapshot)
 
 
 @pytest.mark.parametrize("replacement", ["dimensions", "mode", "format", "truncated", "crc"])
@@ -229,16 +215,16 @@ def test_image_representation_and_decoding_are_checked_beyond_digest(store, snap
             image.save(path, format="BMP" if replacement == "format" else "PNG")
     rewrite_manifest(result, lambda m: m["stages"][0].update(sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
     with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, stage_count=3)
+        store.load(1, snapshot)
 
 
 def test_stage_count_and_extra_files_are_rejected(store, snapshot, images) -> None:
     result = store.store(1, snapshot, images)
     with pytest.raises(ArtifactValidationError, match="exactly 2 stages"):
-        store.load(1, snapshot, stage_count=2)
+        store.load(1, snapshot[:2])
     (result.stage_paths[0].parent / "stage-3.png").write_bytes(result.stage_paths[0].read_bytes())
     with pytest.raises(ArtifactValidationError, match="exactly the expected stage"):
-        store.load(1, snapshot, stage_count=3)
+        store.load(1, snapshot)
 
 
 @pytest.mark.parametrize("point", ["save", "file-sync", "directory-sync", "payload-rename", "manifest-replace"])
@@ -273,10 +259,10 @@ def test_failed_publication_never_exposes_partial_set(store, snapshot, images, m
 
     if existing:
         assert (previous.directory / "manifest.json").read_bytes() == previous_manifest
-        assert PreparedImageArtifactStore(store.root).load(1, snapshot, stage_count=3) == previous
+        assert PreparedImageArtifactStore(store.root).load(1, snapshot) == previous
     else:
         try:
-            result = PreparedImageArtifactStore(store.root).load(1, snapshot, stage_count=3)
+            result = PreparedImageArtifactStore(store.root).load(1, snapshot)
         except ArtifactValidationError:
             result = None
         assert result is None
@@ -295,7 +281,7 @@ def test_post_publication_sync_failure_reports_complete_new_set(store, snapshot,
     with pytest.raises(ArtifactWriteError, match="complete set published") as failure:
         store.store(1, snapshot, tuple(reversed(images)))
     assert failure.value.published
-    result = store.load(1, snapshot, stage_count=3)
+    result = store.load(1, snapshot)
     assert result != previous
     with result.load_stage(0) as image:
         assert image.tobytes() == images[-1].tobytes()
@@ -313,7 +299,7 @@ def test_replacement_and_validation_release_images(store, snapshot, images, monk
         return image
 
     monkeypatch.setattr(PreparedImageArtifactSet, "load_stage", capture)
-    assert store.load(1, snapshot, stage_count=3) == result
+    assert store.load(1, snapshot) == result
     gc.collect()
     assert len(references) == 3
     assert all(reference() is None for reference in references)
@@ -322,23 +308,23 @@ def test_replacement_and_validation_release_images(store, snapshot, images, monk
 
 
 def test_reveal_advancement_reuses_artifacts_and_artifact_operations_do_not_modify_state(
-    store, snapshot, images, tmp_path, monkeypatch
+    store, snapshot, selected_snapshot, images, tmp_path, monkeypatch
 ) -> None:
-    quotation = Quotation(snapshot.quotation_text, snapshot.quotation_identity)
+    quotation = Quotation(selected_snapshot.quotation_text, selected_snapshot.quotation_identity)
     candidate = QuotationCandidate(quotation, ContentEntry("entry", (quotation,)))
     proposal = SelectionProposal(candidate, frozenset({quotation.identity}), False, 0)
     state_store = PersistentStateStore(tmp_path / "authoritative" / "state.json")
-    state = state_store.commit(proposal, snapshot)
-    result = store.store(state.revision, state.snapshot, images)
+    state = state_store.commit(proposal, selected_snapshot)
+    result = store.store(state.revision, snapshot, images)
     advanced = state_store.advance_reveal_progress(state.revision, 2)
     before = state_store.path.read_bytes()
     assert advanced.revision == state.revision
-    assert store.load(advanced.revision, advanced.snapshot, stage_count=3) == result
+    assert store.load(advanced.revision, snapshot) == result
     store.cleanup(advanced.revision)
     with monkeypatch.context() as patch:
         patch.setattr(artifacts.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
         with pytest.raises(ArtifactWriteError):
-            store.store(advanced.revision, advanced.snapshot, images)
+            store.store(advanced.revision, snapshot, images)
     assert state_store.path.read_bytes() == before
     assert state_store.load() == advanced
 
@@ -353,7 +339,7 @@ def test_cleanup_removes_old_revisions_and_abandoned_transactions_but_preserves_
     store.cleanup(2)
     assert not first.directory.exists()
     assert not temporary.exists()
-    assert store.load(2, snapshot, stage_count=3) == current
+    assert store.load(2, snapshot) == current
     (current.directory / "manifest.json").unlink()
     store.cleanup(2)
     assert current.directory.is_dir()
@@ -382,7 +368,7 @@ def test_cleanup_handles_real_interrupted_transactions(store, snapshot, images, 
     current = store.store(2, snapshot, images)
     store.cleanup(2)
     assert tuple(store.root.iterdir()) == (current.directory,)
-    assert store.load(2, snapshot, stage_count=3) == current
+    assert store.load(2, snapshot) == current
 
 
 def test_cleanup_preserves_unrecognized_files_and_trees(store, snapshot, images) -> None:
@@ -399,7 +385,7 @@ def test_cleanup_preserves_unrecognized_files_and_trees(store, snapshot, images)
     (unrelated[-1] / "user-file").write_text("keep", encoding="utf-8")
     store.cleanup(2)
     assert all(path.exists() for path in unrelated)
-    assert store.load(2, snapshot, stage_count=3) == current
+    assert store.load(2, snapshot) == current
 
 
 def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(
@@ -420,7 +406,7 @@ def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(
     assert (store.root / "revision-3").is_symlink()
     assert temporary.is_symlink()
     assert old.directory.exists()
-    assert store.load(2, snapshot, stage_count=3) == current
+    assert store.load(2, snapshot) == current
 
 
 @pytest.mark.parametrize("location", ["root", "ancestor", "revision", "payload", "stage", "manifest"])
@@ -445,7 +431,7 @@ def test_links_are_not_accepted_for_loading_or_storage(
         symlink_or_skip(path, moved, directory=moved.is_dir())
     error = ArtifactAccessError if location in {"root", "ancestor"} else ArtifactValidationError
     with pytest.raises(error, match="link"):
-        store.load(1, snapshot, stage_count=3)
+        store.load(1, snapshot)
     if location in {"root", "ancestor", "revision"}:
         with pytest.raises(ArtifactWriteError, match="link"):
             store.store(1, snapshot, images)
@@ -480,7 +466,7 @@ def test_cleanup_failure_is_reported_without_invalidating_current(
             patch.setattr(artifacts, "_sync_directory", fail)
         with pytest.raises(ArtifactCleanupError, match="cleanup denied"):
             store.cleanup(2)
-    assert PreparedImageArtifactStore(store.root).load(2, snapshot, stage_count=3) == current
+    assert PreparedImageArtifactStore(store.root).load(2, snapshot) == current
 
 
 @pytest.mark.parametrize("revision", [0, -1, True, "1"])
@@ -488,17 +474,17 @@ def test_invalid_revisions_fail_before_io(store, snapshot, images, revision) -> 
     with pytest.raises(ValueError, match="positive integer"):
         store.store(revision, snapshot, images)
     with pytest.raises(ValueError, match="positive integer"):
-        store.load(revision, snapshot, stage_count=3)
+        store.load(revision, snapshot)
     with pytest.raises(ValueError, match="positive integer"):
         store.cleanup(revision)
     assert not store.root.exists()
 
 
-@pytest.mark.parametrize("mode,size", [("P", (32, 24)), ("CMYK", (32, 24)), ("RGB", (1, 1))])
+@pytest.mark.parametrize("mode,size", [("P", (32, 24)), ("CMYK", (32, 24))])
 def test_invalid_images_fail_before_io(store, snapshot, mode, size) -> None:
     with Image.new(mode, size) as image:
         with pytest.raises(ValueError, match="stage 0"):
-            store.store(1, snapshot, (image,))
+            store.store(1, snapshot[:1], (image,))
     assert not store.root.exists()
 
 
@@ -507,16 +493,15 @@ def test_invalid_api_inputs(store, snapshot, images) -> None:
         PreparedImageArtifactStore(Path("relative"))
     with pytest.raises(ValueError, match="nonempty"):
         store.store(1, snapshot, ())
-    with pytest.raises(TypeError, match="DailySnapshot"):
+    with pytest.raises(ValueError, match="CompositionVisibility"):
         store.store(1, None, images)
-    with pytest.raises(ValueError, match="image_size"):
-        store.store(1, replace(snapshot, layout={}), images)
+    with pytest.raises(ValueError, match="nonempty"):
+        store.store(1, (), images)
     with Image.new("L", (32, 24)) as image:
         with pytest.raises(ValueError, match="same image mode"):
-            store.store(1, snapshot, (images[0], image))
-    for count in (0, True, -1):
-        with pytest.raises(ValueError, match="stage_count"):
-            store.load(1, snapshot, stage_count=count)
+            store.store(1, snapshot[:2], (images[0], image))
+    with pytest.raises(ValueError, match="nonempty"):
+        store.load(1, ())
     result = store.store(1, snapshot, images)
     for stage in (-1, 3, True, "0"):
         with pytest.raises(ValueError, match="stage"):
@@ -570,4 +555,4 @@ def test_retry_resynchronizes_parent_of_previously_created_directory(
     monkeypatch.setattr(artifacts, "_sync_directory", capture)
     store.store(1, snapshot, images)
     assert directory.parent in calls
-    assert store.load(1, snapshot, stage_count=3) is not None
+    assert store.load(1, snapshot) is not None

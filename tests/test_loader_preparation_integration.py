@@ -18,9 +18,6 @@ from refrain import (
     prepare_daily_images,
     select_quotation,
 )
-from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
-
-
 def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_path: Path) -> None:
     content_directory = tmp_path / "content"
     content_directory.mkdir()
@@ -64,39 +61,30 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
     assert candidate is not None
     entry = candidate.entry
 
-    font_resource = config.fonts["lora"]
     snapshot = DailySnapshot(
+        entry_id=entry.id,
         quotation_text=candidate.text,
         quotation_identity=candidate.identity,
-        font_identifier=font_resource.identifier,
-        presentation_metadata={
-            "source": entry.source,
-            "attribution": entry.attribution,
-            "presentation_style": entry.presentation_style,
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
+        source=entry.source,
+        attribution=entry.attribution,
+        presentation_style=entry.presentation_style,
+        font=entry.font,
+        font_faces=entry.font_faces,
+        background=entry.background,
+        decoration=entry.decoration,
+        text_color=entry.text_color,
+        decoration_color=entry.decoration_color,
         reveal_schedule={
             "quotation": config.day_start.strftime("%H:%M"),
             "source": config.reveal.source.strftime("%H:%M"),
             "attribution": config.reveal.attribution.strftime("%H:%M"),
-        },
-        layout={
-            "image_size": (320, 240),
-            "presentation_region": {
-                "x": config.presentation_region.x,
-                "y": config.presentation_region.y,
-                "width": config.presentation_region.width,
-                "height": config.presentation_region.height,
-            },
-            "min_font_size": config.min_font_size,
-            "max_font_size": config.max_font_size,
         },
         scheduling=SchedulingContext(
             date(2026, 10, 26),
             config.day_start.strftime("%H:%M"),
         ),
     )
-    assert snapshot.presentation_metadata["presentation_style"] == "left-aligned"
+    assert snapshot.presentation_style == "left-aligned"
 
     config_path.unlink()
     content_path.unlink()
@@ -105,12 +93,12 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
         CompositionVisibility(source=True),
         CompositionVisibility(source=True, attribution=True),
     )
-    images = prepare_daily_images(snapshot, stages, config.fonts)
+    images = prepare_daily_images(snapshot, stages, config)
 
     assert not config_path.exists()
     assert not content_path.exists()
     assert len(images) == len(stages)
-    assert all(image.mode == "RGB" and image.size == (320, 240) for image in images)
+    assert all(image.mode == "RGB" and image.size == (1600, 1200) for image in images)
 
 
 def test_category_registered_resources_load_through_rendering_pipeline(tmp_path: Path) -> None:
@@ -179,32 +167,25 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     config = load_application_config(config_path)
     entry = load_content_library(config.content_directory)[0]
     snapshot = DailySnapshot(
+        entry_id=entry.id,
         quotation_text=entry.quotations[0].text,
         quotation_identity=entry.quotations[0].identity,
-        font_identifier=entry.font,
-        background_identifier=entry.background,
-        decoration_identifier=entry.decoration,
-        presentation_metadata={
-            "source": entry.source,
-            "attribution": entry.attribution,
-            "presentation_style": entry.presentation_style,
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
+        source=entry.source,
+        attribution=entry.attribution,
+        presentation_style=entry.presentation_style,
+        font=entry.font,
+        font_faces=entry.font_faces,
+        background=entry.background,
+        decoration=entry.decoration,
+        text_color=entry.text_color,
+        decoration_color=entry.decoration_color,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-        layout={
-            "image_size": (1600, 1200),
-            "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
-            "min_font_size": config.min_font_size,
-            "max_font_size": config.max_font_size,
-        },
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
     image = prepare_daily_images(
         snapshot,
         (CompositionVisibility(),),
-        config.fonts,
-        config.backgrounds,
-        config.decorations,
+        config,
     )[0]
 
     assert config.fonts["family-serif"].path == font_path

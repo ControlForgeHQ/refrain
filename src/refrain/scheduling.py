@@ -66,9 +66,8 @@ def _resolve_reveal_stages(
     if not isinstance(snapshot, DailySnapshot):
         raise SchedulingEvaluationError("snapshot must be a DailySnapshot")
     schedule = snapshot.reveal_schedule
-    metadata = snapshot.presentation_metadata
-    if not isinstance(schedule, Mapping) or not isinstance(metadata, Mapping):
-        raise SchedulingEvaluationError("snapshot reveal schedule and presentation metadata must be mappings")
+    if not isinstance(schedule, Mapping):
+        raise SchedulingEvaluationError("snapshot reveal schedule must be a mapping")
 
     quotation_time = _schedule_time(schedule, "quotation")
     day_start = _schedule_time({"day_start": snapshot.scheduling.day_start}, "day_start")
@@ -77,11 +76,11 @@ def _resolve_reveal_stages(
 
     field_times = {"quotation": quotation_time}
     for field in ("source", "attribution"):
-        value = metadata.get(field)
+        value = getattr(snapshot, field)
         if value is None:
             continue
         if not isinstance(value, str) or not value.strip():
-            raise SchedulingEvaluationError(f"snapshot presentation_metadata.{field} must be a nonempty string")
+            raise SchedulingEvaluationError(f"snapshot.{field} must be a nonempty string")
         event_time = _schedule_time(schedule, field)
         if event_time < quotation_time:
             raise SchedulingEvaluationError(f"snapshot reveal schedule.{field} must not precede quotation")

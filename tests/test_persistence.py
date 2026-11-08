@@ -30,7 +30,6 @@ from refrain import (
     normalize_quotation,
     select_quotation,
 )
-from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 
 def make_candidate(text: str) -> QuotationCandidate:
@@ -65,22 +64,19 @@ def make_snapshot(
     display_date: date = date(2026, 10, 26),
 ) -> DailySnapshot:
     return DailySnapshot(
+        entry_id="entry",
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
-        font_identifier="test-font",
-        presentation_metadata={
-            "source": "Resolved source",
-            "attribution": "Resolved author",
-            "presentation_style": "centered",
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
-        reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
-        layout={
-            "image_size": (320, 240),
-            "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6},
-            "min_font_size": 12,
-            "max_font_size": 32,
-        },
+        source="Resolved source",
+        attribution="Resolved author",
+        presentation_style="centered",
+        font="test-font",
+        font_faces={},
+        background=None,
+        decoration=None,
+        text_color=None,
+        decoration_color=None,
+        reveal_schedule={"quotation": "06:00", "source": "08:00", "attribution": "09:00"},
         scheduling=SchedulingContext(display_date, "06:00"),
     )
 
@@ -113,81 +109,67 @@ def test_uninitialized_location_and_initial_commit_recover_in_new_instance(tmp_p
     assert recovered == committed
     assert recovered.snapshot.quotation_text == "First quotation."
     assert recovered.snapshot.quotation_identity == "First quotation."
-    assert recovered.snapshot.font_identifier == "test-font"
+    assert recovered.snapshot.entry_id == "entry"
+    assert recovered.snapshot.font == "test-font"
     assert recovered.revision == 1
     assert recovered.repetition_history == {"First quotation."}
     assert recovered.highest_reveal_stage == 0
 
 
-def test_format_six_snapshot_without_face_metadata_remains_unchanged(tmp_path: Path) -> None:
+def test_semantic_snapshot_roundtrips_without_rendering_values(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     committed = commit(store, "Legacy typography.")
     document = json.loads(store.path.read_bytes())
 
-    assert document["format_version"] == 6
-    assert document["state"]["snapshot"]["presentation_metadata"]["qr_code"] == {
-        "url": "https://github.com/ControlForgeHQ/refrain",
-        "version": 4,
-        "error_correction": "M",
-        "module_size": 3,
-        "quiet_zone": 4,
-        "right_offset": 40,
-        "bottom_offset": 40,
-    }
-    assert "font_faces" not in document["state"]["snapshot"]["presentation_metadata"]
+    assert document["format_version"] == 1
+    snapshot = document["state"]["snapshot"]
+    assert snapshot["entry_id"] == "entry"
+    assert snapshot["font"] == "test-font"
+    assert snapshot["source"] == "Resolved source"
+    assert snapshot["attribution"] == "Resolved author"
+    assert not {
+        "font_identifier",
+        "background_identifier",
+        "decoration_identifier",
+        "presentation_metadata",
+        "layout",
+        "qr_code",
+    }.intersection(snapshot)
     recovered = PersistentStateStore(store.path).load()
 
     assert recovered == committed
-    assert "font_faces" not in recovered.snapshot.presentation_metadata
+    assert recovered.snapshot.quotation_text == "Legacy typography."
 
 
-def test_committed_role_face_identifiers_survive_restart(tmp_path: Path) -> None:
+def test_semantic_role_face_preferences_survive_restart(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     base_snapshot = make_snapshot("Role faces.")
     snapshot = replace(
         base_snapshot,
-        presentation_metadata={
-            "source": "Resolved source",
-            "attribution": "Resolved author",
-            "presentation_style": "centered",
-            "font_faces": {"quotation": "handwritten", "source": "regular", "attribution": "italic"},
-            "qr_code": base_snapshot.presentation_metadata["qr_code"],
-        },
+        font_faces={"quotation": "handwritten", "source": "regular", "attribution": "italic"},
     )
     committed = store.commit(make_proposal("Role faces."), snapshot)
 
     recovered = PersistentStateStore(store.path).load()
 
     assert recovered == committed
-    assert dict(recovered.snapshot.presentation_metadata["font_faces"]) == {
+    assert dict(recovered.snapshot.font_faces) == {
         "quotation": "handwritten",
         "source": "regular",
         "attribution": "italic",
     }
 
 
-def test_committed_text_color_survives_format_six_restart(tmp_path: Path) -> None:
+def test_content_color_preferences_survive_restart(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
-    base_snapshot = make_snapshot("Committed color.")
-    snapshot = replace(
-        base_snapshot,
-        presentation_metadata={
-            "source": "Resolved source",
-            "attribution": "Resolved author",
-            "presentation_style": "centered",
-            "text_color_identifier": "burnt-orange",
-            "text_color_rgb": (198, 90, 32),
-            "qr_code": base_snapshot.presentation_metadata["qr_code"],
-        },
-    )
+    snapshot = replace(make_snapshot("Committed color."), text_color=("burnt-orange", "blue"))
     committed = store.commit(make_proposal("Committed color."), snapshot)
 
     recovered = PersistentStateStore(store.path).load()
 
     assert recovered == committed
-    assert recovered.snapshot.presentation_metadata["text_color_identifier"] == "burnt-orange"
-    assert recovered.snapshot.presentation_metadata["text_color_rgb"] == (198, 90, 32)
-    assert json.loads(store.path.read_text(encoding="utf-8"))["format_version"] == 6
+    assert recovered.snapshot.text_color == ("burnt-orange", "blue")
+    assert json.loads(store.path.read_text(encoding="utf-8"))["format_version"] == 1
 
 
 def test_subsequent_commit_appends_history_and_persists_selective_reset(tmp_path: Path) -> None:
@@ -338,16 +320,19 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
     proposal = select_quotation(pool, (), random.Random(0))
     candidate = proposal.selected_candidate
     snapshot = DailySnapshot(
+        entry_id=candidate.entry.id,
         quotation_text=candidate.text,
         quotation_identity=candidate.identity,
-        font_identifier="stable-font",
-        presentation_metadata={
-            "source": candidate.entry.source,
-            "attribution": candidate.entry.attribution,
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
-        reveal_schedule={"quotation": "07:00", "source": "08:00", "attribution": "09:00"},
-        layout={"text_size": 42},
+        source=candidate.entry.source,
+        attribution=candidate.entry.attribution,
+        presentation_style=candidate.entry.presentation_style,
+        font="stable-font",
+        font_faces=candidate.entry.font_faces,
+        background=candidate.entry.background,
+        decoration=candidate.entry.decoration,
+        text_color=candidate.entry.text_color,
+        decoration_color=candidate.entry.decoration_color,
+        reveal_schedule={"quotation": "06:00", "source": "08:00", "attribution": "09:00"},
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
     state_path = tmp_path / "state.json"
@@ -357,10 +342,10 @@ def test_recovery_does_not_require_original_content_or_configuration(tmp_path: P
     recovered = PersistentStateStore(state_path).load()
 
     assert recovered.snapshot == snapshot
-    assert recovered.snapshot.font_identifier == "stable-font"
-    assert recovered.snapshot.presentation_metadata["source"] == "Old source"
-    assert recovered.snapshot.presentation_metadata["attribution"] == "Old author"
-    assert recovered.snapshot.presentation_metadata["qr_code"]["url"] == "https://github.com/ControlForgeHQ/refrain"
+    assert recovered.snapshot.entry_id == "sample"
+    assert recovered.snapshot.font == "stable-font"
+    assert recovered.snapshot.source == "Old source"
+    assert recovered.snapshot.attribution == "Old author"
 
 
 @pytest.mark.parametrize("contents", [b"{", b"\xff", b""])
@@ -384,10 +369,10 @@ def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    del document["state"]["snapshot"]["layout"]
+    del document["state"]["snapshot"]["entry_id"]
     _write_document(state_path, document)
 
-    with pytest.raises(StateRecoveryError, match="snapshot: missing fields: layout"):
+    with pytest.raises(StateRecoveryError, match="snapshot: missing fields: entry_id"):
         PersistentStateStore(state_path).load()
 
     state_path.unlink()
@@ -399,72 +384,51 @@ def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -
         PersistentStateStore(state_path).load()
 
 
-def test_missing_committed_qr_parameters_are_rejected(tmp_path: Path) -> None:
+def test_obsolete_rendering_fields_are_rejected(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Persisted.")
     document = json.loads(store.path.read_text(encoding="utf-8"))
-    del document["state"]["snapshot"]["presentation_metadata"]["qr_code"]
+    document["state"]["snapshot"]["font_identifier"] = "resolved-font"
     _write_document(store.path, document)
 
-    with pytest.raises(StateRecoveryError, match="snapshot.presentation_metadata.qr_code is required"):
+    with pytest.raises(StateRecoveryError, match="unsupported fields: font_identifier"):
         store.load()
 
 
-def test_daily_snapshot_rejects_missing_qr_metadata() -> None:
-    snapshot = make_snapshot("Missing QR metadata.")
-    metadata = dict(snapshot.presentation_metadata)
-    del metadata["qr_code"]
-
-    with pytest.raises(ValueError, match="presentation_metadata.qr_code is required"):
-        replace(snapshot, presentation_metadata=metadata)
-
-
-def test_state_v6_excludes_timezone_global_history_and_font_contents(tmp_path: Path) -> None:
+def test_current_state_excludes_rendering_data_and_history(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
     document = json.loads(state_path.read_text(encoding="utf-8"))
-    assert document["format_version"] == 6
+    assert document["format_version"] == 1
     assert "global_history" not in document["state"]
-    assert document["state"]["snapshot"]["font_identifier"] == "test-font"
-    assert "font" not in document["state"]["snapshot"]
+    assert document["state"]["snapshot"]["font"] == "test-font"
+    assert "font_bytes" not in document["state"]["snapshot"]
     assert set(document["state"]["snapshot"]["scheduling"]) == {"display_date", "day_start"}
     assert "sha256" in document and "sha256" not in document["state"]["snapshot"]
 
 
-def test_format_six_persists_background_decoration_and_effective_region(tmp_path: Path) -> None:
+def test_semantic_preferences_persist_without_resolved_region(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     snapshot = replace(
         make_snapshot("Persisted."),
-        background_identifier="custom-paper",
-        decoration_identifier="lower-flourish",
-        layout={
-            **make_snapshot("Persisted.").layout,
-            "presentation_region": {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4},
-        },
+        background="custom-paper",
+        decoration="lower-flourish",
+        text_color=("burnt-orange",),
+        decoration_color=("blue",),
     )
     committed = store.commit(make_proposal("Persisted."), snapshot)
     assert store.load() == committed
-    assert store.load().snapshot.background_identifier == "custom-paper"
-    assert store.load().snapshot.decoration_identifier == "lower-flourish"
-    assert dict(store.load().snapshot.layout["presentation_region"]) == {
-        "x": 0.2,
-        "y": 0.3,
-        "width": 0.6,
-        "height": 0.4,
-    }
+    assert store.load().snapshot.background == "custom-paper"
+    assert store.load().snapshot.decoration == "lower-flourish"
     document = json.loads(store.path.read_text())
-    assert document["state"]["snapshot"]["background_identifier"] == "custom-paper"
-    assert document["state"]["snapshot"]["decoration_identifier"] == "lower-flourish"
-    assert document["state"]["snapshot"]["layout"]["presentation_region"] == {
-        "x": 0.2,
-        "y": 0.3,
-        "width": 0.6,
-        "height": 0.4,
-    }
+    assert document["state"]["snapshot"]["background"] == "custom-paper"
+    assert document["state"]["snapshot"]["decoration"] == "lower-flourish"
+    assert "layout" not in document["state"]["snapshot"]
+    assert document["state"]["snapshot"]["text_color"] == ["burnt-orange"]
 
 
-@pytest.mark.parametrize("field", ["background_identifier", "decoration_identifier"])
-def test_format_six_requires_visual_resource_fields(tmp_path: Path, field: str) -> None:
+@pytest.mark.parametrize("field", ["entry_id", "font_faces", "presentation_style"])
+def test_current_state_requires_semantic_fields(tmp_path: Path, field: str) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Persisted.")
     document = json.loads(store.path.read_text())
@@ -474,12 +438,12 @@ def test_format_six_requires_visual_resource_fields(tmp_path: Path, field: str) 
         store.load()
 
 
-@pytest.mark.parametrize("version", [1, 2, 3, 5])
+@pytest.mark.parametrize("version", [2, 3, 4, 5, 6])
 def test_unsupported_development_versions_are_not_modified(tmp_path: Path, version: int) -> None:
     state_path = tmp_path / "state.json"
     original = json.dumps({"format_version": version, "state": {}, "sha256": "bad"}).encode()
     state_path.write_bytes(original)
-    with pytest.raises(UnsupportedStateVersionError, match="version 6 is required"):
+    with pytest.raises(UnsupportedStateVersionError, match="version 1 is required"):
         PersistentStateStore(state_path).load()
     assert state_path.read_bytes() == original
 
@@ -608,7 +572,7 @@ def test_global_history_records_committed_selection_as_unicode_jsonl(tmp_path: P
     assert record.selection_timestamp == timestamp
     assert history.path.read_text(encoding="utf-8") == (
         '{"revision":1,"display_date":"2026-10-26","selection_timestamp":"2026-10-29T13:30:00Z",'
-        '"quotation_text":"Étoile, 雪.","quotation_identity":"Étoile, 雪.","font_identifier":"test-font"}\n'
+        '"quotation_text":"Étoile, 雪.","quotation_identity":"Étoile, 雪."}\n'
     )
 
 
@@ -634,7 +598,6 @@ def test_global_history_rotates_only_between_records_and_enforces_retention(tmp_
         "selection_timestamp": "2026-10-27T00:00:00Z",
         "quotation_text": "Next.",
         "quotation_identity": "Next.",
-        "font_identifier": "test-font",
     }
 
     third = commit(state_store, "Last.", date(2026, 10, 28))
@@ -758,34 +721,19 @@ def test_interrupted_reveal_advancement_recovers_complete_state(
     assert PersistentStateStore(store.path).load() == retried
 
 
-def test_version_one_snapshot_progress_is_rejected_explicitly(tmp_path: Path) -> None:
+def test_version_six_state_is_rejected_without_modifying_its_bytes(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Committed.")
     document = json.loads(store.path.read_bytes())
-    assert document["format_version"] == 6
-    document["format_version"] = 1
-    document["state"]["snapshot"]["highest_reveal_stage"] = document["state"].pop("highest_reveal_stage")
+    assert document["format_version"] == 1
+    document["format_version"] = 6
     _write_document(store.path, document)
     contents = store.path.read_bytes()
 
-    with pytest.raises(UnsupportedStateVersionError, match="format version 1"):
+    with pytest.raises(UnsupportedStateVersionError, match="format version 6"):
         store.load()
-    with pytest.raises(UnsupportedStateVersionError, match="format version 1"):
+    with pytest.raises(UnsupportedStateVersionError, match="format version 6"):
         store.advance_reveal_progress(1, 1)
-    assert store.path.read_bytes() == contents
-
-
-def test_format_four_state_is_rejected_without_modifying_its_bytes(tmp_path: Path) -> None:
-    store = PersistentStateStore(tmp_path / "state.json")
-    commit(store, "Committed.")
-    document = json.loads(store.path.read_bytes())
-    document["format_version"] = 4
-    _write_document(store.path, document)
-    contents = store.path.read_bytes()
-
-    with pytest.raises(UnsupportedStateVersionError, match="version 6 is required"):
-        store.load()
-
     assert store.path.read_bytes() == contents
 
 

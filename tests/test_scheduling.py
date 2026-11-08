@@ -20,7 +20,6 @@ from refrain import (
     normalize_quotation,
     resolve_reveal_stages,
 )
-from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 from refrain.renderer import CompositionVisibility
 
 
@@ -49,16 +48,21 @@ def make_state(
     revision: int = 1,
 ) -> PersistentState:
     text = "A committed quotation."
+    metadata = metadata or {"presentation_style": "centered", "source": "Source", "attribution": "Author"}
     snapshot = DailySnapshot(
+        entry_id="entry",
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
-        font_identifier="test-font",
-        presentation_metadata={
-            **(metadata or {"presentation_style": "centered", "source": "Source", "attribution": "Author"}),
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
+        source=metadata.get("source"),
+        attribution=metadata.get("attribution"),
+        presentation_style=metadata.get("presentation_style", "centered"),
+        font=None,
+        font_faces={},
+        background=None,
+        decoration=None,
+        text_color=None,
+        decoration_color=None,
         reveal_schedule=reveal_schedule or {"quotation": day_start, "source": "12:00", "attribution": "18:00"},
-        layout={},
         scheduling=SchedulingContext(display_date, day_start),
     )
     return PersistentState(
@@ -258,20 +262,22 @@ def test_nonexistent_dst_reveal_time_becomes_due_after_the_clock_skips_it() -> N
 
 
 @pytest.mark.parametrize(
-    ("metadata", "schedule", "expected_stage"),
+    ("metadata", "expected_stage"),
     [
-        ({"presentation_style": "centered"}, {"quotation": "06:00"}, 0),
+        ({"presentation_style": "centered"}, 0),
         (
             {"presentation_style": "centered", "attribution": "Author"},
-            {"quotation": "06:00", "attribution": "18:00"},
             1,
         ),
     ],
 )
 def test_absent_optional_fields_do_not_add_reveal_stages(
-    metadata: dict[str, str | None], schedule: dict[str, str], expected_stage: int
+    metadata: dict[str, str | None], expected_stage: int
 ) -> None:
-    state = make_state(metadata=metadata, reveal_schedule=schedule)
+    state = make_state(
+        metadata=metadata,
+        reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
+    )
 
     decision = evaluate_scheduling(
         datetime(2026, 10, 26, 19, 0, tzinfo=ZoneInfo("America/New_York")),
@@ -350,20 +356,13 @@ def test_naive_timestamp_is_rejected() -> None:
 
 
 def test_invalid_snapshot_schedule_is_rejected_conservatively() -> None:
-    state = make_state(reveal_schedule={"quotation": "6 AM"})
-
-    with pytest.raises(SchedulingEvaluationError, match="quotation"):
-        evaluate_scheduling(
-            datetime(2026, 10, 26, 7, 0, tzinfo=ZoneInfo("America/New_York")),
-            make_configuration(),
-            state,
-        )
+    with pytest.raises(ValueError, match="reveal_schedule"):
+        make_state(reveal_schedule={"quotation": "6 AM"})
 
 
 def test_persisted_reveal_stage_cannot_exceed_final_snapshot_stage() -> None:
     state = make_state(
         metadata={"presentation_style": "centered"},
-        reveal_schedule={"quotation": "06:00"},
         highest_reveal_stage=1,
     )
 

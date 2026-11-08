@@ -131,17 +131,16 @@ def _render(configuration, identifier, manifest, variant, debug_layout, initial_
         attribution=attribution,
         decoration=identifier,
     )
-    snapshot = _build_snapshot(configuration, entry, quotation, date(2000, 1, 1), _StableChoices(identifier))
+    snapshot = _build_snapshot(configuration, entry, quotation, date(2000, 1, 1))
     stages = resolve_reveal_stages(snapshot)
     image = prepare_daily_images(
         snapshot,
         (stages[-1],),
-        configuration.fonts,
-        configuration.backgrounds,
-        registry,
+        configuration,
+        chooser=_StableChoices(identifier),
         strict_decoration=True,
     )[0]
-    return _stage_publication_image(image, snapshot, debug_layout), snapshot
+    return _stage_publication_image(image, snapshot, configuration, debug_layout), snapshot
 
 
 def run_decoration_diagnostic(
@@ -179,10 +178,15 @@ def run_decoration_diagnostic(
                     image, snapshot = _render(
                         configuration, identifier, manifests[identifier], variant, debug_layout, initial_warnings
                     )
-                    region = snapshot.layout["presentation_region"]
+                    decoration = configuration.decorations.get(snapshot.decoration)
+                    region = (
+                        configuration.presentation_region
+                        if decoration is None or decoration.presentation_region is None
+                        else decoration.presentation_region
+                    )
                     print(
-                        f"Presentation region: x={region['x']} y={region['y']} "
-                        f"width={region['width']} height={region['height']}",
+                        f"Presentation region: x={region.x} y={region.y} "
+                        f"width={region.width} height={region.height}",
                         flush=True,
                     )
                     serial += 1
