@@ -216,6 +216,14 @@ def _apply_daily_decoration(
     return background
 
 
+def _resample_graphical_composition(image: Image.Image, output_size: tuple[int, int]) -> Image.Image:
+    if image.size == output_size:
+        return image
+    resampled = image.resize(output_size, Image.Resampling.LANCZOS)
+    image.close()
+    return resampled
+
+
 def _read_font(resource: FontResource, face: str = "regular") -> ResolvedFont:
     path = resource.faces.get(face)
     if path is None and face == "regular":
@@ -423,7 +431,7 @@ def prepare_daily_images(
             source_font=fonts["source"],
             attribution_font=fonts["attribution"],
         )
-        background = _generate_daily_background(image_size, background_identifier, configuration.backgrounds)
+        background = _generate_daily_background(geometry.working_size, background_identifier, configuration.backgrounds)
         try:
             background = _apply_daily_decoration(
                 background,
@@ -432,6 +440,7 @@ def prepare_daily_images(
                 decoration_tint,
                 strict=strict_decoration,
             )
+            background = _resample_graphical_composition(background, image_size)
             images = render_reveal_stages(
                 background,
                 fonts["quotation"],

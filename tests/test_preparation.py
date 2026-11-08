@@ -218,6 +218,71 @@ def test_prepared_reveal_images_use_configured_output_resolution(output_size: tu
             image.close()
 
 
+@pytest.mark.parametrize(
+    ("output_size", "working_size"),
+    [
+        ((1600, 1200), (3200, 2400)),
+        ((1920, 1080), (3840, 2160)),
+        ((3840, 2400), (3840, 2400)),
+        ((4000, 3000), (3200, 2400)),
+    ],
+)
+def test_graphical_composition_uses_working_canvas_and_resamples_once_when_needed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output_size: tuple[int, int],
+    working_size: tuple[int, int],
+) -> None:
+    decoration_path = tmp_path / "overlay.png"
+    with Image.new("RGBA", (2, 1), (200, 20, 40, 128)) as decoration_image:
+        decoration_image.save(decoration_path)
+    snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration="overlay")
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        decorations={"overlay": DecorationResource("overlay", decoration_path, False)},
+        output_size=output_size,
+        qr_enabled=False,
+    )
+    background_sizes: list[tuple[int, int]] = []
+    decoration_sizes: list[tuple[int, int]] = []
+    resize_calls: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    generate_background = preparation._generate_daily_background
+    apply_decoration = preparation._apply_daily_decoration
+    resize = Image.Image.resize
+
+    def capture_background(size, *args, **kwargs):
+        background_sizes.append(size)
+        return generate_background(size, *args, **kwargs)
+
+    def capture_decoration(background, *args, **kwargs):
+        decoration_sizes.append(background.size)
+        return apply_decoration(background, *args, **kwargs)
+
+    def capture_resize(image, size, *args, **kwargs):
+        if image.size == working_size:
+            resize_calls.append((image.size, size))
+        return resize(image, size, *args, **kwargs)
+
+    monkeypatch.setattr(preparation, "_generate_daily_background", capture_background)
+    monkeypatch.setattr(preparation, "_apply_daily_decoration", capture_decoration)
+    monkeypatch.setattr(Image.Image, "resize", capture_resize)
+
+    images = _prepare_daily_images(snapshot, (CompositionVisibility(),), configuration)
+    try:
+        assert background_sizes == [working_size]
+        assert decoration_sizes == [working_size]
+        expected_resizes = [] if working_size == output_size else [(working_size, output_size)]
+        assert resize_calls == expected_resizes
+        assert images[0].size == output_size
+        assert images[0].mode == "RGB"
+        assert images[0].getpixel((output_size[0] // 2, 10)) == (255, 255, 255)
+        center = images[0].getpixel((output_size[0] // 4, output_size[1] // 2))
+        assert all(abs(actual - expected) <= 2 for actual, expected in zip(center, (227, 137, 147), strict=True))
+    finally:
+        for image in images:
+            image.close()
+
+
 def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font, source="A Sample Collection", attribution="An Example Author")
     stages = resolve_reveal_stages(snapshot)
@@ -240,8 +305,8 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
     color = (80, 120, 160) if mode == "RGB" else (80, 120, 160, 255)
     with Image.new(mode, (1600, 1200), color) as background:
         if mode == "RGBA":
-            background.putpixel((0, 0), (0, 0, 0, 0))
-            background.putpixel((1, 0), (0, 0, 0, 128))
+            background.paste((0, 0, 0, 0), (0, 0, 20, 20))
+            background.paste((0, 0, 0, 128), (20, 0, 40, 20))
         background.save(path)
     snapshot = replace(
         make_snapshot("lora", source=None, attribution=None),
@@ -256,11 +321,41 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
     )
     try:
         image = images[0]
-        assert image.getpixel((10, 10)) == color[:3]
+        assert image.getpixel((100, 100)) == color[:3]
         assert (0, 0, 0) in image.get_flattened_data()
         if mode == "RGBA":
-            assert image.getpixel((0, 0)) == (255, 255, 255)
-            assert image.getpixel((1, 0)) == (127, 127, 127)
+            assert image.getpixel((5, 5)) == (255, 255, 255)
+            assert image.getpixel((30, 5)) == (127, 127, 127)
+    finally:
+        for image in images:
+            image.close()
+
+
+def test_background_cover_scaling_crops_center_of_wide_source(tmp_path: Path) -> None:
+    path = tmp_path / "wide.png"
+    with Image.new("RGB", (400, 100), (0, 0, 0)) as background:
+        background.paste((255, 0, 0), (0, 0, 100, 100))
+        background.paste((0, 255, 0), (100, 0, 300, 100))
+        background.paste((0, 0, 255), (300, 0, 400, 100))
+        background.save(path)
+    snapshot = replace(make_snapshot("lora", source=None, attribution=None), background="wide")
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        backgrounds={"wide": BackgroundResource("wide", path, False)},
+        output_size=(1600, 1200),
+        qr_enabled=False,
+    )
+
+    images = _prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(),),
+        configuration,
+    )
+    try:
+        image = images[0]
+        assert image.getpixel((10, 10)) == (0, 255, 0)
+        assert image.getpixel((1590, 10)) == (0, 255, 0)
+        assert image.getpixel((10, 1190)) == (0, 255, 0)
     finally:
         for image in images:
             image.close()
@@ -400,7 +495,7 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
     with Image.new("RGB", (1600, 1200), (80, 120, 160)) as background:
         background.save(background_path)
     with Image.new("RGBA", (1600, 1200), (200, 20, 40, 128)) as decoration:
-        decoration.putpixel((0, 0), (200, 20, 40, 0))
+        decoration.paste((200, 20, 40, 0), (0, 0, 20, 20))
         decoration.save(decoration_path)
     snapshot = replace(
         make_snapshot(
@@ -423,8 +518,11 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
     try:
         image = images[0]
         assert image.mode == "RGB"
-        assert image.getpixel((0, 0)) == (80, 120, 160)
-        assert image.getpixel((10, 10)) == (140, 70, 100)
+        assert image.getpixel((10, 10)) == (80, 120, 160)
+        assert all(
+            abs(actual - expected) <= 1
+            for actual, expected in zip(image.getpixel((50, 50)), (140, 70, 100), strict=True)
+        )
     finally:
         for image in images:
             image.close()
@@ -433,10 +531,10 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
 def test_decoration_color_preference_resolves_during_preparation_and_preserves_alpha(tmp_path: Path) -> None:
     decoration_path = tmp_path / "overlay.png"
     with Image.new("RGBA", _IMAGE_SIZE, (20, 40, 60, 255)) as decoration:
-        decoration.putpixel((0, 0), (0, 0, 0, 0))
-        decoration.putpixel((1, 0), (255, 255, 255, 128))
-        decoration.putpixel((2, 0), (0, 0, 0, 255))
-        decoration.putpixel((3, 0), (40, 80, 120, 128))
+        decoration.paste((0, 0, 0, 0), (0, 0, 256, 200))
+        decoration.paste((255, 255, 255, 128), (256, 0, 512, 200))
+        decoration.paste((0, 0, 0, 255), (512, 0, 768, 200))
+        decoration.paste((40, 80, 120, 128), (768, 0, 1024, 200))
         decoration.save(decoration_path)
     original_bytes = decoration_path.read_bytes()
     snapshot = replace(
@@ -460,10 +558,10 @@ def test_decoration_color_preference_resolves_during_preparation_and_preserves_a
     )
     try:
         for image in images:
-            assert image.getpixel((0, 0)) == (255, 255, 255)
-            assert image.getpixel((2, 0)) == (198, 90, 32)
-            assert image.getpixel((1, 0)) != (255, 255, 255)
-            assert image.getpixel((3, 0)) != (40, 80, 120)
+            assert image.getpixel((100, 100)) == (255, 255, 255)
+            assert image.getpixel((600, 100)) == (198, 90, 32)
+            assert image.getpixel((300, 100)) != (255, 255, 255)
+            assert image.getpixel((900, 100)) != (40, 80, 120)
         assert images[0].tobytes() == images[1].tobytes()
         assert decoration_path.read_bytes() == original_bytes
     finally:
