@@ -191,7 +191,7 @@ def test_decoration_preferences_resolve_before_font_background_and_region(worksp
         package,
         "custom",
         font="source-sans-3",
-        background="ethereal",
+        background="hex",
         presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
     )
     workspace.config.write_text(
@@ -207,7 +207,7 @@ def test_decoration_preferences_resolve_before_font_background_and_region(worksp
 
     assert snapshot.decoration_identifier == "custom"
     assert snapshot.font_identifier == "source-sans-3"
-    assert snapshot.background_identifier == "ethereal"
+    assert snapshot.background_identifier == "hex"
     assert dict(snapshot.layout["presentation_region"]) == {
         "x": 0.12,
         "y": 0.18,
@@ -390,7 +390,7 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
         package,
         "custom",
         font="source-sans-3",
-        background="ethereal",
+        background="hex",
         presentation_region={"x": 0.12, "y": 0.18, "width": 0.7, "height": 0.6},
     )
     workspace.config.write_text(

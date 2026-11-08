@@ -92,7 +92,7 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
         assert resource.identifier == identifier
         assert resource.path.name == f"{identifier}.png"
         with load_background_image(resource) as image:
-            assert image.size == (1600, 1200)
+            assert image.size == (3840, 2400)
             assert image.mode in {"RGB", "RGBA"}
     with pytest.raises(TypeError):
         config.backgrounds["other"] = config.backgrounds["canvas"]

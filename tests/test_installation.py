@@ -164,7 +164,19 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
         ("image-server", "127.0.0.1", 8080)
     ]
     assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
-    assert config.default_backgrounds == ("none", "aged-paper", "canvas", "cloth", "ethereal", "hex")
+    assert config.default_backgrounds == (
+        "none",
+        "aged-paper",
+        "canvas",
+        "cloth",
+        "drafting-grid",
+        "handmade-paper",
+        "hex",
+        "isometric-grid",
+        "limestone",
+        "recursive-squares",
+        "vellum",
+    )
     assert config.default_decorations == (
         "none",
         "ethereal",

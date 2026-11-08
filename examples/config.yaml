@@ -44,8 +44,13 @@ layout:
       - "aged-paper"
       - "canvas"
       - "cloth"
-      - "ethereal"
+      - "drafting-grid"
+      - "handmade-paper"
       - "hex"
+      - "isometric-grid"
+      - "limestone"
+      - "recursive-squares"
+      - "vellum"
 
   decorations:
     default:
