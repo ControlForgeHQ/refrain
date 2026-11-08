@@ -17,13 +17,14 @@ from types import MappingProxyType
 from typing import Any
 
 from .content import normalize_quotation
-from .qr import QRCodeGenerationError, qr_parameters_from_metadata
+from .paths import ApplicationPathError, resolve_application_paths
 from .selection import SelectionProposal
 
-_FORMAT_VERSION = 6
+_FORMAT_VERSION = 1
 _DEFAULT_HISTORY_SEGMENT_SIZE = 1_048_576
 _DEFAULT_HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -89,6 +90,19 @@ def _valid_identity(value: object, field: str) -> str:
     return identity
 
 
+def _recovery_guidance(path: Path) -> str:
+    try:
+        standard_state_path = Path(resolve_application_paths().state_file).absolute()
+    except (ApplicationPathError, OSError, RuntimeError):
+        standard_state_path = None
+    if path.absolute() == standard_state_path:
+        return "Stop Refrain and use `refrain --reset` to remove standard runtime state before restarting."
+    return (
+        "Stop Refrain, back up this file, and manually remove or quarantine only this file before restarting; "
+        "--reset does not manage overridden state paths."
+    )
+
+
 @dataclass(frozen=True)
 class ResolvedFont:
     """Font bytes resolved from a stable identifier for image preparation."""
@@ -123,41 +137,74 @@ class SchedulingContext:
 
 @dataclass(frozen=True)
 class DailySnapshot:
-    """Self-contained resolved presentation data for one selected quotation."""
+    """Self-contained semantic content and presentation preferences for one selection."""
 
+    entry_id: str
     quotation_text: str
     quotation_identity: str
-    font_identifier: str
-    presentation_metadata: Mapping[str, Any]
+    source: str | None
+    attribution: str | None
+    presentation_style: str
+    font: str | None
+    font_faces: Mapping[str, str]
+    background: str | None
+    decoration: str | None
+    text_color: tuple[str, ...] | None
+    decoration_color: tuple[str, ...] | None
     reveal_schedule: Mapping[str, Any]
-    layout: Mapping[str, Any]
     scheduling: SchedulingContext
-    background_identifier: str = "none"
-    decoration_identifier: str = "none"
 
     def __post_init__(self) -> None:
+        _nonempty_string(self.entry_id, "entry_id")
         _nonempty_string(self.quotation_text, "quotation_text")
         _valid_identity(self.quotation_identity, "quotation_identity")
         if normalize_quotation(self.quotation_text) != self.quotation_identity:
             raise ValueError("quotation_identity must match the normalized quotation_text")
-        _nonempty_string(self.font_identifier, "font_identifier")
-        _nonempty_string(self.background_identifier, "background_identifier")
-        _nonempty_string(self.decoration_identifier, "decoration_identifier")
+        for field in ("source", "attribution"):
+            value = getattr(self, field)
+            if value is not None:
+                _nonempty_string(value, field)
+        if self.presentation_style not in {"centered", "left-aligned"}:
+            raise ValueError("presentation_style must be 'centered' or 'left-aligned'")
+        for field in ("font", "background", "decoration"):
+            value = getattr(self, field)
+            if value is not None:
+                _nonempty_string(value, field)
+                if field == "font" and value == "none":
+                    raise ValueError("font cannot be 'none'")
+        if not isinstance(self.font_faces, Mapping):
+            raise TypeError("font_faces must be a mapping")
+        faces = dict(self.font_faces)
+        if any(
+            role not in {"quotation", "source", "attribution"}
+            or not isinstance(face, str)
+            or not _IDENTIFIER.fullmatch(face)
+            for role, face in faces.items()
+        ):
+            raise ValueError("font_faces must map literary roles to valid face identifiers")
+        object.__setattr__(self, "font_faces", MappingProxyType(faces))
+        for field in ("text_color", "decoration_color"):
+            value = getattr(self, field)
+            if value is not None:
+                if (
+                    not isinstance(value, (tuple, list))
+                    or not value
+                    or any(not isinstance(item, str) or not _IDENTIFIER.fullmatch(item) for item in value)
+                ):
+                    raise ValueError(f"{field} must contain one or more valid palette identifiers")
+                object.__setattr__(self, field, tuple(value))
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")
-        for field in ("presentation_metadata", "reveal_schedule", "layout"):
-            value = getattr(self, field)
-            if not isinstance(value, Mapping):
-                raise TypeError(f"{field} must be a mapping")
-            if field == "presentation_metadata":
-                value = dict(value)
-                if "qr_code" not in value:
-                    raise ValueError("presentation_metadata.qr_code is required")
-                try:
-                    qr_parameters_from_metadata(value["qr_code"])
-                except QRCodeGenerationError as error:
-                    raise ValueError(f"presentation_metadata.qr_code is invalid: {error}") from error
-            object.__setattr__(self, field, _freeze_json(value, field))
+        if not isinstance(self.reveal_schedule, Mapping):
+            raise TypeError("reveal_schedule must be a mapping")
+        schedule = dict(self.reveal_schedule)
+        if set(schedule) != {"quotation", "source", "attribution"} or any(
+            not isinstance(value, str) or not _DAY_START.fullmatch(value) for value in schedule.values()
+        ):
+            raise ValueError("reveal_schedule must contain valid quotation, source, and attribution HH:MM times")
+        if schedule["quotation"] != self.scheduling.day_start:
+            raise ValueError("reveal_schedule.quotation must match scheduling.day_start")
+        object.__setattr__(self, "reveal_schedule", _freeze_json(schedule, "reveal_schedule"))
 
     @property
     def display_date(self) -> date:
@@ -174,7 +221,6 @@ class GlobalHistoryRecord:
     selection_timestamp: datetime
     quotation_text: str
     quotation_identity: str
-    font_identifier: str
 
 
 @dataclass(frozen=True)
@@ -221,7 +267,6 @@ class GlobalHistoryStore:
             selection_timestamp=event_time,
             quotation_text=state.snapshot.quotation_text,
             quotation_identity=state.snapshot.quotation_identity,
-            font_identifier=state.snapshot.font_identifier,
         )
         contents = _encode_history_record(record)
         if len(contents) > self.max_segment_size:
@@ -297,10 +342,16 @@ class PersistentStateStore:
         try:
             document = json.loads(contents.decode("utf-8"), object_pairs_hook=_unique_object)
             return _decode_document(document)
-        except UnsupportedStateVersionError:
-            raise
+        except UnsupportedStateVersionError as error:
+            raise UnsupportedStateVersionError(
+                f"{error} State file: {self.path}. {_recovery_guidance(self.path)}"
+            ) from error
+        except StateRecoveryError as error:
+            raise StateRecoveryError(f"{error} State file: {self.path}. {_recovery_guidance(self.path)}") from error
         except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
-            raise StateRecoveryError(f"invalid persistent state at {self.path}: {error}") from error
+            raise StateRecoveryError(
+                f"invalid persistent state at {self.path}: {error}. {_recovery_guidance(self.path)}"
+            ) from error
 
     def commit(
         self,
@@ -480,24 +531,22 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         value,
         "snapshot",
         {
+            "entry_id",
             "quotation_text",
             "quotation_identity",
-            "font_identifier",
-            "background_identifier",
-            "decoration_identifier",
-            "presentation_metadata",
+            "source",
+            "attribution",
+            "presentation_style",
+            "font",
+            "font_faces",
+            "background",
+            "decoration",
+            "text_color",
+            "decoration_color",
             "reveal_schedule",
-            "layout",
             "scheduling",
         },
     )
-    metadata = data["presentation_metadata"]
-    if not isinstance(metadata, dict) or "qr_code" not in metadata:
-        raise ValueError("snapshot.presentation_metadata.qr_code is required")
-    try:
-        qr_parameters_from_metadata(metadata["qr_code"])
-    except QRCodeGenerationError as error:
-        raise ValueError(f"snapshot.presentation_metadata.qr_code is invalid: {error}") from error
     scheduling_data = _require_mapping(
         data["scheduling"],
         "snapshot.scheduling",
@@ -508,14 +557,19 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         day_start=scheduling_data["day_start"],
     )
     return DailySnapshot(
+        entry_id=_nonempty_string(data["entry_id"], "snapshot.entry_id"),
         quotation_text=data["quotation_text"],
         quotation_identity=data["quotation_identity"],
-        font_identifier=_nonempty_string(data["font_identifier"], "snapshot.font_identifier"),
-        background_identifier=data["background_identifier"],
-        decoration_identifier=data["decoration_identifier"],
-        presentation_metadata=data["presentation_metadata"],
+        source=data["source"],
+        attribution=data["attribution"],
+        presentation_style=data["presentation_style"],
+        font=data["font"],
+        font_faces=data["font_faces"],
+        background=data["background"],
+        decoration=data["decoration"],
+        text_color=data["text_color"],
+        decoration_color=data["decoration_color"],
         reveal_schedule=data["reveal_schedule"],
-        layout=data["layout"],
         scheduling=scheduling,
     )
 
@@ -527,8 +581,7 @@ def _decode_document(value: object) -> PersistentState:
         raise StateRecoveryError("persistent-state format_version must be an integer")
     if version != _FORMAT_VERSION:
         raise UnsupportedStateVersionError(
-            f"unsupported persistent-state format version {version}; version 6 is required. "
-            "Archive or remove this development state file before starting Refrain; it was not modified."
+            f"unsupported persistent-state format version {version}; version 1 is required"
         )
     payload = document["state"]
     digest = document["sha256"]
@@ -574,14 +627,19 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
         "revision": state.revision,
         "highest_reveal_stage": state.highest_reveal_stage,
         "snapshot": {
+            "entry_id": snapshot.entry_id,
             "quotation_text": snapshot.quotation_text,
             "quotation_identity": snapshot.quotation_identity,
-            "font_identifier": snapshot.font_identifier,
-            "background_identifier": snapshot.background_identifier,
-            "decoration_identifier": snapshot.decoration_identifier,
-            "presentation_metadata": _thaw_json(snapshot.presentation_metadata),
+            "source": snapshot.source,
+            "attribution": snapshot.attribution,
+            "presentation_style": snapshot.presentation_style,
+            "font": snapshot.font,
+            "font_faces": _thaw_json(snapshot.font_faces),
+            "background": snapshot.background,
+            "decoration": snapshot.decoration,
+            "text_color": _thaw_json(snapshot.text_color),
+            "decoration_color": _thaw_json(snapshot.decoration_color),
             "reveal_schedule": _thaw_json(snapshot.reveal_schedule),
-            "layout": _thaw_json(snapshot.layout),
             "scheduling": {
                 "display_date": snapshot.display_date.isoformat(),
                 "day_start": snapshot.scheduling.day_start,
@@ -598,7 +656,6 @@ def _encode_history_record(record: GlobalHistoryRecord) -> bytes:
         "selection_timestamp": record.selection_timestamp.isoformat().replace("+00:00", "Z"),
         "quotation_text": record.quotation_text,
         "quotation_identity": record.quotation_identity,
-        "font_identifier": record.font_identifier,
     }
     return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8") + b"\n"
 
