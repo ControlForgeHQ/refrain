@@ -51,9 +51,9 @@ The first release should be useful in normal household operation without dependi
 - Reset only the affected repetition pool without discarding unrelated repetition history.
 - Remove obsolete repetition identities when selecting from a successfully validated content library.
 - Preserve selections and reveal progression through application restarts and clock adjustments.
-- Commit a durable daily presentation snapshot independently of the original content entry.
-- Preserve the selected font identifier without requiring font-file contents to be embedded in persistent state.
-- Recover missing prepared images using available font resources, including a bundled fallback when necessary.
+- Commit the selected quotation and its content identity, required semantic metadata, reveal schedule, display-day context, repetition history, revision, and reveal progress independently of the original content entry.
+- Treat prepared reveal-stage images as disposable derived cache; reuse complete sets during normal operation and regenerate the whole set from current settings and assets when necessary.
+- Preserve the selected content and reveal progression when image preparation or cache recovery fails; do not require exact visual reproduction.
 - Ensure that committed operational state remains consistent across failures, independently of global-history recording.
 - Maintain monotonically increasing selection revisions independently of historical-log retention.
 
@@ -66,7 +66,7 @@ The first release should be useful in normal household operation without dependi
 - Preserve previously revealed information as new fields appear.
 - Generate and persist all required reveal-stage images when preparing the committed daily selection.
 - Reuse prepared images for scheduled updates rather than rendering each stage on demand.
-- Recover missing or incomplete images without changing the committed selection.
+- Regenerate the complete stage set when its cache is missing or unusable, without changing the committed selection.
 - Resume the appropriate reveal stage after startup or interruption.
 - Prevent backward clock adjustments from hiding previously revealed information.
 - Skip missed intermediate updates rather than replaying them.
@@ -94,7 +94,7 @@ The first release should be useful in normal household operation without dependi
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Support QR-enabled and QR-free literary presentations, including artwork conditional on QR presence.
 - Generate enabled QR codes at final resolution with integer-pixel modules and a complete quiet zone.
-- Preserve selected visual resources and effective presentation geometry throughout the committed display day.
+- Keep presentation-resource choices and derived rendering geometry out of durable daily selection state.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
 - Support optional automatic presentation of the information view for a configurable, bounded duration, enabled by default.
@@ -121,6 +121,7 @@ The first release should be useful in normal household operation without dependi
 - Include automated coverage for quotation eligibility, specificity, priority, repetition, scheduling, persistence, validation, and rendering.
 - Verify atomic selection commitment and recovery from interrupted operations.
 - Verify recovery of committed selections and prepared images after application restarts.
+- Refactor prerelease selection-state construction and validation, rendering metadata, artifact identity and cache validation/reuse, resource recovery, and historical-schema tests to implement the minimal daily record and disposable-cache contract before Version 0.1 validation.
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
 - Provide interactive, state-isolated visual inspection of discovered decorations with short and long literary compositions.
@@ -271,7 +272,7 @@ Diagnostic views could reuse the shared quotation renderer with a dedicated back
 
 A small set of messages associated with broad failure categories is preferable to maintaining a separate quotation for every possible exception.
 
-Some failures, including invalid application configuration, may prevent access to ordinary presentation settings. Any future implementation must therefore define a minimal, application-owned fallback sufficient to render useful diagnostics without depending on the failed configuration or a valid daily snapshot.
+Some failures, including invalid application configuration, may prevent access to ordinary presentation settings. Any future implementation must therefore define a minimal, application-owned fallback sufficient to render useful diagnostics without depending on the failed configuration or a valid daily selection record.
 
 Physical display failures may prevent a diagnostic view from being presented. Logging and other error-reporting mechanisms must remain independent of display availability.
 
@@ -293,12 +294,13 @@ Development should proceed in the following order:
 
 1. Establish repository documentation, engineering standards, contributor workflow, and the resolution-independent architecture and public interfaces.
 2. Implement and test the rendering pipeline, configurable output geometry, and ordered decoration compositions.
-3. Implement resolution-aware visual diagnostics and hardware-independent rendering validation.
-4. Refine bundled artwork for the supported aspect ratios and validate on e-paper and representative non-e-paper output.
-5. Establish reliable unattended operation on the target Raspberry Pi.
-6. Complete Version 0.1 validation, documentation, and release.
-7. Proceed to the companion web presentation.
-8. Evaluate later integrations and public publishing independently.
+3. Simplify prerelease durable selection state and prepared-image caching/recovery to the documented content-and-reveal guarantees; remove obsolete render-plan persistence and compatibility machinery.
+4. Implement resolution-aware visual diagnostics and hardware-independent rendering validation.
+5. Refine bundled artwork for the supported aspect ratios and validate on e-paper and representative non-e-paper output.
+6. Establish reliable unattended operation on the target Raspberry Pi.
+7. Complete Version 0.1 validation, documentation, and release.
+8. Proceed to the companion web presentation.
+9. Evaluate later integrations and public publishing independently.
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
 

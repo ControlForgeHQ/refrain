@@ -122,9 +122,9 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Daily Selection:** The individual quotation assigned to the current display day.
 
-**Daily Snapshot:** A persistent copy of the selected quotation and committed presentation settings sufficient to prepare its presentation independently of the original content entry. Font, background, and decoration resources are resolved separately.
+**Daily Selection Record:** A persistent copy of the selected quotation and the content properties needed to interpret it, independent of the original content entry. Rendering resources and settings are resolved during image preparation.
 
-**Selection Commitment:** The successful durable recording of a daily snapshot, updated repetition history, selection revision, and associated operational context as one consistent authoritative state.
+**Selection Commitment:** The successful durable recording of a daily selection, updated repetition history, selection revision, reveal progress, and scheduling context as one consistent authoritative state.
 
 **Reveal Stage:** A cumulative set of content fields eligible for presentation at a particular point in the configured reveal schedule.
 
@@ -136,7 +136,7 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Display Backend:** The component responsible for presenting prepared images through a configured output destination, including directly connected display hardware or a network-accessible image service.
 
-**Persistent State:** The authoritative operational state containing the committed daily snapshot, selection revision, active repetition history, reveal progress, and scheduling context required for recovery across application restarts.
+**Persistent State:** The authoritative operational state containing the current daily selection, selection revision, active repetition history, reveal progress, and scheduling context required for recovery across application restarts.
 
 
 
@@ -167,7 +167,7 @@ Specificity, repetition, and priority
 Quotation selection
     |
     v
-Daily snapshot + updated repetition history
+Daily selection record + updated repetition history
     |
     v
 Atomic operational-state commitment
@@ -200,7 +200,7 @@ Selection identifies the individual quotation to be displayed during the next pr
 
 The selected quotation inherits the eligibility, priority, reveal configuration, and presentation metadata of its containing content entry.
 
-A new selection becomes authoritative only when its complete daily snapshot, updated repetition history, selection revision, and required scheduling context have been durably committed as one consistent operational state.
+A new selection becomes authoritative only when its daily selection record, updated repetition history, selection revision, initial reveal progress, and required scheduling context have been durably committed as one consistent operational state.
 
 An interrupted or unsuccessful operational-state commitment leaves the proposed selection incomplete.
 
@@ -227,7 +227,7 @@ Normal scheduled reveals do not invoke the renderer or consult the content libra
 
 The display backend owns physical display communication and recovery.
 
-The committed daily snapshot remains authoritative when prepared images need to be recovered.
+The committed daily selection remains authoritative when prepared images need to be recovered.
 
 Time and configuration are inputs to the relevant responsibilities. Neither is an independent source of quotation-selection policy.
 
@@ -435,7 +435,7 @@ Refrain must not attempt to reverse previously committed selections or undo hist
 
 ### Boundary recognition
 
-A display-day transition is an observed scheduling event, not merely a disagreement between the current date and the date stored in the active snapshot.
+A display-day transition is an observed scheduling event, not merely a disagreement between the current date and the date stored with the active selection.
 
 Each newly recognized transition may establish a new daily selection, even when its display date is earlier than a previously committed selection.
 
@@ -594,7 +594,7 @@ Multiple candidate occurrences containing the same normalized quotation may have
 
 Such occurrences share repetition-history identity.
 
-When multiple occurrences of the same quotation remain eligible, the selected occurrence determines the metadata included in the daily snapshot.
+When multiple occurrences of the same quotation remain eligible, the selected occurrence determines the metadata included in the daily selection record.
 
 Refrain is not required to detect or resolve unintended duplicate content entries beyond applying the established selection and quotation-identity rules.
 
@@ -616,14 +616,10 @@ For each new daily selection:
 10. Retain candidates having the highest priority.
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
-13. Resolve the decoration using the entry's preference or the effective default decoration pool.
-14. When at least one layer is effectively tintable and decoration-colour selection applies, resolve and commit one colour from the entry preference, decoration preference, effective decoration-colour pool, or built-in `black` fallback. Tintability alone does not require selecting a tint.
-15. Select one font bundle using the entry preference, selected decoration preference, or effective default font pool, in that precedence order; resolve and commit each role's face within that bundle.
-16. Resolve the background using the entry's preference, the selected decoration's background preference, or the effective default background pool, in that precedence order.
-17. Resolve output geometry, effective literary insets, QR enablement, ordered layer conditions, and all required rendering transformations.
-18. Prepare the complete daily snapshot.
-19. Atomically commit the daily snapshot, updated repetition history, next selection revision, and required scheduling context as authoritative operational state.
-20. Record the committed selection in global history on a best-effort basis.
+13. Preserve the selected occurrence's semantic metadata, effective reveal schedule, presentation style, and declared content preferences needed to interpret or present the quotation.
+14. Prepare the daily selection record.
+15. Atomically commit the daily selection record, updated repetition history, next selection revision, initial reveal progression, and required scheduling context as authoritative operational state.
+16. Record the committed selection in global history on a best-effort basis.
 
 Selection is not complete until operational-state commitment succeeds.
 
@@ -635,7 +631,7 @@ Failure to record global history after commitment does not invalidate the commit
 
 The next selection revision is derived from authoritative operational state, never from global-history contents.
 
-The random results of an uncommitted selection, including decoration, font, and background selection, are not authoritative.
+Visual resources and rendering decisions are resolved during preparation, not selection commitment.
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
 
@@ -648,53 +644,34 @@ Refrain maintains sufficient durable operational state to preserve:
 - the current committed daily selection and its monotonically increasing revision;
 - the display date associated with that selection;
 - the selected quotation's original text;
-- the resolved presentation metadata and font identifier;
-- configured output dimensions and effective literary geometry;
-- selected visual resource identifiers and colors;
-- resolved QR enablement and, when enabled, the URL, version, error-correction level, integer module size, quiet zone, and final-resolution placement offsets;
-- effective decoration layer order, conditions, rendering methods, and transformation geometry;
-- the committed decoration tinting decision and, when enabled, palette identifier and resolved RGB value;
-- the reveal schedule applicable to the selection;
-- relevant layout configuration;
+- the selected content identity, optional source and attribution, and content properties needed to interpret or present the quotation;
+- the effective reveal schedule and scheduling context needed to resume it;
 - active repetition history;
 - the highest reveal stage reached for the current selection;
-- scheduling context required to recover correctly after clock adjustments.
 
 Refrain separately maintains a chronological global history of selection events.
 
 Operational state is authoritative for selection, scheduling, reveal progression, and recovery. Global history is historical information and is not required for normal operation.
 
-After commitment, the active presentation must not require access to the original YAML content entry.
+After commitment, the active selection must not require access to the original YAML content entry.
 
-### Daily snapshot
+### Daily selection record
 
-The daily snapshot contains a complete copy of the selected quotation and the committed presentation settings needed to prepare every reveal stage.
+The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library.
 
-It includes only the selected quotation from its containing content entry, not the entry's other quotations.
+It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, and any selected content preferences needed to interpret or present the quotation. It does not contain other quotations from the entry.
 
-The snapshot contains the selected quotation, available source and attribution, selected font identifier, selected background and decoration identifiers, effective presentation style, reveal schedule, and presentation configuration required for rendering. New snapshots also preserve output dimensions, effective literary insets, resolved QR enablement and generation parameters, and the effective ordered decoration layers with their conditions, rendering methods, and transformation geometry.
+The record is not a serialized rendering plan. Do not store output dimensions, working-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Current configuration, content-level preferences, and available assets are used to prepare images.
 
-New snapshots use format version 7 and contain resource identifiers and resolved scalar parameters, not PNG bytes. Existing version-6 snapshots remain legacy snapshots: valid prepared artifacts may be reused unchanged, and regeneration must honor their committed dimensions, normalized presentation region, QR parameters, and single-image decoration semantics. Do not convert an old normalized region to insets or infer legacy QR behavior from current preferences. Earlier unsupported snapshot versions retain their existing handling; do not silently replace or reinterpret them.
+Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce a clear diagnostic directing the developer to `refrain --reset`; it must not silently replace the selected content or modify the state file.
 
-Font, background, decoration, and applicable decoration-colour selection occurs after quotation selection and before the daily snapshot is committed.
+Selection commitment does not depend on resolving visual resources.
 
-An entry's explicit resource preferences take precedence according to the selection rules defined in the presentation and rendering section. Unavailable preferences do not invalidate otherwise usable quotations.
+Content-level presentation preferences remain part of the selected record when needed to preserve the selected entry's intended behavior. They are preferences for future preparation, not resolved rendering decisions.
 
-The selected resource identifiers and effective presentation settings remain fixed throughout the committed display day.
+The daily selection record is immutable after commitment except for monotonic reveal progress and the scheduling context required by the display-day model.
 
-The decoration tinting decision is also fixed in the snapshot. The effective tintability of each layer and, if selected, the single decoration tint color are committed, so later palette or manifest changes cannot recolour the presentation. If no tint is selected, every layer retains its authored colors.
-
-The snapshot contains resolved presentation values rather than references to mutable content-library entries or configuration that may subsequently change.
-
-The snapshot does not contain font or image resource bytes, filesystem paths, or content hashes.
-
-The snapshot is immutable after commitment.
-
-The snapshot is authoritative for regenerating the complete set of prepared reveal-stage images. Regeneration preserves the selected content, reveal schedule, output dimensions, effective literary geometry, resolved QR policy, ordered decoration layers, transformations, and committed resource identifiers.
-
-Presentation resources are resolved at preparation time. Missing fonts use the documented bundled-font fallback policy. Missing background or decoration images use the documented visual-resource recovery policy.
-
-Presentation changes within the display day are represented by reveal progression and prepared images, not by modifying the selected content or committed presentation configuration.
+Prepared images are disposable derived artifacts. Regeneration preserves the selected content and reveal progression but may reflect current configuration, assets, fonts, colors, layout, and QR policy.
 
 ### Global history
 
@@ -704,7 +681,6 @@ Each record identifies the selection revision and logical display date and prese
 
 - the selected quotation text;
 - its normalized repetition identity;
-- the selected font identifier;
 - the time at which the selection was made.
 
 Selection revisions increase monotonically and are maintained in operational state. They are not derived from global-history records.
@@ -712,8 +688,6 @@ Selection revisions increase monotonically and are maintained in operational sta
 Global history records selection events rather than unique display dates. Multiple selections associated with the same logical display date remain distinct records, including selections resulting from clock adjustments.
 
 Global history is independent of the containing entry's identifier, source, attribution, priority, and eligibility rules for repetition purposes.
-
-The selected font identifier is historical presentation metadata. It does not participate in quotation identity or repetition tracking.
 
 Global history is append-only during normal recording. Recorded events are not modified or removed when repetition pools are exhausted.
 
@@ -751,7 +725,7 @@ Repetition history must not be reconstructed from global history after each rest
 
 Selection commitment establishes a new authoritative operational-state revision containing:
 
-- the complete daily snapshot;
+- the complete daily selection record;
 - the updated repetition history;
 - the identity and scheduling context of the committed selection;
 - initial reveal progression.
@@ -762,7 +736,7 @@ A new selection revision is derived from the preceding operational-state revisio
 
 An interrupted operational-state update must recover to either the preceding valid selection or the newly committed selection.
 
-A partially written or invalid snapshot must not be treated as a completed selection.
+A partially written or invalid daily selection record must not be treated as a completed selection.
 
 Once an operational selection has been committed, failure to prepare images, update the display, or append global history must not cause the same selection to be committed again.
 
@@ -774,23 +748,21 @@ The exact storage formats, rotation mechanics, and persistence operations belong
 
 ### Prepared images
 
-After selection commitment, Refrain generates every required reveal-stage image from the committed snapshot and available presentation resources.
+After selection commitment, Refrain resolves current presentation configuration and available resources, then generates every required reveal-stage image together.
 
 Prepared images are persisted on disk.
 
 They are derived artifacts, not independently authoritative application state.
 
-Prepared images must remain associated with the snapshot from which they were generated.
+Prepared images must remain associated with the committed selection revision and expected reveal-stage sequence.
 
-A complete, valid set of prepared images should be reused after application restart.
+A complete, valid set is reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate it.
 
-Missing, damaged, or incomplete prepared images must be regenerated using the committed snapshot and currently available presentation resources.
+If the set is absent, damaged, incomplete, or unusable, regenerate the complete stage set from the durable current selection using currently available configuration and assets, then safely replace the unusable cache.
 
-Regeneration applies the documented font, background, and decoration recovery policies without changing committed identifiers or layout values.
+All stages generated in one preparation use one consistent resolution of visual resources, configuration, layout, and QR policy.
 
-The same resolved resources and effective presentation region must be used for every stage prepared together.
-
-Regeneration must not trigger a new daily selection or alter repetition or global history.
+Regeneration may change the visual appearance. It must not trigger a new daily selection, change repetition history, or move reveal progression backward.
 
 The runtime must not require all prepared images to remain decoded in memory.
 
@@ -798,25 +770,17 @@ The runtime must not require all prepared images to remain decoded in memory.
 
 On startup, Refrain first attempts to recover the committed operational selection.
 
-The content library does not override a valid committed snapshot.
+The content library does not override a valid committed daily selection record.
 
 If the original YAML entry has been removed, renamed, or modified, the current selection remains unchanged.
 
-Missing or invalid original content does not prevent recovery when the committed snapshot is valid.
+Missing or invalid original content does not prevent recovery when the committed daily selection record is valid.
 
 If selection commitment was interrupted, Refrain must recover the last valid operational state and repeat selection when necessary.
 
-If rendering or image persistence was interrupted after commitment, Refrain resumes or repeats preparation using the same committed snapshot.
+If rendering or image persistence was interrupted after commitment, Refrain regenerates the complete stage set using current configuration and available resources. Existing fallback and diagnostic policies apply to unavailable or invalid resources.
 
-Image regeneration may use a bundled fallback font if the selected font is no longer available.
-
-If no usable font resource can be resolved, the application must report the preparation failure rather than silently substitute an arbitrary system font.
-
-Missing or unusable committed background and decoration resources are omitted according to their documented recovery policies. They do not cause visual-resource reselection or alteration of the effective presentation region.
-
-Exact pixel reproduction is not required when installed presentation resources have changed.
-
-If the committed snapshot itself is unavailable or invalid, the application must report the failure and must not silently substitute another quotation.
+If current operational state is incompatible, unavailable, or invalid, report a clear diagnostic directing the developer to `refrain --reset`. Do not modify the state or silently substitute another quotation. Valid current-format state remains recoverable.
 
 Missing, damaged, or inaccessible global history must not prevent operational recovery.
 
@@ -846,13 +810,13 @@ Authoritative operational state owns:
 
 - the current committed selection and its monotonically increasing revision;
 - active repetition history;
-- the immutable daily content snapshot;
+- the immutable daily selection record;
 - monotonic reveal progress;
 - scheduling context needed for recovery.
 
 Global history owns chronological historical selection records but does not determine operational behavior.
 
-Prepared images are derived from the current snapshot and available presentation resources.
+Prepared images are disposable cache entries derived from the current daily selection, its reveal stages, and the configuration and resources available when the set was prepared.
 
 The appropriate reveal stage is initially determined by the committed schedule and current time.
 
@@ -865,7 +829,7 @@ The currently required stage is therefore the later of:
 
 Reveal progression must survive application restarts.
 
-Prepared images remain recoverable from the committed snapshot and available presentation resources. Pixel-identical reproduction is not guaranteed after changes to installed fonts, backgrounds, or decorations.
+Prepared images are reused without checking for configuration or asset changes. If a set is unusable, regenerate it completely from current inputs; exact visual reproduction is not a requirement.
 
 The future calendar archive is a separate historical presentation resource and is not authoritative for the active display.
 
@@ -891,7 +855,7 @@ A global reveal schedule defines the default timing for supported semantic field
 
 Individual content entries may override that schedule.
 
-The effective schedule is resolved before the daily snapshot is committed.
+The effective schedule is resolved before the daily selection record is committed.
 
 Subsequent changes to global configuration or the original entry do not alter the committed schedule.
 
@@ -905,7 +869,7 @@ After selection commitment, Refrain prepares all images required by the effectiv
 
 Each image represents one cumulative reveal stage.
 
-All images are generated using the same committed content and layout configuration.
+All images generated together use the same selected content and one consistent resolution of current layout configuration.
 
 Normal scheduled progression uses these prepared images.
 
@@ -943,15 +907,15 @@ The hardware-independent scheduling evaluator determines whether an initial or t
 
 The public interface is `refrain.evaluate_scheduling(current_time, configuration, state, observed_boundary=None)`. It returns an immutable `SchedulingDecision` whose `SchedulingAction` is `INITIAL_SELECTION`, `NEW_SELECTION`, `ADVANCE_REVEAL`, or `NO_ACTION`. Initial and transition-driven selections include `display_date`; decisions for a committed selection include `required_reveal_stage`. Invalid or insufficient inputs raise `SchedulingEvaluationError` rather than producing a guessed transition.
 
-Without a committed selection, the evaluator calculates the initial display date using host-local civil time. With a committed selection, a difference between the current date and the snapshot's display date does not authorize reselection. A `DisplayDayBoundary(display_date, state_revision)` observation identifies the resulting display date and the selection revision active when it was observed; after that revision is replaced, the observation is stale. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
+Without a committed selection, the evaluator calculates the initial display date using host-local civil time. With a committed selection, a difference between the current date and the stored display date does not authorize reselection. A `DisplayDayBoundary(display_date, state_revision)` observation identifies the resulting display date and the selection revision active when it was observed; after that revision is replaced, the observation is stale. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
 
-`refrain.resolve_reveal_stages(snapshot)` returns the canonical ordered `CompositionVisibility` sequence for a committed snapshot. The coordinator must pass this same sequence to image preparation and recovery; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
+`refrain.resolve_reveal_stages(selection)` returns the canonical ordered `CompositionVisibility` sequence for a committed daily selection. The coordinator uses this same sequence for image preparation and cache validation; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
 
 `refrain.DisplayDayBoundaryObserver` recognizes only transitions observed during the current process lifetime. Its first timestamp establishes a baseline, a backward wall-clock adjustment resets that baseline without creating a boundary, and a forward jump produces at most one boundary for the currently appropriate display date. An already pending observation remains available across a clock adjustment while its associated selection revision remains current; backward adjustments do not replace it with an earlier date, while a later observed forward transition supersedes it with the currently appropriate date. The observer returns the same pending observation on repeated calls while that revision and date remain current; observing a later revision expires it. A failed selection commit therefore leaves the event available for retry, while a successful commit makes it stale to `evaluate_scheduling()`. The observer does not persist clock history; after an interruption, an isolated timestamp cannot establish that a boundary occurred, so startup continues to follow the conservative recovery policy above.
 
 `refrain.next_scheduling_deadline(current_time, configuration, state)` returns the next applicable committed reveal time or configured display-day boundary. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; observation and waiting do not select content, mutate persistent state, prepare images, or operate a display.
 
-The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by the snapshot's resolved schedule in host-local time and the persisted highest stage. The scheduling context contains only the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
 
 The coordinator presents the corresponding prepared image when a reveal advancement is required. Scheduling evaluation does not determine whether an image was successfully presented.
 
@@ -963,9 +927,9 @@ A subsequent successful update may skip intermediate stages and present the late
 
 ### Rendering independence
 
-Daily-image preparation accepts a committed daily snapshot and an explicit sequence of cumulative reveal stages.
+Daily-image preparation accepts a committed daily selection record and an explicit sequence of cumulative reveal stages.
 
-Preparation resolves the snapshot's literary content and presentation settings, generates the view-specific background, and uses the shared renderer to produce complete images without accessing physical display hardware.
+Preparation resolves the selected content and current presentation settings, generates the view-specific background, and uses the shared renderer to produce complete images without accessing physical display hardware.
 
 Neither preparation nor the renderer selects content, modifies selection history, or determines application lifecycle policy.
 
@@ -989,13 +953,13 @@ Derive the largest working canvas for the configured aspect ratio by reducing on
 
 Compose raster artwork on this working canvas. Scale the completed graphical composition to the configured output dimensions; this may reduce or enlarge it. Final-resolution literary typography and enabled QR output are rendered after that scaling. These three sizes—the fixed reference canvas, ratio-specific working canvas, and configured final output—are distinct. A hardware destination does not select them or constrain the renderer's supported ratios or resolutions.
 
-For working geometry, intersect reference-space rectangles with the centered working-canvas crop, then translate by the crop origin; do not independently rescale the reference dimensions. Map working-canvas coordinates to final output with one uniform ratio-preserving scale. Convert mapped edges to the nearest integer pixel, rounding exact half-pixel values upward. Compute opposing edges independently and derive remaining widths or heights by subtraction so resolved rectangles have no rounding gaps. Reject non-finite, negative, out-of-envelope, or degenerate geometry before rendering.
+Artwork authoring measurements use the fixed reference envelope and map to the selected working canvas according to the artwork contract. Presentation insets are defined directly in working-canvas pixels and are not reference-envelope geometry. Scale working-canvas coordinates uniformly to final output dimensions. Convert mapped edges to the nearest integer pixel, rounding exact half-pixel values upward. Resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps. Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
 
 #### Literary presentation geometry
 
-The literary region is defined by four independent reference-canvas insets: `left`, `right`, `top`, and `bottom`. Each inset is measured inward from its corresponding edge of the fixed 3840 × 2400 reference canvas. These authored values do not change with output resolution or aspect ratio. The reference-space literary rectangle is intersected with the selected working-canvas viewport; the intersection is translated to working-canvas coordinates and uniformly scaled to final output coordinates.
+The literary region is defined by four independent working-canvas pixel insets: `left`, `right`, `top`, and `bottom`. Each is measured inward from the corresponding edge of the ratio-specific working canvas. For example, `left: 180` means 180 working-resolution pixels from the left edge on 4:3, 16:9, and 16:10 canvases. With output sizes `[1600, 1200]` and `[1920, 1080]`, the working canvases are twice the output dimensions, so this inset resolves to 90 final-output pixels in both cases; at `[3840, 2400]` it remains 180 pixels. Insets are not first applied to the full reference envelope and are not intersected with a cropped reference rectangle. Scale the resulting working-space rectangle uniformly to final output coordinates using deterministic nearest-integer, half-up edge rounding.
 
-Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the committed presentation. The resulting rectangle must have positive width and height and contain the complete literary composition. It remains unchanged across every reveal stage.
+Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the same rectangle and layout for all stages generated together.
 
 Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
 
@@ -1016,25 +980,25 @@ Every decoration PNG is behind all literary text and QR output. This pipeline do
 
 A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The initial methods are `contain`, which aspect-preservingly scales the image to fit the working canvas, and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
 
-For `nine-slice`, 3840 × 2400 PNGs are the reference-quality authoring size. Smaller or differently proportioned custom PNGs remain measured in their actual source pixels: fit the complete source uniformly within the fixed reference canvas using centered `contain`, with scale `min(3840 / source_width, 2400 / source_height)`, and apply that same scale and centered offset to its slice boundaries. Round transformed boundaries to the nearest integer, rounding exact half-pixel values upward. This does not create an alternate reference coordinate system. Upscaling a smaller source cannot restore detail and may visibly soften artwork; cropping or stretching edges can further affect its appearance. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
+For `nine-slice`, 3840 × 2400 PNGs are the reference-quality authoring size. Smaller or differently proportioned custom PNGs remain measured in their actual source pixels: fit the complete source uniformly within the fixed reference envelope using centered `contain`, with scale `min(3840 / source_width, 2400 / source_height)`, and apply that same scale and centered offset to its slice boundaries. This maps source measurements into reference-space artwork measurements; it does not change the fixed reference coordinate system. Upscaling a smaller source cannot restore detail and may visibly soften artwork. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
 
-Place the four corner regions at the corresponding working-canvas corners without changing their proportions. Scale corners uniformly by the smaller of the working-width/reference-width and working-height/reference-height ratios. Horizontal edges preserve their thickness and adapt along their horizontal length; vertical edges preserve their thickness and adapt along their vertical length. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
+Map nine-slice source coordinates to high-resolution working-space measurements once. Then place the four corners at the corresponding working-canvas edges and preserve their resolved widths and heights across supported aspect ratios. Do not apply an additional working-canvas-to-reference-envelope ratio to corner dimensions. For example, a resolved 240 × 180 working-space corner remains 240 × 180 on 4:3, 16:9, and 16:10 canvases when those dimensions fit. Horizontal and vertical edge thicknesses remain fixed; only their lengths adapt to the destination canvas. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
 
-Use the deterministic source-to-reference contain scale and nearest-integer, half-up rounding rule defined above for slice boundaries and corner dimensions. Then apply the uniform reference-to-working corner scale. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
+Use the deterministic source-to-reference contain transform and nearest-integer, half-up rounding rule for source boundaries and their resolved working-space measurements. Preserve corner dimensions after that mapping. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
 
 #### Decoration tinting
 
-Decoration-wide and per-layer `tintable` values both default to `true`. A layer is tintable only when `decoration.tintable AND layer.tintable` is true. This permission does not require a tint to be selected. If tinting is selected, one effective decoration tint color is committed and applied only to effectively tintable layers; do not select separate colors per layer. Preserve each source pixel's alpha, including antialiasing and transparency.
+Decoration-wide and per-layer `tintable` values both default to `true`. A layer is tintable only when `decoration.tintable AND layer.tintable` is true. This permission does not require a tint to be selected. If tinting is selected, resolve one decoration tint color for the complete preparation and apply it only to effectively tintable layers; do not select separate colors per layer. Preserve each source pixel's alpha, including antialiasing and transparency.
 
 #### QR generation and conditional artwork
 
-The presentation-level QR policy defaults to enabled and may be disabled. Effective enablement is the logical AND of that policy and the selected decoration's `qr_ready` value; omission of `qr_ready` means `true`. A selected decoration with `qr_ready: false` therefore suppresses QR generation even when the presentation policy enables it. Resolve and commit effective QR enablement before image preparation rather than inferring it from available artwork. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, enabled-only, or disabled-only respectively. Conditions do not change layer order.
+The presentation-level QR policy defaults to enabled and may be disabled. Effective enablement is the logical AND of that policy and the selected decoration's `qr_ready` value; omission of `qr_ready` means `true`. A selected decoration with `qr_ready: false` therefore suppresses QR generation even when the presentation policy enables it. Resolve effective QR enablement once for each complete preparation rather than inferring it from available artwork. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, enabled-only, or disabled-only respectively. Conditions do not change layer order.
 
-When enabled, generate a black QR symbol at final output resolution with square integer-pixel modules and its complete opaque-white quiet zone. Composite it without subsequent resize or resampling. Resolve its dimensions and offsets from final output geometry and commit the resolved generation parameters. Do not automatically modify literary insets or image slicing to accommodate QR placement; QR overlap is not automatically avoided. The standalone information view remains outside literary QR behavior.
+When enabled, generate a black QR symbol at final output resolution with square integer-pixel modules and its complete opaque-white quiet zone. Composite it without subsequent resize or resampling. Resolve its dimensions and offsets from final output geometry for the current preparation. Do not automatically modify literary insets or image slicing to accommodate QR placement; QR overlap is not automatically avoided. The standalone information view remains outside literary QR behavior.
 
 The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
 
-The renderer does not require a content-library entry or committed daily snapshot as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
+The renderer does not require a content-library entry or committed daily selection record as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
 
 The architecture does not require a general-purpose layout framework, externally supplied rendering components, a theme engine, or a plugin interface.
 
@@ -1050,7 +1014,7 @@ Application configuration defines a default selection pool for each resource typ
 
 An omitted resource configuration preserves the plain paper-white, undecorated presentation.
 
-Decoration, font, and background selection occurs after quotation selection and before committing the daily snapshot.
+Decoration, font, background, color, layout, and QR decisions are resolved during image preparation using the selected content's declared preferences and current configuration.
 
 For each selected quotation, Refrain resolves the decoration first:
 
@@ -1081,39 +1045,21 @@ Invalid decoration registrations must not make unrelated fonts, backgrounds, or 
 
 Each effective background and decoration default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
 
-The selected font, background, and decoration identifiers, output dimensions, effective literary insets, resolved QR enablement, ordered layers, and rendering transformations are committed with the daily presentation. They are not part of quotation identity or repetition history.
-
-These selections remain fixed throughout the committed display day, including after restarts.
+Font, background, decoration, color, layout, and QR decisions are resolved from current configuration and available resources during image preparation. They are not part of quotation identity or repetition history and are not persisted as daily selection decisions.
 
 After resolving the decoration, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected decoration's `text_color`, the effective `layout.text.colors` pool, then built-in `black`. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
 
-The selected palette identifier and its resolved RGB value are committed in the daily snapshot. Color selection is independent of quotation identity and repetition history. The effective text color is fixed for the committed display day and is not reconsidered during reveal progression or recovery.
+The selected text and decoration colors are resolved for the complete preparation. Color selection is independent of quotation identity and repetition history.
 
 The registries, valid identifiers, image requirements, pool configuration, and content-entry overrides are specified in `docs/CONTENT_FORMAT.md`.
 
 ### Background and decoration recovery
 
-The committed daily snapshot identifies the selected background and decoration, contains the effective literary insets and output dimensions, and records the ordered decoration layers and resolved transformation geometry.
-
-The snapshot does not embed background or decoration image bytes, filesystem paths, or content hashes.
-
-Image preparation resolves the committed identifiers against available resources. Existing valid prepared images remain reusable when installed resources change.
-
-When prepared images must be regenerated, Refrain uses the committed identifiers rather than repeating background or decoration selection.
-
-If a committed background becomes unavailable, preparation uses the paper-white base with an appropriate diagnostic. It does not randomly select another background.
-
-If a committed decoration or one of its required layer images becomes unavailable, preparation omits that decoration with an appropriate diagnostic. It retains the committed effective literary insets rather than recalculating them from the current decoration registry or global configuration.
-
-The committed tinting decision and RGB value are used during regeneration; preparation does not recalculate tintability or colour from the current manifest or palette. Snapshots predating tint metadata preserve legacy untinted rendering, including when a current decoration manifest marks the resource tintable.
-
-The same rule applies when a decoration's preferred background was selected and subsequently becomes unavailable.
+Preparation resolves current configuration and available visual resources once for the complete reveal-stage set. It applies the documented fallback and diagnostic policies to unavailable or invalid resources without changing the selected quotation or its reveal progression.
 
 Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation applies deterministic, aspect-preserving centered cover scaling and equal-edge cropping at working resolution, then composites the result over paper-white while preserving source alpha. Decoration layers use the configured rendering method at working resolution. Their slice coordinates and transformations do not determine the literary insets.
 
-A recoverable missing image resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required snapshot data or an unrenderable literary composition, remain errors.
-
-Resource substitution during regeneration may alter appearance, but it must not modify the committed snapshot.
+A missing or invalid optional visual resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required selection data or an unrenderable literary composition, remain errors.
 
 The daily background and decoration system does not alter the independent composition or recovery policies of the information view.
 
@@ -1213,7 +1159,7 @@ The byline retains its applicable leading dash and separator punctuation through
 
 Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
-The presentation insets are configured in reference-canvas pixels. Intersect the reference-space rectangle with the working-canvas viewport, translate to working coordinates, then uniformly scale the resulting geometry to final output dimensions.
+Presentation insets are working-canvas pixels, measured inward from each edge of the active working canvas. Apply them directly in working space, then uniformly scale the resulting geometry to final output dimensions.
 
 Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
@@ -1262,27 +1208,23 @@ Each font in the effective default pool has equal selection probability.
 
 The effective default pool must be nonempty when a new selection requires automatic font selection. Refrain must not silently populate it with unrelated bundled fonts.
 
-Font selection is independent for each daily selection. Fonts do not have repetition histories, and a font may be used on consecutive days.
+Font selection is independent for each complete image preparation. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
-The selected decoration is resolved before font selection. The selected font identifier is resolved before daily snapshot commitment.
+Resolve the selected decoration and font bundle, then resolve all role faces for one complete preparation. Do not select fonts independently for reveal stages within the same generated set.
 
-The selected bundle identifier and all three effective face identifiers are recorded in the committed snapshot before preparation. Font contents, paths, and font-content hashes are not persisted in operational state. Existing format-6 snapshots without face metadata remain valid and continue to render every role with `regular`; no state migration or rewrite is needed. This absence is not interpreted as a request to apply newly configured face preferences.
-
-Image preparation resolves the committed bundle and face identifiers using available font resources. It does not reconsider the original entry, decoration, bundle-manifest, or global preferences.
-
-If a committed face is no longer available or usable during regeneration, that role uses `regular` from the resolved bundle without changing the snapshot. If the entire committed bundle is unavailable or unusable, Refrain uses an available bundled fallback font, selected deterministically; it applies the committed face identifiers against that fallback bundle and uses its `regular` face for any unavailable face. The resolved bundle and role faces remain consistent across all stages prepared together.
+Font identifiers, paths, face choices, and font contents are not persisted in operational state. Every preparation resolves font and face preferences from the selected content properties and current decoration, bundle, and global configuration. Apply the documented fallback and diagnostics if a requested resource is unavailable. Use one consistent bundle and role-face resolution across all stages generated together.
 
 If no usable bundled fallback exists, preparation fails with an actionable diagnostic.
 
-Existing valid prepared images are not invalidated solely because installed font resources have changed.
+An existing complete prepared image set is reused during ordinary operation even if font files or preferences subsequently change.
 
 Font registration, default-pool validation, and configuration fallback rules are defined in `docs/CONTENT_FORMAT.md`.
 
 ### Stable progressive layout
 
-The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage. Each role uses its committed face while the source and attribution remain components of the existing unified byline.
+The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage. Each role uses its preparation's resolved face while the source and attribution remain components of the existing unified byline.
 
-The effective literary rectangle, resolved from the selected decoration's insets or global insets and recorded in the committed snapshot, remains unchanged throughout the committed selection.
+The effective literary rectangle, resolved from the selected decoration's insets or global insets for the complete preparation, remains unchanged across every stage generated together.
 
 The resolved layout establishes the positions, role-specific typography, wrapping, and spacing of all present fields. Byline measurement and baseline placement account for each face's metrics, advances, and glyph bounds. The prefix and separator use the quotation face, with fixed positions determined from the complete composition.
 
@@ -1314,36 +1256,15 @@ All reveal stages use the same resolved composition layout.
 
 Content that cannot be rendered legibly within the supported literary rectangle must be handled explicitly rather than silently clipped, truncated, or omitted.
 
-### Committed daily presentation data
+### Daily selection data
 
-A daily snapshot must contain the selected quotation, its presentation metadata, effective reveal schedule, selected font, background, and decoration identifiers, and resolved layout values needed to prepare the presentation without consulting the original content library or current presentation configuration.
+The daily selection record contains the selected entry identity, normalized quotation identity, original quotation text, optional source and attribution, effective reveal schedule, display date, and any selected content-level properties or preferences needed to interpret or present the quotation. Selection revision, repetition history, highest reveal stage, and scheduling context are held in authoritative operational state.
 
-`presentation_metadata` contains optional nonempty `source` and `attribution` strings, the required built-in `presentation_style` (`centered` or `left-aligned`), and the effective `font_faces` identifiers for `quotation`, `source`, and `attribution`. New snapshots also contain `text_color_identifier` and `text_color_rgb`, the committed palette identifier and its three resolved integer RGB channels. Older valid snapshots may omit `font_faces`; preparation interprets that legacy absence as `regular` for every role and does not apply current preferences. Snapshots omitting both text-color values retain legacy literary colors, including muted attribution.
+The record does not contain resolved rendering values. Output dimensions, working-canvas size, inset rectangle, font and face choices, palette RGB values, visual-resource selections, tinting decisions, QR settings or placement, layer transformations, and other derived presentation parameters are resolved during image preparation and are not persisted solely for pixel-identical recovery.
 
-`layout` contains:
+Required selected content remains available even when its source YAML entry is edited or unavailable. Changes to content-level and global presentation preferences can affect a newly generated cache, but do not alter the selected quotation or its effective reveal schedule.
 
-- `output_size`: configured final dimensions as positive integer width and height;
-- `working_size`: the resolved high-resolution composition dimensions;
-- `reference_size`: the fixed `[3840, 2400]` reference-envelope dimensions;
-- `presentation_insets`: the four resolved reference-pixel inset values;
-- `literary_region`: the effective integer-pixel rectangle at final output resolution;
-- `min_font_size` and `max_font_size`: positive integer quotation font-size bounds, with the maximum no smaller than the minimum.
-
-The committed presentation metadata also contains effective QR enablement and, when enabled, its complete generation and placement parameters. It records the effective ordered decoration layers, layer conditions, rendering methods, source identifiers, source-pixel slice boundaries, and resolved transformation geometry. Snapshot format 7 includes these values in its canonical fingerprint; dimensions, geometry, conditions, and transformations therefore cannot be changed by later configuration or manifest edits.
-
-The snapshot also preserves the resolved background and decoration identifiers. The reserved value `"none"` represents the absence of the corresponding resource.
-
-The snapshot stores resource identifiers, not font or image contents or their digests. Effective role-face identifiers are part of the snapshot fingerprint used to associate prepared images, so typography changes cannot be mistaken for the same presentation. For snapshots predating face metadata, omission remains part of their canonical fingerprint, preserving reuse of their already prepared artifacts.
-
-The committed RGB channels are part of snapshot metadata and its fingerprint. Image regeneration uses those channels rather than current palette configuration, so a later palette edit cannot recolor a committed presentation.
-
-Daily preparation uses the shared renderer's `1.20` quotation–byline spacing factor and deterministic `pixel-distortion` concealment; these are not current-configuration fallbacks.
-
-Presentation resources are resolved using the available registries during preparation. Font and image recovery follow their separately documented fallback policies without changing the committed quotation, metadata, reveal schedule, resource identifiers, or effective layout.
-
-Missing or invalid required presentation data, failure to resolve any usable font, or a composition that does not fit is a preparation error.
-
-Preparation does not change the committed snapshot or persistent selection state.
+Preparation errors are reported without changing the committed selection, repetition history, or reveal progress.
 
 ### Complete stage preparation
 
@@ -1359,28 +1280,18 @@ The same preparation facilities may produce a single fully visible image for vie
 
 Every prepared image must be independently displayable without requiring a previous image to have been presented.
 
-Prepared images are persisted for reuse throughout the current display day and after application restarts.
+Prepared images are persisted as a disposable cache for reuse throughout the current display day and after application restarts.
 
 Normal reveal transitions select an existing prepared image. They do not invoke quotation fitting, layout calculation, or image rendering.
 
-The preparation process must not expose incomplete images as valid presentation artifacts.
+The preparation process must not expose incomplete images as a valid complete set. Cache metadata need only associate a complete set with the current selection and expected stages and detect incomplete or damaged files. Do not require a fingerprint of all rendering decisions.
 
 
 ### Rendering recovery
 
-The committed daily snapshot is the authority for regenerating prepared images.
+The durable daily selection record, not the image cache, is authoritative. If the prepared set is missing, damaged, incomplete, or unusable, regenerate all reveal-stage images together using the selected content, effective schedule, current configuration, and currently available assets. Safely replace the unusable cache only after a complete new set is ready.
 
-Missing or invalid prepared images may be regenerated without access to the original content library.
-
-Regeneration resolves the committed font bundle and role-face identifiers through the available font registry. Missing role faces use the resolved bundle's regular face; a missing bundle uses the deterministic bundled fallback policy and applies committed face identifiers against that bundle. Neither recovery path changes the snapshot or consults current preferences.
-
-Committed background and decoration identifiers are resolved through the available resource registries. Missing or unusable image resources are omitted according to the background and decoration recovery policy. Regeneration retains the committed output dimensions, effective literary geometry, QR decision, and ordered layer transformations; it does not select replacement resources or derive new decisions from current preferences.
-
-Regeneration uses the committed text-color RGB value without consulting the current palette. If both text-color fields are absent, it preserves the historical renderer behavior and attribution-color distinction; it does not infer a color from current configuration.
-
-Recovery must not change the selected quotation, presentation metadata, reveal schedule, committed resource identifiers, or committed layout configuration.
-
-Exact pixel reproduction is not required when installed font resources have changed. Existing valid prepared images remain reusable independently of those changes.
+Regeneration preserves the selected quotation, content identity, schedule, selection revision, and highest reached reveal stage. It does not consult the original content library, repeat selection, modify repetition history, or move reveal progression backward. Visual appearance may differ from the prior cache after configuration or resource changes; exact pixel reproduction is not required.
 
 If image generation fails, the application must report the error and preserve the existing display image where practical.
 
@@ -1431,7 +1342,7 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare panel's native output is 1600 × 1200 landscape. The backend adapts the shared final-resolution image to that destination as needed; its policy may scale, crop, pad, rotate, dither, or convert colors without changing the prepared image or the committed global presentation geometry. This physical destination does not require portrait support in the core renderer. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare panel's native output is 1600 × 1200 landscape. The backend adapts the shared final-resolution image to that destination as needed; its policy may scale, crop, pad, rotate, dither, or convert colors without changing the prepared image or global renderer configuration. This physical destination does not require portrait support in the core renderer. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
 
@@ -1451,7 +1362,7 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 Refrain coordinates publication of the current prepared presentation independently to every configured display backend.
 
-A single committed daily snapshot and set of prepared reveal-stage images remain authoritative for all destinations.
+A single committed daily selection and its prepared-image cache are shared by all destinations. Only the selection is authoritative.
 
 Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent the application from recognizing subsequent scheduling events.
 
@@ -1599,7 +1510,7 @@ Normal startup performs the following logical operations:
 4. Load and validate content sources when a new selection is required, constructing an effective library from accepted entries.
 5. Perform and commit a new selection when required and when a usable effective content library is available.
 6. Verify that all required reveal-stage images are available and valid for the committed selection.
-7. Prepare or recover any missing presentation artifacts using available presentation resources and the committed snapshot's resolved layout.
+7. Reuse a complete prepared-image cache or regenerate the complete stage set from the current daily selection, configuration, and available resources.
 8. Initialize configured display backends independently.
 9. If automatic information-view presentation is enabled, prepare and request publication of the information view.
 10. Observe the configured information-view duration and transition to daily presentation when it expires, or proceed directly when automatic presentation is disabled or cannot be completed.
@@ -1637,8 +1548,8 @@ At a recognized display-day transition, the application:
 2. Constructs a nonempty effective content library from successfully examined sources and accepted entries.
 3. Removes obsolete repetition identities based on the effective library.
 4. Performs eligibility, repetition, priority, and random quotation selection.
-5. Creates the complete daily snapshot.
-6. Atomically commits the snapshot, updated repetition history, next selection revision, and required scheduling context.
+5. Creates the daily selection record.
+6. Atomically commits the selection record, updated repetition history, next selection revision, initial reveal progress, and required scheduling context.
 7. Records the committed selection in global history on a best-effort basis.
 8. Generates and persists every required reveal-stage image.
 9. Determines the stage appropriate to the current time.
@@ -1670,7 +1581,7 @@ The optional `--demo SECONDS` operating mode repeatedly selects quotations and p
 
 The session determines its eligibility display date once from host-local time and the configured day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
 
-Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each complete snapshot is committed before its canonical image set is prepared or recovered through the existing facilities. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
+Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each daily selection is committed before its canonical image set is prepared or reused from cache. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
 
 The initial stage is requested as soon as it is ready. Each stage receives the requested minimum monotonic viewing interval beginning at its first successful backend acknowledgement. After the final stage's interval, the controller commits another selection. Failed preparation or publication does not complete a stage or authorize reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
 
@@ -1680,11 +1591,11 @@ Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/E
 
 ### One-shot diagnostic entry presentation
 
-The optional `--show-entry ENTRY_ID` mode presents one targeted image without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal selection and renders the final canonical reveal stage, with every supplied field visible.
+The optional `--show-entry ENTRY_ID` mode presents one targeted image without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal image preparation and renders the final canonical reveal stage, with every supplied field visible.
 
 The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares one image through the shared renderer. Before initializing display backends, it saves that exact image as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. The output is independent of the configuration file location and is not production state.
 
-The reserved target `information` is recognized before content-library loading. It uses `prepare_information_view()` directly, without constructing a content snapshot, evaluating a reveal schedule, waiting for the configured information-view duration, or transitioning to a daily quotation. A content entry with that ID remains valid for ordinary selection but cannot override this diagnostic target.
+The reserved target `information` is recognized before content-library loading. It uses `prepare_information_view()` directly, without constructing a daily selection record, evaluating a reveal schedule, waiting for the configured information-view duration, or transitioning to a daily quotation. A content entry with that ID remains valid for ordinary selection but cannot override this diagnostic target.
 
 After saving the PNG, the mode publishes one image through the existing display publication coordinator. It waits until every configured backend acknowledges the image or reaches a terminal publication failure, reports each result, and exits nonzero if any destination fails. It closes the backends after the attempts complete and does not start the continuous loop or hold serving backends open. A physical e-paper panel normally retains its image after process exit; the window and image-server backends are process-scoped and stop serving when Refrain exits. Publication failure does not remove the diagnostic PNG or alter production state.
 
@@ -1702,7 +1613,7 @@ An interruption before selection commitment permits selection to be repeated.
 
 An interruption after commitment preserves the committed selection.
 
-Missing or incomplete prepared images are regenerated from the committed snapshot.
+Missing or incomplete prepared images are regenerated as a complete set from the durable daily selection and current presentation inputs.
 
 Individual display backend failures are handled through independent recovery policies without delaying other available destinations.
 
@@ -1722,15 +1633,15 @@ Failure to close one backend must not prevent cleanup attempts for other backend
 
 Shutdown must not intentionally erase retained e-paper images.
 
-Committed selection state and prepared presentation images remain available for subsequent startup recovery.
+Committed selection state remains available for subsequent startup recovery. Prepared images are a disposable cache that may be rebuilt.
 
 ### Failure isolation
 
 Display backend failures must remain isolated from other destinations and must not invalidate content selection or persistent history.
 
-Rendering failures must not cause reselection after a daily snapshot has been committed.
+Rendering failures must not cause reselection after a daily selection has been committed.
 
-Content-library changes or validation failures must not modify an already committed daily snapshot.
+Content-library changes or validation failures must not modify an already committed daily selection.
 
 An unrecoverable configuration or state error must be reported clearly rather than disguised as normal operation.
 
@@ -1807,14 +1718,14 @@ The following must remain true as the project evolves:
 9. Repetition identities absent from a nonempty effective content library may be removed during a new selection, but failed source discovery or an empty effective library must never trigger repetition-history cleanup.
 10. Priority determines preference among otherwise eligible unused quotations.
 11. Equal-priority distinct quotation candidates have equal selection probability.
-12. A daily selection is authoritative only after its complete snapshot, updated repetition history, selection revision, and scheduling context have been committed consistently.
+12. A daily selection is authoritative only after its selected content record, updated repetition history, selection revision, reveal progress, and scheduling context have been committed consistently.
 13. An interrupted operational-state commitment must not leave a partially committed selection or inconsistent repetition history.
 14. Selection revisions increase monotonically and are maintained independently of global history.
 15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
-16. A committed daily snapshot preserves its selected content and presentation settings independently of subsequent content-library changes, while font resources may be resolved again during image regeneration.
-17. Every required reveal-stage image is prepared from the committed daily snapshot and available presentation resources.
-18. Prepared images are persisted and reused rather than regenerated at every scheduled reveal.
-19. Missing prepared images can be recovered without selecting new content.
+16. A committed daily selection preserves the selected content and effective reveal schedule independently of subsequent content-library changes.
+17. Every required reveal-stage image is generated together using one consistent resolution of current presentation inputs.
+18. Complete prepared-image sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
+19. Missing or unusable prepared images can be regenerated without selecting new content or moving reveal progression backward.
 20. A restart does not independently invalidate the committed daily selection or reset its reveal progression.
 21. Reveal progression never moves backward within a committed selection.
 22. A backward clock adjustment does not independently invalidate the active selection.

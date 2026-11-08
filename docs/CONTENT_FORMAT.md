@@ -155,10 +155,10 @@ display:
 layout:
   output_size: [1920, 1080]
   presentation_insets:
-    left: 320
-    right: 320
-    top: 200
-    bottom: 200
+    left: 180
+    right: 180
+    top: 120
+    bottom: 160
 
   fonts:
     default:
@@ -264,7 +264,7 @@ The former singular `display.backend` field is not supported. No compatibility a
 
 Backend selection is independent of content selection, reveal scheduling, and image preparation.
 
-All configured backends consume the same complete prepared images. Backend selection does not change the configured output dimensions, literary insets, typography, committed snapshot, or reveal schedule. Independent output resolutions for individual backends are not supported.
+All configured backends consume the same complete prepared images. Backend selection does not change the configured output dimensions or the committed daily selection and reveal schedule. Independent output resolutions for individual backends are not supported.
 
 Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
 
@@ -378,7 +378,7 @@ The optional `presentation.qr` mapping controls QR generation for literary prese
 |---|---|---|---|
 | `presentation.qr.enabled` | Boolean | No | `true` |
 
-When `enabled` is `false`, no QR code is generated for literary presentations. Effective enablement is also suppressed when the selected decoration declares `qr_ready: false`. The resolved result is committed before image preparation. This setting does not affect the standalone information view.
+When `enabled` is `false`, no QR code is generated for literary presentations. Effective enablement is also suppressed when the selected decoration declares `qr_ready: false`. Resolve the result for each complete image preparation. This setting does not affect the standalone information view.
 
 Boolean values are required when the field is present; strings, integers, and other YAML types are invalid. An omitted setting enables QR generation. An invalid optional value produces a warning and uses the default `true`.
 
@@ -458,16 +458,16 @@ The configured output must use exactly one of the supported landscape aspect rat
 
 Boolean values, non-integer dimensions, zero or negative values, and unsupported aspect ratios are invalid. An omitted value uses the documented default. An invalid optional value produces a warning and falls back to `[1600, 1200]`. The backend adapts the globally prepared output to its destination; display hardware does not constrain the output-size options or cause core rendering to select another resolution.
 
-The `layout.presentation_insets` mapping is required and defines the default literary rectangle as four independent reference-canvas pixel measurements:
+The `layout.presentation_insets` mapping is required and defines the default literary rectangle as four independent working-canvas pixel measurements:
 
 | Field | Type | Required |
 |---|---|---|
-| `layout.presentation_insets.left` | Nonnegative integer | Yes |
-| `layout.presentation_insets.right` | Nonnegative integer | Yes |
-| `layout.presentation_insets.top` | Nonnegative integer | Yes |
-| `layout.presentation_insets.bottom` | Nonnegative integer | Yes |
+| `layout.presentation_insets.left` | Nonnegative working-canvas pixel integer | Yes |
+| `layout.presentation_insets.right` | Nonnegative working-canvas pixel integer | Yes |
+| `layout.presentation_insets.top` | Nonnegative working-canvas pixel integer | Yes |
+| `layout.presentation_insets.bottom` | Nonnegative working-canvas pixel integer | Yes |
 
-The reference canvas is always 3840 × 2400 pixels, regardless of output or display hardware. Insets are measured inward from their corresponding reference-envelope edges. They are not normalized coordinates and are not scaled to fit the physical display. Boolean values and non-integer values are invalid.
+The 3840 × 2400 envelope defines the maximum high-resolution authoring space from which the working canvas is derived. Insets are applied directly inward from the selected working canvas's edges, not from the full reference envelope. Thus `left: 180` means 180 working-resolution pixels at every supported aspect ratio. Insets are not normalized coordinates; they are uniformly scaled from the working canvas to final output dimensions. Boolean values and non-integer values are invalid.
 
 For example:
 
@@ -475,17 +475,17 @@ For example:
 layout:
   output_size: [1920, 1080]
   presentation_insets:
-    left: 320
-    right: 320
-    top: 200
-    bottom: 200
+    left: 180
+    right: 180
+    top: 120
+    bottom: 160
 ```
 
-Each opposing pair must leave a positive width or height within the 3840 × 2400 reference envelope. Each value must be within the extent of its corresponding edge. The resulting reference-space rectangle must intersect the ratio-specific centered working-canvas viewport with positive width and height; otherwise it is invalid. A missing required edge, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
+Each opposing pair must leave a positive width or height on the active working canvas for the configured aspect ratio. A missing required edge, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
 
 The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage.
 
-YAML supplies the configured output dimensions, fixed-reference-pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. The working-canvas dimensions, centered crop, converted pixel geometry, and effective layer transformations are resolved runtime values and are committed separately in the daily snapshot as defined by `docs/ARCHITECTURE.md`; they are not additional YAML fields.
+YAML supplies the configured output dimensions, working-canvas pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Working-canvas dimensions and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
 
 A content entry cannot directly specify presentation insets.
 
@@ -560,9 +560,9 @@ The effective default pool identifies the fonts eligible for automatic selection
 
 An empty or unusable configured default pool cannot be repaired by silently substituting an unrelated bundled font pool.
 
-Bundled fallback during regeneration of an already committed presentation is independent of automatic font selection and is defined in `docs/ARCHITECTURE.md`.
+Bundled fallback during image preparation is independent of automatic font selection and is defined in `docs/ARCHITECTURE.md`.
 
-Automatic font selection and its persistence are defined in `docs/ARCHITECTURE.md`.
+Automatic font selection during image preparation is defined in `docs/ARCHITECTURE.md`.
 
 ### Background registry
 
@@ -627,10 +627,10 @@ Bundled identifiers are `ethereal`, `hex`, `lower-flourish`, `simple-border`, an
 
 #### Decoration manifests
 
-Each package directory under `<configuration directory>/assets/decorations/` contains `decoration.yaml`. Format version 2 defines an ordered multi-image composition; version-1 single-image manifests are not compatible and are excluded with an actionable diagnostic rather than being ambiguously reinterpreted.
+Each package directory under `<configuration directory>/assets/decorations/` contains `decoration.yaml`. The initial supported manifest schema defines an ordered multi-image composition. No compatibility with previous unreleased single-image development manifests is required.
 
 ```yaml
-format: 2
+format: 1
 id: botanical-border
 presentation_insets:
   left: 180
@@ -674,10 +674,10 @@ layers:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `format` | Integer version (`2`) | Yes | — |
+| `format` | Integer version (`1`) | Yes | — |
 | `id` | Asset identifier | Yes | — |
 | `layers` | Nonempty ordered sequence of layer mappings | Yes | — |
-| `presentation_insets` | Complete four-edge mapping of nonnegative reference-pixel integers | No | Global `layout.presentation_insets` |
+| `presentation_insets` | Complete four-edge mapping of nonnegative working-canvas pixel integers | No | Global `layout.presentation_insets` |
 | `font` | Font identifier | No | None |
 | `font_faces` | Mapping of literary roles to face identifiers | No | None |
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
@@ -686,13 +686,13 @@ layers:
 | `tintable` | Boolean | No | `true` |
 | `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 
-`format` must be integer `2`; identifiers follow the shared ASCII asset identifier rules. Each layer's image path is resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, invalid layer definitions, and unreadable manifests or images exclude only the affected decoration.
+`format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Each layer's image path is resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, invalid layer definitions, and unreadable manifests or images exclude only the affected decoration.
 
-The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are reference-canvas measurements, validated and resolved according to [Output resolution and presentation insets](#output-resolution-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
+The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are working-canvas measurements, validated and resolved according to [Output resolution and presentation insets](#output-resolution-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
 
 An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid inset metadata or artwork excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
-The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints decoration images. It accepts the same scalar-or-nonempty-list syntax as the content-entry field. Invalid or unavailable members are diagnosed at selection time and ignored without invalidating the decoration.
+The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints decoration images. It accepts the same scalar-or-nonempty-list syntax as the content-entry field. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
 The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when tinting is selected, and has no effect if all layers are effectively non-tintable. It accepts a palette identifier or nonempty sequence. Invalid or unavailable members are diagnosed during selection and ignored without invalidating the decoration.
 
@@ -719,7 +719,7 @@ For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring 
 | `nine_slice.horizontal` | `"stretch"` or `"crop"` | No | `"stretch"` |
 | `nine_slice.vertical` | `"stretch"` or `"crop"` | No | `"stretch"` |
 
-The four insets partition the source image into nine regions in its actual source-pixel coordinates, regardless of its dimensions. Booleans and non-integer measurements are invalid. Left and right insets may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. The architecture defines how source artwork and boundaries map to the fixed reference and working canvases; smaller images do not change that coordinate system. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Destinations too small to preserve both opposing corners are invalid. Geometry and rounding follow the deterministic architecture contract.
+The four insets partition the source image into nine regions in its actual source-pixel coordinates, regardless of its dimensions. Booleans and non-integer measurements are invalid. Left and right insets may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. The architecture defines how source artwork and boundaries map to working-space measurements; smaller images do not change the coordinate system. After that mapping, corner dimensions are preserved across aspect ratios. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Destinations too small to preserve both opposing corners are invalid. Geometry and rounding follow the deterministic architecture contract.
 
 `condition: always` includes the layer whether QR is enabled or not; `qr` includes it only when QR is enabled; `no-qr` includes it only when QR is disabled. A condition never changes the order of the remaining layers. Invalid conditions, methods, parameter combinations, paths, or source images exclude the containing decoration with an actionable diagnostic. A malformed `tintable` value produces a warning and uses `true`.
 
@@ -809,7 +809,7 @@ The literary text color is resolved after the decoration has been selected, usin
 3. The effective `layout.text.colors` pool.
 4. The built-in `black` fallback.
 
-Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. The selected palette identifier and RGB value are committed before rendering.
+Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. Resolve the selected palette identifier and RGB value for the complete image preparation.
 
 Decoration colour is resolved once for the selected decoration when at least one layer has effective tintability (`decoration.tintable AND layer.tintable`) and tinting is selected, using the first level with usable candidates:
 
@@ -820,7 +820,7 @@ Decoration colour is resolved once for the selected decoration when at least one
 
 Invalid and unavailable identifiers are excluded with diagnostics. Duplicate identifiers do not add selection weight. The first level with usable candidates is selected uniformly without combining levels. Effective tintability permits a tint but does not require that one be selected. If no tint is selected, no color is resolved and each layer retains its authored colors.
 
-Tinting replaces RGB only on effectively tintable layers with the single committed palette colour and preserves each original alpha channel. No per-layer palette selection is supported.
+Tinting replaces RGB only on effectively tintable layers with the single palette colour selected for the complete preparation and preserves each original alpha channel. No per-layer palette selection is supported.
 
 An unavailable decoration font or background preference is ignored with a warning, without invalidating an otherwise usable decoration.
 
@@ -828,9 +828,9 @@ An absent decoration preference does not prevent explicit content-entry resource
 
 The selected decoration's complete inset override applies when present; otherwise the global insets apply.
 
-The final font, background, and decoration identifiers, effective insets, output dimensions, resolved QR enablement, ordered layers, and transformation geometry are committed with the daily selection. If a tint is selected, its one palette identifier and resolved RGB value are committed.
+Content-level fields in this document express presentation preferences. Their resolved resources, colors, output geometry, effective insets, QR enablement, ordered layers, and transformations are determined during image preparation and are not committed as daily selection data.
 
-No resource is reselected during reveal progression or restart recovery. Image regeneration resolves the committed identifiers independently of the original content-entry and decoration preferences.
+All images generated together use one consistent resolution of those preferences and the available configuration and assets. A valid cached image set is reused even when those inputs change. If a new set must be generated, current inputs may result in different visual choices.
 
 The presentation-level QR policy defaults to enabled. Effective QR enablement is the logical AND of that setting and the selected decoration's `qr_ready` value, which defaults to `true`. Layer `condition` values select artwork after this decision is resolved; they do not enable or disable QR generation.
 
@@ -890,7 +890,7 @@ Additional built-in literary presentation styles may be introduced in future ver
 
 Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared final-resolution image; independent per-backend resolutions are not supported. Each backend is responsible for adapting that image to its physical or network destination. A backend's destination dimensions or capabilities do not constrain core rendering.
 
-The renderer derives a centered working canvas by cropping the fixed reference envelope to the configured landscape aspect ratio. It intersects reference-space inset geometry with that crop, translates it into working-canvas coordinates, and uniformly scales the resulting geometry to final output dimensions.
+The renderer derives a centered working canvas by cropping the fixed reference envelope to the configured landscape aspect ratio. It applies the configured working-canvas insets directly at that canvas's edges, then uniformly scales the resulting geometry to final output dimensions.
 
 ## Content entries
 
@@ -965,7 +965,7 @@ text_color:
   - burnt-orange
 ```
 
-List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette at selection time. Unknown, malformed, or unavailable members are diagnosed during selection and excluded; a preference with no usable members falls through to the next selection level without invalidating the content entry. RGB values are not accepted here.
+List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Unknown, malformed, or unavailable members are diagnosed during preparation and excluded; a preference with no usable members falls through to the next selection level without invalidating the content entry. RGB values are not accepted here.
 
 ### Decoration-color preference
 
@@ -1117,7 +1117,7 @@ An absent `font` field means that no specific content-entry font preference is e
 
 An explicit empty string or invalid field type is a validation error.
 
-The resolution of preferred fonts, fallback behavior, warnings, and persistence of the selected font are defined in `docs/ARCHITECTURE.md`.
+The resolution of preferred fonts, fallback behavior, and warnings during image preparation are defined in `docs/ARCHITECTURE.md`.
 
 ### Font face preferences
 
@@ -1164,7 +1164,7 @@ Unknown background identifiers are permitted without invalidating otherwise vali
 
 Empty strings, non-string values, and YAML null are invalid.
 
-The resolved background identifier is committed for the display day and is not reconsidered during progressive reveals or restart recovery.
+The background preference is applied during image preparation. A complete existing image set is reused without reconsidering the preference; a regenerated set uses the current preference and available resources.
 
 ### Decoration preference
 
@@ -1194,7 +1194,7 @@ Unknown decoration identifiers are permitted without invalidating otherwise vali
 
 Empty strings, non-string values, and YAML null are invalid.
 
-The resolved decoration identifier and its effective presentation insets and layer transformations are committed for the display day and are not reconsidered during progressive reveals or restart recovery.
+The decoration preference and its insets are applied during image preparation. A complete existing image set is reused without reconsidering them; a regenerated set uses current preferences and available resources.
 
 ### Presentation style
 
@@ -1234,7 +1234,7 @@ Unknown identifiers, empty strings, and non-string values are validation errors.
 
 The selected style governs the composition's layout. Both initial styles use consistent subordinate presentation for source and attribution.
 
-The effective style is preserved in the committed daily snapshot. Subsequent content-library changes do not alter the active presentation.
+The selected content's presentation style is retained in its daily selection record so the quotation remains interpretable if its source entry becomes unavailable.
 
 Version 0.1 does not support per-quotation style overrides.
 
@@ -1379,9 +1379,9 @@ The primary quotation always begins at the configured display-day start.
 
 An entry cannot override the quotation reveal time in Version 0.1.
 
-The effective reveal schedule is resolved when preparing the daily snapshot.
+The effective reveal schedule is resolved when preparing the daily selection record.
 
-Changes to the original entry or global configuration do not alter a committed selection.
+The selected quotation and its resolved reveal schedule do not change if the original entry or global configuration later changes. A regenerated image set may reflect currently available presentation configuration and assets.
 
 ### Override validation
 
@@ -1611,7 +1611,7 @@ Repetition-history cleanup must not occur when library discovery fails or the ef
 
 Cleanup is committed only as part of a successful new selection.
 
-An already committed presentation remains independent of subsequent changes or failures in its original content library.
+An already committed daily selection remains independent of subsequent changes or failures in its original content library.
 
 Runtime selection, recovery, and scheduling behavior are defined in `docs/ARCHITECTURE.md`.
 
