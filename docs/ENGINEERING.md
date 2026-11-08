@@ -630,7 +630,7 @@ During ordinary operation, reuse a complete valid set without checking whether c
 
 ### Prerelease implementation simplification
 
-Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes rendering-plan fields and snapshot validation, snapshot construction devoted to resolved presentation metadata, artifact identities and fingerprints over visual decisions, cache invalidation when settings or assets change, regeneration rules that preserve old font/palette/QR/resource choices, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration.
+Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes rendering-plan fields and snapshot validation, snapshot construction devoted to resolved presentation metadata, artifact identities and fingerprints over visual decisions, cache invalidation when settings or assets change, regeneration rules that preserve old font/palette/QR/resource choices, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration.
 
 Retain only the machinery needed to atomically commit selected content and scheduling state, protect repetition identity and monotonic reveal progress, associate complete image sets with the right selection and stages, detect damaged cache files, safely replace a complete set, reuse it during ordinary operation, and regenerate all stages after cache failure. Do not introduce replacement abstractions unless implementation evidence demonstrates they are necessary.
 
@@ -658,9 +658,9 @@ Do not allow the renderer to depend directly on Waveshare-specific objects or AP
 
 ### Output geometry and diagnostics
 
-Use Pillow for high-resolution raster composition and downsampling. Keep configured output dimensions, the fixed 3840 × 2400 authoring envelope, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images. Apply literary insets directly from the selected working canvas's edges, then uniformly scale the resulting rectangle to final output dimensions with deterministic nearest-integer, half-up rounding. Map nine-slice source coordinates into working-space measurements according to the fixed-reference artwork rules, then preserve resolved corner dimensions across supported aspect ratios.
+Use Pillow for high-resolution raster composition and resampling. Keep configured output dimensions, the fixed 3840 × 2400 authoring envelope, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images. Apply literary insets directly from the selected working canvas's edges, then uniformly scale the resulting rectangle to final output dimensions with deterministic nearest-integer, half-up rounding. Map nine-slice source coordinates into working-space measurements according to the fixed-reference artwork rules, then preserve resolved corner dimensions across supported aspect ratios.
 
-Compose backgrounds and decorations on the resolved working canvas, then downsample the graphical result once to final output dimensions. Avoid unnecessary raster upscaling and full-canvas copies. Render literary typography and the QR symbol only after downsampling, at final output resolution.
+Compose backgrounds and decorations on the resolved working canvas, then resample the graphical result to final output dimensions when needed, whether reducing or enlarging it. Do not resample when working and output dimensions already match. Avoid unnecessary upscaling of source raster resources and unnecessary full-canvas copies; enlargement of the completed composition is permitted when required by output dimensions. Render literary typography and the QR symbol only after this step, at final output resolution, without subsequent resizing or resampling.
 
 Keep visual diagnostics resolution-aware: derive their canvas and placement from the configured output geometry, and do not assume one fixed canvas size. A diagnostic must not mutate committed presentation state or generated daily artifacts.
 
@@ -704,7 +704,7 @@ Discover bundled and user backgrounds from their category directories, using `im
 
 Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background for a complete image-preparation operation, not during selection commitment or independently for reveal stages.
 
-Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base, preserving RGBA transparency. Resolve and compose once per complete preparation operation, downsample the graphic composition once, then reuse it for every stage. Use a high-quality Pillow resampling filter for reduction, retain deterministic geometry, and close decoded resources promptly.
+Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base, preserving RGBA transparency. Resolve and compose once per complete preparation operation, resample the graphic composition to final output dimensions only when needed, then reuse it for every stage. Use an appropriate high-quality Pillow resampling filter when dimensions differ, retain deterministic geometry, and close decoded resources promptly.
 
 Daily-image preparation accepts the selected content, effective reveal stages, and current resource registries. It resolves a background from current preferences or pool configuration for the whole generated set. A supplied empty registry represents unavailable resources and applies the paper-white fallback policy.
 
@@ -1325,7 +1325,7 @@ Test automatic text fitting with:
 
 Verify that all rendered literary content stays within the effective rectangle derived from working-canvas insets, uniformly scaled to final output dimensions.
 
-Verify that artwork is composed at working resolution and downsampled once before final-resolution typography and QR generation. Confirm no later resize or resampling changes text or QR pixels.
+Verify that artwork is composed at working resolution and resampled to final output dimensions when needed, for both reduction and enlargement; confirm no resampling occurs when dimensions match. Then verify final-resolution typography and QR generation, with no later resizing or resampling of text or QR pixels.
 
 Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
 

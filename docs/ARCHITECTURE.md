@@ -969,9 +969,9 @@ Prepare each literary reveal-stage image in this order:
 
 1. Resolve configured output geometry and its working canvas.
 2. Compose a paper-white base, the selected background, and selected decoration PNG layers at working resolution, processing layers in manifest order.
-3. Downsample the graphical composition to final output dimensions.
+3. Resample the graphical composition to final output dimensions when the dimensions differ, whether reducing or enlarging it; do not resample when they already match.
 4. Fit and render all literary text at final resolution using the stable effective rectangle.
-5. When QR generation is enabled, generate and composite the QR code at final resolution.
+5. When QR generation is enabled, generate and composite the QR code at final resolution. Do not resize or resample literary text or QR output afterward.
 6. Persist the complete prepared reveal-stage images and publish them through the existing backend architecture.
 
 Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. The same geometry and graphical composition are used for every reveal stage. Other views, including the information view, retain their separate composition and QR behavior.

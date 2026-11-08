@@ -196,8 +196,6 @@ Fonts, packaged backgrounds, and decorations use YAML manifests whose referenced
 
 When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly.
 
-The legacy `layout.fonts.available`, `layout.backgrounds.available`, and `layout.decorations.available` fields are unsupported and are not migrated. Refrain warns and ignores these mappings. Move resources into their category directories and provide manifests where required.
-
 The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
 
 The reserved value `"none"` is available for backgrounds and decorations. The example uses it to preserve the original undecorated, paper-white presentation.
@@ -521,8 +519,6 @@ Use safe YAML loading. Unknown manifest fields produce warnings and are ignored.
 
 All usable bundled and discovered fonts are available for explicit content-entry selection independently of default-pool membership. A custom identifier conflicting with a bundled identifier is excluded. All custom bundles sharing an identifier are excluded with deterministic diagnostics listing their locations.
 
-`layout.fonts.available` is no longer supported. It is ignored with an actionable migration warning; place font files in a bundle under `assets/fonts/`.
-
 ### Default font pool
 
 The required `layout.fonts.default` field is a nonempty sequence of font identifiers.
@@ -589,8 +585,6 @@ Manifests use safe YAML loading; unknown fields produce warnings. Absolute refer
 Background composition preserves aspect ratio with centred cover scaling: scale uniformly until the canvas is covered, then crop overflow evenly from opposing sides. The result is composited over paper-white, preserving RGBA transparency; it is never stretched or letterboxed.
 
 All usable discovered backgrounds are available for explicit entry or decoration preferences whether or not included in the default pool. Custom resources cannot shadow bundled identifiers. If custom resources share an identifier, all are excluded and their locations are reported deterministically.
-
-`layout.backgrounds.available` is no longer supported. It is ignored with an actionable migration warning; use standalone PNG files or packaged backgrounds in the category directory.
 
 #### Default background pool
 
@@ -724,8 +718,6 @@ The four insets partition the source image into nine regions in its actual sourc
 `condition: always` includes the layer whether QR is enabled or not; `qr` includes it only when QR is enabled; `no-qr` includes it only when QR is disabled. A condition never changes the order of the remaining layers. Invalid conditions, methods, parameter combinations, paths, or source images exclude the containing decoration with an actionable diagnostic. A malformed `tintable` value produces a warning and uses `true`.
 
 The effective tintability of each layer is `decoration.tintable AND layer.tintable`. Both values default to `true`. Effective tintability permits applying the single selected decoration tint; it does not require that tinting occur. Per-layer palette selection is not supported. Tinting replaces RGB while preserving source alpha.
-
-`layout.decorations.available` is no longer supported. It is ignored with an actionable migration warning; place each decoration and its manifest in the category directory.
 
 #### Default decoration pool
 
