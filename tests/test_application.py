@@ -35,7 +35,7 @@ from refrain import (
     run_startup,
 )
 from refrain.__main__ import main
-from refrain.config import DecorationResource, DisplayBackendConfiguration
+from refrain.config import DisplayBackendConfiguration
 from refrain.display import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
@@ -44,7 +44,6 @@ from refrain.display import (
 )
 from refrain.display.coordinator import DisplayPublicationCoordinator
 from refrain.information_view import InformationViewPreparationError
-from refrain.qr import REPOSITORY_URL, QRCodeParameters
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
@@ -151,38 +150,33 @@ def ordinary(workspace: Workspace, text: str = "An ordinary quotation.", extra: 
 
 
 @pytest.mark.parametrize(
-    ("preference", "expected"),
-    [(None, "canvas"), ("cloth", "cloth"), ("none", "none"), ("unavailable-paper", "canvas")],
+    "preference",
+    [None, "cloth", "none", "unavailable-paper"],
 )
-def test_background_preference_resolves_before_commit(workspace: Workspace, caplog, preference, expected) -> None:
+def test_background_preferences_are_preserved_without_resolution(workspace: Workspace, preference) -> None:
     workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
     ordinary(workspace, extra="" if preference is None else f'background: "{preference}"\n')
     configuration = application.load_application_config(workspace.config)
     proposal, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
     state = PersistentStateStore(workspace.state).commit(proposal, snapshot)
-    assert state.snapshot.background_identifier == expected
-    assert state.snapshot.decoration_identifier == "none"
-    assert dict(state.snapshot.layout["presentation_region"]) == {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55}
+    assert state.snapshot.background == preference
+    assert state.snapshot.decoration is None
     assert PersistentStateStore(workspace.state).load() == state
-    if preference == "unavailable-paper":
-        assert "Requested background 'unavailable-paper'" in caplog.text
+    assert not caplog.records
 
 
-def test_background_pool_selects_distinct_usable_members(workspace: Workspace) -> None:
+def test_background_pool_is_not_resolved_before_commit(workspace: Workspace) -> None:
     workspace.config.write_text(
         _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas", "none", "canvas", "cloth"]\n  fonts:')
     )
     configuration = application.load_application_config(workspace.config)
 
-    class RecordingChooser:
-        def choice(self, members):
-            assert members == ("canvas", "none", "cloth")
-            return members[-1]
-
-    assert application._resolve_background(configuration, None, RecordingChooser()) == "cloth"
+    ordinary(workspace)
+    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
+    assert snapshot.background is None
 
 
-def test_decoration_preferences_resolve_before_font_background_and_region(workspace: Workspace) -> None:
+def test_decoration_preferences_remain_semantic_content(workspace: Workspace) -> None:
     package = workspace.root / "assets" / "decorations" / "custom"
     overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
@@ -205,180 +199,35 @@ def test_decoration_preferences_resolve_before_font_background_and_region(worksp
 
     _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
 
-    assert snapshot.decoration_identifier == "custom"
-    assert snapshot.font_identifier == "source-sans-3"
-    assert snapshot.background_identifier == "ethereal"
-    assert dict(snapshot.layout["presentation_region"]) == {
-        "x": 0.12,
-        "y": 0.18,
-        "width": 0.7,
-        "height": 0.6,
-    }
+    assert snapshot.decoration == "custom"
+    assert snapshot.font is None
+    assert snapshot.background is None
 
 
-def test_text_color_precedence_deduplicates_candidates_and_commits_rgb(workspace: Workspace, caplog) -> None:
-    package = workspace.root / "assets" / "decorations" / "custom"
-    overlay = package / "overlay.png"
-    overlay.parent.mkdir(parents=True)
-    Image.new("RGBA", (16, 16)).save(overlay)
-    write_decoration_manifest(package, "custom", text_color=["blue", "burnt-orange", "blue"])
-    workspace.config.write_text(
-        'palette:\n  red: "#C82F32"\n  burnt-orange: "#C65A20"\n' + _CONFIG,
-        encoding="utf-8",
+def test_text_color_preference_is_preserved_without_palette_resolution(workspace: Workspace) -> None:
+    ordinary(workspace, extra="text_color:\n  - red\n  - burnt-orange\n")
+    _, snapshot = application._select_snapshot(
+        application.load_application_config(workspace.config), date(2026, 3, 10), Random(1)
     )
-    ordinary(
-        workspace,
-        extra=(
-            'decoration: "custom"\n' "text_color:\n" "  - missing-color\n" "  - red\n" "  - red\n" "  - burnt-orange\n"
-        ),
+    assert snapshot.text_color == ("red", "burnt-orange")
+
+
+def test_decoration_color_preference_is_preserved(workspace: Workspace) -> None:
+    ordinary(workspace, extra="decoration_color:\n  - red\n  - burnt-orange\n")
+    _, snapshot = application._select_snapshot(
+        application.load_application_config(workspace.config), date(2026, 3, 10), Random(1)
     )
-    configuration = application.load_application_config(workspace.config)
-    _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
-
-    color_identifier = snapshot.presentation_metadata["text_color_identifier"]
-    assert color_identifier in {"red", "burnt-orange"}
-    value = configuration.palette[color_identifier]
-    assert snapshot.presentation_metadata["text_color_rgb"] == (
-        int(value[1:3], 16),
-        int(value[3:5], 16),
-        int(value[5:7], 16),
-    )
-    assert "missing-color" in caplog.text
-
-    entry = application.load_content_library(workspace.content)[0]
-    decoration = configuration.decorations["custom"]
-
-    class RecordingChooser:
-        members: tuple[str, ...] = ()
-
-        def choice(self, members):
-            self.members = tuple(members)
-            return self.members[-1]
-
-    chooser = RecordingChooser()
-    assert application._resolve_text_color(configuration, entry, decoration, chooser) == (
-        "burnt-orange",
-        (198, 90, 32),
-    )
-    assert chooser.members == ("red", "burnt-orange")
-
-    without_entry_preference = replace(entry, text_color=None)
-    assert application._resolve_text_color(configuration, without_entry_preference, decoration, chooser)[0] == (
-        "burnt-orange"
-    )
-    unavailable_decoration = replace(decoration, text_color=("missing-color",))
-    global_preference = replace(configuration, default_text_colors=("green",))
-    assert application._resolve_text_color(
-        global_preference, without_entry_preference, unavailable_decoration, chooser
-    ) == ("green", (0, 255, 0))
-    black_fallback = replace(
-        configuration,
-        palette={**configuration.palette, "black": "#123456"},
-        default_text_colors=("missing-color",),
-    )
-    assert application._resolve_text_color(
-        black_fallback, without_entry_preference, unavailable_decoration, chooser
-    ) == ("black", (18, 52, 86))
+    assert snapshot.decoration_color == ("red", "burnt-orange")
 
 
-def test_decoration_color_precedence_uses_distinct_candidates_and_only_tints_enabled_art(
-    workspace: Workspace, caplog
-) -> None:
-    ordinary(workspace)
-    configuration = application.load_application_config(workspace.config)
-    configuration = replace(
-        configuration,
-        palette={**configuration.palette, "burnt-orange": "#C65A20"},
-        default_decoration_colors=("black", "burnt-orange"),
-    )
-    entry = replace(
-        application.load_content_library(workspace.content)[0],
-        decoration_color=("missing", "red", "red", "burnt-orange"),
-    )
-    decoration = DecorationResource(
-        "custom",
-        workspace.root / "overlay.png",
-        False,
-        tintable=True,
-        decoration_color=("blue", "burnt-orange"),
-    )
-
-    class RecordingChooser:
-        members: tuple[str, ...] = ()
-
-        def choice(self, members):
-            self.members = tuple(members)
-            return self.members[-1]
-
-    chooser = RecordingChooser()
-    assert application._resolve_decoration_color(configuration, entry, decoration, chooser) == (
-        "burnt-orange",
-        (198, 90, 32),
-    )
-    assert chooser.members == ("red", "burnt-orange")
-    assert "missing" in caplog.text
-
-    without_entry_preference = replace(entry, decoration_color=None)
-    assert application._resolve_decoration_color(configuration, without_entry_preference, decoration, chooser) == (
-        "burnt-orange",
-        (198, 90, 32),
-    )
-    assert chooser.members == ("blue", "burnt-orange")
-    unavailable_decoration_preference = replace(decoration, decoration_color=("missing",))
-    assert application._resolve_decoration_color(
-        configuration, without_entry_preference, unavailable_decoration_preference, chooser
-    ) == ("burnt-orange", (198, 90, 32))
-    assert chooser.members == ("black", "burnt-orange")
-    assert application._resolve_decoration_color(
-        replace(configuration, default_decoration_colors=()),
-        without_entry_preference,
-        unavailable_decoration_preference,
-        chooser,
-    ) == ("black", (0, 0, 0))
-
-    class RejectChoice:
-        def choice(self, members):
-            raise AssertionError("non-tintable decorations must not select a colour")
-
-    assert (
-        application._resolve_decoration_color(configuration, entry, replace(decoration, tintable=False), RejectChoice())
-        is None
-    )
-    assert application._resolve_decoration_color(configuration, entry, None, RejectChoice()) is None
-
-
-def test_tinting_decision_and_resolved_color_are_committed_in_snapshot(workspace: Workspace) -> None:
-    package = workspace.root / "assets" / "decorations" / "custom"
-    package.mkdir(parents=True)
-    with Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)) as decoration:
-        decoration.putpixel((0, 0), (255, 255, 255, 255))
-        decoration.save(package / "overlay.png")
-    write_decoration_manifest(package, "custom", tintable=True, decoration_color="green")
-    workspace.config.write_text(
-        'palette:\n  red: "#C82F32"\n  green: "#00FF00"\n'
-        + _CONFIG.replace("  fonts:", '  decorations: {default: ["none"], colors: ["black"]}\n  fonts:')
-    )
-    ordinary(workspace, extra='decoration: "custom"\ndecoration_color: "red"\n')
-
-    first, first_display = workspace.run(at(10, 7))
-    committed = first.state.snapshot.presentation_metadata
-    assert committed["decoration_tint_enabled"] is True
-    assert committed["decoration_color_identifier"] == "red"
-    assert committed["decoration_color_rgb"] == (200, 47, 50)
-    assert committed["text_color_identifier"] == "black"
-    assert committed["text_color_rgb"] == (0, 0, 0)
-    assert first_display.images[-1].getpixel((0, 0)) == (200, 47, 50)
-    state_bytes = workspace.state.read_bytes()
-
-    write_decoration_manifest(package, "custom", tintable=False, decoration_color="green")
-    workspace.config.write_text('palette:\n  red: "#00FF00"\n' + _CONFIG, encoding="utf-8")
-    for artifact in png_files(workspace.artifacts):
-        artifact.unlink()
-    second, second_display = workspace.run(at(10, 7))
-
-    assert second.state == first.state
-    assert workspace.state.read_bytes() == state_bytes
-    assert second_display.images[-1].getpixel((0, 0)) == (200, 47, 50)
+def test_committed_color_preferences_are_not_resolved_palette_values(workspace: Workspace) -> None:
+    ordinary(workspace, extra="text_color: red\ndecoration_color: green\n")
+    state, _ = workspace.run(at(10, 7))
+    assert state.state.snapshot.text_color == ("red",)
+    assert state.state.snapshot.decoration_color == ("green",)
+    serialized = workspace.state.read_text(encoding="utf-8")
+    assert "text_color_rgb" not in serialized
+    assert "decoration_color_rgb" not in serialized
 
 
 def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
@@ -404,15 +253,9 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
 
     _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
 
-    assert snapshot.decoration_identifier == "none"
-    assert snapshot.font_identifier == "lora"
-    assert snapshot.background_identifier == "none"
-    assert dict(snapshot.layout["presentation_region"]) == {
-        "x": 0.1,
-        "y": 0.15,
-        "width": 0.8,
-        "height": 0.55,
-    }
+    assert snapshot.decoration == "none"
+    assert snapshot.font == "lora"
+    assert snapshot.background == "none"
 
 
 def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bundle(
@@ -464,13 +307,8 @@ def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bund
     configuration = application.load_application_config(workspace.config)
     _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
 
-    assert snapshot.font_identifier == "literary"
-    assert dict(snapshot.presentation_metadata["font_faces"]) == {
-        "quotation": "regular",
-        "source": "italic",
-        "attribution": "regular",
-    }
-    assert "Preferred quotation face 'unavailable'" in caplog.text
+    assert snapshot.font == "literary"
+    assert dict(snapshot.font_faces) == {"quotation": "unavailable", "attribution": "regular"}
 
 
 def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoration(workspace: Workspace) -> None:
@@ -509,12 +347,8 @@ def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoratio
     configuration = application.load_application_config(workspace.config)
     _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
 
-    assert snapshot.font_identifier == "literary"
-    assert dict(snapshot.presentation_metadata["font_faces"]) == {
-        "quotation": "italic",
-        "source": "italic",
-        "attribution": "regular",
-    }
+    assert snapshot.font == "literary"
+    assert dict(snapshot.font_faces) == {"attribution": "regular"}
 
 
 def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace, caplog) -> None:
@@ -525,11 +359,11 @@ def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace
 
     _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
 
-    assert snapshot.decoration_identifier == "hex"
-    assert "Requested decoration 'not-registered'" in caplog.text
+    assert snapshot.decoration == "not-registered"
+    assert not caplog.records
 
 
-def test_normal_runtime_recovers_missing_decoration_without_reselection(workspace: Workspace, caplog) -> None:
+def test_normal_runtime_regenerates_with_current_decoration_resources(workspace: Workspace, caplog) -> None:
     package = workspace.root / "assets" / "decorations" / "custom"
     overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
@@ -548,13 +382,7 @@ def test_normal_runtime_recovers_missing_decoration_without_reselection(workspac
     ordinary(workspace)
     first, first_display = workspace.run(at(10, 7))
     snapshot = first.state.snapshot
-    assert snapshot.decoration_identifier == "custom"
-    assert dict(snapshot.layout["presentation_region"]) == {
-        "x": 0.2,
-        "y": 0.3,
-        "width": 0.6,
-        "height": 0.4,
-    }
+    assert snapshot.decoration is None
     assert first_display.images[-1].getpixel((10, 10)) == (227, 137, 147)
 
     overlay.unlink()
@@ -563,9 +391,8 @@ def test_normal_runtime_recovers_missing_decoration_without_reselection(workspac
     second, second_display = workspace.run(at(10, 7))
 
     assert second.state == first.state
-    assert dict(second.state.snapshot.layout["presentation_region"]) == dict(snapshot.layout["presentation_region"])
     assert second_display.images[-1].getpixel((10, 10)) == (255, 255, 255)
-    assert "Committed decoration 'custom' is unavailable" in caplog.text
+    assert "decoration identifier 'custom' is unavailable" in caplog.text
 
 
 def test_committed_background_survives_restart_config_changes_and_resource_loss(workspace: Workspace, caplog) -> None:
@@ -581,7 +408,7 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     )
     ordinary(workspace)
     first, first_display = workspace.run(at(10, 7))
-    assert first.state.snapshot.background_identifier == "paper"
+    assert first.state.snapshot.background is None
     assert first_display.images[-1].getpixel((0, 0)) == (100, 140, 180)
     path.unlink()
     workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
@@ -592,18 +419,15 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
         artifact.unlink()
     third, third_display = workspace.run(at(10, 7))
     assert third.state == first.state
-    assert third_display.images[-1].getpixel((0, 0)) == (255, 255, 255)
-    assert "Committed background 'paper'" in caplog.text
+    assert third_display.images[-1].getpixel((0, 0)) != first_display.images[-1].getpixel((0, 0))
 
 
-def test_committed_text_color_survives_palette_changes_and_artifact_regeneration(workspace: Workspace) -> None:
+def test_committed_text_color_preference_survives_palette_changes_and_regeneration(workspace: Workspace) -> None:
     workspace.config.write_text('palette:\n  red: "#C82F32"\n' + _CONFIG, encoding="utf-8")
     ordinary(workspace, extra="text_color: red\n")
 
     first, first_display = workspace.run(at(10, 7))
-    committed = first.state.snapshot.presentation_metadata
-    assert committed["text_color_identifier"] == "red"
-    assert committed["text_color_rgb"] == (200, 47, 50)
+    assert first.state.snapshot.text_color == ("red",)
     assert (200, 47, 50) in first_display.images[-1].get_flattened_data()
     state_bytes = workspace.state.read_bytes()
 
@@ -614,9 +438,8 @@ def test_committed_text_color_survives_palette_changes_and_artifact_regeneration
 
     assert second.state == first.state
     assert workspace.state.read_bytes() == state_bytes
-    assert second_display.images[-1].tobytes() == first_display.images[-1].tobytes()
-    assert (200, 47, 50) in second_display.images[-1].get_flattened_data()
-    assert (0, 255, 0) not in second_display.images[-1].get_flattened_data()
+    assert second_display.images[-1].tobytes() != first_display.images[-1].tobytes()
+    assert (0, 255, 0) in second_display.images[-1].get_flattened_data()
 
 
 def png_files(root: Path) -> list[Path]:
@@ -632,28 +455,13 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert state is not None and state.revision == 1 and state.highest_reveal_stage == 0
     snapshot = state.snapshot
     assert snapshot.quotation_text == "An ordinary quotation."
-    assert snapshot.font_identifier == "lora"
-    assert snapshot.display_date == date(2026, 3, 10)
-    assert snapshot.presentation_metadata == {
-        "presentation_style": "centered",
-        "source": "A Book",
-        "attribution": "An Author",
-        "font_faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
-        "text_color_identifier": "black",
-        "text_color_rgb": (0, 0, 0),
-        "decoration_tint_enabled": False,
-        "qr_code": {
-            "url": "https://github.com/ControlForgeHQ/refrain",
-            "version": 4,
-            "error_correction": "M",
-            "module_size": 3,
-            "quiet_zone": 4,
-            "right_offset": 40,
-            "bottom_offset": 40,
-        },
-    }
+    assert snapshot.entry_id == "ordinary"
+    assert snapshot.font is None
+    assert snapshot.source == "A Book"
+    assert snapshot.attribution == "An Author"
+    assert snapshot.presentation_style == "centered"
+    assert snapshot.scheduling.display_date == date(2026, 3, 10)
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
-    assert snapshot.layout["image_size"] == (1600, 1200) or list(snapshot.layout["image_size"]) == [1600, 1200]
     assert state.repetition_history == {snapshot.quotation_identity}
     assert len(workspace.history_records()) == 1
     assert display.sizes == [(1600, 1200)] and display.closed == 1
@@ -662,21 +470,13 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert len(png_files(workspace.artifacts)) == 3
 
 
-def test_snapshot_accepts_an_explicit_internal_qr_url(workspace: Workspace) -> None:
+def test_daily_snapshot_does_not_persist_qr_rendering_parameters(workspace: Workspace) -> None:
     ordinary(workspace)
-    configuration = application.load_application_config(workspace.config)
-    entry = application.load_content_library(configuration.content_directory)[0]
-    snapshot = application._build_snapshot(
-        configuration,
-        entry,
-        entry.quotations[0],
-        date(2026, 3, 10),
-        Random(1),
-        qr_parameters=QRCodeParameters("https://example.org/quote", 4, "M", 3, 4, 40, 40),
-    )
-
-    assert snapshot.presentation_metadata["qr_code"]["url"] == "https://example.org/quote"
-    assert snapshot.presentation_metadata["qr_code"]["url"] != REPOSITORY_URL
+    result, _ = workspace.run(at(10, 7))
+    serialized = workspace.state.read_text(encoding="utf-8")
+    assert result.state.snapshot.quotation_text == "An ordinary quotation."
+    assert "qr_code" not in serialized
+    assert "quiet_zone" not in serialized
 
 
 def test_debug_layout_only_changes_published_copy_of_cached_image(workspace: Workspace) -> None:
@@ -723,14 +523,9 @@ def test_debug_layout_uses_committed_region_after_configuration_and_manifest_cha
     )
     _, debug_display = workspace.run(at(10, 7), debug_layout=True)
 
-    assert committed.snapshot.layout["presentation_region"] == {
-        "x": 0.2,
-        "y": 0.3,
-        "width": 0.6,
-        "height": 0.4,
-    }
+    assert committed.snapshot.decoration == "custom"
     assert baseline_display.images[0].getpixel((320, 450)) == (255, 255, 255)
-    assert debug_display.images[0].getpixel((320, 450)) == (127, 127, 127)
+    assert debug_display.images[0].getpixel((640, 600)) == (127, 127, 127)
     assert workspace.load() == committed
     for display in (baseline_display, debug_display):
         for image in display.images:
@@ -970,10 +765,10 @@ def test_multiple_quotations_select_one_and_record_history(workspace: Workspace)
     assert state.repetition_history == {state.snapshot.quotation_identity}
 
 
-def test_entry_font_preference_is_resolved(workspace: Workspace) -> None:
+def test_entry_font_preference_is_preserved(workspace: Workspace) -> None:
     ordinary(workspace, extra='font: "source-sans-3"\n')
     workspace.run(at(10, 8))
-    assert workspace.load().snapshot.font_identifier == "source-sans-3"
+    assert workspace.load().snapshot.font == "source-sans-3"
 
 
 def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspace) -> None:
@@ -984,9 +779,9 @@ def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspac
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace)
 
-    with pytest.raises(ApplicationError, match="no usable font remains"):
+    with pytest.raises(ApplicationError, match="cannot resolve a usable font"):
         workspace.run(at(10, 8))
-    assert workspace.load() is None
+    assert workspace.load().revision == 1
 
 
 def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bundled_fallback(
@@ -1000,13 +795,13 @@ def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bu
     write_font_manifest(package, "custom-font", "custom.ttf")
     config = workspace.config.read_text(encoding="utf-8").replace(
         'default: ["lora"]',
-        'default: ["custom-font"]',
+        'default: ["custom-font", "lora"]',
     )
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace, extra='font: "custom-font"\n')
     first, _ = workspace.run(at(10, 8))
     committed_bytes = workspace.state.read_bytes()
-    assert first.state.snapshot.font_identifier == "custom-font"
+    assert first.state.snapshot.font == "custom-font"
 
     custom_font.unlink()
     with caplog.at_level(logging.WARNING):
@@ -1019,16 +814,16 @@ def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bu
     with caplog.at_level(logging.WARNING):
         regenerated, _ = workspace.run(at(10, 9))
     assert not regenerated.selected_initial_quotation
-    assert "bundled fallback" in caplog.text
+    assert "Requested font 'custom-font'" in caplog.text
     assert workspace.load() == first.state
     assert workspace.state.read_bytes() == committed_bytes
 
 
-def test_unavailable_font_falls_back_to_default_pool(workspace: Workspace, caplog) -> None:
+def test_unavailable_font_preference_survives_default_pool_fallback(workspace: Workspace, caplog) -> None:
     ordinary(workspace, extra='font: "missing-font"\n')
     with caplog.at_level(logging.WARNING):
         workspace.run(at(10, 8))
-    assert workspace.load().snapshot.font_identifier == "lora"
+    assert workspace.load().snapshot.font == "missing-font"
     assert "missing-font" in caplog.text
 
 
@@ -1053,7 +848,7 @@ def test_attribution_can_reveal_before_source(workspace: Workspace) -> None:
 
 def test_invalid_override_before_day_start_commits_nothing(workspace: Workspace) -> None:
     ordinary(workspace, extra='reveal:\n  source: "05:00"\n')
-    with pytest.raises(ApplicationError, match="daily snapshot"):
+    with pytest.raises(ApplicationError, match="daily selection"):
         workspace.run(at(10, 8))
     assert workspace.load() is None
 
@@ -1709,9 +1504,9 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     original = application.recover_prepared_daily_images
     recovered = []
 
-    def recover(state, *args):
+    def recover(state, *args, **kwargs):
         recovered.append(state.revision)
-        return original(state, *args)
+        return original(state, *args, **kwargs)
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
 
@@ -2020,12 +1815,12 @@ def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(wor
     original = application.recover_prepared_daily_images
     attempts = []
 
-    def recover(state, *args):
+    def recover(state, *args, **kwargs):
         attempts.append(state.revision)
         if state.revision == 2 and attempts.count(2) == 1:
             assert len(workspace.history_records()) == 2
             raise DailyImagePreparationError("temporary preparation failure")
-        return original(state, *args)
+        return original(state, *args, **kwargs)
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
     clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: clock.move(at(11, 19))])
@@ -2351,8 +2146,8 @@ def test_continuous_slow_preparation_rechecks_latest_stage_before_presenting(wor
     clock = RuntimeClock(at(10, 7))
     original = application.recover_prepared_daily_images
 
-    def recover(*args):
-        images = original(*args)
+    def recover(*args, **kwargs):
+        images = original(*args, **kwargs)
         clock.move(at(10, 19))
         return images
 
@@ -2367,9 +2162,9 @@ def test_continuous_daily_display_failure_retains_commit_and_prepared_images(wor
     prepared = []
     original = application.recover_prepared_daily_images
 
-    def recover(state, *args):
+    def recover(state, *args, **kwargs):
         prepared.append(state.revision)
-        return original(state, *args)
+        return original(state, *args, **kwargs)
 
     def fail_daily_update():
         display.fail_update = True

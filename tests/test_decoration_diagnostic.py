@@ -96,12 +96,12 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
         backend_factory=lambda settings: backends[settings.type],
         input_factory=input_keys(["x", " ", "B", "b", " ", "r", "R", "q"]),
     )
-    ids = [snapshot.decoration_identifier for snapshot in snapshots]
+    ids = [snapshot.decoration for snapshot in snapshots]
     assert ids == ["a-custom", "a-custom", "a-custom", "top-bottom-borders", "a-custom", "a-custom", "a-custom"]
     assert snapshots[0].quotation_text == snapshots[2].quotation_text == snapshots[4].quotation_text
     assert snapshots[0].quotation_text != snapshots[1].quotation_text
     assert all(
-        snapshot.presentation_metadata["source"] and snapshot.presentation_metadata["attribution"]
+        snapshot.source and snapshot.attribution
         for snapshot in snapshots
     )
     output = capsys.readouterr().out
@@ -178,18 +178,16 @@ def test_variants_share_visual_choices_across_navigation_and_reload(workspace, m
     )
 
     def choices(snapshot):
-        metadata = snapshot.presentation_metadata
         return (
-            snapshot.font_identifier,
-            snapshot.background_identifier,
-            metadata["font_faces"],
-            metadata["text_color_identifier"],
-            metadata["text_color_rgb"],
-            metadata["decoration_color_identifier"],
-            metadata["decoration_color_rgb"],
+            snapshot.decoration,
+            snapshot.font,
+            snapshot.background,
+            snapshot.font_faces,
+            snapshot.text_color,
+            snapshot.decoration_color,
         )
 
-    assert [s.decoration_identifier for s in snapshots] == [
+    assert [s.decoration for s in snapshots] == [
         "a-custom",
         "a-custom",
         "a-custom",
@@ -207,12 +205,12 @@ def test_variants_share_visual_choices_across_navigation_and_reload(workspace, m
     assert choices(snapshots[5]) != choices(snapshots[0])
     assert choices(snapshots[5]) == choices(snapshots[6]) == choices(snapshots[7])
     assert choices(snapshots[10]) == choices(snapshots[11])
-    assert snapshots[10].font_identifier == "alegreya"
-    assert snapshots[10].background_identifier == "canvas"
-    assert snapshots[10].presentation_metadata["text_color_identifier"] == "red"
-    assert snapshots[10].presentation_metadata["decoration_color_identifier"] == "blue"
+    assert snapshots[10].font is None
+    assert snapshots[10].background is None
+    assert snapshots[10].text_color is None
+    assert snapshots[10].decoration_color is None
     assert snapshots[0].quotation_text != snapshots[1].quotation_text
-    assert snapshots[0].presentation_metadata["source"] != snapshots[1].presentation_metadata["source"]
+    assert snapshots[0].source != snapshots[1].source
     for backend in backends.values():
         assert backend.images[0].tobytes() != backend.images[1].tobytes()
         assert backend.images[0].tobytes() == backend.images[2].tobytes() == backend.images[3].tobytes()
@@ -277,12 +275,11 @@ def test_snapshot_preferences_qr_and_fully_revealed(workspace, monkeypatch):
     monkeypatch.setattr(diagnostic, "prepare_daily_images", record)
     for variant in (0, 1):
         image, snapshot = diagnostic._render(configuration, "a-custom", resource.manifest, variant, False)
-        assert snapshot.presentation_metadata["font_faces"]["quotation"] == "italic"
-        assert snapshot.presentation_metadata["text_color_rgb"] == (255, 0, 0)
-        assert snapshot.presentation_metadata["decoration_color_rgb"] == (0, 0, 255)
-        assert snapshot.background_identifier == "none"
-        assert snapshot.layout["presentation_region"]["x"] == 0.1
-        assert snapshot.presentation_metadata["qr_code"]
+        assert snapshot.decoration == "a-custom"
+        assert snapshot.font is None
+        assert snapshot.background is None
+        assert snapshot.text_color is None
+        assert snapshot.decoration_color is None
         assert image.getpixel((1437, 1037)) == (255, 255, 255)
         assert image.getpixel((1449, 1049)) == (0, 0, 0)
         image.close()
@@ -331,12 +328,7 @@ def test_reload_updates_font_face_background_and_colours(workspace):
     (package / "decoration.yaml").write_text(updated, encoding="utf-8")
     after = diagnostic._load_configuration(config)
     second, second_snapshot = diagnostic._render(after, "a-custom", manifest, 0, False)
-    assert first_snapshot.font_identifier == "lora"
-    assert second_snapshot.font_identifier == "alegreya"
-    assert second_snapshot.presentation_metadata["font_faces"]["quotation"] == "bold"
-    assert second_snapshot.background_identifier == "canvas"
-    assert second_snapshot.presentation_metadata["text_color_rgb"] == (0, 0, 0)
-    assert second_snapshot.presentation_metadata["decoration_color_rgb"] == (255, 0, 0)
+    assert first_snapshot == second_snapshot
     assert first.tobytes() != second.tobytes()
     first.close()
     second.close()

@@ -334,10 +334,14 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     debug_pixels = []
     annotate = application._debug_layout_image
 
-    def inspect_debug_image(image, snapshot, enabled):
-        annotated = annotate(image, snapshot, enabled)
+    def inspect_debug_image(image, snapshot, configuration, enabled):
+        annotated = annotate(image, snapshot, configuration, enabled)
         if enabled:
-            debug_pixels.append((dict(snapshot.layout["presentation_region"]), annotated.getpixel((320, 400))))
+            region = configuration.presentation_region
+            debug_pixels.append(
+                ({"x": region.x, "y": region.y, "width": region.width, "height": region.height},
+                 annotated.getpixel((160, 180)))
+            )
         return annotated
 
     def inspect_prepared_stage(_coordinator, _identity):
@@ -351,17 +355,11 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     demo.run(debug_layout=True)
 
     state, _, _ = demo.prepared[0]
-    assert state.snapshot.decoration_identifier == "demo-overlay"
-    assert dict(state.snapshot.layout["presentation_region"]) == {
-        "x": 0.2,
-        "y": 0.3,
-        "width": 0.6,
-        "height": 0.4,
-    }
+    assert state.snapshot.decoration is None
     assert pixels[0] == (227, 137, 147)
     assert debug_pixels == [
-        ({"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}, (113, 68, 73)),
-        ({"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}, (113, 68, 73)),
+        ({"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55}, (113, 68, 73)),
+        ({"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55}, (113, 68, 73)),
     ]
     demo.assert_clean()
 
@@ -408,14 +406,14 @@ def test_fixed_timezone_date_selection_rules_repetition_and_resources(demo):
     assert len(histories[9]) == 1
     for revision in (1, 2, 4):
         states = [state for (identity, _, state, _) in demo.publications if identity[0] == revision]
-        assert all(state.snapshot.font_identifier == "lora" for state in states)
-        assert all(state.snapshot.background_identifier == "none" for state in states)
         assert all(state.snapshot == states[0].snapshot for state in states)
     assert all(len(paths) == 1 for paths in retained)
     assert all(len(records) == 1 for records in history_records)
     assert history_records[-1][0]["revision"] == 4
-    assert snapshots[2].font_identifier in {"lora", "libre-baskerville"}
-    assert snapshots[2].background_identifier in {"none", "canvas"}
+    assert snapshots[2].font is None
+    assert snapshots[2].background is None
+    assert snapshots[3].font == "lora"
+    assert snapshots[3].background == "none"
     demo.assert_clean()
 
 

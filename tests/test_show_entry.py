@@ -82,10 +82,10 @@ quotations:
     captured: dict[str, object] = {}
     prepare = application.prepare_daily_images
 
-    def capture_preparation(snapshot, stages, *registries):
+    def capture_preparation(snapshot, stages, configuration, **kwargs):
         captured["snapshot"] = snapshot
         captured["stages"] = stages
-        return prepare(snapshot, stages, *registries)
+        return prepare(snapshot, stages, configuration, **kwargs)
 
     def unexpected_selection(*_args, **_kwargs):
         pytest.fail("diagnostic selection must not use the ordinary candidate pool")
@@ -104,8 +104,8 @@ quotations:
 
     snapshot = captured["snapshot"]
     assert snapshot.quotation_text == "First quotation."
-    assert snapshot.presentation_metadata["source"] == "A source"
-    assert snapshot.presentation_metadata["attribution"] == "An author"
+    assert snapshot.source == "A source"
+    assert snapshot.attribution == "An author"
     assert captured["stages"][-1].source
     assert captured["stages"][-1].attribution
     assert output == output_directory / "refrain-requested-entry.png"

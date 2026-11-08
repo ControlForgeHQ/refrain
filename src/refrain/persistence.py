@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .content import normalize_quotation
+from .paths import ApplicationPathError, resolve_application_paths
 from .selection import SelectionProposal
 
 _FORMAT_VERSION = 1
@@ -87,6 +88,19 @@ def _valid_identity(value: object, field: str) -> str:
     if normalize_quotation(identity) != identity:
         raise ValueError(f"{field} must be a normalized quotation identity")
     return identity
+
+
+def _recovery_guidance(path: Path) -> str:
+    try:
+        standard_state_path = Path(resolve_application_paths().state_file).absolute()
+    except (ApplicationPathError, OSError, RuntimeError):
+        standard_state_path = None
+    if path.absolute() == standard_state_path:
+        return "Stop Refrain and use `refrain --reset` to remove standard runtime state before restarting."
+    return (
+        "Stop Refrain, back up this file, and manually remove or quarantine only this file before restarting; "
+        "--reset does not manage overridden state paths."
+    )
 
 
 @dataclass(frozen=True)
@@ -330,18 +344,15 @@ class PersistentStateStore:
             return _decode_document(document)
         except UnsupportedStateVersionError as error:
             raise UnsupportedStateVersionError(
-                f"{error} State file: {self.path}. Stop Refrain, back up this file, and manually remove or "
-                "quarantine only this file before restarting; --reset does not manage overridden state paths."
+                f"{error} State file: {self.path}. {_recovery_guidance(self.path)}"
             ) from error
         except StateRecoveryError as error:
             raise StateRecoveryError(
-                f"{error} State file: {self.path}. Stop Refrain, back up this file, and manually remove or "
-                "quarantine only this file before restarting; --reset does not manage overridden state paths."
+                f"{error} State file: {self.path}. {_recovery_guidance(self.path)}"
             ) from error
         except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
             raise StateRecoveryError(
-                f"invalid persistent state at {self.path}: {error}. Stop Refrain, back up this file, and manually "
-                "remove or quarantine only this file before restarting; --reset does not manage overridden state paths."
+                f"invalid persistent state at {self.path}: {error}. {_recovery_guidance(self.path)}"
             ) from error
 
     def commit(

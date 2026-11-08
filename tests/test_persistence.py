@@ -365,6 +365,32 @@ def test_unsupported_version_is_reported_explicitly(tmp_path: Path) -> None:
         PersistentStateStore(state_path).load()
 
 
+def test_standard_state_path_recommends_reset_without_modifying_file(tmp_path: Path, monkeypatch) -> None:
+    state_path = tmp_path / "standard-state.json"
+    original = b'{"format_version":77,"state":{},"sha256":""}'
+    state_path.write_bytes(original)
+    monkeypatch.setattr(persistence, "resolve_application_paths", lambda: SimpleNamespace(state_file=state_path))
+
+    with pytest.raises(UnsupportedStateVersionError, match="refrain --reset"):
+        PersistentStateStore(state_path).load()
+
+    assert state_path.read_bytes() == original
+
+
+def test_overridden_state_path_recommends_quarantining_only_that_file(tmp_path: Path) -> None:
+    state_path = tmp_path / "custom-state.json"
+    original = b'{"format_version":77,"state":{},"sha256":""}'
+    state_path.write_bytes(original)
+
+    with pytest.raises(UnsupportedStateVersionError) as raised:
+        PersistentStateStore(state_path).load()
+
+    assert str(state_path) in str(raised.value)
+    assert "quarantine only this file" in str(raised.value)
+    assert "--reset does not manage overridden state paths" in str(raised.value)
+    assert state_path.read_bytes() == original
+
+
 def test_missing_fields_and_inconsistent_snapshot_are_rejected(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     commit(PersistentStateStore(state_path), "Persisted.")
