@@ -190,7 +190,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "stream=resource.open('rb'); "
                 "image=Image.open(stream); "
                 "assert image.format == 'PNG'; "
-                "assert image.size == (1600,1200); "
+                "assert image.size == (3840,2400); "
                 "assert image.mode in ('RGB','RGBA'); "
                 "assert image.n_frames == 1; "
                 "image.load(); "
