@@ -9,13 +9,14 @@ import re
 import shutil
 import stat
 import uuid
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PIL import Image
 
-from .persistence import DailySnapshot
+from .config import PresentationRegion
+from .renderer import CompositionVisibility
 
 _MODES = {"1", "L", "LA", "RGB", "RGBA"}
 _REVISION = re.compile(r"revision-([1-9][0-9]*)\Z")
@@ -53,45 +54,29 @@ def _canonical_json(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _json_value(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {key: _json_value(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_json_value(item) for item in value]
-    return value
-
-
-def _snapshot_digest(snapshot: DailySnapshot) -> str:
-    payload = {
-        "quotation_text": snapshot.quotation_text,
-        "quotation_identity": snapshot.quotation_identity,
-        "font_identifier": snapshot.font_identifier,
-        "background_identifier": snapshot.background_identifier,
-        "decoration_identifier": snapshot.decoration_identifier,
-        "presentation_metadata": _json_value(snapshot.presentation_metadata),
-        "reveal_schedule": _json_value(snapshot.reveal_schedule),
-        "layout": _json_value(snapshot.layout),
-        "scheduling": {
-            "display_date": snapshot.display_date.isoformat(),
-            "day_start": snapshot.scheduling.day_start,
-        },
-    }
-    return hashlib.sha256(_canonical_json(payload)).hexdigest()
-
-
 def _positive_integer(value: object, field: str) -> None:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{field} must be a positive integer")
 
 
-def _inputs(revision: int, snapshot: DailySnapshot) -> tuple[int, int]:
+def _stage_definitions(stages: Sequence[CompositionVisibility]) -> list[dict[str, bool]]:
+    if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
+        raise ValueError("stages must be a nonempty sequence of CompositionVisibility values")
+    if any(not isinstance(stage, CompositionVisibility) for stage in stages):
+        raise ValueError("stages must contain only CompositionVisibility values")
+    return [
+        {
+            "quotation": stage.quotation,
+            "source": stage.source,
+            "attribution": stage.attribution,
+        }
+        for stage in stages
+    ]
+
+
+def _inputs(revision: int, stages: Sequence[CompositionVisibility]) -> list[dict[str, bool]]:
     _positive_integer(revision, "revision")
-    if not isinstance(snapshot, DailySnapshot):
-        raise TypeError("snapshot must be a DailySnapshot")
-    size = snapshot.layout.get("image_size")
-    if not isinstance(size, tuple) or len(size) != 2 or any(type(n) is not int or n <= 0 for n in size):
-        raise ValueError("snapshot.layout.image_size must contain two positive integer dimensions")
-    return size
+    return _stage_definitions(stages)
 
 
 def _is_link(path: Path) -> bool:
@@ -155,6 +140,7 @@ class PreparedImageArtifactSet:
     mode: str
     stage_paths: tuple[Path, ...]
     _digests: tuple[str, ...]
+    presentation_region: PresentationRegion | None = field(default=None, compare=False, repr=False)
 
     def load_stage(self, stage: int) -> Image.Image:
         """Decode one independent image, rechecking integrity since initial validation."""
@@ -219,11 +205,19 @@ class PreparedImageArtifactStore:
             if not stat.S_ISDIR(status.st_mode):
                 raise ValueError(f"{path} must be a real directory, not a link")
 
-    def store(self, revision: int, snapshot: DailySnapshot, images: Sequence[Image.Image]) -> PreparedImageArtifactSet:
+    def store(
+        self,
+        revision: int,
+        stages: Sequence[CompositionVisibility],
+        images: Sequence[Image.Image],
+    ) -> PreparedImageArtifactSet:
         """Publish all explicit stages losslessly; input images remain caller-owned."""
-        size = _inputs(revision, snapshot)
+        expected_stages = _inputs(revision, stages)
         if not isinstance(images, Sequence) or isinstance(images, (str, bytes)) or not images:
             raise ValueError("images must be a nonempty sequence of complete Pillow images")
+        if len(images) != len(expected_stages):
+            raise ValueError("images must match the expected reveal-stage sequence")
+        size = images[0].size
         for index, image in enumerate(images):
             if not isinstance(image, Image.Image) or image.size != size or image.mode not in _MODES:
                 raise ValueError(f"stage {index} must be a Pillow image of size {size} in a supported mode")
@@ -252,11 +246,13 @@ class PreparedImageArtifactStore:
             metadata = {
                 "format_version": 1,
                 "revision": revision,
-                "snapshot_sha256": _snapshot_digest(snapshot),
                 "image_directory": payload.name,
                 "image_size": list(size),
                 "mode": images[0].mode,
-                "stages": [{"file": f"stage-{i}.png", "sha256": digest} for i, digest in enumerate(digests)],
+                "stages": [
+                    {"visibility": expected_stages[i], "file": f"stage-{i}.png", "sha256": digest}
+                    for i, digest in enumerate(digests)
+                ],
             }
             document = {"artifacts": metadata, "sha256": hashlib.sha256(_canonical_json(metadata)).hexdigest()}
             with (temporary / "manifest.json").open("xb") as stream:
@@ -289,10 +285,14 @@ class PreparedImageArtifactStore:
             tuple(digests),
         )
 
-    def load(self, revision: int, snapshot: DailySnapshot, *, stage_count: int) -> PreparedImageArtifactSet | None:
+    def load(
+        self,
+        revision: int,
+        stages: Sequence[CompositionVisibility],
+    ) -> PreparedImageArtifactSet | None:
         """Validate a whole expected set sequentially, retaining no decoded images."""
-        size = _inputs(revision, snapshot)
-        _positive_integer(stage_count, "stage_count")
+        expected_stages = _inputs(revision, stages)
+        stage_count = len(expected_stages)
         directory = self.root / f"revision-{revision}"
         try:
             self._check_root()
@@ -313,7 +313,6 @@ class PreparedImageArtifactStore:
             fields = {
                 "format_version",
                 "revision",
-                "snapshot_sha256",
                 "image_directory",
                 "image_size",
                 "mode",
@@ -327,15 +326,15 @@ class PreparedImageArtifactStore:
                 raise ValueError("unsupported artifact format_version")
             if type(metadata["revision"]) is not int or metadata["revision"] != revision:
                 raise ValueError("manifest revision does not match expected committed revision")
-            if metadata["snapshot_sha256"] != _snapshot_digest(snapshot):
-                raise ValueError("manifest does not match expected committed snapshot")
             if (
-                metadata["image_size"] != list(size)
-                or any(type(n) is not int for n in metadata["image_size"])
+                not isinstance(metadata["image_size"], list)
+                or len(metadata["image_size"]) != 2
+                or any(type(n) is not int or n <= 0 for n in metadata["image_size"])
                 or not isinstance(metadata["mode"], str)
                 or metadata["mode"] not in _MODES
             ):
                 raise ValueError("manifest dimensions or image mode do not match supported representation")
+            size = tuple(metadata["image_size"])
             name = metadata["image_directory"]
             if not isinstance(name, str) or not _PAYLOAD.fullmatch(name):
                 raise ValueError("invalid manifest image_directory")
@@ -348,7 +347,8 @@ class PreparedImageArtifactStore:
             for index, stage in enumerate(stages):
                 if (
                     not isinstance(stage, dict)
-                    or set(stage) != {"file", "sha256"}
+                    or set(stage) != {"visibility", "file", "sha256"}
+                    or stage["visibility"] != expected_stages[index]
                     or stage["file"] != f"stage-{index}.png"
                     or not isinstance(stage["sha256"], str)
                     or not _DIGEST.fullmatch(stage["sha256"])

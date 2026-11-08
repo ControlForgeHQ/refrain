@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, time
 from importlib.resources import files
 from pathlib import Path
 
@@ -10,24 +10,23 @@ from PIL import Image
 
 import refrain.preparation as preparation
 from refrain import (
+    ApplicationConfiguration,
     CompositionVisibility,
     DailyImagePreparationError,
     DailySnapshot,
+    DisplayBackendConfiguration,
     FontResource,
+    PresentationRegion,
+    RevealSchedule,
     SchedulingContext,
-    prepare_daily_images,
     resolve_reveal_stages,
 )
+from refrain import (
+    prepare_daily_images as _prepare_daily_images,
+)
 from refrain.config import BackgroundResource, DecorationResource
-from refrain.qr import PRODUCTION_QR_PARAMETERS, QRCodeParameters, qr_parameters_to_metadata
 
-_IMAGE_SIZE = (320, 240)
-_LAYOUT = {
-    "image_size": _IMAGE_SIZE,
-    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
-    "min_font_size": 12,
-    "max_font_size": 32,
-}
+_IMAGE_SIZE = (1600, 1200)
 _LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
 _LORA_ITALIC = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
 _FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
@@ -53,27 +52,92 @@ def make_snapshot(
     attribution: str | None = "An Example Author",
     style: str = "centered",
     metadata: dict[str, object] | None = None,
-    layout: dict[str, object] | None = None,
 ) -> DailySnapshot:
     if metadata is None:
-        metadata = {"presentation_style": style}
-        if source is not None:
-            metadata["source"] = source
-        if attribution is not None:
-            metadata["attribution"] = attribution
-    metadata = {
-        **metadata,
-        "qr_code": metadata.get("qr_code", qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS)),
-    }
+        metadata = {"presentation_style": style, "source": source, "attribution": attribution}
+    text_color = metadata.get("text_color")
+    if text_color is None and isinstance(metadata.get("text_color_identifier"), str):
+        text_color = (metadata["text_color_identifier"],)
+    decoration_color = metadata.get("decoration_color")
+    if decoration_color is None and isinstance(metadata.get("decoration_color_identifier"), str):
+        decoration_color = (metadata["decoration_color_identifier"],)
     return DailySnapshot(
+        entry_id="test-entry",
         quotation_text="A small thought, carefully kept.",
         quotation_identity="A small thought, carefully kept.",
-        font_identifier=font_identifier,
-        presentation_metadata=metadata,
+        source=metadata.get("source", source),
+        attribution=metadata.get("attribution", attribution),
+        presentation_style=metadata.get("presentation_style", style),
+        font=font_identifier,
+        font_faces=metadata.get("font_faces", {}),
+        background=None,
+        decoration=None,
+        text_color=text_color,
+        decoration_color=decoration_color,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-        layout=_LAYOUT if layout is None else layout,
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
+
+
+def _configuration(
+    fonts: dict[str, FontResource],
+    backgrounds: dict[str, BackgroundResource] | None = None,
+    decorations: dict[str, DecorationResource] | None = None,
+    *,
+    region: PresentationRegion = PresentationRegion(0.1, 0.1, 0.8, 0.8),
+    min_font_size: int = 12,
+    max_font_size: int = 32,
+    default_fonts: tuple[str, ...] | None = None,
+    default_backgrounds: tuple[str, ...] = ("none",),
+    default_decorations: tuple[str, ...] = ("none",),
+) -> ApplicationConfiguration:
+    return ApplicationConfiguration(
+        file=Path("/config.yaml"),
+        display_backends=(DisplayBackendConfiguration("window"),),
+        day_start=time(6),
+        content_directory=Path("/content"),
+        reveal=RevealSchedule(time(12), time(18)),
+        presentation_region=region,
+        fonts=fonts,
+        default_fonts=tuple(fonts) if default_fonts is None else default_fonts,
+        min_font_size=min_font_size,
+        max_font_size=max_font_size,
+        backgrounds={} if backgrounds is None else backgrounds,
+        default_backgrounds=default_backgrounds,
+        decorations={} if decorations is None else decorations,
+        default_decorations=default_decorations,
+        palette={"black": "#000000", "burnt-orange": "#C65A20", "blue": "#0000FF"},
+        default_text_colors=("black",),
+        default_decoration_colors=("black",),
+    )
+
+
+def prepare_daily_images(
+    snapshot: DailySnapshot,
+    stages,
+    fonts,
+    backgrounds=None,
+    decorations=None,
+    **kwargs,
+):
+    backgrounds = kwargs.pop("background_registry", backgrounds)
+    decorations = kwargs.pop("decoration_registry", decorations)
+    configuration = (
+        fonts
+        if isinstance(fonts, ApplicationConfiguration)
+        else _configuration(
+            fonts,
+            backgrounds,
+            decorations,
+            region=kwargs.pop("region", PresentationRegion(0.1, 0.1, 0.8, 0.8)),
+            min_font_size=kwargs.pop("min_font_size", 12),
+            max_font_size=kwargs.pop("max_font_size", 32),
+            default_fonts=kwargs.pop("default_fonts", None),
+            default_backgrounds=kwargs.pop("default_backgrounds", ("none",)),
+            default_decorations=kwargs.pop("default_decorations", ("none",)),
+        )
+    )
+    return _prepare_daily_images(snapshot, stages, configuration, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -156,8 +220,8 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
             background.putpixel((1, 0), (0, 0, 0, 128))
         background.save(path)
     snapshot = replace(
-        make_snapshot("lora", source=None, attribution=None, layout={**_LAYOUT, "image_size": (1600, 1200)}),
-        background_identifier="paper",
+        make_snapshot("lora", source=None, attribution=None),
+        background="paper",
     )
     images = prepare_daily_images(
         snapshot, (CompositionVisibility(),), _FONT_REGISTRY, {"paper": BackgroundResource("paper", path, False)}
@@ -185,16 +249,9 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
         make_snapshot(
             "lora",
             source="A Sample Collection",
-            layout={
-                **_LAYOUT,
-                "image_size": (1600, 1200),
-                "presentation_region": {"x": 0.75, "y": 0.75, "width": 0.2, "height": 0.2},
-                "min_font_size": 16,
-                "max_font_size": 24,
-            },
         ),
-        background_identifier="paper",
-        decoration_identifier="overlay",
+        background="paper",
+        decoration="overlay",
     )
     stages = resolve_reveal_stages(snapshot)
     images = prepare_daily_images(
@@ -203,6 +260,9 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", background_path, False)},
         {"overlay": DecorationResource("overlay", decoration_path, False)},
+        region=PresentationRegion(0.75, 0.75, 0.2, 0.2),
+        min_font_size=16,
+        max_font_size=24,
     )
     try:
         assert all(image.mode == "RGB" and image.size == (1600, 1200) for image in images)
@@ -211,7 +271,7 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
             assert image.crop((1437, 1037, 1560, 1160)).tobytes() == images[0].crop((1437, 1037, 1560, 1160)).tobytes()
         assert images[0].getpixel((1437, 1037)) == (255, 255, 255)
         assert images[0].getpixel((1449, 1049)) == (0, 0, 0)
-        assert snapshot.layout["presentation_region"] == {"x": 0.75, "y": 0.75, "width": 0.2, "height": 0.2}
+        assert snapshot.decoration == "overlay"
     finally:
         for image in images:
             image.close()
@@ -230,10 +290,9 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
             "lora",
             source=None,
             attribution=None,
-            layout={**_LAYOUT, "image_size": (1600, 1200)},
         ),
-        background_identifier="paper",
-        decoration_identifier="overlay",
+        background="paper",
+        decoration="overlay",
     )
 
     images = prepare_daily_images(
@@ -253,7 +312,7 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
             image.close()
 
 
-def test_committed_decoration_tint_preserves_alpha_and_does_not_modify_source(tmp_path: Path) -> None:
+def test_decoration_color_preference_resolves_during_preparation_and_preserves_alpha(tmp_path: Path) -> None:
     decoration_path = tmp_path / "overlay.png"
     with Image.new("RGBA", _IMAGE_SIZE, (20, 40, 60, 255)) as decoration:
         decoration.putpixel((0, 0), (0, 0, 0, 0))
@@ -269,26 +328,24 @@ def test_committed_decoration_tint_preserves_alpha_and_does_not_modify_source(tm
             attribution=None,
             metadata={
                 "presentation_style": "centered",
-                "decoration_tint_enabled": True,
                 "decoration_color_identifier": "burnt-orange",
-                "decoration_color_rgb": (200, 100, 50),
             },
         ),
-        decoration_identifier="overlay",
+        decoration="overlay",
     )
 
     images = prepare_daily_images(
         snapshot,
         (CompositionVisibility(), CompositionVisibility()),
         _FONT_REGISTRY,
-        decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=False)},
+        decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=True)},
     )
     try:
         for image in images:
             assert image.getpixel((0, 0)) == (255, 255, 255)
-            assert image.getpixel((1, 0)) == (227, 177, 152)
-            assert image.getpixel((2, 0)) == (200, 100, 50)
-            assert image.getpixel((3, 0)) == (227, 177, 152)
+            assert image.getpixel((2, 0)) == (198, 90, 32)
+            assert image.getpixel((1, 0)) != (255, 255, 255)
+            assert image.getpixel((3, 0)) != (40, 80, 120)
         assert images[0].tobytes() == images[1].tobytes()
         assert decoration_path.read_bytes() == original_bytes
     finally:
@@ -296,12 +353,12 @@ def test_committed_decoration_tint_preserves_alpha_and_does_not_modify_source(tm
             image.close()
 
 
-def test_legacy_snapshot_does_not_infer_tinting_from_current_manifest(tmp_path: Path) -> None:
+def test_unrequested_decoration_color_uses_current_default_palette(tmp_path: Path) -> None:
     decoration_path = tmp_path / "overlay.png"
     with Image.new("RGBA", _IMAGE_SIZE, (255, 255, 255, 255)) as decoration:
         decoration.putpixel((0, 0), (40, 80, 120, 255))
         decoration.save(decoration_path)
-    snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration_identifier="overlay")
+    snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration="overlay")
 
     images = prepare_daily_images(
         snapshot,
@@ -310,8 +367,8 @@ def test_legacy_snapshot_does_not_infer_tinting_from_current_manifest(tmp_path: 
         decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=True)},
     )
     try:
-        assert images[0].getpixel((0, 0)) == (40, 80, 120)
-        assert images[0].getpixel((10, 10)) == (255, 255, 255)
+        assert images[0].getpixel((0, 0)) == (0, 0, 0)
+        assert images[0].getpixel((10, 10)) == (0, 0, 0)
     finally:
         for image in images:
             image.close()
@@ -374,40 +431,30 @@ def test_decoration_contain_scaling_centres_transparent_portrait(tmp_path: Path)
 
 
 def test_missing_committed_decoration_is_omitted_without_changing_snapshot(tmp_path: Path, caplog) -> None:
-    region = {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}
-    snapshot = replace(
-        make_snapshot("lora"),
-        decoration_identifier="removed-decoration",
-        layout={**_LAYOUT, "presentation_region": region},
-    )
+    snapshot = replace(make_snapshot("lora"), decoration="removed-decoration")
 
     images = prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY, {}, {})
     try:
         assert images[0].getpixel((0, 0)) == (255, 255, 255)
-        assert snapshot.decoration_identifier == "removed-decoration"
-        assert dict(snapshot.layout["presentation_region"]) == region
-        assert "Committed decoration 'removed-decoration' is unavailable" in caplog.text
+        assert snapshot.decoration == "removed-decoration"
+        assert "Requested decoration 'removed-decoration' is unavailable" in caplog.text
     finally:
         for image in images:
             image.close()
 
 
-@pytest.mark.parametrize("kwargs", [{}, {"decoration_registry": None}])
-def test_selected_decoration_requires_registry(kwargs, caplog) -> None:
-    snapshot = replace(make_snapshot("lora"), decoration_identifier="overlay")
-
-    with pytest.raises(DailyImagePreparationError, match="decoration_registry must be supplied"):
-        prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, {}, **kwargs)
-
-    assert not caplog.records
-
-
-@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])
-def test_selected_background_requires_registry(kwargs, caplog) -> None:
-    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
-    with pytest.raises(DailyImagePreparationError, match="background_registry must be supplied"):
-        prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, **kwargs)
-    assert not caplog.records
+def test_unavailable_visual_preferences_fall_back_without_changing_snapshot(caplog) -> None:
+    snapshot = replace(make_snapshot("lora"), decoration="missing-frame", background="missing-paper")
+    images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, {}, {})
+    try:
+        assert images[0].getpixel((0, 0)) == (255, 255, 255)
+        assert snapshot.decoration == "missing-frame"
+        assert snapshot.background == "missing-paper"
+        assert "Requested decoration 'missing-frame' is unavailable" in caplog.text
+        assert "Requested background 'missing-paper' from content entry is unavailable" in caplog.text
+    finally:
+        for image in images:
+            image.close()
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}, {"background_registry": {}}])
@@ -427,13 +474,16 @@ def test_unusable_committed_background_warns_and_uses_white(tmp_path: Path, capl
     registry = {} if damage == "missing-id" else {"paper": BackgroundResource("paper", path, False)}
     if damage == "invalid-file":
         path.write_text("not a PNG")
-    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
+    snapshot = replace(make_snapshot("lora"), background="paper")
     images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _FONT_REGISTRY, registry)
     try:
         assert all(image.getpixel((0, 0)) == (255, 255, 255) for image in images)
-        assert "Committed background 'paper'" in caplog.text
-        assert "paper-white base" in caplog.text
-        assert snapshot.background_identifier == "paper"
+        assert snapshot.background == "paper"
+        if damage == "missing-id":
+            assert "Requested background 'paper' from content entry is unavailable" in caplog.text
+        else:
+            assert "Committed background 'paper'" in caplog.text
+            assert "paper-white base" in caplog.text
     finally:
         for image in images:
             image.close()
@@ -445,7 +495,7 @@ def test_background_decode_errors_fall_back_to_white(tmp_path: Path, monkeypatch
         raise error
 
     monkeypatch.setattr(preparation, "load_background_image", unreadable)
-    snapshot = replace(make_snapshot("lora"), background_identifier="paper")
+    snapshot = replace(make_snapshot("lora"), background="paper")
     images = prepare_daily_images(
         snapshot,
         resolve_reveal_stages(snapshot),
@@ -475,7 +525,6 @@ def test_preparation_is_deterministic(embedded_font: str) -> None:
 
 
 def test_committed_color_is_rendered_for_all_literary_fields_and_reveal_stages() -> None:
-    color = (198, 90, 32)
     snapshot = make_snapshot(
         "lora",
         metadata={
@@ -483,18 +532,6 @@ def test_committed_color_is_rendered_for_all_literary_fields_and_reveal_stages()
             "source": "A Sample Collection",
             "attribution": "An Example Author",
             "text_color_identifier": "burnt-orange",
-            "text_color_rgb": color,
-            "qr_code": qr_parameters_to_metadata(
-                QRCodeParameters(
-                    url=None,
-                    version=4,
-                    error_correction="M",
-                    module_size=1,
-                    quiet_zone=0,
-                    right_offset=0,
-                    bottom_offset=0,
-                )
-            ),
         },
     )
     stages = resolve_reveal_stages(snapshot)
@@ -608,7 +645,7 @@ def test_preparation_uses_committed_faces_for_each_role_and_all_stages(monkeypat
     assert layout.attribution_font_identifier == "lora:italic"
     assert layout.byline is not None
     assert all(image.size == _IMAGE_SIZE for image in images)
-    assert dict(snapshot.presentation_metadata["font_faces"]) == {
+    assert dict(snapshot.font_faces) == {
         "quotation": "regular",
         "source": "italic",
         "attribution": "italic",
@@ -629,8 +666,8 @@ def test_missing_committed_face_uses_regular_without_changing_snapshot(caplog) -
     images = prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), _MULTI_FACE_REGISTRY)
 
     assert images
-    assert "Committed source face 'missing'" in caplog.text
-    assert dict(snapshot.presentation_metadata["font_faces"])["source"] == "missing"
+    assert "Preferred source face 'missing'" in caplog.text
+    assert dict(snapshot.font_faces)["source"] == "missing"
 
 
 def test_missing_bundle_fallback_uses_committed_face_identifiers(caplog) -> None:
@@ -659,42 +696,23 @@ def test_missing_bundle_fallback_uses_committed_face_identifiers(caplog) -> None
 
     assert images
     assert layouts[0].source_font_identifier == "lora:italic"
-    assert snapshot.font_identifier == "removed-bundle"
-    assert "Committed font 'removed-bundle' is unavailable" in caplog.text
+    assert snapshot.font == "removed-bundle"
+    assert "Requested font 'removed-bundle' from content entry is unavailable" in caplog.text
 
 
 @pytest.mark.parametrize(
-    ("metadata", "layout", "message"),
+    ("metadata", "message"),
     [
-        ({}, _LAYOUT, "presentation_style"),
-        ({"presentation_style": "unknown"}, _LAYOUT, "presentation_style"),
-        ({"presentation_style": "prose"}, _LAYOUT, "presentation_style"),
-        ({"presentation_style": "centered", "source": ""}, _LAYOUT, "source"),
-        ({"presentation_style": "centered"}, {**_LAYOUT, "image_size": (0, 240)}, "image_size"),
-        (
-            {"presentation_style": "centered"},
-            {**_LAYOUT, "presentation_region": {"x": 0.1, "y": 0.1, "height": 0.8}},
-            "presentation_region is missing width",
-        ),
-        (
-            {"presentation_style": "centered"},
-            {**_LAYOUT, "presentation_region": {"x": 0.9, "y": 0.1, "width": 0.2, "height": 0.8}},
-            "normalized rectangle",
-        ),
-        ({"presentation_style": "centered"}, {**_LAYOUT, "min_font_size": 0}, "min_font_size"),
-        ({"presentation_style": "centered"}, {**_LAYOUT, "max_font_size": 10}, "max_font_size"),
+        ({"presentation_style": "unknown"}, "presentation_style"),
+        ({"presentation_style": "centered", "source": ""}, "source"),
     ],
 )
-def test_invalid_snapshot_presentation_data_is_actionable(
-    embedded_font: str,
+def test_invalid_semantic_preferences_are_rejected(
     metadata: dict[str, object],
-    layout: dict[str, object],
     message: str,
 ) -> None:
-    snapshot = make_snapshot(embedded_font, metadata=metadata, layout=layout)
-
-    with pytest.raises(DailyImagePreparationError, match=message):
-        prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY)
+    with pytest.raises(ValueError, match=message):
+        make_snapshot("lora", metadata=metadata)
 
 
 def test_invalid_stage_sequence_is_rejected(embedded_font: str) -> None:
@@ -731,14 +749,14 @@ def test_reveal_stages_must_remain_cumulative(embedded_font: str) -> None:
         )
 
 
-def test_missing_font_fails_clearly_without_bundled_fallback() -> None:
+def test_missing_font_fails_when_default_pool_is_empty() -> None:
     snapshot = make_snapshot("missing-font")
 
-    with pytest.raises(DailyImagePreparationError, match="no usable bundled fallback"):
-        prepare_daily_images(snapshot, (CompositionVisibility(),), {})
+    with pytest.raises(DailyImagePreparationError, match="configure a usable identifier in layout.fonts.default"):
+        prepare_daily_images(snapshot, (CompositionVisibility(),), {}, default_fonts=())
 
 
-def test_unusable_selected_font_uses_deterministic_bundled_fallback(tmp_path, caplog, monkeypatch) -> None:
+def test_unusable_explicit_font_uses_configured_default_pool(tmp_path, caplog, monkeypatch) -> None:
     broken_path = tmp_path / "broken.ttf"
     broken_path.write_bytes(b"not a font")
     snapshot = make_snapshot("broken")
@@ -757,7 +775,12 @@ def test_unusable_selected_font_uses_deterministic_bundled_fallback(tmp_path, ca
 
     monkeypatch.setattr(preparation, "layout_composition", capture_layout)
 
-    images = prepare_daily_images(snapshot, (CompositionVisibility(),), registry)
+    images = prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(),),
+        registry,
+        default_fonts=("a-fallback",),
+    )
 
     assert images[0].size == _IMAGE_SIZE
     assert layouts[0].font_identifier == "a-fallback"
@@ -765,17 +788,18 @@ def test_unusable_selected_font_uses_deterministic_bundled_fallback(tmp_path, ca
 
 
 def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: str) -> None:
-    layout = {
-        "image_size": (100, 100),
-        "presentation_region": {"x": 0.49, "y": 0.49, "width": 0.02, "height": 0.02},
-        "min_font_size": 24,
-        "max_font_size": 28,
-    }
-    snapshot = make_snapshot(embedded_font, source=None, attribution=None, layout=layout)
+    snapshot = make_snapshot(embedded_font, source=None, attribution=None)
     original_snapshot = snapshot
 
     with pytest.raises(DailyImagePreparationError, match="does not fit"):
-        prepare_daily_images(snapshot, (CompositionVisibility(),), _FONT_REGISTRY)
+        prepare_daily_images(
+            snapshot,
+            (CompositionVisibility(),),
+            _FONT_REGISTRY,
+            region=PresentationRegion(0.49, 0.49, 0.02, 0.02),
+            min_font_size=24,
+            max_font_size=28,
+        )
 
     assert snapshot == original_snapshot
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, time
 from importlib.resources import files
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from PIL import Image
 
 import refrain.recovery as recovery
 from refrain import (
+    ApplicationConfiguration,
     ArtifactAccessError,
     ArtifactValidationError,
     ArtifactWriteError,
@@ -17,12 +18,15 @@ from refrain import (
     ContentEntry,
     DailyImagePreparationError,
     DailySnapshot,
+    DisplayBackendConfiguration,
     EligibilityRule,
     FontResource,
     PersistentStateStore,
     PreparedImageArtifactStore,
+    PresentationRegion,
     Quotation,
     QuotationCandidate,
+    RevealSchedule,
     SchedulingContext,
     SelectionProposal,
     normalize_quotation,
@@ -30,7 +34,6 @@ from refrain import (
     recover_prepared_daily_images,
 )
 from refrain.config import BackgroundResource
-from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 _STAGES = (
     CompositionVisibility(),
@@ -44,28 +47,37 @@ _FONT_REGISTRY = {
         bundled=True,
     )
 }
+_CONFIGURATION = ApplicationConfiguration(
+    file=Path("/config.yaml"),
+    display_backends=(DisplayBackendConfiguration("window"),),
+    day_start=time(6),
+    content_directory=Path("/content"),
+    reveal=RevealSchedule(time(12), time(18)),
+    presentation_region=PresentationRegion(0.1, 0.1, 0.8, 0.8),
+    fonts=_FONT_REGISTRY,
+    default_fonts=("committed-font",),
+    min_font_size=12,
+    max_font_size=32,
+)
 
 
 @pytest.fixture
 def committed_state(tmp_path: Path):
     text = "A committed quotation for recovery."
     snapshot = DailySnapshot(
+        entry_id="entry",
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
-        font_identifier="committed-font",
-        presentation_metadata={
-            "source": "Committed source",
-            "attribution": "Committed author",
-            "presentation_style": "centered",
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
+        source="Committed source",
+        attribution="Committed author",
+        presentation_style="centered",
+        font="committed-font",
+        font_faces={},
+        background=None,
+        decoration=None,
+        text_color=None,
+        decoration_color=None,
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-        layout={
-            "image_size": (320, 240),
-            "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
-            "min_font_size": 12,
-            "max_font_size": 32,
-        },
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
     quotation = Quotation(text, normalize_quotation(text))
@@ -89,9 +101,9 @@ def artifact_store(tmp_path: Path) -> PreparedImageArtifactStore:
 
 
 def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
-    images = prepare_daily_images(state.snapshot, stages, _FONT_REGISTRY)
+    images = prepare_daily_images(state.snapshot, stages, _CONFIGURATION)
     try:
-        return store.store(state.revision, state.snapshot, images)
+        return store.store(state.revision, stages, images)
     finally:
         for image in images:
             image.close()
@@ -103,125 +115,55 @@ def _assert_images_closed(images: tuple[Image.Image, ...]) -> None:
             image.getpixel((0, 0))
 
 
-@pytest.mark.parametrize("kwargs", [{}, {"background_registry": None}])
-@pytest.mark.parametrize("prepared", [False, True])
-def test_selected_background_requires_registry_before_reuse(
-    committed_state, artifact_store, monkeypatch, caplog, kwargs, prepared
-) -> None:
-    state, state_path = committed_state
-    state = replace(state, snapshot=replace(state.snapshot, background_identifier="paper"))
-    state_bytes = state_path.read_bytes()
-    if prepared:
-        images = prepare_daily_images(state.snapshot, _STAGES, _FONT_REGISTRY, {})
-        try:
-            artifact_store.store(state.revision, state.snapshot, images)
-        finally:
-            for image in images:
-                image.close()
-    caplog.clear()
-    monkeypatch.setattr(PreparedImageArtifactStore, "load", lambda *_args, **_kwargs: pytest.fail("unexpected load"))
-    with pytest.raises(DailyImagePreparationError, match="background_registry must be supplied"):
-        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, **kwargs)
-    assert state.snapshot.background_identifier == "paper"
-    assert state_path.read_bytes() == state_bytes
-    assert not caplog.records
-
-
-def test_missing_committed_background_never_reselects_and_reuses_valid_images(
-    committed_state, artifact_store, tmp_path: Path, caplog
-) -> None:
-    state, _ = committed_state
-    snapshot = replace(
-        state.snapshot,
-        background_identifier="lost-paper",
-        layout={**state.snapshot.layout, "image_size": (1600, 1200)},
-    )
-    state = replace(state, snapshot=snapshot)
-    substitute = tmp_path / "substitute.png"
-    with Image.new("RGB", (1600, 1200), "red") as image:
-        image.save(substitute)
-    registry = {"substitute": BackgroundResource("substitute", substitute, False)}
-    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, registry)
-    with result.load_stage(0) as image:
-        assert image.getpixel((0, 0)) == (255, 255, 255)
-    assert "Committed background 'lost-paper'" in caplog.text
-    assert state.snapshot == snapshot
-    manifest_before = (result.directory / "manifest.json").read_bytes()
-    caplog.clear()
-    assert recover_prepared_daily_images(state, artifact_store, _STAGES, {}, {}) == result
-    assert (result.directory / "manifest.json").read_bytes() == manifest_before
-    assert not caplog.records
-
-
-def test_missing_committed_decoration_is_omitted_and_region_is_preserved(
+def test_missing_preference_falls_back_without_changing_committed_selection(
     committed_state, artifact_store, caplog
 ) -> None:
-    state, _ = committed_state
-    region = {"x": 0.2, "y": 0.3, "width": 0.6, "height": 0.4}
-    snapshot = replace(
-        state.snapshot,
-        decoration_identifier="removed-decoration",
-        layout={**state.snapshot.layout, "presentation_region": region},
-    )
-    state = replace(state, snapshot=snapshot)
-
-    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, {})
-
-    with result.load_stage(0) as image:
-        assert image.getpixel((0, 0)) == (255, 255, 255)
-    assert state.snapshot.decoration_identifier == "removed-decoration"
-    assert dict(state.snapshot.layout["presentation_region"]) == region
-    assert "Committed decoration 'removed-decoration' is unavailable" in caplog.text
-
-
-@pytest.mark.parametrize("kwargs", [{}, {"decoration_registry": None}])
-@pytest.mark.parametrize("prepared", [False, True])
-def test_selected_decoration_requires_registry_before_reuse(
-    committed_state, artifact_store, monkeypatch, caplog, kwargs, prepared
-) -> None:
     state, state_path = committed_state
-    snapshot = replace(state.snapshot, decoration_identifier="removed-decoration")
+    snapshot = replace(state.snapshot, background="removed-paper")
     state = replace(state, snapshot=snapshot)
     state_bytes = state_path.read_bytes()
-    if prepared:
-        images = prepare_daily_images(state.snapshot, _STAGES, _FONT_REGISTRY, {}, {})
-        try:
-            artifact_store.store(state.revision, state.snapshot, images)
-        finally:
-            for image in images:
-                image.close()
-    caplog.clear()
-    monkeypatch.setattr(PreparedImageArtifactStore, "load", lambda *_args, **_kwargs: pytest.fail("unexpected load"))
 
-    with pytest.raises(DailyImagePreparationError, match="decoration_registry must be supplied"):
-        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, **kwargs)
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
-    assert state.snapshot.decoration_identifier == "removed-decoration"
+    assert state.snapshot.background == "removed-paper"
     assert state_path.read_bytes() == state_bytes
-    assert not caplog.records
+    with result.load_stage(0) as image:
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert "Requested background 'removed-paper' from content entry is unavailable" in caplog.text
 
 
-def test_valid_prepared_images_are_reused_after_decoration_changes(
-    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
+    committed_state, artifact_store, tmp_path: Path, monkeypatch
 ) -> None:
-    state, _ = committed_state
-    snapshot = replace(
-        state.snapshot,
-        decoration_identifier="custom-overlay",
-        layout={**state.snapshot.layout, "presentation_region": {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}},
-    )
+    state, state_path = committed_state
+    snapshot = replace(state.snapshot, background="paper")
     state = replace(state, snapshot=snapshot)
-    images = prepare_daily_images(snapshot, _STAGES, _FONT_REGISTRY, {}, {})
+    background_path = tmp_path / "paper.png"
+    with Image.new("RGB", (1600, 1200), "red") as image:
+        image.save(background_path)
+    configured = replace(
+        _CONFIGURATION,
+        backgrounds={"paper": BackgroundResource("paper", background_path, False)},
+    )
+    images = prepare_daily_images(snapshot, _STAGES, configured)
     try:
-        prepared = artifact_store.store(state.revision, snapshot, images)
+        prepared = artifact_store.store(state.revision, _STAGES, images)
     finally:
         for image in images:
             image.close()
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args, **_kwargs: pytest.fail("unexpected rendering"))
+    state_bytes = state_path.read_bytes()
+    monkeypatch.setattr(
+        recovery,
+        "prepare_daily_images",
+        lambda *_args, **_kwargs: pytest.fail("unexpected regeneration"),
+    )
 
-    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY, {}, {})
+    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
     assert recovered == prepared
+    with recovered.load_stage(0) as image:
+        assert image.getpixel((0, 0)) == (255, 0, 0)
+    assert state_path.read_bytes() == state_bytes
 
 
 def test_reuses_complete_artifacts_without_preparing_or_writing(
@@ -237,7 +179,7 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
     monkeypatch.setattr(PreparedImageArtifactStore, "store", lambda *_args, **_kwargs: pytest.fail("unexpected write"))
     result = recover_prepared_daily_images(
-        state, PreparedImageArtifactStore(artifact_store.root), _STAGES, _FONT_REGISTRY
+        state, PreparedImageArtifactStore(artifact_store.root), _STAGES, _CONFIGURATION
     )
 
     assert result == expected
@@ -256,12 +198,16 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
     first_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
     changed_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
     font_path.write_bytes(first_font.read_bytes())
-    registry = {"committed-font": FontResource("committed-font", font_path, bundled=False)}
+    configured = replace(
+        _CONFIGURATION,
+        fonts={"committed-font": FontResource("committed-font", font_path, bundled=False)},
+        default_fonts=("committed-font",),
+    )
 
-    original = recover_prepared_daily_images(state, artifact_store, _STAGES, registry)
+    original = recover_prepared_daily_images(state, artifact_store, _STAGES, configured)
     font_path.write_bytes(changed_font.read_bytes())
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args: pytest.fail("unexpected regeneration"))
-    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, registry)
+    recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, configured)
 
     assert recovered == original
     assert state_path.read_bytes() == state_bytes_before
@@ -277,7 +223,6 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
         "missing-manifest",
         "invalid-manifest",
         "wrong-stage-count",
-        "wrong-snapshot",
     ],
 )
 def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, artifact_store, damage: str) -> None:
@@ -288,18 +233,10 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
     if damage == "interrupted":
         (artifact_store.root / f"revision-{state.revision}").mkdir(parents=True)
     else:
-        artifact_snapshot = state.snapshot
         artifact_stages = _STAGES
-        if damage == "wrong-snapshot":
-            artifact_snapshot = replace(
-                state.snapshot,
-                quotation_text="Different committed text.",
-                quotation_identity="Different committed text.",
-            )
         if damage == "wrong-stage-count":
             artifact_stages = _STAGES[:2]
-        artifact_state = replace(state, snapshot=artifact_snapshot)
-        old_set = _store_images(artifact_store, artifact_state, artifact_stages)
+        old_set = _store_images(artifact_store, state, artifact_stages)
         previous_payloads = tuple(old_set.directory.glob("images-*"))
 
         if damage == "missing-stage":
@@ -313,21 +250,19 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
         elif damage == "invalid-manifest":
             (old_set.directory / "manifest.json").write_bytes(b"{")
 
-    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
-    reloaded = PreparedImageArtifactStore(artifact_store.root).load(
-        state.revision, state.snapshot, stage_count=len(_STAGES)
-    )
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
+    reloaded = PreparedImageArtifactStore(artifact_store.root).load(state.revision, _STAGES)
 
     assert result.revision == state.revision
     assert reloaded == result
     assert len(result.stage_paths) == len(_STAGES)
     assert all(path.is_file() for path in result.stage_paths)
     assert all(path.name == f"stage-{index}.png" for index, path in enumerate(result.stage_paths))
-    expected_images = prepare_daily_images(state.snapshot, _STAGES, _FONT_REGISTRY)
+    expected_images = prepare_daily_images(state.snapshot, _STAGES, _CONFIGURATION)
     try:
         for index, expected in enumerate(expected_images):
             with result.load_stage(index) as image:
-                assert image.size == (320, 240)
+                assert image.size == (1600, 1200)
                 assert image.mode == "RGB"
                 assert image.tobytes() == expected.tobytes()
     finally:
@@ -343,12 +278,12 @@ def test_repeated_recovery_uses_reloaded_artifacts_without_rewriting(
     committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state, _ = committed_state
-    first = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
+    first = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
     manifest = (first.directory / "manifest.json").read_bytes()
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
     second = recover_prepared_daily_images(
-        state, PreparedImageArtifactStore(artifact_store.root), _STAGES, _FONT_REGISTRY
+        state, PreparedImageArtifactStore(artifact_store.root), _STAGES, _CONFIGURATION
     )
 
     assert second == first
@@ -371,7 +306,7 @@ def test_rejects_inconsistent_stage_definitions_before_reuse(
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
 
     with pytest.raises(DailyImagePreparationError):
-        recover_prepared_daily_images(state, artifact_store, stages, _FONT_REGISTRY)
+        recover_prepared_daily_images(state, artifact_store, stages, _CONFIGURATION)
 
 
 def test_rejects_reveals_for_fields_absent_from_snapshot(committed_state, artifact_store) -> None:
@@ -380,11 +315,7 @@ def test_rejects_reveals_for_fields_absent_from_snapshot(committed_state, artifa
         state,
         snapshot=replace(
             state.snapshot,
-            presentation_metadata={
-                "attribution": "Committed author",
-                "presentation_style": "centered",
-                "qr_code": state.snapshot.presentation_metadata["qr_code"],
-            },
+            source=None,
         ),
     )
 
@@ -393,7 +324,7 @@ def test_rejects_reveals_for_fields_absent_from_snapshot(committed_state, artifa
             state_without_source,
             artifact_store,
             (CompositionVisibility(), CompositionVisibility(source=True)),
-            _FONT_REGISTRY,
+            _CONFIGURATION,
         )
 
 
@@ -403,10 +334,10 @@ def test_rendering_failure_preserves_committed_state_and_storage(
     state, state_path = committed_state
     before = state_path.read_bytes()
     error = DailyImagePreparationError("injected rendering failure")
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: (_ for _ in ()).throw(error))
 
     with pytest.raises(DailyImagePreparationError) as raised:
-        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
+        recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
     assert raised.value is error
     assert not artifact_store.root.exists()
@@ -422,11 +353,11 @@ def test_storage_failure_is_preserved_and_closes_generated_images(
     before = state_path.read_bytes()
     images = tuple(Image.new("RGB", (320, 240), color) for color in ("white", "gray", "black"))
     error = ArtifactWriteError("injected storage failure", published=published)
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: images)
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: images)
     monkeypatch.setattr(artifact_store, "store", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
 
     with pytest.raises(ArtifactWriteError) as raised:
-        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
+        recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
     assert raised.value is error
     assert raised.value.published is published
@@ -441,12 +372,10 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
     state, state_path = committed_state
     before = state_path.read_bytes()
     images = tuple(Image.new("RGB", (320, 240), color) for color in ("white", "gray", "black"))
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: images)
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: images)
 
-    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
-    reloaded = PreparedImageArtifactStore(artifact_store.root).load(
-        state.revision, state.snapshot, stage_count=len(_STAGES)
-    )
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
+    reloaded = PreparedImageArtifactStore(artifact_store.root).load(state.revision, _STAGES)
 
     assert reloaded == result
     _assert_images_closed(images)
@@ -463,10 +392,10 @@ def test_artifact_root_access_failure_is_not_treated_as_a_cache_miss(
         raise PermissionError("injected permission failure")
 
     monkeypatch.setattr(artifact_store, "_check_root", deny_access)
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: pytest.fail("unexpected rendering"))
 
     with pytest.raises(ArtifactAccessError, match="injected permission failure"):
-        recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
+        recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
 
 def test_artifact_validation_error_triggers_regeneration_but_access_error_does_not(
@@ -477,12 +406,12 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
     monkeypatch.setattr(artifact_store, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
     prepared = []
 
-    def prepare(snapshot, stages, font_registry, background_registry=None):
+    def prepare(snapshot, stages, configuration, **_kwargs):
         prepared.append(tuple(stages))
         return tuple(Image.new("RGB", (320, 240), "white") for _ in stages)
 
     monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
-    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _FONT_REGISTRY)
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
     assert result.revision == state.revision
     assert prepared == [_STAGES]

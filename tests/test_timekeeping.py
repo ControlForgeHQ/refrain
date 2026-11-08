@@ -22,7 +22,6 @@ from refrain import (
     normalize_quotation,
     wait_for_scheduling_event,
 )
-from refrain.qr import PRODUCTION_QR_PARAMETERS, qr_parameters_to_metadata
 
 
 def make_configuration(*, day_start: str = "06:00") -> ApplicationConfiguration:
@@ -49,17 +48,19 @@ def make_state(
 ) -> PersistentState:
     text = "A committed quotation."
     snapshot = DailySnapshot(
+        entry_id="entry",
         quotation_text=text,
         quotation_identity=normalize_quotation(text),
-        font_identifier="test-font",
-        presentation_metadata={
-            "presentation_style": "centered",
-            "source": "Source",
-            "attribution": "Author",
-            "qr_code": qr_parameters_to_metadata(PRODUCTION_QR_PARAMETERS),
-        },
+        source="Source",
+        attribution="Author",
+        presentation_style="centered",
+        font=None,
+        font_faces={},
+        background=None,
+        decoration=None,
+        text_color=None,
+        decoration_color=None,
         reveal_schedule=reveal_schedule or {"quotation": day_start, "source": "12:00", "attribution": "18:00"},
-        layout={},
         scheduling=SchedulingContext(display_date, day_start),
     )
     return PersistentState(

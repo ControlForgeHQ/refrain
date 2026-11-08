@@ -8,7 +8,7 @@ import os
 import random
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -18,14 +18,10 @@ from threading import Event
 from PIL import Image
 
 from .artifacts import ArtifactStoreError, PreparedImageArtifactSet, PreparedImageArtifactStore
-from .assets import valid_identifier
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
-    BackgroundResource,
-    DecorationResource,
     DisplayBackendConfiguration,
-    FontResource,
     PresentationRegion,
     load_application_config,
 )
@@ -45,11 +41,6 @@ from .persistence import (
     StateRecoveryError,
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
-from .qr import (
-    PRODUCTION_QR_PARAMETERS,
-    QRCodeParameters,
-    qr_parameters_to_metadata,
-)
 from .qr_diagnostic import (
     QRCalibrationError,
     QRCalibrationGeometry,
@@ -69,7 +60,6 @@ from .selection import SelectionProposal, select_quotation
 from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
 
 _LOGGER = logging.getLogger(__name__)
-_IMAGE_SIZE = (1600, 1200)
 _INFORMATION_VIEW_IDENTITY = (0, -1)
 _DIAGNOSTIC_PRESENTATION_IDENTITY = (0, -2)
 _INFORMATION_VIEW_PUBLICATION_TIMEOUT = 60.0
@@ -130,148 +120,6 @@ def _default_backend_factory(configuration: DisplayBackendConfiguration) -> Disp
     )
 
 
-def _resolve_font(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
-    identifier = preferred
-    if identifier is not None and identifier not in configuration.fonts:
-        _LOGGER.warning("Requested font %r is not available; using a font from the default pool", identifier)
-        identifier = None
-    if identifier is None:
-        if not configuration.default_fonts:
-            raise ApplicationError(
-                "no usable font remains in layout.fonts.default; discover a valid font bundle and add its identifier "
-                "to the default pool, or select an available font in the content entry"
-            )
-        identifier = chooser.choice(configuration.default_fonts)
-    return identifier
-
-
-def _resolve_font_faces(
-    configuration: ApplicationConfiguration,
-    entry: ContentEntry,
-    decoration: DecorationResource | None,
-    font_identifier: str,
-) -> dict[str, str]:
-    bundle = configuration.fonts[font_identifier]
-    preference_levels = (
-        entry.font_faces,
-        {} if decoration is None else decoration.font_faces,
-        bundle.font_faces,
-        configuration.font_faces,
-    )
-    resolved: dict[str, str] = {}
-    for role in ("quotation", "source", "attribution"):
-        preferred = next((level[role] for level in preference_levels if role in level), "regular")
-        if preferred not in bundle.faces:
-            _LOGGER.warning(
-                "Preferred %s face %r is unavailable in selected font bundle %r; using its regular face",
-                role,
-                preferred,
-                font_identifier,
-            )
-            preferred = "regular"
-        resolved[role] = preferred
-    return resolved
-
-
-def _resolve_background(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
-    if preferred == "none" or preferred in configuration.backgrounds:
-        return preferred
-    if preferred is not None:
-        _LOGGER.warning("Requested background %r is not available; using the default background pool", preferred)
-    return chooser.choice(configuration.default_backgrounds)
-
-
-def _resolve_decoration(configuration: ApplicationConfiguration, preferred: str | None, chooser: random.Random) -> str:
-    if preferred == "none" or preferred in configuration.decorations:
-        return preferred
-    if preferred is not None:
-        _LOGGER.warning("Requested decoration %r is not available; using the default decoration pool", preferred)
-    return chooser.choice(configuration.default_decorations)
-
-
-def _resolve_text_color(
-    configuration: ApplicationConfiguration,
-    entry: ContentEntry,
-    decoration: DecorationResource | None,
-    chooser: random.Random,
-) -> tuple[str, tuple[int, int, int]]:
-    preference_levels = (
-        ("content entry", entry.text_color),
-        ("selected decoration", None if decoration is None else decoration.text_color),
-        ("layout.text.colors", configuration.default_text_colors),
-        ("built-in fallback", ("black",)),
-    )
-    for source, candidates in preference_levels:
-        if candidates is None:
-            continue
-        usable: list[str] = []
-        seen: set[str] = set()
-        for identifier in candidates:
-            if not valid_identifier(identifier):
-                _LOGGER.warning("Text colour identifier %r from %s is invalid; excluding it", identifier, source)
-            elif identifier not in configuration.palette:
-                _LOGGER.warning("Text colour identifier %r from %s is unavailable; excluding it", identifier, source)
-            elif identifier not in seen:
-                usable.append(identifier)
-                seen.add(identifier)
-        if usable:
-            identifier = usable[0] if len(usable) == 1 else chooser.choice(tuple(usable))
-            value = configuration.palette[identifier]
-            return identifier, (
-                int(value[1:3], 16),
-                int(value[3:5], 16),
-                int(value[5:7], 16),
-            )
-    value = configuration.palette.get("black", "#000000")
-    return "black", (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
-
-
-def _resolve_decoration_color(
-    configuration: ApplicationConfiguration,
-    entry: ContentEntry,
-    decoration: DecorationResource | None,
-    chooser: random.Random,
-) -> tuple[str, tuple[int, int, int]] | None:
-    if decoration is None or not decoration.tintable:
-        return None
-
-    preference_levels = (
-        ("content entry", entry.decoration_color),
-        ("selected decoration", decoration.decoration_color),
-        ("layout.decorations.colors", configuration.default_decoration_colors),
-        ("built-in fallback", ("black",)),
-    )
-    for source, candidates in preference_levels:
-        if candidates is None:
-            continue
-        usable: list[str] = []
-        seen: set[str] = set()
-        for identifier in candidates:
-            if not valid_identifier(identifier):
-                _LOGGER.warning("Decoration colour identifier %r from %s is invalid; excluding it", identifier, source)
-            elif identifier not in configuration.palette:
-                _LOGGER.warning(
-                    "Decoration colour identifier %r from %s is unavailable; excluding it", identifier, source
-                )
-            elif identifier in seen:
-                _LOGGER.warning(
-                    "Decoration colour identifier %r from %s is duplicated; ignoring the duplicate", identifier, source
-                )
-            else:
-                usable.append(identifier)
-                seen.add(identifier)
-        if usable:
-            identifier = usable[0] if len(usable) == 1 else chooser.choice(tuple(usable))
-            value = configuration.palette[identifier]
-            return identifier, (
-                int(value[1:3], 16),
-                int(value[3:5], 16),
-                int(value[5:7], 16),
-            )
-    value = configuration.palette.get("black", "#000000")
-    return "black", (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
-
-
 def _select_snapshot(
     configuration: ApplicationConfiguration,
     display_date: date,
@@ -299,7 +147,7 @@ def _select_snapshot(
             "add an ordinary or matching date-specific entry"
         )
 
-    snapshot = _build_snapshot(configuration, candidate.entry, candidate.quotation, display_date, chooser)
+    snapshot = _build_snapshot(configuration, candidate.entry, candidate.quotation, display_date)
     return proposal, snapshot
 
 
@@ -308,71 +156,26 @@ def _build_snapshot(
     entry: ContentEntry,
     quotation: Quotation,
     display_date: date,
-    chooser: random.Random,
-    qr_parameters: QRCodeParameters | None = None,
 ) -> DailySnapshot:
     reveal = entry.reveal
-    metadata: dict[str, object] = {"presentation_style": entry.presentation_style}
-    metadata["qr_code"] = qr_parameters_to_metadata(
-        PRODUCTION_QR_PARAMETERS if qr_parameters is None else qr_parameters
-    )
-    if entry.source is not None:
-        metadata["source"] = entry.source
-    if entry.attribution is not None:
-        metadata["attribution"] = entry.attribution
-    decoration_identifier = _resolve_decoration(configuration, entry.decoration, chooser)
-    decoration = configuration.decorations.get(decoration_identifier)
-    decoration_color = _resolve_decoration_color(configuration, entry, decoration, chooser)
-    metadata["decoration_tint_enabled"] = decoration_color is not None
-    if decoration_color is not None:
-        metadata["decoration_color_identifier"], metadata["decoration_color_rgb"] = decoration_color
-    font_preference = entry.font
-    if font_preference is not None and font_preference not in configuration.fonts:
-        _LOGGER.warning("Requested font %r is not available; checking decoration preference", font_preference)
-        font_preference = None
-    if font_preference is None and decoration is not None:
-        font_preference = decoration.font
-    background_preference = entry.background
-    if (
-        background_preference is not None
-        and background_preference != "none"
-        and background_preference not in configuration.backgrounds
-    ):
-        _LOGGER.warning(
-            "Requested background %r is not available; checking decoration preference", background_preference
-        )
-        background_preference = None
-    if background_preference is None and decoration is not None:
-        background_preference = decoration.background
-    font_identifier = _resolve_font(configuration, font_preference, chooser)
-    metadata["font_faces"] = _resolve_font_faces(configuration, entry, decoration, font_identifier)
-    region = (
-        configuration.presentation_region
-        if decoration is None
-        else (decoration.presentation_region or configuration.presentation_region)
-    )
     try:
-        background_identifier = _resolve_background(configuration, background_preference, chooser)
-        text_color_identifier, text_color_rgb = _resolve_text_color(configuration, entry, decoration, chooser)
-        metadata["text_color_identifier"] = text_color_identifier
-        metadata["text_color_rgb"] = text_color_rgb
         snapshot = DailySnapshot(
+            entry_id=entry.id,
             quotation_text=quotation.text,
             quotation_identity=quotation.identity,
-            font_identifier=font_identifier,
-            background_identifier=background_identifier,
-            decoration_identifier=decoration_identifier,
-            presentation_metadata=metadata,
+            source=entry.source,
+            attribution=entry.attribution,
+            presentation_style=entry.presentation_style,
+            font=entry.font,
+            font_faces=entry.font_faces,
+            background=entry.background,
+            decoration=entry.decoration,
+            text_color=entry.text_color,
+            decoration_color=entry.decoration_color,
             reveal_schedule={
                 "quotation": configuration.day_start.strftime("%H:%M"),
                 "source": (reveal.source or configuration.reveal.source).strftime("%H:%M"),
                 "attribution": (reveal.attribution or configuration.reveal.attribution).strftime("%H:%M"),
-            },
-            layout={
-                "image_size": _IMAGE_SIZE,
-                "presentation_region": {"x": region.x, "y": region.y, "width": region.width, "height": region.height},
-                "min_font_size": configuration.min_font_size,
-                "max_font_size": configuration.max_font_size,
             },
             scheduling=SchedulingContext(
                 display_date,
@@ -381,7 +184,7 @@ def _build_snapshot(
         )
         resolve_reveal_stages(snapshot)
     except (ValueError, TypeError) as error:
-        raise ApplicationError(f"entry {entry.id!r} cannot produce a valid daily snapshot: {error}") from error
+        raise ApplicationError(f"entry {entry.id!r} cannot produce a valid daily selection: {error}") from error
     return snapshot
 
 
@@ -446,15 +249,21 @@ def run_show_entry(
             )
         if not entry.quotations:
             raise ApplicationError(f"content entry {entry_id!r} has no usable quotations to present")
-        snapshot = _build_snapshot(configuration, entry, entry.quotations[0], date.today(), chooser)
+        snapshot = _build_snapshot(configuration, entry, entry.quotations[0], date.today())
         stages = resolve_reveal_stages(snapshot)
+        resolved_region: PresentationRegion | None = None
+
+        def remember_region(region: PresentationRegion) -> None:
+            nonlocal resolved_region
+            resolved_region = region
+
         try:
             images = prepare_daily_images(
                 snapshot,
                 (stages[-1],),
-                configuration.fonts,
-                configuration.backgrounds,
-                configuration.decorations,
+                configuration,
+                chooser=chooser,
+                on_resolved_region=remember_region,
             )
         except Exception as error:
             raise ApplicationError(f"cannot prepare diagnostic presentation for entry {entry_id!r}: {error}") from error
@@ -465,7 +274,7 @@ def run_show_entry(
     annotated_image: Image.Image | None = None
     try:
         if snapshot is not None and debug_layout:
-            annotated_image = _debug_layout_image(image, snapshot, True)
+            annotated_image = _debug_layout_image(image, resolved_region, True)
             image = annotated_image
         output = _save_diagnostic_png(image, entry_id)
         identity = _DIAGNOSTIC_PRESENTATION_IDENTITY
@@ -692,16 +501,26 @@ def _load_configuration(config_file: str | Path) -> ApplicationConfiguration:
         raise ApplicationError(f"application configuration is invalid: {error}") from error
 
 
-def _debug_layout_image(image: Image.Image, snapshot: DailySnapshot, enabled: bool) -> Image.Image:
+def _debug_layout_image(
+    image: Image.Image,
+    region: PresentationRegion | None,
+    enabled: bool,
+) -> Image.Image:
     if not enabled:
         return image
-    region = PresentationRegion(**snapshot.layout["presentation_region"])
+    if region is None:
+        _LOGGER.warning("Cannot outline the presentation region because its resolved geometry is unavailable")
+        return image
     return annotate_presentation_region(image, region)
 
 
-def _stage_publication_image(image: Image.Image, snapshot: DailySnapshot, debug_layout: bool) -> Image.Image:
+def _stage_publication_image(
+    image: Image.Image,
+    region: PresentationRegion | None,
+    debug_layout: bool,
+) -> Image.Image:
     try:
-        annotated = _debug_layout_image(image, snapshot, debug_layout)
+        annotated = _debug_layout_image(image, region, debug_layout)
     except Exception:
         image.close()
         raise
@@ -713,18 +532,16 @@ def _stage_publication_image(image: Image.Image, snapshot: DailySnapshot, debug_
 def _recover_images(
     state: PersistentState,
     artifact_store: PreparedImageArtifactStore,
-    font_registry: Mapping[str, FontResource],
-    background_registry: Mapping[str, BackgroundResource] | None = None,
-    decoration_registry: Mapping[str, DecorationResource] | None = None,
+    configuration: ApplicationConfiguration,
+    chooser: random.Random,
 ) -> PreparedImageArtifactSet:
     try:
         return recover_prepared_daily_images(
             state,
             artifact_store,
             resolve_reveal_stages(state.snapshot),
-            font_registry,
-            background_registry,
-            decoration_registry,
+            configuration,
+            chooser=chooser,
         )
     except DailyImagePreparationError as error:
         raise _RetryableApplicationError(f"cannot prepare daily images: {error}") from error
@@ -858,15 +675,14 @@ def run_startup(
             artifacts = _recover_images(
                 state,
                 artifact_store,
-                configuration.fonts,
-                configuration.backgrounds,
-                configuration.decorations,
+                configuration,
+                chooser,
             )
             try:
                 image = artifacts.load_stage(stage)
             except ArtifactStoreError as error:
                 raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-            image = _stage_publication_image(image, state.snapshot, debug_layout)
+            image = _stage_publication_image(image, artifacts.presentation_region, debug_layout)
             try:
                 final_decision = evaluate_scheduling(read_current_time(), configuration, state)
             except SchedulingEvaluationError as error:
@@ -994,9 +810,8 @@ def run_application(
                     artifacts = _recover_images(
                         state,
                         artifact_store,
-                        configuration.fonts,
-                        configuration.backgrounds,
-                        configuration.decorations,
+                        configuration,
+                        chooser,
                     )
                     artifact_revision = state.revision
                     try:
@@ -1091,7 +906,7 @@ def run_application(
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(image, state.snapshot, debug_layout)
+                    image = _stage_publication_image(image, artifacts.presentation_region, debug_layout)
                     coordinator.publish(identity, image)
                     continue
                 if last_failure is not None:
@@ -1204,9 +1019,8 @@ def run_demo(
                     artifacts = _recover_images(
                         state,
                         artifact_store,
-                        configuration.fonts,
-                        configuration.backgrounds,
-                        configuration.decorations,
+                        configuration,
+                        chooser,
                     )
                     try:
                         artifact_store.cleanup(state.revision)
@@ -1224,7 +1038,7 @@ def run_demo(
                         raise _RetryableApplicationError(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(image, state.snapshot, debug_layout)
+                    image = _stage_publication_image(image, artifacts.presentation_region, debug_layout)
                     coordinator.publish(identity, image)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
                     continue
