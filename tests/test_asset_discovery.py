@@ -7,7 +7,7 @@ import pytest
 import yaml
 from PIL import Image, ImageFont
 
-from refrain import load_application_config
+from refrain import PresentationInsets, load_application_config
 
 _BUNDLED_LORA = Path(__file__).parents[1] / "src" / "refrain" / "assets" / "fonts" / "lora" / "Lora-Regular.ttf"
 _FONT_STYLE_FACES = {
@@ -32,7 +32,7 @@ _FONT_STYLE_FACES = {
 
 def _config_data(**layout_sections: object) -> dict[str, object]:
     layout: dict[str, object] = {
-        "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+        "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
         "fonts": {"default": ["lora"]},
         "backgrounds": {"default": ["none"]},
         "decorations": {"default": ["none"]},
@@ -168,7 +168,7 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
             "format": 1,
             "id": "botanical-border",
             "image": "border.png",
-            "presentation_region": {"x": 0.12, "y": 0.16, "width": 0.76, "height": 0.68},
+            "presentation_insets": {"left": 461, "right": 461, "top": 346, "bottom": 346},
             "font": "missing-font",
             "background": "missing-background",
             "font_faces": {"source": "handwritten"},
@@ -181,8 +181,7 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
     assert dict(config.fonts["literary"].font_faces) == {"quotation": "handwritten", "attribution": "italic"}
     assert config.fonts["literary"].path == font_dir / "Regular.ttf"
     decoration = config.decorations["botanical-border"]
-    assert decoration.presentation_region is not None
-    assert decoration.presentation_region.x == 0.12
+    assert decoration.presentation_insets == PresentationInsets(461, 461, 346, 346)
     assert decoration.font is None
     assert decoration.background is None
     assert dict(decoration.font_faces) == {"source": "handwritten"}

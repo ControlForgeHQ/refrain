@@ -370,7 +370,7 @@ def discover_decorations(
     font_ids: set[str],
     background_ids: set[str],
     report: Report,
-    parse_region: Callable[..., object],
+    parse_insets: Callable[..., object],
 ) -> dict[str, object]:
     from .config import DecorationResource
 
@@ -385,7 +385,7 @@ def discover_decorations(
                     "format",
                     "id",
                     "image",
-                    "presentation_region",
+                    "presentation_insets",
                     "font",
                     "font_faces",
                     "background",
@@ -399,13 +399,13 @@ def discover_decorations(
                 continue
             image_path, data = parsed
             identifier = data["id"]
-            region = None
-            if "presentation_region" in data:
-                region = parse_region(
-                    data["presentation_region"], f"{field}.presentation_region", report, logging.WARNING
+            insets = None
+            if "presentation_insets" in data:
+                insets = parse_insets(
+                    data["presentation_insets"], f"{field}.presentation_insets", report, logging.WARNING
                 )
-                if region is None:
-                    report(f"{field}.presentation_region", "is invalid; this decoration is excluded", logging.WARNING)
+                if insets is None:
+                    report(f"{field}.presentation_insets", "is invalid; this decoration is excluded", logging.WARNING)
                     continue
             preferred_font = data.get("font")
             if "font" in data and (not valid_identifier(preferred_font) or preferred_font not in font_ids):
@@ -449,7 +449,7 @@ def discover_decorations(
                 identifier=identifier,
                 path=image_path,
                 bundled=is_bundled,
-                presentation_region=region,  # type: ignore[arg-type]
+                presentation_insets=insets,  # type: ignore[arg-type]
                 font=preferred_font,
                 font_faces=font_faces,
                 background=preferred_background,

@@ -14,10 +14,10 @@ from .config import (
     BackgroundResource,
     DecorationResource,
     FontResource,
-    PresentationRegion,
     load_background_image,
     load_decoration_image,
 )
+from .geometry import PixelBounds, PresentationGeometry, PresentationGeometryError, resolve_presentation_geometry
 from .persistence import DailySnapshot, ResolvedFont
 from .qr import (
     PRODUCTION_QR_PARAMETERS,
@@ -35,7 +35,6 @@ from .renderer import (
 
 _BACKGROUND_COLOR = "#FFFFFF"
 _BYLINE_GAP_FACTOR = 1.20
-_IMAGE_SIZE = (1600, 1200)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -47,21 +46,24 @@ def _resolve_presentation(
     snapshot: DailySnapshot,
     configuration: ApplicationConfiguration,
     decoration: DecorationResource | None,
-) -> tuple[LiteraryComposition, PresentationRegion, tuple[int, int], int, int, str]:
+) -> tuple[LiteraryComposition, PresentationGeometry, int, int, str]:
     composition = LiteraryComposition(
         quotation=snapshot.quotation_text,
         source=snapshot.source,
         attribution=snapshot.attribution,
     )
-    region = (
-        configuration.presentation_region
-        if decoration is None or decoration.presentation_region is None
-        else decoration.presentation_region
+    insets = (
+        configuration.presentation_insets
+        if decoration is None or decoration.presentation_insets is None
+        else decoration.presentation_insets
     )
+    try:
+        geometry = resolve_presentation_geometry(configuration.output_size, insets)
+    except PresentationGeometryError as error:
+        raise DailyImagePreparationError(f"cannot resolve literary presentation geometry: {error}") from error
     return (
         composition,
-        region,
-        _IMAGE_SIZE,
+        geometry,
         configuration.min_font_size,
         configuration.max_font_size,
         snapshot.presentation_style,
@@ -370,7 +372,7 @@ def prepare_daily_images(
     *,
     chooser: random.Random | None = None,
     strict_decoration: bool = False,
-    on_resolved_region: Callable[[PresentationRegion], None] | None = None,
+    on_resolved_bounds: Callable[[PixelBounds], None] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -386,11 +388,12 @@ def prepare_daily_images(
     chooser = chooser if chooser is not None else random.Random()
     decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser)
     background_identifier = _resolve_background(snapshot, decoration, configuration, chooser)
-    composition, region, image_size, min_font_size, max_font_size, style = _resolve_presentation(
+    composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
         snapshot, configuration, decoration
     )
-    if on_resolved_region is not None:
-        on_resolved_region(region)
+    image_size = geometry.output_size
+    if on_resolved_bounds is not None:
+        on_resolved_bounds(geometry.output_region)
     text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
     qr_parameters = PRODUCTION_QR_PARAMETERS
     decoration_tint = _resolve_decoration_tint(configuration, snapshot, decoration, chooser)
@@ -399,7 +402,7 @@ def prepare_daily_images(
         layout = layout_composition(
             composition,
             fonts["quotation"],
-            region,
+            geometry.output_region,
             image_size,
             min_font_size,
             max_font_size,

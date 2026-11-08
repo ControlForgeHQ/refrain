@@ -35,7 +35,7 @@ display:
 information_view:
   duration: 60
 layout:
-  presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.55}
+  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
     default: ["lora", "libre-baskerville"]
   backgrounds:
@@ -298,7 +298,7 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
         (2, 0),
     ]
     assert [when for _, when, *_ in demo.publications] == [2.5 * n for n in range(len(expected) + 1)]
-    assert all(size == (1600, 1200) for *_, size in demo.publications)
+    assert all(size == (1920, 1080) for *_, size in demo.publications)
     state, stages, _ = demo.prepared[0]
     assert [(stage.quotation, stage.source, stage.attribution) for stage in stages] == expected
     assert state.snapshot.display_date == date(2026, 3, 9)
@@ -318,7 +318,7 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
         "format: 1\n"
         "id: demo-overlay\n"
         "image: overlay.png\n"
-        "presentation_region: {x: 0.2, y: 0.3, width: 0.6, height: 0.4}\n",
+        "presentation_insets: {left: 768, right: 768, top: 648, bottom: 648}\n",
         encoding="utf-8",
     )
     demo.config.write_text(

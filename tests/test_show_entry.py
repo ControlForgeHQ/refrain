@@ -26,7 +26,7 @@ display:
 information_view:
   duration: 0
 layout:
-  presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.55}
+  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
     default: ["lora"]
   text: {min_font_size: 28, max_font_size: 100}
@@ -223,7 +223,7 @@ def test_information_target_uses_existing_renderer_without_loading_content(
     assert len(backend.images) == 1
     with Image.open(output) as saved:
         assert saved.mode == backend.images[0].mode == "RGB"
-        assert saved.size == backend.images[0].size == (1600, 1200)
+        assert saved.size == backend.images[0].size == (1920, 1080)
         assert saved.tobytes() == backend.images[0].tobytes()
         assert saved.getpixel((1437, 1037)) == (250, 249, 245)
     assert backend.closed

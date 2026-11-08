@@ -16,7 +16,7 @@ from refrain import (
     ApplicationConfigurationError,
     BackgroundResource,
     DecorationResource,
-    PresentationRegion,
+    PresentationInsets,
     load_application_config,
     load_background_image,
     load_decoration_image,
@@ -29,7 +29,6 @@ def configuration_data(**overrides: object) -> dict[str, object]:
         "content": {"directory": "content"},
         "display": {"backends": [{"type": "window"}]},
         "layout": {
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         },
@@ -429,7 +428,7 @@ def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -
     assert "none" not in config.decorations
     assert all(resource.bundled for resource in config.decorations.values())
     assert all(
-        resource.font is None and resource.background is None and resource.presentation_region is None
+        resource.font is None and resource.background is None and resource.presentation_insets is None
         for resource in config.decorations.values()
     )
     assert not any(record.levelno >= 30 and "decoration" in record.message for record in caplog.records)
@@ -455,7 +454,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
             "format": 1,
             "id": "custom-flourish",
             "image": "flourish.png",
-            "presentation_region": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6},
+            "presentation_insets": {"left": 384, "right": 768, "top": 432, "bottom": 432},
             "font": "lora",
             "text_color": ["black", "burnt-orange"],
             "background": "none",
@@ -471,7 +470,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
         "custom-flourish",
         path,
         False,
-        PresentationRegion(0.1, 0.2, 0.7, 0.6),
+        PresentationInsets(384, 768, 432, 432),
         "lora",
         "none",
         text_color=("black", "burnt-orange"),
@@ -534,7 +533,7 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
             "format": 1,
             "id": "bad-region",
             "image": "overlay.png",
-            "presentation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
+            "presentation_insets": {"left": 3840, "right": 0, "top": 0, "bottom": 0},
         },
     )
     write_asset_manifest(decorations / "valid", "decoration.yaml", {"format": 1, "id": "valid", "image": "overlay.png"})
@@ -553,7 +552,7 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
         "valid",
     }
     assert config.default_decorations == ("valid",)
-    assert "bad-region/decoration.yaml.presentation_region" in caplog.text.replace("\\", "/")
+    assert "bad-region/decoration.yaml.presentation_insets" in caplog.text.replace("\\", "/")
 
 
 def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(tmp_path: Path, caplog) -> None:
@@ -638,10 +637,8 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.content_directory == tmp_path / "content"
     assert config.reveal.source == time(12)
     assert config.reveal.attribution == time(18)
-    assert config.presentation_region.x == 0.1
-    assert config.presentation_region.y == 0.15
-    assert config.presentation_region.width == 0.8
-    assert config.presentation_region.height == 0.55
+    assert config.output_size == (1920, 1080)
+    assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.default_fonts == ("lora",)
     assert config.min_font_size == 28
     assert config.max_font_size == 100
@@ -652,6 +649,64 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert all(font.path.is_file() for font in config.fonts.values())
     assert all(font.path.parent.joinpath("OFL.txt").is_file() for font in config.fonts.values())
     assert config.fonts["orbitron"].path.name == "Orbitron-Regular.ttf"
+
+
+@pytest.mark.parametrize(
+    ("output_size", "expected"),
+    [
+        ([1600, 1200], (1600, 1200)),
+        ([1920, 1080], (1920, 1080)),
+        ([3840, 2400], (3840, 2400)),
+        ([1280, 960], (1280, 960)),
+        ([1600, 900], (1600, 900)),
+        ([808, 505], (808, 505)),
+    ],
+)
+def test_output_size_accepts_supported_exact_aspect_ratios(
+    tmp_path: Path, output_size: list[int], expected: tuple[int, int]
+) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                layout={
+                    "output_size": output_size,
+                    "fonts": {"default": ["lora"]},
+                    "text": {"min_font_size": 1, "max_font_size": 2},
+                }
+            ),
+        )
+    )
+
+    assert config.output_size == expected
+
+
+@pytest.mark.parametrize(
+    "output_size",
+    [
+        [0, 1200],
+        [-1, 1200],
+        [1920, 0],
+        [1920, -1],
+        [1920.0, 1080],
+        [True, 1080],
+        [1920],
+        [1920, 1080, 1],
+        "1920x1080",
+        [1000, 1000],
+        [1920, 1100],
+    ],
+)
+def test_invalid_output_sizes_are_rejected(tmp_path: Path, output_size: object) -> None:
+    data = configuration_data(
+        layout={
+            "output_size": output_size,
+            "fonts": {"default": ["lora"]},
+            "text": {"min_font_size": 1, "max_font_size": 2},
+        }
+    )
+
+    assert "layout.output_size" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
 def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> None:
@@ -703,7 +758,8 @@ def test_representative_configuration_example_loads() -> None:
         "simple-border",
         "top-bottom-borders",
     )
-    assert config.presentation_region.height == 0.70
+    assert config.output_size == (1920, 1080)
+    assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.information_view_duration == 5
 
 
@@ -901,7 +957,7 @@ def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path)
     write_asset_manifest(package, "font.yaml", {"format": 1, "id": "extra", "faces": {"regular": "Regular.ttf"}})
     data = configuration_data(
         layout={
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
@@ -933,7 +989,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     data = configuration_data(
         content={"directory": "entries"},
         layout={
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
             "fonts": {"default": ["lora"]},
             "backgrounds": {"default": ["none"]},
             "decorations": {"default": ["none"]},
@@ -957,7 +1013,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
 def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog, absolute_path: str) -> None:
     data = configuration_data(
         layout={
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
@@ -995,7 +1051,7 @@ def test_mixed_discovered_font_bundles_keep_only_usable_fonts(tmp_path: Path, ca
             tmp_path / "config.yaml",
             configuration_data(
                 layout={
-                    "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+                    "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
                     "fonts": {"default": ["valid-user-font", "missing-user-font"]},
                     "text": {"min_font_size": 28, "max_font_size": 100},
                 }
@@ -1014,7 +1070,7 @@ def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, ca
     config_data = configuration_data(
         general={"timezone": "UTC", 1: "ignored", "unknown": "ignored"},
         layout={
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
             "fonts": {"default": ["lora"], "available": {1: "ignored.ttf"}},
             "text": {"min_font_size": 28, "max_font_size": 100},
         },
@@ -1030,22 +1086,22 @@ def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, ca
 
 
 @pytest.mark.parametrize(
-    ("region", "expected_field"),
+    ("insets", "expected_field"),
     [
-        ({}, "layout.presentation_region.x"),
-        ({"x": -0.1, "y": 0.1, "width": 0.2, "height": 0.2}, "layout.presentation_region.x"),
-        ({"x": 0.1, "y": 1, "width": 0.2, "height": 0.2}, "layout.presentation_region.y"),
-        ({"x": 0.1, "y": 0.1, "width": 0, "height": 0.2}, "layout.presentation_region.width"),
-        ({"x": 0.1, "y": 0.1, "width": 0.2, "height": 0}, "layout.presentation_region.height"),
-        ({"x": 0.1, "y": 0.8, "width": 0.2, "height": 0.3}, "layout.presentation_region.height"),
+        ({}, "layout.presentation_insets.left"),
+        ({"left": -1, "right": 384, "top": 324, "bottom": 324}, "layout.presentation_insets.left"),
+        ({"left": True, "right": 384, "top": 324, "bottom": 324}, "layout.presentation_insets.left"),
+        ({"left": 1.5, "right": 384, "top": 324, "bottom": 324}, "layout.presentation_insets.left"),
+        ({"left": 1920, "right": 1920, "top": 324, "bottom": 324}, "layout.presentation_insets"),
+        ({"left": 384, "right": 384, "top": 1080, "bottom": 1080}, "layout.presentation_insets"),
     ],
 )
-def test_invalid_presentation_region_geometry_is_rejected(
-    tmp_path: Path, region: dict[str, float], expected_field: str
+def test_invalid_presentation_insets_are_rejected(
+    tmp_path: Path, insets: dict[str, int | float | bool], expected_field: str
 ) -> None:
     data = configuration_data(
         layout={
-            "presentation_region": region,
+            "presentation_insets": insets,
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
@@ -1054,10 +1110,10 @@ def test_invalid_presentation_region_geometry_is_rejected(
     assert expected_field in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
-def test_presentation_region_accepts_full_normalized_image(tmp_path: Path) -> None:
+def test_presentation_insets_accept_zero_edges(tmp_path: Path) -> None:
     data = configuration_data(
         layout={
-            "presentation_region": {"x": 0, "y": 0, "width": 1, "height": 1},
+            "presentation_insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
@@ -1065,16 +1121,12 @@ def test_presentation_region_accepts_full_normalized_image(tmp_path: Path) -> No
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.presentation_region.x == 0
-    assert config.presentation_region.y == 0
-    assert config.presentation_region.width == 1
-    assert config.presentation_region.height == 1
+    assert config.presentation_insets == PresentationInsets(0, 0, 0, 0)
 
 
 def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog) -> None:
     data = configuration_data(
         layout={
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
@@ -1083,7 +1135,7 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.presentation_region.x == 0.1
+    assert config.output_size == (1920, 1080)
     assert "layout.quotation_region" in caplog.text
     assert "ignored" in caplog.text
 
@@ -1094,27 +1146,26 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
         (
             configuration_data(
                 layout={
-                    "presentation_region": {"x": 0.8, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_insets": {"left": 3840, "right": 0, "top": 0, "bottom": 0},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
             ),
-            "layout.presentation_region.width",
+            "layout.presentation_insets",
         ),
         (
             configuration_data(
                 layout={
-                    "presentation_region": {"x": True, "y": 0.1, "width": 0.3, "height": 0.5},
+                    "presentation_insets": {"left": True, "right": 384, "top": 324, "bottom": 324},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
             ),
-            "layout.presentation_region.x",
+            "layout.presentation_insets.left",
         ),
         (
             configuration_data(
                 layout={
-                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 10, "max_font_size": 9},
                 }
@@ -1124,7 +1175,6 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
         (
             configuration_data(
                 layout={
-                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.5},
                     "fonts": {"default": []},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
@@ -1181,7 +1231,7 @@ def test_default_font_pool_filters_unavailable_and_duplicates(
             tmp_path / "config.yaml",
             configuration_data(
                 layout={
-                    "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+                    "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
                     "fonts": {"default": default_fonts},
                     "text": {"min_font_size": 28, "max_font_size": 100},
                 }
@@ -1277,7 +1327,7 @@ def test_unreadable_user_font_is_excluded(tmp_path: Path, monkeypatch: pytest.Mo
     user_font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
     data = configuration_data(
         layout={
-            "presentation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
+            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
             "fonts": {"default": ["lora"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }

@@ -16,7 +16,7 @@ from refrain import (
     DailySnapshot,
     DisplayBackendConfiguration,
     FontResource,
-    PresentationRegion,
+    PresentationInsets,
     RevealSchedule,
     SchedulingContext,
     resolve_reveal_stages,
@@ -26,7 +26,7 @@ from refrain import (
 )
 from refrain.config import BackgroundResource, DecorationResource
 
-_IMAGE_SIZE = (1600, 1200)
+_IMAGE_SIZE = (1920, 1080)
 _LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
 _LORA_ITALIC = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
 _FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
@@ -84,7 +84,8 @@ def _configuration(
     backgrounds: dict[str, BackgroundResource] | None = None,
     decorations: dict[str, DecorationResource] | None = None,
     *,
-    region: PresentationRegion = PresentationRegion(0.1, 0.1, 0.8, 0.8),
+    insets: PresentationInsets = PresentationInsets(384, 384, 216, 216),
+    output_size: tuple[int, int] = _IMAGE_SIZE,
     min_font_size: int = 12,
     max_font_size: int = 32,
     default_fonts: tuple[str, ...] | None = None,
@@ -97,7 +98,8 @@ def _configuration(
         day_start=time(6),
         content_directory=Path("/content"),
         reveal=RevealSchedule(time(12), time(18)),
-        presentation_region=region,
+        output_size=output_size,
+        presentation_insets=insets,
         fonts=fonts,
         default_fonts=tuple(fonts) if default_fonts is None else default_fonts,
         min_font_size=min_font_size,
@@ -129,7 +131,8 @@ def prepare_daily_images(
             fonts,
             backgrounds,
             decorations,
-            region=kwargs.pop("region", PresentationRegion(0.1, 0.1, 0.8, 0.8)),
+            insets=kwargs.pop("insets", PresentationInsets(384, 384, 216, 216)),
+            output_size=kwargs.pop("output_size", _IMAGE_SIZE),
             min_font_size=kwargs.pop("min_font_size", 12),
             max_font_size=kwargs.pop("max_font_size", 32),
             default_fonts=kwargs.pop("default_fonts", None),
@@ -194,6 +197,25 @@ def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
     assert snapshot == original_snapshot
 
 
+@pytest.mark.parametrize("output_size", [(1600, 1200), (1920, 1080), (3840, 2400), (808, 505)])
+def test_prepared_reveal_images_use_configured_output_resolution(output_size: tuple[int, int]) -> None:
+    snapshot = make_snapshot("lora")
+    configuration = replace(_configuration(_FONT_REGISTRY), output_size=output_size)
+
+    images = _prepare_daily_images(
+        snapshot,
+        resolve_reveal_stages(snapshot),
+        configuration,
+    )
+    try:
+        assert len(images) == 3
+        assert all(image.size == output_size for image in images)
+        assert all(image.mode == "RGB" for image in images)
+    finally:
+        for image in images:
+            image.close()
+
+
 def test_canonical_reveal_stages_can_be_passed_directly_to_preparation(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font, source="A Sample Collection", attribution="An Example Author")
     stages = resolve_reveal_stages(snapshot)
@@ -224,7 +246,11 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
         background="paper",
     )
     images = prepare_daily_images(
-        snapshot, (CompositionVisibility(),), _FONT_REGISTRY, {"paper": BackgroundResource("paper", path, False)}
+        snapshot,
+        (CompositionVisibility(),),
+        _FONT_REGISTRY,
+        {"paper": BackgroundResource("paper", path, False)},
+        output_size=(1600, 1200),
     )
     try:
         image = images[0]
@@ -260,7 +286,8 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", background_path, False)},
         {"overlay": DecorationResource("overlay", decoration_path, False)},
-        region=PresentationRegion(0.75, 0.75, 0.2, 0.2),
+        insets=PresentationInsets(2400, 160, 1800, 120),
+        output_size=(1600, 1200),
         min_font_size=16,
         max_font_size=24,
     )
@@ -301,6 +328,7 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", background_path, False)},
         {"overlay": DecorationResource("overlay", decoration_path, False)},
+        output_size=(1600, 1200),
     )
     try:
         image = images[0]
@@ -796,7 +824,7 @@ def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: str) 
             snapshot,
             (CompositionVisibility(),),
             _FONT_REGISTRY,
-            region=PresentationRegion(0.49, 0.49, 0.02, 0.02),
+            insets=PresentationInsets(1882, 1882, 1058, 1058),
             min_font_size=24,
             max_font_size=28,
         )

@@ -32,7 +32,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
                 "content": {"directory": "content"},
                 "display": {"backends": [{"type": "window"}]},
                 "layout": {
-                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+                    "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
                     "fonts": {"default": ["lora"]},
                     "text": {"min_font_size": 12, "max_font_size": 24},
                 },
@@ -100,7 +100,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
     assert not config_path.exists()
     assert not content_path.exists()
     assert len(images) == len(stages)
-    assert all(image.mode == "RGB" and image.size == (1600, 1200) for image in images)
+    assert all(image.mode == "RGB" and image.size == (1920, 1080) for image in images)
 
 
 def test_category_registered_resources_load_through_rendering_pipeline(tmp_path: Path) -> None:
@@ -154,7 +154,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
                 "content": {"directory": "content"},
                 "display": {"backends": [{"type": "window"}]},
                 "layout": {
-                    "presentation_region": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+                    "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
                     "fonts": {"default": ["family-serif"]},
                     "backgrounds": {"default": ["paper"]},
                     "decorations": {"default": ["border"]},
@@ -193,7 +193,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     assert config.fonts["family-serif"].path == font_path
     assert config.backgrounds["paper"].path == background_path
     assert config.decorations["border"].path == decoration_path
-    assert image.size == (1600, 1200)
+    assert image.size == (1920, 1080)
     assert image.getpixel((0, 0)) == (255, 0, 0)
     assert image.getpixel((1, 0)) == (0, 0, 255)
     image.close()

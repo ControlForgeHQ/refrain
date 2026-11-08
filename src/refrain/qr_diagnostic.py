@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
+from .geometry import DEFAULT_OUTPUT_SIZE
 from .qr import (
     QRCodeGenerationError,
     QRCodeGeometry,
@@ -15,9 +16,6 @@ from .qr import (
     render_qr_code,
     validate_qr_parameters,
 )
-
-_CANVAS_SIZE = (1600, 1200)
-
 
 QRCalibrationError = QRCodeGenerationError
 
@@ -54,6 +52,7 @@ def validate_qr_calibration_parameters(parameters: QRCalibrationParameters) -> N
 
 def create_qr_calibration_image(
     parameters: QRCalibrationParameters = QRCalibrationParameters(),
+    output_size: tuple[int, int] = DEFAULT_OUTPUT_SIZE,
 ) -> QRCalibrationImage:
     """Create the complete QR calibration canvas and its resolved pixel geometry."""
     validate_qr_calibration_parameters(parameters)
@@ -67,9 +66,9 @@ def create_qr_calibration_image(
             right_offset=parameters.right_offset,
             bottom_offset=parameters.bottom_offset,
         ),
-        _CANVAS_SIZE,
+        output_size,
     )
-    image = Image.new("RGB", _CANVAS_SIZE, (255, 255, 255))
+    image = Image.new("RGB", output_size, (255, 255, 255))
     try:
         composite_qr_code(image, code)
     except Exception:

@@ -16,7 +16,7 @@ display:
     - type: window
     - type: image-server
 layout:
-  presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.7}
+  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
     default: [lora]
   backgrounds:
@@ -32,7 +32,7 @@ _MANIFEST = """\
 format: 1
 id: a-custom
 image: artwork.png
-presentation_region: {x: 0.1, y: 0.15, width: 0.8, height: 0.7}
+presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
 font: lora
 font_faces: {quotation: italic}
 background: none
