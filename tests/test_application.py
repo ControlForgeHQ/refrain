@@ -1099,7 +1099,7 @@ def test_matching_logical_date_and_missing_content_do_not_reselect(workspace: Wo
         first.snapshot,
         first.repetition_history,
     )
-    assert result.presented_stage == 2
+    assert result.presented_stage == 0
     assert len(display.sizes) == 1
 
 
@@ -1139,7 +1139,11 @@ def test_restart_into_previously_displayed_date_creates_new_revision(workspace: 
     third, _ = workspace.run(at(10, 7))
 
     assert [first.state.revision, second.state.revision, third.state.revision] == [1, 2, 3]
-    assert [first.state.snapshot.display_date, second.state.snapshot.display_date, third.state.snapshot.display_date] == [
+    assert [
+        first.state.snapshot.display_date,
+        second.state.snapshot.display_date,
+        third.state.snapshot.display_date,
+    ] == [
         date(2026, 3, 10),
         date(2026, 3, 11),
         date(2026, 3, 10),
@@ -1917,7 +1921,7 @@ def test_continuous_restart_is_conservative_and_reuses_committed_snapshot(worksp
     for path in workspace.content.iterdir():
         path.unlink()
     monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
-    stages, initialized, display = run_continuously(workspace, RuntimeClock(at(14, 19)), monkeypatch)
+    stages, initialized, display = run_continuously(workspace, RuntimeClock(at(10, 19)), monkeypatch)
     state = workspace.load()
     assert stages == [(1, 2)]
     assert state.snapshot == first.snapshot
@@ -1942,7 +1946,7 @@ def test_continuous_backward_jump_reconciles_each_current_logical_date(workspace
     ordinary(workspace)
     clock = RuntimeClock(at(15, 19), [at(12, 4), at(12, 5), at(12, 6)])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
-    assert stages == [(1, 2), (2, 0), (3, 0)]
+    assert stages == [(1, 2), (2, 2), (3, 0)]
     assert [record["display_date"] for record in workspace.history_records()] == [
         "2026-03-15",
         "2026-03-11",

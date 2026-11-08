@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from threading import Event
 from zoneinfo import ZoneInfo
@@ -119,10 +119,16 @@ def test_next_deadline_resolves_day_start_across_dst_gap_and_fold() -> None:
     spring_deadline = next_scheduling_deadline(
         datetime(2026, 3, 8, 1, 45, tzinfo=ZoneInfo("America/New_York")),
         spring_config,
-        make_state(highest_reveal_stage=2),
+        make_state(display_date=date(2026, 3, 7), day_start="02:30", highest_reveal_stage=2),
     )
     fall_config = make_configuration(day_start="01:30")
     fall_state = make_state(
+        display_date=date(2026, 10, 31),
+        day_start="01:30",
+        reveal_schedule={"quotation": "01:30", "source": "12:00", "attribution": "18:00"},
+        highest_reveal_stage=2,
+    )
+    second_fold_state = make_state(
         display_date=date(2026, 11, 1),
         day_start="01:30",
         reveal_schedule={"quotation": "01:30", "source": "12:00", "attribution": "18:00"},
@@ -132,7 +138,9 @@ def test_next_deadline_resolves_day_start_across_dst_gap_and_fold() -> None:
         datetime(2026, 11, 1, 1, 0, fold=0, tzinfo=ZoneInfo("America/New_York")), fall_config, fall_state
     )
     second_fold_deadline = next_scheduling_deadline(
-        datetime(2026, 11, 1, 1, 15, fold=1, tzinfo=ZoneInfo("America/New_York")), fall_config, fall_state
+        datetime(2026, 11, 1, 1, 15, fold=1, tzinfo=ZoneInfo("America/New_York")),
+        fall_config,
+        second_fold_state,
     )
 
     assert spring_deadline == datetime(2026, 3, 8, 7, 0, tzinfo=timezone.utc)

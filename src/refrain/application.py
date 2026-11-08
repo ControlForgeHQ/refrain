@@ -809,12 +809,7 @@ def run_startup(
     except SchedulingEvaluationError as error:
         raise ApplicationError(f"scheduling evaluation failed: {error}") from error
 
-    coordinator = DisplayPublicationCoordinator(
-        configuration.display_backends,
-        backend_factory,
-        retry=False,
-        monotonic_clock=monotonic_clock,
-    )
+    coordinator: DisplayPublicationCoordinator | None = None
     try:
         if configuration.information_view_duration > 0:
             try:
@@ -822,6 +817,12 @@ def run_startup(
             except InformationViewPreparationError as error:
                 _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
             else:
+                coordinator = DisplayPublicationCoordinator(
+                    configuration.display_backends,
+                    backend_factory,
+                    retry=False,
+                    monotonic_clock=monotonic_clock,
+                )
                 coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_image)
                 if coordinator.wait_for_any_publication(
                     _INFORMATION_VIEW_IDENTITY,
@@ -877,6 +878,13 @@ def run_startup(
                 image.close()
                 continue
             identity = (state.revision, stage)
+            if coordinator is None:
+                coordinator = DisplayPublicationCoordinator(
+                    configuration.display_backends,
+                    backend_factory,
+                    retry=False,
+                    monotonic_clock=monotonic_clock,
+                )
             coordinator.publish(identity, image)
             if not coordinator.wait_for_publication(identity):
                 raise ApplicationError("all configured display destinations are unavailable")
@@ -890,7 +898,8 @@ def run_startup(
                         break
             break
     finally:
-        coordinator.close()
+        if coordinator is not None:
+            coordinator.close()
     return StartupResult(state=state, presented_stage=stage, selected_initial_quotation=initial)
 
 
