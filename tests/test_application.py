@@ -76,6 +76,7 @@ def write_decoration_manifest(directory: Path, identifier: str, **metadata: obje
     manifest = {
         "format": 1,
         "id": identifier,
+        "tintable": False,
         "layers": [{"image": "overlay.png", "method": "contain"}],
         **metadata,
     }

@@ -317,6 +317,7 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     (package / "decoration.yaml").write_text(
         "format: 1\n"
         "id: demo-overlay\n"
+        "tintable: false\n"
         "layers:\n"
         "  - image: overlay.png\n"
         "    method: contain\n"
