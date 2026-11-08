@@ -17,14 +17,14 @@
 
 All ten masters were generated directly on the 3840 × 2400 grid with NumPy and Pillow.  No bundled-image pixels or third-party textures are included in the masters.
 
-The artwork is intended for redistribution under [Refrain’s MIT License](https://github.com/ControlForgeHQ/refrain/blob/main/LICENSE) to the extent that applicable intellectual-property rights exist. Generation and preview sources are in `source/`.
+The artwork is intended for redistribution under [Refrain’s MIT License](https://github.com/ControlForgeHQ/refrain/blob/main/LICENSE) to the extent that applicable intellectual-property rights exist.
 
 ## Regenerate the masters
 
 `generate.py` creates all ten PNGs from scratch using Python, NumPy, and Pillow. Each design has a fixed seed. The script requires no source images or files.
 
 ```sh
-python source/generate.py --output-dir regenerated
+python tools/backgrounds/generate.py --output-dir regenerated
 ```
 
 Omit `--output-dir` to write to `backgrounds/` in the current directory. The regenerated files matched the accepted masters byte for byte with Python 3.12.14, NumPy 2.3.5, and Pillow 13.0.0.

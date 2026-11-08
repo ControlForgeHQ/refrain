@@ -27,7 +27,18 @@ _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 _LOGGER = logging.getLogger(__name__)
 _BUNDLED_FONT_IDS = {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
-_BUNDLED_BACKGROUND_IDS = {"aged-paper", "canvas", "cloth", "ethereal", "hex"}
+_BUNDLED_BACKGROUND_IDS = {
+    "aged-paper",
+    "canvas",
+    "cloth",
+    "drafting-grid",
+    "handmade-paper",
+    "hex",
+    "isometric-grid",
+    "limestone",
+    "recursive-squares",
+    "vellum",
+}
 _BUNDLED_DECORATION_IDS = {"ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"}
 _BUILTIN_PALETTE = {
     "black": "#000000",

@@ -566,7 +566,7 @@ Font-selection precedence, cache reuse, face fallback, and preparation failures 
 
 Refrain maintains an effective registry containing bundled and recursively discovered backgrounds. Identifiers are case-sensitive ASCII names beginning with a letter or digit and containing only letters, digits, hyphens, and underscores. The reserved identifier `"none"` represents no background and cannot be registered.
 
-Bundled identifiers are `aged-paper`, `canvas`, `cloth`, `ethereal`, and `hex`; they remain stable and are available without being added to the default pool.
+Bundled identifiers are `aged-paper`, `canvas`, `cloth`, `drafting-grid`, `handmade-paper`, `hex`, `isometric-grid`, `limestone`, `recursive-squares`, and `vellum`; they remain stable and are available without being added to the default pool.
 
 #### Discovered backgrounds
 
