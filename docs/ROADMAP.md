@@ -94,7 +94,7 @@ The first release should be useful in normal household operation without dependi
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Support QR-enabled and QR-free literary presentations, including artwork conditional on QR presence.
 - Direct enabled Version 0.1 literary QR codes to the Refrain repository.
-- Generate enabled QR codes at final resolution with resolution-aware integer-pixel modules and a complete quiet zone.
+- Generate enabled QR codes at final resolution with resolution-aware integer-pixel modules and a complete quiet zone, with allocation geometry established for the rendering pipeline and bundled decoration layouts.
 - Keep presentation-resource choices and derived rendering geometry out of durable daily selection state.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
