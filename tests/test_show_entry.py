@@ -17,7 +17,7 @@ from refrain.geometry import (
     PresentationInsets,
     resolve_presentation_geometry,
 )
-from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code
+from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code, resolve_qr_placement
 
 _CONFIG = """\
 general:
@@ -48,7 +48,7 @@ def assert_default_literary_bounds(image: Image.Image) -> None:
 
 
 def assert_production_qr_geometry(image: Image.Image) -> None:
-    qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size)
+    qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size, resolve_qr_placement(image.size))
     try:
         left, top, _, _ = qr.geometry.bounds
         quiet_zone = qr.geometry.quiet_zone_pixels

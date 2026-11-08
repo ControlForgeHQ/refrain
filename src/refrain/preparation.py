@@ -22,8 +22,11 @@ from .persistence import DailySnapshot, ResolvedFont
 from .qr import (
     PRODUCTION_QR_PARAMETERS,
     QRCodeGenerationError,
+    QRCodePlacement,
+    QRCodePlacementError,
     composite_qr_code,
     render_qr_code,
+    resolve_qr_placement,
 )
 from .renderer import (
     CompositionVisibility,
@@ -392,6 +395,15 @@ def prepare_daily_images(
         snapshot, configuration, decoration
     )
     image_size = geometry.output_size
+    qr_placement: QRCodePlacement | None = None
+    if configuration.qr_enabled and (decoration is None or decoration.qr_ready):
+        try:
+            qr_placement = resolve_qr_placement(
+                image_size,
+                None if decoration is None else decoration.qr_positioning,
+            )
+        except QRCodePlacementError as error:
+            _LOGGER.warning("QR generation is disabled for this preparation: %s", error)
     if on_resolved_bounds is not None:
         on_resolved_bounds(geometry.output_region)
     text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
@@ -432,9 +444,10 @@ def prepare_daily_images(
             )
             qr_code = None
             try:
-                qr_code = render_qr_code(qr_parameters, image_size)
-                for image in images:
-                    composite_qr_code(image, qr_code)
+                if qr_placement is not None:
+                    qr_code = render_qr_code(qr_parameters, image_size, qr_placement)
+                    for image in images:
+                        composite_qr_code(image, qr_code)
                 return images
             except Exception:
                 for image in images:

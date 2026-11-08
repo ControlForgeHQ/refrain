@@ -27,7 +27,7 @@ from .geometry import (
     validate_output_size,
 )
 
-_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "information_view", "palette"}
+_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "presentation", "information_view", "palette"}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -112,6 +112,8 @@ class DecorationResource:
     text_color: tuple[str, ...] | None = None
     tintable: bool = False
     decoration_color: tuple[str, ...] | None = None
+    qr_ready: bool = True
+    qr_positioning: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     manifest: Union[Path, Traversable, None] = field(default=None, compare=False)
 
 
@@ -148,6 +150,7 @@ class ApplicationConfiguration:
     min_font_size: int
     max_font_size: int
     information_view_duration: int = 60
+    qr_enabled: bool = True
     backgrounds: Mapping[str, BackgroundResource] = field(default_factory=lambda: MappingProxyType({}))
     default_backgrounds: tuple[str, ...] = ("none",)
     decorations: Mapping[str, DecorationResource] = field(default_factory=lambda: MappingProxyType({}))
@@ -347,6 +350,15 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         finish_diagnostics()
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
     _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
+
+    presentation_data = _mapping(data.get("presentation", {}), "presentation", report)
+    _known_fields(presentation_data, {"qr"}, "presentation", report)
+    qr_data = _mapping(presentation_data.get("qr", {}), "presentation.qr", report)
+    _known_fields(qr_data, {"enabled"}, "presentation.qr", report)
+    qr_enabled = qr_data.get("enabled", True)
+    if "enabled" in qr_data and type(qr_enabled) is not bool:
+        report("presentation.qr.enabled", "must be a YAML boolean; QR generation remains enabled", logging.WARNING)
+        qr_enabled = True
 
     palette = dict(_BUILTIN_PALETTE)
     if "palette" in data:
@@ -739,6 +751,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         min_font_size=sizes["min_font_size"],
         max_font_size=sizes["max_font_size"],
         information_view_duration=information_view_duration,
+        qr_enabled=qr_enabled,
         backgrounds=MappingProxyType(background_registry),
         default_backgrounds=default_backgrounds,
         decorations=MappingProxyType(decoration_registry),
