@@ -153,7 +153,7 @@ def ordinary(workspace: Workspace, text: str = "An ordinary quotation.", extra: 
     "preference",
     [None, "cloth", "none", "unavailable-paper"],
 )
-def test_background_preferences_are_preserved_without_resolution(workspace: Workspace, preference) -> None:
+def test_background_preferences_are_preserved_without_resolution(workspace: Workspace, preference, caplog) -> None:
     workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
     ordinary(workspace, extra="" if preference is None else f'background: "{preference}"\n')
     configuration = application.load_application_config(workspace.config)
