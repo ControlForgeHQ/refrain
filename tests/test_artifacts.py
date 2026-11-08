@@ -91,6 +91,9 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
     result = store.store(1, snapshot[:count], images[:count])
     assert result.directory == store.root / "revision-1"
     assert tuple(path.name for path in result.stage_paths) == tuple(f"stage-{i}.png" for i in range(count))
+    metadata = json.loads((result.directory / "manifest.json").read_bytes())["artifacts"]
+    assert set(metadata) == {"revision", "image_directory", "image_size", "mode", "stages"}
+    assert all(set(stage) == {"visibility", "sha256"} for stage in metadata["stages"])
     for path, original in zip(result.stage_paths, images):
         with Image.open(path) as image:
             assert image.format == "PNG"
@@ -174,8 +177,6 @@ def test_missing_or_corrupt_manifest_is_rejected(store, snapshot, images, damage
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda m: m.update(format_version=2),
-        lambda m: m.update(format_version=True),
         lambda m: m.update(revision=2),
         lambda m: m.update(revision=True),
         lambda m: m.update(image_size=[33, 24]),
@@ -184,7 +185,7 @@ def test_missing_or_corrupt_manifest_is_rejected(store, snapshot, images, damage
         lambda m: m.update(mode=[]),
         lambda m: m.update(stages=[]),
         lambda m: m["stages"].reverse(),
-        lambda m: m["stages"][0].update(file="../outside.png"),
+        lambda m: m["stages"][0].update(path="../outside.png"),
         lambda m: m["stages"][0].update(sha256="invalid"),
         lambda m: m.update(image_directory="../outside"),
         lambda m: m.pop("mode"),
@@ -346,6 +347,57 @@ def test_cleanup_removes_old_revisions_and_abandoned_transactions_but_preserves_
     assert all(path.exists() for path in current.stage_paths)
 
 
+def test_cleanup_removes_superseded_active_payloads_and_preserves_manifest_target(store, snapshot, images) -> None:
+    superseded = store.store(2, snapshot, images)
+    current = store.store(2, snapshot, tuple(reversed(images)))
+    unrelated = current.directory / "notes.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+    unowned_payload = current.directory / ("images-" + "f" * 32)
+    unowned_payload.mkdir()
+    (unowned_payload / "user-file").write_text("keep", encoding="utf-8")
+
+    store.cleanup(2)
+
+    assert not superseded.stage_paths[0].parent.exists()
+    assert current.stage_paths[0].parent.is_dir()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+    assert (unowned_payload / "user-file").read_text(encoding="utf-8") == "keep"
+    assert store.load(2, snapshot) == current
+
+    store.cleanup(2)
+    assert {path.name for path in current.directory.iterdir()} == {
+        current.stage_paths[0].parent.name,
+        "manifest.json",
+        unrelated.name,
+        unowned_payload.name,
+    }
+
+
+def test_cleanup_removes_payload_from_interrupted_active_revision_replacement(
+    store, snapshot, images, monkeypatch
+) -> None:
+    current = store.store(2, snapshot, images)
+    original_replace = artifacts.os.replace
+
+    def interrupt_manifest(source, target):
+        if Path(target).name == "manifest.json":
+            raise OSError("manifest publication interrupted")
+        original_replace(source, target)
+
+    monkeypatch.setattr(artifacts.os, "replace", interrupt_manifest)
+    with pytest.raises(ArtifactWriteError, match="manifest publication interrupted"):
+        store.store(2, snapshot, tuple(reversed(images)))
+
+    assert store.load(2, snapshot) == current
+    store.cleanup(2)
+
+    assert {path.name for path in current.directory.iterdir()} == {
+        current.stage_paths[0].parent.name,
+        "manifest.json",
+    }
+    assert store.load(2, snapshot) == current
+
+
 @pytest.mark.parametrize("point", ["save", "manifest"])
 def test_cleanup_handles_real_interrupted_transactions(store, snapshot, images, monkeypatch, point) -> None:
     original = artifacts.os.replace
@@ -401,10 +453,13 @@ def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(
     symlink_or_skip(old.stage_paths[0].parent / "stage-9.png", sentinel)
     temporary = store.root / (".tmp-revision-9-" + "a" * 32)
     symlink_or_skip(temporary, outside, directory=True)
+    active_payload_link = current.directory / ("images-" + "b" * 32)
+    symlink_or_skip(active_payload_link, outside, directory=True)
     store.cleanup(2)
     assert sentinel.read_bytes() == b"authoritative"
     assert (store.root / "revision-3").is_symlink()
     assert temporary.is_symlink()
+    assert active_payload_link.is_symlink()
     assert old.directory.exists()
     assert store.load(2, snapshot) == current
 
