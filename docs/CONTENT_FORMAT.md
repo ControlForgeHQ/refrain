@@ -642,6 +642,14 @@ text_color:
   - burnt-orange
 background: aged-paper
 qr_ready: true
+qr_placement:
+  region:
+    left: 2000
+    top: 1600
+    width: 1000
+    height: 600
+  right: 20
+  bottom: 20
 tintable: true
 decoration_color:
   - sky-blue
@@ -679,6 +687,7 @@ layers:
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 | `background` | Background identifier or `"none"` | No | None |
 | `qr_ready` | Boolean | No | `true` |
+| `qr_placement` | QR placement mapping | No | Full working canvas, bottom-right with 20-pixel right and bottom insets |
 | `tintable` | Boolean | No | `true` |
 | `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 
@@ -693,6 +702,12 @@ The optional `text_color` is a preference for the literary composition's text wh
 The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when at least one layer is effectively tintable. It accepts a palette identifier or nonempty sequence. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
 `qr_ready` must be a YAML boolean and defaults to `true`. When false, QR generation is suppressed for this selected decoration regardless of the presentation-level QR setting. A malformed value produces a warning and uses the default.
+
+The optional `qr_placement` mapping supplies the QR's available region and its bottom-right insets. It must contain a `region` mapping with all four working-canvas pixel integers `left`, `top`, `width`, and `height`. `left` and `top` locate the region from the working canvas's top-left; `width` and `height` must be positive. The optional `right` and `bottom` values are nonnegative working-canvas pixel integers measured inward from the corresponding region edges and default to `20`. The region must be within the ratio-specific working canvas. These values use the working-canvas coordinate system, not the reference envelope or final output pixels.
+
+When `qr_placement` is omitted, the complete working canvas is the available region, with 20-working-canvas-pixel right and bottom insets for Version 0.1. This fallback applies whether no decoration is selected or the selected decoration has no QR placement metadata. A malformed or out-of-bounds `qr_placement` excludes the affected decoration with an actionable diagnostic. A valid region that cannot fit the QR footprint at the configured output size produces a preparation error when QR generation is enabled.
+
+The region and insets are transformed to final-output coordinates using the architecture's working-canvas-to-output scale and edge-rounding rules. Refrain anchors the QR footprint at the resulting region's bottom-right and calculates its largest fitting integer-pixel module size; see [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork). A decoration does not configure the QR payload or encoding.
 
 Each `layers` item is a mapping with the following fields:
 
