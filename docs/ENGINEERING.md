@@ -400,7 +400,7 @@ Discover bundled and user-owned assets when loading effective configuration, usi
 
 Construct registries from valid discovered identifiers, but construct default pools only from explicitly configured identifiers. Never add discovered assets to a default pool automatically. Custom resources cannot shadow bundled identifiers, and all custom resources in a same-category collision are excluded deterministically.
 
-An unavailable font preference in an otherwise valid content entry does not invalidate that entry. Report the unavailable preference and apply the documented default-font fallback.
+An unavailable font preference in an otherwise valid content entry does not invalidate that entry. Report it and proceed to the next font preference, using the effective default pool only when automatic selection is required. An empty effective pool must not invalidate an otherwise usable explicit content-entry or decoration preference.
 
 Validate discovered backgrounds individually against the PNG requirements in `docs/CONTENT_FORMAT.md`. Preserve valid resources when another asset fails. Build the effective default background pool without adding unrequested resources. Report unavailable content-entry background preferences without rejecting otherwise valid entries.
 
@@ -467,7 +467,7 @@ Do not require a global-history append to succeed before recognizing a committed
 
 Persistent operational state must be validated when loaded. Incomplete, invalid, or integrity-check-failing state must not be silently accepted. An interrupted state publication must not produce a partially committed selection or inconsistent repetition history. A failure after selection commitment must preserve the committed quotation. Global-history failures must not prevent operational recovery, and global history must not be used to reconstruct repetition state or determine the next revision.
 
-Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. Incompatible or invalid state must produce a clear diagnostic directing the developer to `refrain --reset`, without silently replacing selected content or modifying the state file.
+Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location, without silently replacing selected content or modifying the file. For a standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For an overridden state path, it must identify the path and direct the operator to stop Refrain, back up the file, and manually quarantine or remove only that file; `--reset` does not manage custom paths.
 
 The current state need only preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Do not persist derived rendering geometry, selected fonts or face identifiers, resolved colors, selected image resources, tinting decisions, QR placement, or layer transformation plans solely to reproduce pixels.
 
@@ -570,21 +570,19 @@ Global-history recording occurs only for committed selection events, not reveal 
 
 ### Global-history retention and rotation
 
-Use size-based rotation for global-history files.
+Global-history retention is bounded and does not have operator-configurable limits in Version 0.1. Use size-based rotation with the following fixed limits:
 
-The default maximum segment size is 1 MiB (1,048,576 bytes).
+The maximum segment size is 1 MiB (1,048,576 bytes).
 
-The default total retention allowance is 20 MiB, represented by one active segment and up to 19 rotated segments.
+The total retention allowance is 20 MiB, represented by one active segment and up to 19 rotated segments.
 
-The active segment contains the newest records. Rotated segments retain older records in chronological order, with the oldest retained segment removed when necessary to maintain the configured segment count.
+The active segment contains the newest records. Rotated segments retain older records in chronological order, with the oldest retained segment removed when necessary to maintain the fixed retention allowance.
 
 Rotation occurs between complete records, never within a JSONL record.
 
-Before appending a record that would exceed the active segment's size limit, rotate the active segment.
+Before appending a record that would exceed the 1 MiB active-segment limit, rotate the active segment.
 
-A single record exceeding the configured segment limit cannot be recorded in that segment and must produce a diagnostic without affecting the committed selection.
-
-Segment size and retention count must be configurable without introducing a dependency on an external logging or database service.
+A single record exceeding the segment limit cannot be recorded and must produce a diagnostic without affecting the committed selection.
 
 Rotation must not modify authoritative operational state or reset selection revisions.
 
@@ -680,17 +678,15 @@ Validate the syntax of content-entry face preferences during content-library loa
 
 Use a controlled random source for deterministic testing of automatic font selection.
 
-Select one font bundle using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence during image preparation. An unavailable winning face warns and resolves directly to the bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
+Select one font bundle during image preparation using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit preference applies and that pool is empty, preparation fails with an actionable diagnostic. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
 Do not store selected bundle identifiers, effective face identifiers, font bytes, filesystem paths, or content digests in operational state. Resolve current preferences once per complete stage preparation and use those faces consistently for all generated stages.
 
 Do not independently select fonts for individual reveal stages.
 
-Existing complete prepared images remain reusable even when a selected face or font file has changed or become unavailable. If regeneration is needed, resolve the current preferences and apply the established fallback diagnostics.
+Reuse a valid complete prepared-image set without resolving fonts, even when a selected face or font file has changed or become unavailable. If regeneration is needed, resolve current explicit preferences and the effective default pool deterministically; do not use a separate emergency bundled-font pool. Report an actionable preparation error if the selected font or required regular face cannot be loaded.
 
-If no usable bundled fallback exists, report an actionable preparation error.
-
-Font substitution during regeneration may change the rendered appearance, including line wrapping or typography. It must not change the committed quotation, content identity, reveal schedule, or reveal progression.
+Font errors during regeneration must not change the committed quotation, content identity, reveal schedule, or reveal progression.
 
 Do not distribute third-party font files without verifying their licenses and redistribution terms.
 
@@ -718,19 +714,19 @@ Resolve decoration, font, background, output dimensions, working-canvas insets, 
 
 Test nine-slice source boundaries, preserved corner dimensions across 4:3, 16:9, and 16:10 working canvases, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. For example, verify that a resolved 240 × 180 corner remains 240 × 180 where it fits. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
 
-Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. Preserve each layer's source alpha when applying the single preparation-wide decoration color. A tintable layer does not require that a tint be selected. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
+Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. When any layer is effectively tintable, select one color using content-entry, decoration, global-pool, then built-in black precedence; a successful selection activates tinting. Preserve each layer's source alpha when applying that single preparation-wide decoration color. Artwork retaining authored RGB must explicitly be non-tintable. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
 
 Image preparation accepts the effective decoration registry independently of the background registry. Reuse a complete valid set before resolving image resources, so registry or file changes do not invalidate it.
 
 ### QR composition
 
-Resolve the explicit presentation-level QR policy and the selected decoration's `qr_ready` value once per complete preparation. Apply conditional layer selection from that resolved state. Generate a symbol only when effective QR enablement is true, using the shared QR encoder and rasterizer. Keep diagnostic canvas generation, reporting, file saving, and publication outside production helpers.
+Resolve the explicit presentation-level QR policy and the selected decoration's `qr_ready` value once per complete preparation. Apply conditional layer selection from that resolved state. Generate a symbol only when effective QR enablement is true, using the shared QR encoder and rasterizer. For Version 0.1, the payload is the fixed repository URL `https://github.com/ControlForgeHQ/refrain`; it is independent of quotation, entry, display date, and reveal stage. The encoder/rasterizer contract, fixed version 4 and error-correction level M, UTF-8 byte encoding, 3-pixel modules, 4-module quiet zone, 40-pixel right/bottom offsets, capacity behavior, and final-resolution placement are defined in [the architecture](ARCHITECTURE.md#qr-generation-and-conditional-artwork). Keep diagnostic canvas generation, reporting, file saving, and publication outside production helpers.
 
 Generate QR output at final output resolution after literary text. Resolve its complete footprint once per preparation and composite identical pixels onto every reveal stage. Use integer-pixel modules and the complete quiet zone, without antialiasing, later resizing, resampling, or transparency. Do not generate QR images during scheduling, cache loading, or backend publication.
 
-Resolve QR dimensions and offsets from final output geometry during preparation. Validate capacity and fit; failures must produce an actionable error rather than silently changing the version or resizing the symbol. Do not perform automatic collision avoidance or modify literary insets or artwork slices to reserve QR space. The information view remains outside this pipeline.
+Resolve QR dimensions and offsets from final output geometry during preparation. Validate capacity and fit; failures must produce an actionable error rather than silently changing the version or resizing the symbol. Verify a generated production QR by decoding it and checking that it yields the Version 0.1 repository URL. Do not perform automatic collision avoidance, modify literary insets or artwork slices to reserve QR space, rearrange text, or emit collision-related warnings or failures. The literary renderer must fit complete content inside its configured rectangle, but overlap with independently composited artwork or QR is the responsibility of the default configuration, artwork, and custom authors. The information view remains outside this pipeline.
 
-Test both enabled and disabled presentations, `qr_ready: false`, all three layer conditions, integer module and footprint pixels, quiet-zone opacity, placement at different output dimensions, exact-fit and non-fitting destinations, capacity errors, and composition after text. Verify identical QR pixels across all stages generated together and that cache reuse does not depend on configuration or asset fingerprints.
+Test both enabled and disabled presentations, `qr_ready: false`, all three layer conditions, exact production payload, version, error-correction level, integer module and footprint pixels, quiet-zone opacity, final-resolution placement at different output dimensions, exact-fit and non-fitting destinations, capacity errors, and composition after text. Decode a generated production QR and verify the exact Version 0.1 repository URL. Verify identical QR pixels across all stages generated together and that cache reuse does not depend on configuration or asset fingerprints.
 
 Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
 
@@ -1126,13 +1122,13 @@ Do not use fixed-duration sleeps as a substitute for correct calendar-boundary c
 
 The scheduler should ordinarily wait until the next meaningful event rather than polling continuously.
 
-The hardware-independent `DisplayDayBoundaryObserver` receives explicit wall-clock and monotonic observations. `next_scheduling_deadline()` derives reveal deadlines from the committed selection's effective schedule and combines them with the configured display-day boundary. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline.
+`next_scheduling_deadline()` derives reveal deadlines from the committed selection's effective schedule and combines them with the next configured day-start time. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline. Scheduling is based on comparing the current logical display date with the committed selection's date, not on a boundary-observation event.
 
 ### Wall-clock changes
 
 Implement the documented forward- and backward-clock behavior without allowing previous reveal stages to become hidden.
 
-Tests must cover clock changes without requiring the host operating-system clock to be modified.
+If a clock change alters the logical display date, establish one selection for the current logical date regardless of adjustment direction. If the date is unchanged, retain the selection and its monotonic reveal progression. Tests must cover these cases without requiring the host operating-system clock to be modified.
 
 Separate the current time source from scheduling policy sufficiently to permit controlled test inputs.
 
@@ -1140,19 +1136,13 @@ Use monotonic elapsed time for retry intervals and other durations that should n
 
 ### Recovery after interruption
 
-Persist the scheduling context required by the architecture.
+Persist the display date and day-start context required by the architecture. On startup, compare the current logical display date with the committed date: retain the selection when they match and establish one selection for the current logical date when they differ.
 
-Do not treat a difference between the stored selection date and the current date as sufficient proof that the committed selection must be replaced.
-
-Test boundary recognition across restarts, missed day starts, clock corrections, and large forward jumps.
-
-When available information cannot reliably distinguish a clock discontinuity, use the architecture's conservative recovery policy rather than inventing unobservable clock history.
-
-Boundary observations held by `DisplayDayBoundaryObserver` are process-local. Its first observation after startup establishes a baseline and does not manufacture an event for an unobserved interruption.
+Test logical-date comparison across restarts, missed day starts, backward and forward clock adjustments, and large forward jumps. Repeated evaluations for the same committed logical date must not duplicate a selection. Do not add or infer clock-observation history.
 
 ### Demo-session ownership and timing
 
-`run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Ignore production persistence paths in the CLI rather than resolving or opening them. Determine the initial display date through the existing OS-local/day-start calculation once; do not create synthetic boundary observations or reevaluate wall time to drive demo stages.
+`run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Ignore production persistence paths in the CLI rather than resolving or opening them. Determine the initial display date through the OS-local/day-start calculation once; do not reevaluate wall time to drive demo stages.
 
 Reuse the application selection, resource resolution, daily-selection commitment, reveal-progress persistence, image-cache recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the durable daily selection without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
 
@@ -1271,7 +1261,7 @@ Automated testing should cover:
 - repetition-history cleanup using accepted content only;
 - preservation of repetition history when content discovery fails or no valid quotations remain;
 - recovery of valid current-format daily selections independently of current content-library availability;
-- clear rejection of incompatible current state with a `refrain --reset` diagnostic and no modification of the state file;
+- clear rejection of incompatible current state without modifying the state file; diagnostics for standard per-user paths may direct the operator to stop Refrain and run `refrain --reset`, while diagnostics for overridden paths identify that path and require manual backup and quarantine/removal of only that file;
 - current selection-record round trips containing selected content, effective schedule, day context, and required repetition/reveal state, without derived rendering decisions;
 - recovery of the selected quotation and monotonic reveal progress after image preparation or cache failure;
 - no legacy development-schema readers, migrations, normalization, or historical-format recovery tests;
@@ -1298,7 +1288,7 @@ Do not rely on statistical luck to make unit tests pass.
 
 Use temporary directories and isolated test state.
 
-Test path selection with injected platform and environment information. Exercise category-relative resource paths independently of the current working directory, including nested and absolute paths and unchanged content-directory semantics. Exercise repeatable initialization, existing user data and assets, links, exclusive file creation, race-time destinations, partial failures, reset preservation, purge deletion, confirmation, and deletion boundaries using temporary locations; do not use developer application-data directories.
+Test path selection with injected platform and environment information. Exercise category-specific custom-resource discovery independently of the current working directory, including nested package references and manifest confinement, while verifying that content directories retain configuration-relative and explicit-absolute semantics. Exercise repeatable initialization, existing user data and assets, links, exclusive file creation, race-time destinations, marker-verified interrupted sample installation, partial failures, reset preservation, purge deletion, confirmation, and deletion boundaries using temporary locations; do not use developer application-data directories.
 
 Test persistence failure at meaningful boundaries, including failures before and after commitment.
 
@@ -1338,6 +1328,8 @@ Test font configuration and selection behavior, including:
 - empty default font pools;
 - default identifiers missing from the registry;
 - explicit content-entry font preferences;
+- a valid explicit content-entry or decoration preference with an empty effective default pool;
+- automatic-selection failure when the effective default pool is empty and no usable explicit preference applies;
 - `font_faces` parsing and invalid-value handling at all four configuration/content/manifest levels;
 - role-face precedence, explicit-regular overrides, unavailable winning-face fallback without lower-level preference lookup, and decoration preferences applied to an entry-selected bundle;
 - consistent face resolution across stages generated together and reuse of complete caches despite later typography configuration or asset changes;
@@ -1345,14 +1337,14 @@ Test font configuration and selection behavior, including:
 - randomized selection from the default pool;
 - absence of resolved font identifiers and face choices from operational state and global history;
 - image regeneration using current font preferences and available assets after cache invalidation;
-- documented font fallback and diagnostics when a requested font is unavailable;
+- preference fallback and diagnostics when a requested font is unavailable, without an emergency bundled-font pool;
 - consistent font use across every reveal stage prepared together;
 - reuse of valid prepared images independently of subsequent font-file changes;
 - actionable failure when no usable font resource can be resolved.
 
 Use deterministic random sources where required.
 
-Test ordered multi-layer decoration composition, all QR conditions, RGBA transparency, decoration-wide AND per-layer tintability, the untinted-accent case, consistent composition across reveal stages, and plain output for `"none"`. Verify diagnostics and established fallbacks for missing or unusable resources, and that a valid cached set is reused without checking resource changes.
+Test ordered multi-layer decoration composition, all QR conditions, RGBA transparency, decoration-wide AND per-layer tintability, color-precedence selection and automatic tint activation, the untinted-accent case, consistent composition across reveal stages, and plain output for `"none"`. Verify diagnostics and established resource fallbacks, and that a valid cached set is reused without checking resource changes. Do not test or implement QR/text collision detection or automatic overlap correction.
 
 Test background cover scaling and centered cropping and decoration `contain` scaling for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results. Test nine-slice corners, preservation of resolved corner dimensions across 4:3, 16:9, and 16:10 canvases, edge stretching, centered edge cropping, center stretching, source-pixel bounds, destinations too small for preserved corners, crop destinations longer than available source segments, and deterministic rounding without gaps or overlaps.
 
@@ -1419,7 +1411,7 @@ Deployment instructions must identify the supported operating system, system dep
 
 Installation must not depend on the developer's local directory structure.
 
-Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, install samples only into a missing or empty standard content directory, and leave unmarked nonempty content uninspected and untouched. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. When installing samples, create a temporary marker exclusively before writing any sample; it records the expected packaged sample paths and digests. A retry may resume only when that marker matches the packaged sample set and every existing expected sample matches its packaged bytes. It creates only missing files exclusively and removes the marker after the sample set is complete. An invalid marker or conflicting existing sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Reuse state and cache directories without modifying existing state, history, or artifact files. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
+Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
 
 Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Reject runtime path overrides rather than treating them as deletion targets. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configuration values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
 
@@ -1451,7 +1443,7 @@ User-authored content and configuration should not require write access from the
 
 Keep user-authored content separate from application code and generated state.
 
-Valid current-format selection state and histories must survive application restarts. Prepared images are disposable and may be regenerated. During prerelease development, incompatible state schemas may require `refrain --reset`; compatibility with internal schemas from prior development is not required.
+Valid current-format selection state and histories must survive application restarts. Prepared images are disposable and may be regenerated. During prerelease development, incompatible state schemas do not require migration support. A diagnostic for incompatible standard per-user state may direct the operator to stop Refrain and run `refrain --reset`; for an overridden state path, identify that path and require manual backup and quarantine/removal of only that file. `--reset` does not manage custom paths.
 
 Avoid writing runtime state into the installed Python package directory.
 

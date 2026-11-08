@@ -104,7 +104,7 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Content Library:** The validated collection of available content entries.
 
-**Display Day:** A logical presentation interval established by Refrain's configured local day-start boundary and ending at the next recognized display-day transition.
+**Display Day:** The logical presentation interval determined by host-local time and Refrain's configured day-start time.
 
 **Display Date:** The local calendar date associated with a daily selection. This date determines content eligibility.
 
@@ -384,7 +384,7 @@ The application must not assume that every local calendar day contains exactly 2
 
 An ambiguous scheduled wall time resolves to its first occurrence. A nonexistent scheduled wall time resolves to the first valid local instant after the gap. These rules apply to both reveal deadlines and display-day boundaries, including transitions whose offset changes are not whole hours.
 
-Changing the host timezone is an operating-system operation. Refrain does not need to adapt its scheduling while running; restarting afterward is acceptable. If local-time rules change during observation, that change resets the boundary observer's baseline rather than creating a boundary. A timezone change alone does not invalidate a committed selection or reduce reveal progress.
+Changing the host timezone is an operating-system operation. Refrain does not need to adapt its scheduling while running; restarting afterward is acceptable. At the next scheduling evaluation, the current host-local logical display date determines whether the committed selection remains active. Reveal progression does not move backward while that logical date remains unchanged.
 
 Clock changes must be handled according to the established display-day transition and reveal-progression policies.
 
@@ -398,21 +398,21 @@ The local calendar date associated with a new selection determines its special-d
 
 ### Daily selection stability
 
-A committed daily selection remains authoritative until Refrain recognizes the next display-day transition.
+A committed daily selection remains authoritative while its display date matches the current logical display date.
 
-Application restarts, display failures, content-library changes, and missed reveal events must not independently trigger reselection.
+Whenever the current logical display date differs from the committed selection's display date, Refrain establishes a new selection for the current logical date. This rule applies during continuous operation, after restart, and after either forward or backward clock adjustments. It does not depend on observing a particular boundary crossing.
 
-The current system date being different from the committed display date does not, by itself, invalidate the selection.
+Repeated scheduling evaluations for the same committed logical date must not generate duplicate selections. Display failures, content-library changes, and missed reveal events do not independently trigger reselection.
 
-The display date identifies the date for which the selection was made; it is not a condition that must continuously match the system clock.
+When the logical date is unchanged, the existing selection remains authoritative and its reveal progression never moves backward. A transition to another logical date establishes a new selection and reveal progression, even if a quotation was previously selected for that date.
 
 ### Forward clock adjustments
 
-When the clock advances within the active display day, Refrain advances to the reveal stage appropriate to the new time.
+The current logical display date is calculated from host-local time and the configured day-start time. When the clock advances within that logical date, Refrain advances to the reveal stage appropriate to the new time.
 
 Missed intermediate reveal stages are not presented sequentially.
 
-When the clock advances past one or more display-day boundaries, Refrain selects a quotation for the display date appropriate to the new time.
+When the logical display date differs from the committed selection's date, Refrain selects a quotation for the current logical date, including after a forward jump across one or more day-start boundaries.
 
 Skipped display dates do not require retrospective selection or presentation.
 
@@ -420,34 +420,26 @@ For example, if the clock advances from October 17 to November 28, Refrain selec
 
 ### Backward clock adjustments
 
-Moving the clock backward does not invalidate the current committed selection.
+Moving the clock backward does not reverse reveal progression while the logical display date remains unchanged.
 
-Refrain retains that selection until a subsequent configured day-start boundary is reached.
+If the backward adjustment changes the logical display date, Refrain establishes a new selection for that date.
 
-For example, if Refrain selects content at 06:00 on October 17 and the clock is subsequently changed to 04:00 on October 12:
+With `day_start: "06:00"`:
 
-- the October 17 selection remains active;
-- no immediate reselection occurs;
-- the highest previously reached reveal stage is preserved;
-- when the clock subsequently reaches 06:00 on October 12, a new selection is made for October 12.
+- Monday 07:00 to Monday 03:00 changes the logical date from Monday to Sunday and establishes a new selection.
+- Monday 15:00 to Monday 10:00 keeps the same logical date and selection; reveal progress is retained.
+- Monday 23:00 to Tuesday 02:00 keeps the same logical date and selection.
+- Tuesday 02:00 to Tuesday 07:00 changes the logical date from Monday to Tuesday and establishes a new selection.
 
-Refrain must not attempt to reverse previously committed selections or undo history updates because the clock moved backward.
+Moving to another logical date does not reverse or remove prior selection or history records. The new selection has its own reveal progression.
 
-### Boundary recognition
+### Logical-date evaluation
 
-A display-day transition is an observed scheduling event, not merely a disagreement between the current date and the date stored with the active selection.
+The display date is the local calendar date associated with the current logical display day: before the configured day-start time, it is the preceding local calendar date; at or after that time, it is the current local calendar date.
 
-Each newly recognized transition may establish a new daily selection, even when its display date is earlier than a previously committed selection.
+For example, with `day_start: "06:00"`, Monday 05:00 has logical display date Sunday, and Monday 07:00 has logical display date Monday.
 
-A single boundary occurrence must not cause repeated selections.
-
-Refrain must preserve sufficient scheduling context to recover a committed selection after a restart without treating a previously observed backward clock adjustment as an immediate reason for reselection.
-
-When execution resumes after an interruption that spans a forward display-day transition, Refrain advances to the currently appropriate display date without replaying skipped selections.
-
-The implementation must distinguish these conditions using the available persisted scheduling context. Clock discontinuities that cannot be distinguished reliably after an interruption must be handled conservatively rather than silently discarding a valid committed selection.
-
-The current persistent contract records the active selection's display date and day-start time, but does not record an observed boundary or clock history. After an interruption, a current timestamp and that context cannot prove whether a transition occurred, how many boundaries were crossed, or whether a clock adjustment caused the date mismatch. Startup evaluation therefore preserves the committed selection unless the runtime supplies a recognized boundary observation. Complete recovery across arbitrary interruptions requires additional boundary observation or persisted scheduling context; this issue does not add a history store.
+On startup and during ordinary scheduling, compare this date with the committed selection's display date. A mismatch requires one new selection for the current logical date; skipped dates do not require retrospective selections. The committed date and day-start context are sufficient for this comparison. Do not require a boundary-observation event, retain an outdated selection because a boundary was not observed, or persist or infer clock-observation history.
 
 ## Content eligibility and selection
 
@@ -663,7 +655,7 @@ It includes the selected entry identity and quotation identity, the selected quo
 
 The record is not a serialized rendering plan. Do not store output dimensions, working-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Current configuration, content-level preferences, and available assets are used to prepare images.
 
-Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce a clear diagnostic directing the developer to `refrain --reset`; it must not silently replace the selected content or modify the state file.
+Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location; it must not silently replace the selected content or modify the state file. For a standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For an overridden state path, identify that path and direct the operator to stop Refrain and manually back up and remove or quarantine only that file; `--reset` does not manage custom paths.
 
 Selection commitment does not depend on resolving visual resources.
 
@@ -691,7 +683,7 @@ Global history is independent of the containing entry's identifier, source, attr
 
 Global history is append-only during normal recording. Recorded events are not modified or removed when repetition pools are exhausted.
 
-Global history has configurable bounded retention. Older records may be discarded according to the configured retention policy without affecting operational state or future selection revisions.
+Global history has bounded retention. Its rotation mechanism and fixed retention limits are defined in `docs/ENGINEERING.md`. Discarding older records does not affect operational state or future selection revisions.
 
 Global-history recording is best-effort. Failure to record an event must be reported but must not invalidate an otherwise committed selection, prevent image preparation, or stop ordinary presentation.
 
@@ -780,7 +772,7 @@ If selection commitment was interrupted, Refrain must recover the last valid ope
 
 If rendering or image persistence was interrupted after commitment, Refrain regenerates the complete stage set using current configuration and available resources. Existing fallback and diagnostic policies apply to unavailable or invalid resources.
 
-If current operational state is incompatible, unavailable, or invalid, report a clear diagnostic directing the developer to `refrain --reset`. Do not modify the state or silently substitute another quotation. Valid current-format state remains recoverable.
+If current operational state is incompatible, unavailable, or invalid, report an actionable diagnostic identifying the effective state-file location. For a standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For an overridden path, direct the operator to stop Refrain and manually back up and remove or quarantine only that file; do not suggest `--reset` for a custom path. Do not modify the state or silently substitute another quotation. Valid current-format state remains recoverable.
 
 Missing, damaged, or inaccessible global history must not prevent operational recovery.
 
@@ -827,7 +819,7 @@ The currently required stage is therefore the later of:
 - the stage required by the current time;
 - the highest stage already reached for the committed selection.
 
-Reveal progression must survive application restarts.
+Reveal progression must survive application restarts while the committed selection's display date matches the current logical display date.
 
 Prepared images are reused without checking for configuration or asset changes. If a set is unusable, regenerate it completely from current inputs; exact visual reproduction is not a requirement.
 
@@ -887,7 +879,7 @@ If the current time requires a later stage, Refrain advances directly to it.
 
 Missed intermediate stages do not need to be displayed sequentially.
 
-A restart must not reset the progressive reveal sequence.
+A restart retains the committed selection and reveal progression when its display date matches the current logical display date. If the date differs, startup establishes a new selection for the current logical date with its own reveal progression.
 
 ### Clock changes
 
@@ -903,19 +895,19 @@ Clock adjustments that establish a new display day follow the rules defined in t
 
 ### Scheduling and display
 
-The hardware-independent scheduling evaluator determines whether an initial or transition-driven selection is required, the display date for that selection, and the required reveal stage for a committed selection. It accepts an explicit timezone-aware current timestamp, application configuration, recovered persistent state, and optionally a boundary observed by the running application.
+The hardware-independent scheduling evaluator determines whether an initial or new selection is required, the display date for that selection, and the required reveal stage for a committed selection. It accepts an explicit timezone-aware current timestamp, application configuration, and recovered persistent state.
 
-The public interface is `refrain.evaluate_scheduling(current_time, configuration, state, observed_boundary=None)`. It returns an immutable `SchedulingDecision` whose `SchedulingAction` is `INITIAL_SELECTION`, `NEW_SELECTION`, `ADVANCE_REVEAL`, or `NO_ACTION`. Initial and transition-driven selections include `display_date`; decisions for a committed selection include `required_reveal_stage`. Invalid or insufficient inputs raise `SchedulingEvaluationError` rather than producing a guessed transition.
+The public interface is `refrain.evaluate_scheduling(current_time, configuration, state)`. It returns an immutable `SchedulingDecision` whose `SchedulingAction` is `INITIAL_SELECTION`, `NEW_SELECTION`, `ADVANCE_REVEAL`, or `NO_ACTION`. Initial and new selections include `display_date`; decisions for a committed selection include `required_reveal_stage`. Invalid inputs raise `SchedulingEvaluationError` rather than producing a guessed date.
 
-Without a committed selection, the evaluator calculates the initial display date using host-local civil time. With a committed selection, a difference between the current date and the stored display date does not authorize reselection. A `DisplayDayBoundary(display_date, state_revision)` observation identifies the resulting display date and the selection revision active when it was observed; after that revision is replaced, the observation is stale. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
+The evaluator calculates the current logical display date using host-local civil time and `general.day_start`. With a committed selection, a different logical date requires a new selection for that date; the same date retains the selection and advances reveal progress monotonically. Repeated evaluation for one committed logical date does not request another selection. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
 
 `refrain.resolve_reveal_stages(selection)` returns the canonical ordered `CompositionVisibility` sequence for a committed daily selection. The coordinator uses this same sequence for image preparation and cache validation; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
 
-`refrain.DisplayDayBoundaryObserver` recognizes only transitions observed during the current process lifetime. Its first timestamp establishes a baseline, a backward wall-clock adjustment resets that baseline without creating a boundary, and a forward jump produces at most one boundary for the currently appropriate display date. An already pending observation remains available across a clock adjustment while its associated selection revision remains current; backward adjustments do not replace it with an earlier date, while a later observed forward transition supersedes it with the currently appropriate date. The observer returns the same pending observation on repeated calls while that revision and date remain current; observing a later revision expires it. A failed selection commit therefore leaves the event available for retry, while a successful commit makes it stale to `evaluate_scheduling()`. The observer does not persist clock history; after an interruption, an isolated timestamp cannot establish that a boundary occurred, so startup continues to follow the conservative recovery policy above.
+The former observer-dependent scheduling interface and behavior are superseded: `DisplayDayBoundary`, `DisplayDayBoundaryObserver`, and the `observed_boundary` argument to `evaluate_scheduling()` are not part of the required scheduling contract. Their implementation refactor is follow-up work. Do not replace them with a boundary-history subsystem.
 
-`refrain.next_scheduling_deadline(current_time, configuration, state)` returns the next applicable committed reveal time or configured display-day boundary. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; observation and waiting do not select content, mutate persistent state, prepare images, or operate a display.
+`refrain.next_scheduling_deadline(current_time, configuration, state)` returns the next applicable committed reveal time or configured day-start time. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; waiting does not select content, mutate persistent state, prepare images, or operate a display.
 
-The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
 
 The coordinator presents the corresponding prepared image when a reveal advancement is required. Scheduling evaluation does not determine whether an image was successfully presented.
 
@@ -959,7 +951,7 @@ Artwork authoring measurements use the fixed reference envelope and map to the s
 
 The literary region is defined by four independent working-canvas pixel insets: `left`, `right`, `top`, and `bottom`. Each is measured inward from the corresponding edge of the ratio-specific working canvas. For example, `left: 180` means 180 working-resolution pixels from the left edge on 4:3, 16:9, and 16:10 canvases. With output sizes `[1600, 1200]` and `[1920, 1080]`, the working canvases are twice the output dimensions, so this inset resolves to 90 final-output pixels in both cases; at `[3840, 2400]` it remains 180 pixels. Insets are not first applied to the full reference envelope and are not intersected with a cropped reference rectangle. Scale the resulting working-space rectangle uniformly to final output coordinates using deterministic nearest-integer, half-up edge rounding.
 
-Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the same rectangle and layout for all stages generated together.
+Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the same rectangle and layout for all stages generated together. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
 
 Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
 
@@ -988,17 +980,30 @@ Use the deterministic source-to-reference contain transform and nearest-integer,
 
 #### Decoration tinting
 
-Decoration-wide and per-layer `tintable` values both default to `true`. A layer is tintable only when `decoration.tintable AND layer.tintable` is true. This permission does not require a tint to be selected. If tinting is selected, resolve one decoration tint color for the complete preparation and apply it only to effectively tintable layers; do not select separate colors per layer. Preserve each source pixel's alpha, including antialiasing and transparency.
+Decoration-wide and per-layer `tintable` values both default to `true`. A layer is effectively tintable only when `decoration.tintable AND layer.tintable` is true. If at least one layer is effectively tintable, select one decoration color for the complete preparation using the first level with usable candidates:
+
+1. The content entry's `decoration_color`.
+2. The selected decoration's `decoration_color`.
+3. The effective global `layout.decorations.colors` pool.
+4. The built-in `black` fallback.
+
+Select uniformly among distinct usable identifiers at the first applicable level; do not combine candidates from different levels. A successful color selection activates tinting; there is no separate activation state or configuration field. Apply the selected color to every effectively tintable layer, replacing RGB while preserving authored alpha, including antialiasing and transparency. When no layer is effectively tintable, do not resolve a decoration color. Artwork intended to retain authored RGB must set `tintable: false` at the decoration or layer level.
 
 #### QR generation and conditional artwork
 
 The presentation-level QR policy defaults to enabled and may be disabled. Effective enablement is the logical AND of that policy and the selected decoration's `qr_ready` value; omission of `qr_ready` means `true`. A selected decoration with `qr_ready: false` therefore suppresses QR generation even when the presentation policy enables it. Resolve effective QR enablement once for each complete preparation rather than inferring it from available artwork. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, enabled-only, or disabled-only respectively. Conditions do not change layer order.
 
-When enabled, generate a black QR symbol at final output resolution with square integer-pixel modules and its complete opaque-white quiet zone. Composite it without subsequent resize or resampling. Resolve its dimensions and offsets from final output geometry for the current preparation. Do not automatically modify literary insets or image slicing to accommodate QR placement; QR overlap is not automatically avoided. The standalone information view remains outside literary QR behavior.
+For Version 0.1, an enabled literary QR code encodes `https://github.com/ControlForgeHQ/refrain`, independently of the selected quotation, entry, display date, or reveal stage. Resolve the destination separately from encoding and rasterization so a future companion experience can change destination resolution without redesigning those operations. Do not add a configurable destination or depend on the deferred companion experience.
+
+Use QR version 4 with error-correction level M and UTF-8 byte encoding without optimization. Generate a black symbol at final output resolution with 3-pixel square modules and a complete opaque-white quiet zone 4 modules wide on every side. The complete 41-module footprint is 123 × 123 pixels. Place its right and bottom outer edges 40 pixels from the corresponding output edges; derive the top-left position from the final output dimensions. Do not resize or resample the symbol or quiet zone.
+
+The fixed payload must fit version 4 at level M. Treat a capacity failure, or an output too small to contain the 123-pixel footprint plus both 40-pixel offsets, as an actionable preparation error; do not silently change the payload, version, error-correction level, module size, quiet zone, or placement. The same destination and QR pixels are used for every reveal stage in a complete preparation.
+
+QR output is composited after literary text. The literary renderer must fit the complete literary composition within the configured literary rectangle, but this does not protect text from independently composited artwork or QR output. QR placement does not change literary insets, rearrange text, or reserve additional space. The information view remains outside literary QR behavior.
 
 The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
 
-The renderer does not require a content-library entry or committed daily selection record as its input. Callers supply the resolved content and presentation parameters appropriate to the view.
+The renderer does not require a content-library entry or committed daily selection record as its input. Callers supply the resolved content and presentation parameters appropriate to the view. It follows valid configured geometry and does not guarantee that independently composited graphical elements do not overlap.
 
 The architecture does not require a general-purpose layout framework, externally supplied rendering components, a theme engine, or a plugin interface.
 
@@ -1024,10 +1029,10 @@ For each selected quotation, Refrain resolves the decoration first:
 
 The selected decoration may provide preferred font and background values and a complete literary-inset override.
 
-Exactly one font bundle is selected using this precedence:
+Exactly one font bundle is selected during image preparation using this precedence:
 
-1. Use the content entry's explicit font when available.
-2. Otherwise, use the selected decoration's preferred font when available.
+1. Use the content entry's explicit font when it is available and usable.
+2. Otherwise, use the selected decoration's preferred font when it is available and usable.
 3. Otherwise, select from the effective default font pool.
 
 Background selection follows this precedence:
@@ -1186,7 +1191,7 @@ Bundled fonts, backgrounds, and decorations are package-owned resources accessed
 
 Refrain maintains an effective font registry containing usable bundled and discovered font bundles.
 
-Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool.
+Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool and may be empty when none of its configured identifiers is usable.
 
 Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Bundled font identifiers remain reserved and cannot be overridden.
 
@@ -1194,27 +1199,27 @@ A content entry may specify a preferred font, inherited by every quotation in th
 
 A decoration may also specify a preferred font.
 
-Font selection follows this precedence:
+During image preparation, font selection follows this precedence:
 
-1. Use an available explicit content-entry font preference.
-2. Otherwise, use an available font preference from the selected decoration.
+1. Use an available and usable explicit content-entry font preference.
+2. Otherwise, use an available and usable font preference from the selected decoration.
 3. Otherwise, select from the effective default font pool.
 
 An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning and proceeds to the next bundle-selection preference.
 
 After selecting the bundle, Refrain independently resolves the `quotation`, `source`, and `attribution` faces within that bundle. For each role, the first defined preference wins in this order: content entry, selected decoration, selected bundle manifest, global `layout.fonts.font_faces`, then implicit `regular`. An explicit `regular` is defined and overrides lower-priority values. If the winning face is unavailable or unusable, that role falls directly to the selected bundle's `regular` face with an actionable warning; lower-priority face preferences are not consulted. No role selects another bundle. Decoration face preferences apply to the selected bundle even when an entry overrides the decoration's bundle preference.
 
-Each font in the effective default pool has equal selection probability.
+Each distinct font in the effective default pool has equal selection probability when automatic selection is required.
 
-The effective default pool must be nonempty when a new selection requires automatic font selection. Refrain must not silently populate it with unrelated bundled fonts.
+Automatic font selection requires at least one usable member in the effective default font pool. An empty pool is not an error when a usable explicit content-entry or decoration preference applies. If no usable explicit preference applies and the pool is empty, preparation fails with an actionable diagnostic. Refrain must not silently populate the pool with unrelated bundled fonts or use a separate emergency fallback pool.
 
 Font selection is independent for each complete image preparation. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
 Resolve the selected decoration and font bundle, then resolve all role faces for one complete preparation. Do not select fonts independently for reveal stages within the same generated set.
 
-Font identifiers, paths, face choices, and font contents are not persisted in operational state. Every preparation resolves font and face preferences from the selected content properties and current decoration, bundle, and global configuration. Apply the documented fallback and diagnostics if a requested resource is unavailable. Use one consistent bundle and role-face resolution across all stages generated together.
+Reuse a valid complete cached image set without resolving fonts. When regeneration is required, resolve bundle and face preferences from the selected content properties and current decoration, registry, and global configuration, using the precedence and failure behavior above. Font identifiers, paths, face choices, and font contents are not persisted in operational state. Use one consistent bundle and role-face resolution across all stages generated together.
 
-If no usable bundled fallback exists, preparation fails with an actionable diagnostic.
+If the selected font or a required face cannot be loaded during preparation, report an actionable preparation error. Font failure must not authorize reselection of literary content or alter reveal progression.
 
 An existing complete prepared image set is reused during ordinary operation even if font files or preferences subsequently change.
 
@@ -1364,7 +1369,7 @@ Refrain coordinates publication of the current prepared presentation independent
 
 A single committed daily selection and its prepared-image cache are shared by all destinations. Only the selection is authoritative.
 
-Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent the application from recognizing subsequent scheduling events.
+Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent subsequent scheduling evaluation.
 
 An active update to one backend must not overlap another update to the same backend. Updates to different backends may proceed concurrently.
 
@@ -1490,9 +1495,9 @@ Network clients are responsible for retaining their displayed content during tem
 
 The command-line entry point resolves omitted paths to platform-standard per-user locations independently of the current working directory. Explicit configuration, state, artifact, and history paths override their corresponding defaults; an omitted history path is placed beside the effective state file. The entry point passes these effective locations to the existing application and storage components, which do not infer home-directory paths.
 
-Normal startup requires the selected configuration file to exist. It does not substitute the packaged default configuration, create an installation directory structure, or copy sample content. Relative content paths remain based on the selected configuration file. Relative custom-resource paths use their category-specific directory under `assets/` beside that effective configuration file; absolute custom-resource paths remain direct references.
+Normal startup requires the selected configuration file to exist. It does not substitute the packaged default configuration, create an installation directory structure, or copy sample content. Relative content paths remain based on the selected configuration file. Custom visual resources are discovered by category beneath `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/` beside that effective configuration file and are referenced by registered identifier. Manifest image and font references are relative to their containing package and confined to that package. There is no arbitrary absolute-path custom-resource registration interface.
 
-The explicit, noninteractive `--initialize` operation manages only standard per-user destinations. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; any existing entry makes the directory nonempty, so initialization preserves it without validating or reorganizing its contents. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
+The explicit, noninteractive `--initialize` operation manages only standard per-user destinations. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; ordinary pre-existing nonempty content is left untouched and uninspected. An interrupted sample installation may be resumed only when its installation marker and every existing expected sample file can be positively verified; missing expected files may then be installed without overwriting existing files. Invalid markers, conflicting sample contents, or uncertain ownership require manual inspection rather than automatic repair. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
 
 Configuration and content remain user-owned inputs. Operational state and global history remain authoritative and historical persistence respectively; prepared artifacts remain derived output. Runtime creation of those persistence and artifact files remains owned by their existing components.
 
@@ -1514,7 +1519,7 @@ Normal startup performs the following logical operations:
 8. Initialize configured display backends independently.
 9. If automatic information-view presentation is enabled, prepare and request publication of the information view.
 10. Observe the configured information-view duration and transition to daily presentation when it expires, or proceed directly when automatic presentation is disabled or cannot be completed.
-11. Determine the currently required daily reveal stage, respecting previously reached progression and any scheduling events that occurred during startup.
+11. Determine the currently required daily reveal stage, respecting previously reached progression and the current logical display date.
 12. Independently publish the corresponding prepared image to available destinations.
 13. Continue operating until shutdown.
 
@@ -1577,7 +1582,7 @@ The application must not rely on busy waiting to determine ordinary reveal times
 
 ### Accelerated demo operation
 
-The optional `--demo SECONDS` operating mode repeatedly selects quotations and presents each canonical reveal stage at an accelerated interval. It bypasses normal time-of-day scheduling and boundary observation without manufacturing clock transitions. The automatic startup information view is suppressed.
+The optional `--demo SECONDS` operating mode repeatedly selects quotations and presents each canonical reveal stage at an accelerated interval. It bypasses normal time-of-day scheduling without manufacturing clock transitions. The automatic startup information view is suppressed.
 
 The session determines its eligibility display date once from host-local time and the configured day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
 
@@ -1726,10 +1731,10 @@ The following must remain true as the project evolves:
 17. Every required reveal-stage image is generated together using one consistent resolution of current presentation inputs.
 18. Complete prepared-image sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
 19. Missing or unusable prepared images can be regenerated without selecting new content or moving reveal progression backward.
-20. A restart does not independently invalidate the committed daily selection or reset its reveal progression.
+20. A restart retains the committed selection and reveal progression only while the current logical display date matches the committed date.
 21. Reveal progression never moves backward within a committed selection.
-22. A backward clock adjustment does not independently invalidate the active selection.
-23. Forward clock adjustments advance selection and reveal state to the currently appropriate presentation when required.
+22. The active selection remains authoritative while the current logical display date matches its committed date; a mismatch requires a new selection regardless of clock direction or restart.
+23. Within one logical display date, reveal progression is monotonic. A new selection for another logical display date begins its own reveal progression.
 24. Hardware failures do not invalidate committed selections.
 25. Ordinary operation does not require internet access or external services.
 26. Public presentation does not grant privileged local control.

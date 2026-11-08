@@ -46,11 +46,11 @@ The first release should be useful in normal household operation without dependi
 - Support ordinary and date-specific eligibility with absolute specificity precedence.
 - Apply repetition avoidance before priority-based selection.
 - Select randomly among equally eligible, highest-priority quotations.
-- Maintain a chronological history of committed quotation selections with configurable bounded retention.
+- Maintain a chronological history of committed quotation selections with bounded retention.
 - Maintain separate, resettable repetition history that prevents quotation reuse until the applicable selection pool is exhausted.
 - Reset only the affected repetition pool without discarding unrelated repetition history.
 - Remove obsolete repetition identities when selecting from a successfully validated content library.
-- Preserve selections and reveal progression through application restarts and clock adjustments.
+- Preserve a committed selection and its reveal progression across restarts and clock adjustments while the logical display date matches; establish a selection for the current logical date when it differs.
 - Commit the selected quotation and its content identity, required semantic metadata, reveal schedule, display-day context, repetition history, revision, and reveal progress independently of the original content entry.
 - Treat prepared reveal-stage images as disposable derived cache; reuse complete sets during normal operation and regenerate the whole set from current settings and assets when necessary.
 - Preserve the selected content and reveal progression when image preparation or cache recovery fails; do not require exact visual reproduction.
@@ -93,6 +93,7 @@ The first release should be useful in normal household operation without dependi
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
 - Support QR-enabled and QR-free literary presentations, including artwork conditional on QR presence.
+- Direct enabled Version 0.1 literary QR codes to the Refrain repository.
 - Generate enabled QR codes at final resolution with integer-pixel modules and a complete quiet zone.
 - Keep presentation-resource choices and derived rendering geometry out of durable daily selection state.
 - Handle content that cannot fit the effective layout without silent truncation.
@@ -121,7 +122,6 @@ The first release should be useful in normal household operation without dependi
 - Include automated coverage for quotation eligibility, specificity, priority, repetition, scheduling, persistence, validation, and rendering.
 - Verify atomic selection commitment and recovery from interrupted operations.
 - Verify recovery of committed selections and prepared images after application restarts.
-- Refactor prerelease selection-state construction and validation, rendering metadata, artifact identity and cache validation/reuse, resource recovery, and historical-schema tests to implement the minimal daily record and disposable-cache contract before Version 0.1 validation.
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
 - Provide interactive, state-isolated visual inspection of discovered decorations with short and long literary compositions.
@@ -294,7 +294,7 @@ Development should proceed in the following order:
 
 1. Establish repository documentation, engineering standards, contributor workflow, and the resolution-independent architecture and public interfaces.
 2. Implement and test the rendering pipeline, configurable output geometry, and ordered decoration compositions.
-3. Simplify prerelease durable selection state and prepared-image caching/recovery to the documented content-and-reveal guarantees; remove obsolete render-plan persistence and compatibility machinery.
+3. Ensure durable daily-selection state contains the required selected-content, scheduling, and reveal guarantees, while prepared-image caching remains disposable; satisfy these Version 0.1 prerequisites before release validation.
 4. Implement resolution-aware visual diagnostics and hardware-independent rendering validation.
 5. Refine bundled artwork for the supported aspect ratios and validate on e-paper and representative non-e-paper output.
 6. Establish reliable unattended operation on the target Raspberry Pi.
