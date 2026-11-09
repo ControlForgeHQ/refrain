@@ -651,7 +651,7 @@ decoration_color:
 layers:
   - image: border.png
     method: nine-slice
-    nine_slice:
+    slices:
       left: 96
       right: 96
       top: 96
@@ -713,20 +713,20 @@ Each `layers` item is a mapping with the following fields:
 |---|---|---|---|
 | `image` | Relative single-frame RGB or RGBA PNG path | Yes | — |
 | `method` | `"contain"` or `"nine-slice"` | No | `"contain"` |
-| `nine_slice` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
+| `slices` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
+For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` accepts no `slices` mapping. `nine-slice` requires a `slices` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `nine_slice.left` | Nonnegative source-pixel integer | Yes | — |
-| `nine_slice.right` | Nonnegative source-pixel integer | Yes | — |
-| `nine_slice.top` | Nonnegative source-pixel integer | Yes | — |
-| `nine_slice.bottom` | Nonnegative source-pixel integer | Yes | — |
-| `nine_slice.horizontal` | `"stretch"` or `"crop"` | No | `"stretch"` |
-| `nine_slice.vertical` | `"stretch"` or `"crop"` | No | `"stretch"` |
+| `slices.left` | Nonnegative source-pixel integer | Yes | — |
+| `slices.right` | Nonnegative source-pixel integer | Yes | — |
+| `slices.top` | Nonnegative source-pixel integer | Yes | — |
+| `slices.bottom` | Nonnegative source-pixel integer | Yes | — |
+| `slices.horizontal` | `"stretch"` or `"crop"` | No | `"stretch"` |
+| `slices.vertical` | `"stretch"` or `"crop"` | No | `"stretch"` |
 
 The four insets partition the source image into nine regions in its actual source-pixel coordinates, regardless of its dimensions. Booleans and non-integer measurements are invalid. Left and right insets may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. The architecture defines how source artwork and boundaries map to working-space measurements; smaller images do not change the coordinate system. After that mapping, corner dimensions are preserved across aspect ratios. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Destinations too small to preserve both opposing corners are invalid. Geometry and rounding follow the deterministic architecture contract.
 
@@ -888,7 +888,7 @@ The initial public format does not define:
 - configurable concealment effects for unrevealed fields;
 - automatic selection among fonts based on fitting results;
 - automatic foreground/background contrast analysis;
-- arbitrary image transformations or independent artwork placement beyond the documented layer methods and nine-slice fields;
+- arbitrary image transformations or independent artwork placement beyond the documented layer methods and slice fields;
 - a general-purpose theme engine.
 
 Decorations may define presentation insets, but content entries reference decorations by identifier rather than supplying inset values.

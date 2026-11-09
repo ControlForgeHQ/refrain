@@ -433,7 +433,7 @@ def discover_decorations(
                     continue
                 _unknown_fields(
                     definition,
-                    {"image", "method", "nine_slice", "condition", "tintable"},
+                    {"image", "method", "slices", "condition", "tintable"},
                     layer_field,
                     report,
                 )
@@ -460,19 +460,19 @@ def discover_decorations(
                     report(f"{layer_field}.tintable", "must be a YAML boolean; using true", logging.WARNING)
                     layer_tintable = True
                 nine_slice: NineSliceParameters | None = None
-                if method == "contain" and "nine_slice" in definition:
+                if method == "contain" and "slices" in definition:
                     report(
-                        f"{layer_field}.nine_slice",
+                        f"{layer_field}.slices",
                         "is not supported with method 'contain'; decoration excluded",
                         logging.WARNING,
                     )
                     invalid_layers = True
                     continue
                 if method == "nine-slice":
-                    parameters = definition.get("nine_slice")
+                    parameters = definition.get("slices")
                     if not isinstance(parameters, dict):
                         report(
-                            f"{layer_field}.nine_slice",
+                            f"{layer_field}.slices",
                             "is required and must be a mapping; decoration excluded",
                             logging.WARNING,
                         )
@@ -482,7 +482,7 @@ def discover_decorations(
                     invalid_parameter = False
                     for key in sorted(parameters.keys() - allowed_parameters, key=str):
                         report(
-                            f"{layer_field}.nine_slice.{key}",
+                            f"{layer_field}.slices.{key}",
                             "is not a supported parameter; decoration excluded",
                             logging.WARNING,
                         )
@@ -492,7 +492,7 @@ def discover_decorations(
                         value = parameters.get(key)
                         if type(value) is not int or value < 0:
                             report(
-                                f"{layer_field}.nine_slice.{key}",
+                                f"{layer_field}.slices.{key}",
                                 "must be a nonnegative source-pixel integer; decoration excluded",
                                 logging.WARNING,
                             )
@@ -503,14 +503,14 @@ def discover_decorations(
                     vertical = parameters.get("vertical", "stretch")
                     if not isinstance(horizontal, str) or horizontal not in {"stretch", "crop"}:
                         report(
-                            f"{layer_field}.nine_slice.horizontal",
+                            f"{layer_field}.slices.horizontal",
                             "must be 'stretch' or 'crop'; decoration excluded",
                             logging.WARNING,
                         )
                         invalid_parameter = True
                     if not isinstance(vertical, str) or vertical not in {"stretch", "crop"}:
                         report(
-                            f"{layer_field}.nine_slice.vertical",
+                            f"{layer_field}.slices.vertical",
                             "must be 'stretch' or 'crop'; decoration excluded",
                             logging.WARNING,
                         )
@@ -535,7 +535,7 @@ def discover_decorations(
                     or nine_slice.top + nine_slice.bottom > image_size[1]
                 ):
                     report(
-                        f"{layer_field}.nine_slice",
+                        f"{layer_field}.slices",
                         f"boundaries overlap or exceed the {image_size[0]} x {image_size[1]} image; "
                         "decoration excluded",
                         logging.WARNING,

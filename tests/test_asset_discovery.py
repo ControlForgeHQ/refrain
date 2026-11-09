@@ -259,7 +259,7 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
                 {
                     "image": "frame.png",
                     "method": "nine-slice",
-                    "nine_slice": {"left": 5, "right": 5, "top": 3, "bottom": 3, "horizontal": "crop"},
+                    "slices": {"left": 5, "right": 5, "top": 3, "bottom": 3, "horizontal": "crop"},
                     "condition": "qr",
                     "tintable": False,
                 },
@@ -289,49 +289,57 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
         ([{"image": "border.png", "method": "fit"}], ".method"),
         ([{"image": "border.png", "method": "contain", "condition": "sometimes"}], ".condition"),
         (
-            [{"image": "border.png", "method": "contain", "nine_slice": {"left": 1}}],
-            ".nine_slice",
+            [{"image": "border.png", "method": "contain", "slices": {"left": 1}}],
+            ".slices",
         ),
         (
             [{"image": "border.png", "method": "nine-slice"}],
-            ".nine_slice",
+            ".slices",
+        ),
+        (
+            [{"image": "border.png", "method": "nine-slice", "slices": []}],
+            ".slices",
+        ),
+        (
+            [{"image": "border.png", "method": "nine-slice", "nine_slice": {"left": 1}}],
+            ".slices",
         ),
         (
             [
                 {
                     "image": "border.png",
                     "method": "nine-slice",
-                    "nine_slice": {"left": True, "right": 1, "top": 1, "bottom": 1},
+                    "slices": {"left": True, "right": 1, "top": 1, "bottom": 1},
                 }
             ],
-            ".nine_slice.left",
+            ".slices.left",
         ),
         (
             [
                 {
                     "image": "border.png",
                     "method": "nine-slice",
-                    "nine_slice": {"left": 1.5, "right": 1, "top": 1, "bottom": 1},
+                    "slices": {"left": 1.5, "right": 1, "top": 1, "bottom": 1},
                 }
             ],
-            ".nine_slice.left",
+            ".slices.left",
         ),
         (
             [
                 {
                     "image": "border.png",
                     "method": "nine-slice",
-                    "nine_slice": {"left": -1, "right": 1, "top": 1, "bottom": 1},
+                    "slices": {"left": -1, "right": 1, "top": 1, "bottom": 1},
                 }
             ],
-            ".nine_slice.left",
+            ".slices.left",
         ),
         (
             [
                 {
                     "image": "border.png",
                     "method": "nine-slice",
-                    "nine_slice": {
+                    "slices": {
                         "left": 1,
                         "right": 1,
                         "top": 1,
@@ -340,17 +348,17 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
                     },
                 }
             ],
-            ".nine_slice.horizontal",
+            ".slices.horizontal",
         ),
         (
             [
                 {
                     "image": "border.png",
                     "method": "nine-slice",
-                    "nine_slice": {"left": 10, "right": 10, "top": 1, "bottom": 1},
+                    "slices": {"left": 10, "right": 10, "top": 1, "bottom": 1},
                 }
             ],
-            ".nine_slice",
+            ".slices",
         ),
         ([{"image": "../outside.png", "method": "contain"}], ".image"),
         ([{"image": "/tmp/outside.png", "method": "contain"}], ".image"),
