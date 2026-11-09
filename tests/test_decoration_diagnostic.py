@@ -112,7 +112,7 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     output = capsys.readouterr().out
     assert "Presentation: 1 of 12" in output
     assert "Quotation: SHORT" in output and "Quotation: LONG" in output
-    assert "Literary output bounds: (192, 162, 1728, 918)" in output
+    assert "Literary output bounds: (384, 324, 3456, 1836)" in output
     first, second = backends.values()
     assert len(first.images) == len(second.images) == len(snapshots)
     assert [image.tobytes() for image in first.images] == [image.tobytes() for image in second.images]
@@ -262,14 +262,14 @@ def test_reload_invalid_recover_image_manifest_and_debug_region(workspace, capsy
     )
     captured = capsys.readouterr()
     assert captured.out.count("Presentation: 1 of 12") == 5
-    assert "Literary output bounds: (192, 162, 1728, 918)" in captured.out
-    assert "Literary output bounds: (384, 324, 1536, 756)" in captured.out
+    assert "Literary output bounds: (384, 324, 3456, 1836)" in captured.out
+    assert "Literary output bounds: (768, 648, 3072, 1512)" in captured.out
     assert captured.err.count("Cannot present decoration") == 2
     assert len(backend.images) == 6
     assert backend.images[0].tobytes() != backend.images[2].tobytes()
-    assert backend.images[2].getpixel((384, 324)) == (127, 127, 127)
-    assert backend.images[4].getpixel((320, 180)) == (0, 0, 255)
-    assert backend.images[4].getpixel((384, 324)) == (0, 0, 127)
+    assert backend.images[2].getpixel((768, 648)) == (127, 127, 127)
+    assert backend.images[4].getpixel((640, 360)) == (0, 0, 255)
+    assert backend.images[4].getpixel((768, 648)) == (0, 0, 127)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -455,7 +455,12 @@ def test_diagnostic_state_wraps_and_keyboard_controls_match_actions():
 
 @pytest.mark.parametrize(
     ("aspect", "size"),
-    [("configured", (1920, 1080)), ("4:3", (1920, 1440)), ("16:9", (1920, 1080)), ("16:10", (1920, 1200))],
+    [
+        ("configured", (3840, 2160)),
+        ("4:3", (3200, 2400)),
+        ("16:9", (3840, 2160)),
+        ("16:10", (3840, 2400)),
+    ],
 )
 def test_aspect_output_geometry_and_screen_fit(workspace, aspect, size):
     config, _ = workspace
@@ -464,14 +469,16 @@ def test_aspect_output_geometry_and_screen_fit(workspace, aspect, size):
     preview = diagnostic.preview_size_for_screen(size, (1366, 768))
     assert preview[0] <= 1326 and preview[1] <= 564
     assert preview[0] * size[1] == preview[1] * size[0] or preview == (1, 1)
+    assert diagnostic.preview_size_for_screen(size, (8000, 6000)) == size
 
 
 def test_aspect_override_resolves_exact_geometry_for_other_configured_widths(workspace):
     config, _ = workspace
     configuration = diagnostic._load_configuration(config)
     configuration = replace(configuration, output_size=(1000, 750))
-    assert diagnostic._with_aspect(configuration, "16:9").output_size == (1008, 567)
-    assert diagnostic._with_aspect(configuration, "16:10").output_size == (1000, 625)
+    assert diagnostic._with_aspect(configuration, "configured").output_size == (3200, 2400)
+    assert diagnostic._with_aspect(configuration, "16:9").output_size == (3840, 2160)
+    assert diagnostic._with_aspect(configuration, "16:10").output_size == (3840, 2400)
 
 
 def test_geometry_initialization_inheritance_and_independent_inset_overrides(workspace):
@@ -740,7 +747,7 @@ def test_geometry_override_rendering_aspect_and_debug_bounds(workspace):
     try:
         assert details[0].geometry.working_region == (500, 324, 2816, 2076)
         assert details[0].qr_placement.working_bounds[0] == 60
-        assert details[0].qr_placement.image_size == image.size == (1920, 1440)
+        assert details[0].qr_placement.image_size == image.size == (3200, 2400)
         assert image.tobytes() != clean.tobytes()
     finally:
         image.close()
@@ -866,7 +873,7 @@ def test_cli_headless_png_export_uses_pipeline_without_gui_or_state(workspace, m
     assert cli.main(arguments) == 0
     with Image.open(output_one) as first:
         assert first.format == "PNG"
-        assert first.size == (1920, 1440)
+        assert first.size == (3200, 2400)
         first_bytes = output_one.read_bytes()
 
     second_arguments = list(arguments)
@@ -892,6 +899,211 @@ def test_test_output_requires_one_decoration_id(arguments):
     assert error.value.code == 2
 
 
+def test_test_output_rejects_directory_before_rendering(workspace, monkeypatch, tmp_path):
+    config, _ = workspace
+    directory = tmp_path / "previews"
+    directory.mkdir()
+    monkeypatch.setattr(
+        diagnostic,
+        "_render_request",
+        lambda *_args, **_kwargs: pytest.fail("directory destinations must be rejected before rendering"),
+    )
+
+    with pytest.raises(
+        application.ApplicationError,
+        match=r"Cannot write diagnostic PNG to .*destination is a directory.*Specify a filename",
+    ):
+        diagnostic.export_decoration_png(config, diagnostic.DiagnosticState(("a-custom",)), directory)
+
+
+def test_test_output_save_failure_preserves_existing_file(workspace, monkeypatch):
+    config, _ = workspace
+    output = config.parent / "preview.png"
+    output.write_bytes(b"previous image")
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Image.Image, "save", fail_save)
+    with pytest.raises(application.ApplicationError, match="cannot save diagnostic PNG.*disk full"):
+        diagnostic.export_decoration_png(config, diagnostic.DiagnosticState(("a-custom",)), output)
+
+    assert output.read_bytes() == b"previous image"
+    assert not list(config.parent.glob(".preview.png.*.tmp"))
+
+
+def test_batch_export_generates_full_deterministic_variant_matrix(workspace, monkeypatch, capsys):
+    config, package = workspace
+    config.write_text(
+        _CONFIG.replace("default: [lora]", "default: [lora, alegreya, source-sans-3]")
+        .replace("default: [none]\n  decorations:", "default: [none, canvas, cloth]\n  decorations:")
+        .replace("    min_font_size:", "    colors: [black, red, blue]\n    min_font_size:"),
+        encoding="utf-8",
+    )
+    manifest = (
+        _MANIFEST.replace("font: lora\n", "")
+        .replace("background: none\n", "")
+        .replace("text_color: red", "text_color: [black, red, blue]")
+        .replace("decoration_color: blue", "decoration_color: [black, red, blue]")
+    )
+    (package / "decoration.yaml").write_text(manifest, encoding="utf-8")
+    snapshots = []
+    states = []
+    render_request = diagnostic._render_request
+
+    def capture_render(config_path, state, **kwargs):
+        rendered = render_request(config_path, state, **kwargs)
+        snapshots.append(rendered.snapshot)
+        states.append(rendered.state)
+        return rendered
+
+    monkeypatch.setattr(diagnostic, "_render_request", capture_render)
+    monkeypatch.setattr(
+        diagnostic,
+        "_run_tk_preview",
+        lambda *_: pytest.fail("batch export must not initialize Tk"),
+    )
+    arguments = [
+        "--config",
+        str(config),
+        "--test-decoration",
+        "a-custom",
+        "--test-variants",
+        str(config.parent / "previews"),
+        "--no-background",
+        "--no-tinting",
+        "--debug-layout",
+    ]
+
+    assert cli.main(arguments) == 0
+    output = config.parent / "previews" / "a-custom"
+    expected_aspects = {
+        "4x3": (3200, 2400),
+        "16x9": (3840, 2160),
+        "16x10": (3840, 2400),
+    }
+    for aspect, size in expected_aspects.items():
+        files = sorted((output / aspect).glob("*.png"))
+        assert [path.name for path in files] == [
+            "long-qr-off.png",
+            "long-qr-on.png",
+            "medium-qr-off.png",
+            "medium-qr-on.png",
+            "short-qr-off.png",
+            "short-qr-on.png",
+        ]
+        with Image.open(output / aspect / "short-qr-on.png") as image:
+            assert image.size == size
+    assert len(list(output.rglob("*.png"))) == 18
+    assert f"Diagnostic variants saved to {output} (18 PNGs)" in capsys.readouterr().out
+    assert len(states) == 18
+    assert all(not state.background_enabled and not state.tinting_enabled and state.debug_layout for state in states)
+    choices = [
+        (snapshot.font, snapshot.background, snapshot.text_color, snapshot.decoration_color) for snapshot in snapshots
+    ]
+    assert all(choice == choices[0] for choice in choices)
+
+    second_arguments = list(arguments)
+    second_arguments[second_arguments.index(str(config.parent / "previews"))] = str(config.parent / "previews-second")
+    assert cli.main(second_arguments) == 0
+    second_output = config.parent / "previews-second" / "a-custom"
+    first_images = sorted(output.rglob("*.png"))
+    second_images = sorted(second_output.rglob("*.png"))
+    assert [path.relative_to(output) for path in first_images] == [
+        path.relative_to(second_output) for path in second_images
+    ]
+    assert [path.read_bytes() for path in first_images] == [path.read_bytes() for path in second_images]
+
+
+def test_batch_export_suppresses_qr_for_ineligible_decoration(workspace):
+    config, package = workspace
+    manifest = package / "decoration.yaml"
+    manifest.write_text(_MANIFEST + "qr_ready: false\n", encoding="utf-8")
+
+    output, count = diagnostic.export_decoration_variants(
+        config,
+        diagnostic.DiagnosticState(("a-custom",), qr_enabled=True, all_decorations=False),
+        config.parent / "previews",
+    )
+
+    assert count == 9
+    assert sorted(path.name for path in output.rglob("*.png")) == sorted(
+        [f"{quotation}-qr-off.png" for _ in range(3) for quotation in ("long", "medium", "short")]
+    )
+
+
+def test_batch_export_rejects_existing_directory_before_rendering(workspace, monkeypatch):
+    config, _ = workspace
+    target = config.parent / "previews" / "a-custom"
+    target.mkdir(parents=True)
+    existing = target / "keep.txt"
+    existing.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(
+        diagnostic,
+        "_render_request",
+        lambda *_args, **_kwargs: pytest.fail("existing batch destinations must be rejected before rendering"),
+    )
+
+    with pytest.raises(application.ApplicationError, match="already exists"):
+        diagnostic.export_decoration_variants(
+            config,
+            diagnostic.DiagnosticState(("a-custom",), all_decorations=False),
+            target.parent,
+        )
+    assert existing.read_text(encoding="utf-8") == "preserve"
+
+
+def test_batch_export_cleans_staging_directory_after_render_failure(workspace, monkeypatch):
+    config, _ = workspace
+    calls = 0
+
+    def render(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise application.ApplicationError("injected rendering failure")
+        return SimpleNamespace(
+            image=Image.new("RGB", (4, 3), "white"),
+            diagnostics=SimpleNamespace(qr_placement=object(), qr_unavailable_reason=None),
+        )
+
+    monkeypatch.setattr(diagnostic, "_render_request", render)
+    parent = config.parent / "previews"
+    with pytest.raises(application.ApplicationError, match=r"short-qr-off\.png.*injected rendering failure"):
+        diagnostic.export_decoration_variants(
+            config,
+            diagnostic.DiagnosticState(("a-custom",), all_decorations=False),
+            parent,
+        )
+
+    assert not (parent / "a-custom").exists()
+    assert not list(parent.glob(".a-custom-*"))
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--test-output", "one.png", "--test-variants", "previews"],
+        ["--test-aspect", "4:3"],
+        ["--test-quotation", "short"],
+        ["--no-qr"],
+    ],
+)
+def test_batch_cli_rejects_incompatible_options(arguments):
+    options = ["--test-decoration", "a-custom", "--test-variants", "previews"]
+    if arguments[0] in ("--test-output", "--test-aspect", "--test-quotation", "--no-qr"):
+        options.extend(arguments)
+    with pytest.raises(SystemExit) as error:
+        cli.main(options)
+    assert error.value.code == 2
+
+
+def test_batch_cli_rejects_all_decorations():
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--test-decoration", "all", "--test-variants", "previews"])
+    assert error.value.code == 2
+
+
 @pytest.mark.parametrize("mode", ["--once", "--test-qr"])
 def test_decoration_preview_rejects_other_modes(mode):
     with pytest.raises(SystemExit) as error:
@@ -904,7 +1116,7 @@ def test_test_output_reports_unwritable_parent(workspace):
     parent = config.parent / "not-a-directory"
     parent.write_text("file", encoding="utf-8")
     state = diagnostic.DiagnosticState(("a-custom",))
-    with pytest.raises(application.ApplicationError, match="cannot save diagnostic PNG"):
+    with pytest.raises(application.ApplicationError, match="cannot create diagnostic PNG directory"):
         diagnostic.export_decoration_png(config, state, parent / "preview.png")
 
 
@@ -979,7 +1191,7 @@ def test_preview_overrides_use_shared_preparation_pipeline(workspace):
         tinting_enabled=False,
         diagnostics_out=details,
     )
-    assert image.size == (1920, 1440)
+    assert image.size == (3200, 2400)
     assert image.getpixel((100, 100)) == (255, 255, 255)
     assert image.getpixel((100, 720)) == (0, 0, 0)
     assert details[0].qr_placement is None

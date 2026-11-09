@@ -143,7 +143,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--test-output",
         metavar="PATH",
-        help="save a native-resolution diagnostic PNG instead of opening the preview (requires one decoration ID)",
+        help="save a full-working-canvas diagnostic PNG instead of opening the preview (requires one decoration ID)",
+    )
+    parser.add_argument(
+        "--test-variants",
+        metavar="DIRECTORY",
+        help="export all supported diagnostic variants under a new decoration-named subdirectory",
     )
     parser.add_argument("--test-aspect", choices=("4:3", "16:9", "16:10"), help="decoration-preview aspect ratio")
     parser.add_argument(
@@ -196,6 +201,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ("--no-background", arguments.no_background),
             ("--no-tinting", arguments.no_tinting),
             ("--test-output", arguments.test_output),
+            ("--test-variants", arguments.test_variants),
         )
         if value is not None and value is not False
     ]
@@ -208,6 +214,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--test-output is only available with --test-decoration")
     if arguments.test_output is not None and arguments.test_decoration == "all":
         parser.error("--test-output requires exactly one decoration ID; 'all' cannot be exported")
+    if arguments.test_output is not None and arguments.test_variants is not None:
+        parser.error("--test-output and --test-variants are mutually exclusive")
+    if arguments.test_variants is not None and arguments.test_decoration == "all":
+        parser.error("--test-variants requires one specific decoration ID; 'all' is not supported")
+    if arguments.test_variants is not None:
+        incompatible_variants = [
+            option
+            for option, selected in (
+                ("--test-aspect", arguments.test_aspect is not None),
+                ("--test-quotation", arguments.test_quotation is not None),
+                ("--no-qr", arguments.no_qr),
+            )
+            if selected
+        ]
+        if incompatible_variants:
+            parser.error(
+                "--test-variants generates all aspect ratios, quotation lengths, and effective QR states; "
+                "do not combine it with " + ", ".join(incompatible_variants)
+            )
     conflicting_modes = [
         option
         for option, selected in (
@@ -396,6 +421,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 tinting_enabled=not arguments.no_tinting,
                 debug_layout=arguments.debug_layout,
                 output_path=arguments.test_output,
+                variants_directory=arguments.test_variants,
             )
             return 0
         else:
