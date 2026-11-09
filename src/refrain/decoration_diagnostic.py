@@ -147,6 +147,8 @@ class GeometryOverrides:
     presentation_insets: tuple[tuple[str, int], ...] = ()
     qr_horizontal: _QRPosition | None = None
     qr_vertical: _QRPosition | None = None
+    qr_horizontal_anchor: _QRPosition | None = None
+    qr_vertical_anchor: _QRPosition | None = None
 
 
 @dataclass(frozen=True)
@@ -282,12 +284,30 @@ def _set_geometry_override(
         insets[inset[0]] = inset[1]
     horizontal = qr_horizontal or overrides.qr_horizontal
     vertical = qr_vertical or overrides.qr_vertical
+    horizontal_anchor = overrides.qr_horizontal_anchor
+    vertical_anchor = overrides.qr_vertical_anchor
+    if qr_horizontal is not None:
+        if qr_horizontal.method != "center":
+            horizontal_anchor = qr_horizontal
+        elif overrides.qr_horizontal is not None and overrides.qr_horizontal.method != "center":
+            horizontal_anchor = overrides.qr_horizontal
+    if qr_vertical is not None:
+        if qr_vertical.method != "center":
+            vertical_anchor = qr_vertical
+        elif overrides.qr_vertical is not None and overrides.qr_vertical.method != "center":
+            vertical_anchor = overrides.qr_vertical
     if horizontal is not None and vertical is not None and horizontal.method == vertical.method == "center":
         if qr_horizontal is not None:
-            vertical = _QRPosition("bottom", 20)
+            vertical = vertical_anchor or _QRPosition("bottom", 20)
         else:
-            horizontal = _QRPosition("right", 20)
-    updated = GeometryOverrides(tuple(sorted(insets.items())), horizontal, vertical)
+            horizontal = horizontal_anchor or _QRPosition("right", 20)
+    updated = GeometryOverrides(
+        tuple(sorted(insets.items())),
+        horizontal,
+        vertical,
+        horizontal_anchor,
+        vertical_anchor,
+    )
     by_decoration = dict(state.geometry_overrides)
     by_decoration[decoration_id] = updated
     return replace(state, geometry_overrides=tuple(sorted(by_decoration.items())))
@@ -303,16 +323,53 @@ def _set_qr_axis_override(
 ) -> DiagnosticState:
     if axis not in {"horizontal", "vertical"}:
         raise ValueError("QR axis must be horizontal or vertical")
-    other = current_vertical if axis == "horizontal" else current_horizontal
-    reset_other = None
-    if position.method == other.method == "center":
-        reset_other = _QRPosition("bottom" if axis == "horizontal" else "right", 20)
-    return _set_geometry_override(
-        state,
-        decoration_id,
-        qr_horizontal=position if axis == "horizontal" else reset_other,
-        qr_vertical=position if axis == "vertical" else reset_other,
+    overrides = dict(state.geometry_overrides).get(decoration_id, GeometryOverrides())
+    horizontal_anchor = overrides.qr_horizontal_anchor
+    vertical_anchor = overrides.qr_vertical_anchor
+    if current_horizontal.method != "center":
+        horizontal_anchor = current_horizontal
+    if current_vertical.method != "center":
+        vertical_anchor = current_vertical
+
+    if position.method == "center":
+        selected = position
+    else:
+        previous = horizontal_anchor if axis == "horizontal" else vertical_anchor
+        if previous is None:
+            previous = _QRPosition("right" if axis == "horizontal" else "bottom", 20)
+        selected = _QRPosition(position.method, previous.offset)
+        if axis == "horizontal":
+            horizontal_anchor = selected
+        else:
+            vertical_anchor = selected
+
+    horizontal = selected if axis == "horizontal" else overrides.qr_horizontal
+    vertical = selected if axis == "vertical" else overrides.qr_vertical
+    if axis == "horizontal" and position.method == "center":
+        horizontal_anchor = current_horizontal if current_horizontal.method != "center" else horizontal_anchor
+    if axis == "vertical" and position.method == "center":
+        vertical_anchor = current_vertical if current_vertical.method != "center" else vertical_anchor
+
+    effective_horizontal = selected if axis == "horizontal" else current_horizontal
+    effective_vertical = selected if axis == "vertical" else current_vertical
+    if effective_horizontal.method == effective_vertical.method == "center":
+        if axis == "horizontal":
+            vertical = vertical_anchor or _QRPosition("bottom", 20)
+            vertical_anchor = vertical
+        else:
+            horizontal = horizontal_anchor or _QRPosition("right", 20)
+            horizontal_anchor = horizontal
+
+    updated = replace(
+        overrides,
+        qr_horizontal=horizontal,
+        qr_vertical=vertical,
+        qr_horizontal_anchor=horizontal_anchor,
+        qr_vertical_anchor=vertical_anchor,
     )
+    by_decoration = dict(state.geometry_overrides)
+    by_decoration[decoration_id] = updated
+    return replace(state, geometry_overrides=tuple(sorted(by_decoration.items())))
 
 
 def _reset_geometry_overrides(state: DiagnosticState, decoration_id: str) -> DiagnosticState:
