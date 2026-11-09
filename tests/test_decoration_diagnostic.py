@@ -524,7 +524,12 @@ def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
     resource = configuration.decorations["a-custom"]
     state = diagnostic.DiagnosticState(("a-custom",))
     state = diagnostic._set_geometry_override(state, "a-custom", qr_horizontal=diagnostic._QRPosition("right", 51))
-    state = diagnostic._set_geometry_override(state, "a-custom", qr_vertical=diagnostic._QRPosition("center"))
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    state = diagnostic._set_qr_axis_override(
+        state, "a-custom", "vertical", diagnostic._QRPosition("center"), horizontal, vertical
+    )
     overrides = dict(state.geometry_overrides)["a-custom"]
     insets, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource, overrides)
     assert (horizontal.method, horizontal.offset) == ("right", 51)
@@ -551,9 +556,157 @@ def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
     overrides = dict(state.geometry_overrides)["a-custom"]
     _, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource, overrides)
     assert horizontal.method == "center"
-    assert (vertical.method, vertical.offset) == ("bottom", 20)
-    assert metadata == {"qr_centered": "horizontal", "qr_from_bottom": 20}
+    assert (vertical.method, vertical.offset) == ("top", 45)
+    assert metadata == {"qr_centered": "horizontal", "qr_from_top": 45}
     assert diagnostic._reset_geometry_overrides(state, "a-custom").geometry_overrides == ()
+
+
+@pytest.mark.parametrize(
+    ("axis", "initial_method", "initial_offset", "other_method"),
+    [
+        ("horizontal", "right", 80, "left"),
+        ("vertical", "top", 70, "bottom"),
+    ],
+)
+@pytest.mark.parametrize("explicit", [False, True])
+def test_qr_centering_remembers_axis_anchor_through_edits_and_reselection(
+    workspace, axis, initial_method, initial_offset, other_method, explicit
+):
+    config, package = workspace
+    manifest = _MANIFEST
+    if explicit:
+        manifest = manifest.replace(
+            "text_color: red\n",
+            f"text_color: red\nqr_from_{initial_method}: {initial_offset}\n",
+        )
+    (package / "decoration.yaml").write_text(manifest, encoding="utf-8")
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    state = diagnostic.DiagnosticState(("a-custom", "other-decoration"))
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource)
+    original = horizontal if axis == "horizontal" else vertical
+    assert (original.method, original.offset) == (
+        (initial_method, initial_offset) if explicit else (("right", 20) if axis == "horizontal" else ("bottom", 20))
+    )
+
+    edited = diagnostic._QRPosition(initial_method, 120)
+    state = diagnostic._set_geometry_override(
+        state,
+        "a-custom",
+        qr_horizontal=edited if axis == "horizontal" else None,
+        qr_vertical=edited if axis == "vertical" else None,
+    )
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    state = diagnostic._set_qr_axis_override(
+        state, "a-custom", axis, diagnostic._QRPosition("center"), horizontal, vertical
+    )
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    assert (horizontal if axis == "horizontal" else vertical).method == "center"
+
+    original_field = f"qr_from_{initial_method}: {initial_offset}\n"
+    opposite_axis_field = "qr_from_top: 33\n" if axis == "horizontal" else "qr_from_left: 33\n"
+    refreshed_manifest = manifest.replace(original_field, "").replace(
+        "text_color: red\n",
+        f"text_color: red\nqr_from_{other_method}: 44\n{opposite_axis_field}",
+    )
+    (package / "decoration.yaml").write_text(refreshed_manifest, encoding="utf-8")
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    assert (horizontal if axis == "horizontal" else vertical).method == "center"
+    unoverridden = vertical if axis == "horizontal" else horizontal
+    expected_unoverridden = ("top", 33) if axis == "horizontal" else ("left", 33)
+    assert (unoverridden.method, unoverridden.offset) == expected_unoverridden
+
+    state = diagnostic._set_qr_axis_override(
+        state, "a-custom", axis, diagnostic._QRPosition(initial_method), horizontal, vertical
+    )
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    restored = horizontal if axis == "horizontal" else vertical
+    assert (restored.method, restored.offset) == (initial_method, 120)
+
+    switched = diagnostic._set_qr_axis_override(
+        state, "a-custom", axis, diagnostic._QRPosition(other_method), horizontal, vertical
+    )
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(switched.geometry_overrides)["a-custom"]
+    )
+    switched_position = horizontal if axis == "horizontal" else vertical
+    assert (switched_position.method, switched_position.offset) == (other_method, 120)
+    state = diagnostic._set_qr_axis_override(
+        switched, "a-custom", axis, diagnostic._QRPosition("center"), horizontal, vertical
+    )
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    state = diagnostic._set_qr_axis_override(
+        state, "a-custom", axis, diagnostic._QRPosition(other_method), horizontal, vertical
+    )
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(state.geometry_overrides)["a-custom"]
+    )
+    restored = horizontal if axis == "horizontal" else vertical
+    assert (restored.method, restored.offset) == (other_method, 120)
+
+    navigated = diagnostic.transition_state(state, "next-decoration")
+    assert dict(navigated.geometry_overrides)["a-custom"] == dict(state.geometry_overrides)["a-custom"]
+    navigated = diagnostic.transition_state(navigated, "previous-decoration")
+    assert navigated == state
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, dict(navigated.geometry_overrides)["a-custom"]
+    )
+    restored = horizontal if axis == "horizontal" else vertical
+    assert (restored.method, restored.offset) == (other_method, 120)
+    reset = diagnostic._reset_geometry_overrides(navigated, "a-custom")
+    assert reset.geometry_overrides == ()
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource)
+    reset_position = horizontal if axis == "horizontal" else vertical
+    assert (reset_position.method, reset_position.offset) == (other_method, 44)
+
+
+@pytest.mark.parametrize(
+    ("first_axis", "second_axis", "first_original", "second_original"),
+    [
+        ("horizontal", "vertical", diagnostic._QRPosition("right", 81), diagnostic._QRPosition("top", 61)),
+        ("vertical", "horizontal", diagnostic._QRPosition("right", 81), diagnostic._QRPosition("top", 61)),
+    ],
+)
+def test_centering_both_axes_restores_the_other_last_edge_anchor(
+    workspace, first_axis, second_axis, first_original, second_original
+):
+    config, package = workspace
+    manifest = _MANIFEST.replace(
+        "presentation_insets:",
+        "qr_from_right: 81\nqr_from_top: 61\npresentation_insets:",
+    )
+    (package / "decoration.yaml").write_text(manifest, encoding="utf-8")
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    state = diagnostic.DiagnosticState(("a-custom",))
+    original_by_axis = {"horizontal": first_original, "vertical": second_original}
+    for axis in (first_axis, second_axis):
+        overrides = dict(state.geometry_overrides).get("a-custom")
+        _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource, overrides)
+        state = diagnostic._set_qr_axis_override(
+            state, "a-custom", axis, diagnostic._QRPosition("center"), horizontal, vertical
+        )
+        _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+            configuration, resource, dict(state.geometry_overrides)["a-custom"]
+        )
+        centered = horizontal if axis == "horizontal" else vertical
+        assert centered.method == "center"
+    restored = horizontal if first_axis == "horizontal" else vertical
+    assert restored == original_by_axis[first_axis]
+    centered = horizontal if second_axis == "horizontal" else vertical
+    assert centered.method == "center"
 
 
 def test_geometry_override_rendering_aspect_and_debug_bounds(workspace):
