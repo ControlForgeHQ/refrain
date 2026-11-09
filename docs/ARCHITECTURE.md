@@ -1613,6 +1613,14 @@ The optional `--test-qr` mode generates a final-resolution RGB calibration image
 
 The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. The image is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output, and the same image is published through the existing coordinator to every configured backend. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
 
+### Interactive decoration preview
+
+Use `--test-decoration all` to preview all available decorations or `--test-decoration ID` to inspect one. The preview starts with a short quotation; `--test-quotation medium|long` selects another initial length, and `--test-aspect 4:3|16:9|16:10` resolves a diagnostic output geometry in that aspect ratio. The configured output ratio is used when no override is given. `--no-qr`, `--no-background`, and `--no-tinting` establish diagnostic-only initial overrides; `--debug-layout` also enables diagnostic geometry overlays.
+
+The desktop preview uses the normal preparation and rendering pipeline, fits the completed output uniformly within the available screen area, and keeps its toolbar outside the presentation image. Right/Space and Left navigate decorations; Up and Down cycle quotation lengths; Q, B, T, and D toggle QR, graphical background, decoration tinting, and geometry overlays; R/F5 reload configuration and assets; X exits. Mouse toolbar controls perform the same state transitions.
+
+The QR status distinguishes requested enablement from effective availability, including decoration readiness and placement validation. Debug overlays show literary and effective QR bounds plus resolved nine-slice guides; identical guide sets are drawn once and share a legend color. Reload preserves selections and toggles when they remain available. This mode does not load user quotations or read or modify operational state, global history, or prepared-image artifacts. Desktop preview scaling is for composition inspection only and does not establish QR scan reliability at physical display size.
+
 ### Recovery
 
 Recovery is performed according to the stage at which an interruption occurred.
