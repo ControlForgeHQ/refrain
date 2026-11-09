@@ -221,6 +221,8 @@ The repository's GitHub Actions CI workflow provides the standard automated vali
 - the complete hardware-independent pytest suite on Linux;
 - the same pytest suite on Windows.
 
+For pull requests whose diff is limited to Markdown under `docs/`, the root `README.md`, or the root `AGENTS.md`, CI still runs lint and both required test jobs. The test jobs report the documentation-only result and skip Python setup, dependency installation, and pytest. Any other changed path or an inconclusive comparison requires the full test suite on both platforms. Pushes to the default branch and manual runs always run the full suite.
+
 Use the project's supported Python version and declared development dependencies. CI must not require Raspberry Pi hardware, GPIO or SPI libraries, or other hardware-specific dependencies to run the hardware-independent tests.
 
 Tests must not assume a particular filesystem path separator, directory layout, user privilege level, or operating-system-specific error message. Compare paths using native `pathlib.Path` values where practical. Assertions involving diagnostic output must remain portable without weakening the behavior they verify.
