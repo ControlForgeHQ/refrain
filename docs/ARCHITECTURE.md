@@ -51,7 +51,7 @@ Commitment makes the selected quotation and its associated presentation informat
 
 Preparation generates and persists all images required for the committed selection and its configured output specifications.
 
-Scheduling determines which prepared image should currently be presented.
+Scheduling determines which reveal stage should currently be presented.
 
 Display output publishes the prepared image variant appropriate to each configured destination.
 
@@ -865,11 +865,11 @@ Reveal timing is evaluated relative to the logical display day associated with t
 
 ### Stage preparation
 
-After selection commitment, Refrain prepares all images required by the effective reveal schedule.
+After selection commitment, Refrain prepares all images required by the effective reveal schedule for every required output specification.
 
-Each image represents one cumulative reveal stage.
+Each image represents one cumulative reveal stage for one output specification.
 
-All images generated together use the same selected content and one consistent resolution of current layout configuration.
+All variants generated together use the same selected content and consistent presentation-wide choices. Raster-dependent layout and rendering results are resolved independently for each variant.
 
 Normal scheduled progression uses these prepared images.
 
@@ -941,23 +941,26 @@ Daily-image preparation separates graphical composition from the shared literary
 
 #### Output and working canvases
 
-Each application instance has one globally configured final output resolution. The reference canvas is always 3840 × 2400 pixels, a fixed 16:10 authoring envelope independent of output resolution and display hardware. Supported landscape output aspect ratios are 4:3, 16:9, and 16:10. The reference envelope must not be scaled or redefined to match a physical display.
+Aspect ratio is a first-class presentation property: it determines composition and the canonical working/design canvas used for layout coordinates. The set of supported ratios is extensible. The initial supported landscape ratios are 4:3, 5:3, 16:9, and 16:10.
 
-Derive the largest working canvas for the configured aspect ratio by reducing only the dimension that exceeds that ratio, centered within the reference envelope:
+Each supported ratio has one canonical working/design canvas. The 3840 × 2400 reference artwork envelope remains a fixed authoring reference, independent of output dimensions and display hardware. Derive each canonical canvas by reducing only the dimension that exceeds its ratio, centered within that envelope:
 
-| Aspect ratio | Working canvas | Centered reference-envelope crop |
+| Aspect ratio | Canonical working/design canvas | Centered reference-envelope crop |
 |---|---:|---|
 | 4:3 | 3200 × 2400 | 320 pixels from each horizontal edge |
+| 5:3 | 3840 × 2304 | 48 pixels from each vertical edge |
 | 16:9 | 3840 × 2160 | 120 pixels from each vertical edge |
 | 16:10 | 3840 × 2400 | None |
 
-Compose raster artwork on this working canvas. Scale the completed graphical composition to the configured output dimensions; this may reduce or enlarge it. Final-resolution literary typography and enabled QR output are rendered after that scaling. These three sizes—the fixed reference canvas, ratio-specific working canvas, and configured final output—are distinct. A hardware destination does not select them or constrain the renderer's supported ratios or resolutions.
+Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested raster resolution. Backend-specific configuration and defaults determine these values; do not infer the declared aspect ratio from requested dimensions. Destinations resolving to identical specifications share one prepared raster variant.
 
-Artwork authoring measurements use the fixed reference envelope and map to the selected working canvas according to the artwork contract. Presentation insets are defined directly in working-canvas pixels and are not reference-envelope geometry. Scale working-canvas coordinates uniformly to final output dimensions. Convert mapped edges to the nearest integer pixel, rounding exact half-pixel values upward. Resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps. Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
+For each output specification, render natively at the requested integer-pixel resolution when it exactly matches the declared aspect ratio. Otherwise, render the complete presentation at the nearest integer-pixel resolution matching the declared ratio, then resample the complete rendered image to the exact requested dimensions. The complete-image resample occurs only in the mismatched case. A hardware destination does not choose the presentation aspect or canonical canvas.
+
+Artwork authoring measurements use the fixed reference envelope and map to the canonical canvas for the selected aspect according to the artwork contract. Presentation insets are defined directly in canonical working-canvas pixels and are not reference-envelope geometry. Scale canonical working-canvas coordinates uniformly to the native render resolution for each output specification. Convert mapped edges to the nearest integer pixel, rounding exact half-pixel values upward. Resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps. Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
 
 #### Literary presentation geometry
 
-The literary region is defined by four independent working-canvas pixel insets: `left`, `right`, `top`, and `bottom`. Each is measured inward from the corresponding edge of the ratio-specific working canvas. For example, `left: 180` means 180 working-resolution pixels from the left edge on 4:3, 16:9, and 16:10 canvases. With output sizes `[1600, 1200]` and `[1920, 1080]`, the working canvases are twice the output dimensions, so this inset resolves to 90 final-output pixels in both cases; at `[3840, 2400]` it remains 180 pixels. Insets are not first applied to the full reference envelope and are not intersected with a cropped reference rectangle. Scale the resulting working-space rectangle uniformly to final output coordinates using deterministic nearest-integer, half-up edge rounding.
+The literary region is defined by four independent working-canvas pixel insets: `left`, `right`, `top`, and `bottom`. Each is measured inward from the corresponding edge of the canonical canvas for the selected aspect ratio. For example, `left: 180` means 180 working-canvas pixels from the left edge regardless of output resolution. Insets are not first applied to the full reference envelope and are not intersected with a cropped reference rectangle. Scale the resulting working-space rectangle uniformly to each variant's native render resolution using deterministic nearest-integer, half-up edge rounding.
 
 Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the same rectangle and layout for all stages generated together. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
 
@@ -967,23 +970,24 @@ Presentation insets are independent of decoration slice coordinates, PNG dimensi
 
 Prepare each literary reveal-stage image in this order:
 
-1. Resolve configured output geometry and its working canvas.
-2. Resolve effective QR availability and, when available, the complete working- and output-space QR geometry.
-3. Compose a paper-white base, the selected background, and selected decoration PNG layers at working resolution, processing layers in manifest order.
-4. Resample the graphical composition to final output dimensions when the dimensions differ, whether reducing or enlarging it; do not resample when they already match.
-5. Fit and render all literary text at final resolution using the stable effective rectangle.
-6. When QR generation is available, generate and composite the QR code at final resolution. Do not resize or resample literary text or QR output afterward.
-7. Persist the complete prepared reveal-stage images and publish them through the existing backend architecture.
+1. Resolve the unique output specifications and the canonical working/design canvas for each declared aspect ratio.
+2. For each specification, determine its native render resolution and map canonical geometry to that raster.
+3. Independently resolve the variant's effective QR viability and geometry.
+4. Compose a paper-white base, the selected background, and selected decoration PNG layers for the variant, processing layers in manifest order.
+5. Fit and render literary text at the variant's native resolution using that variant's effective rectangle.
+6. When QR generation is available for the variant, generate and composite it at native resolution.
+7. If the requested dimensions do not match the declared aspect ratio, resample the complete rendered image to those exact dimensions. Otherwise, do not apply a final whole-image resample.
+8. Persist complete images for every required reveal stage and output specification, then publish each destination's matching variant through the existing backend architecture.
 
-Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. The same geometry and graphical composition are used for every reveal stage. Other views, including the information view, retain their separate composition and QR behavior.
+Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. Each variant's geometry and graphical composition remain stable across its reveal stages. Other views, including the information view, retain their separate composition and QR behavior while observing the same output-specification model.
 
 #### Decoration layers
 
-A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The methods are `contain`, which aspect-preservingly scales the image to fit the working canvas; `cover`, which aspect-preservingly scales the source directly to cover the selected working canvas and crops excess artwork symmetrically around its center; and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
+A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The methods are `contain`, which aspect-preservingly scales the image to fit the canonical working canvas; `cover`, which aspect-preservingly scales the source directly to cover that canvas and crops excess artwork symmetrically around its center; and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
 
 For `nine-slice`, 3840 × 2400 PNGs are the reference-quality authoring size. Smaller or differently proportioned custom PNGs remain measured in their actual source pixels: fit the complete source uniformly within the fixed reference envelope using centered `contain`, with scale `min(3840 / source_width, 2400 / source_height)`, and apply that same scale and centered offset to its slice boundaries. This maps source measurements into reference-space artwork measurements; it does not change the fixed reference coordinate system. Upscaling a smaller source cannot restore detail and may visibly soften artwork. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
 
-Map nine-slice source coordinates to high-resolution working-space measurements once. Then place the four corners at the corresponding working-canvas edges and preserve their resolved widths and heights across supported aspect ratios. Do not apply an additional working-canvas-to-reference-envelope ratio to corner dimensions. For example, a resolved 240 × 180 working-space corner remains 240 × 180 on 4:3, 16:9, and 16:10 canvases when those dimensions fit. Horizontal and vertical edge thicknesses remain fixed; only their lengths adapt to the destination canvas. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
+Map nine-slice source coordinates to high-resolution working-space measurements once. Then place the four corners at the corresponding canonical working-canvas edges and preserve their resolved widths and heights across supported aspect ratios. Do not apply an additional working-canvas-to-reference-envelope ratio to corner dimensions. For example, a resolved 240 × 180 working-space corner remains 240 × 180 on each supported canvas when those dimensions fit. Horizontal and vertical edge thicknesses remain fixed; only their lengths adapt to the destination canvas. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
 
 Use the deterministic source-to-reference contain transform and nearest-integer, half-up rounding rule for source boundaries and their resolved working-space measurements. Preserve corner dimensions after that mapping. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
 
