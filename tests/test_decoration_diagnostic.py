@@ -490,7 +490,7 @@ def test_geometry_initialization_inheritance_and_independent_inset_overrides(wor
     (package / "decoration.yaml").write_text(
         _MANIFEST.replace(
             "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}",
-            "presentation_insets: {left: 111, right: 222, top: 333, bottom: 444}",
+            "qr_from_left: 55\npresentation_insets: {left: 111, right: 222, top: 333, bottom: 444}",
         ),
         encoding="utf-8",
     )
@@ -499,6 +499,11 @@ def test_geometry_initialization_inheritance_and_independent_inset_overrides(wor
         reloaded, reloaded.decorations["a-custom"], dict(state.geometry_overrides)["a-custom"]
     )
     assert (insets.left, insets.right, insets.top, insets.bottom) == (510, 222, 333, 444)
+    _, _, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        reloaded, reloaded.decorations["a-custom"], dict(state.geometry_overrides)["a-custom"]
+    )
+    assert (horizontal.method, horizontal.offset) == ("left", 55)
+    assert (vertical.method, vertical.offset) == ("bottom", 20)
     assert reloaded.decorations["a-custom"].presentation_insets.left == 111
 
     inherited_manifest = _MANIFEST.replace("presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}\n", "")
@@ -535,7 +540,14 @@ def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
         "qr_centered": "vertical",
     }
 
-    state = diagnostic._set_geometry_override(state, "a-custom", qr_horizontal=diagnostic._QRPosition("center"))
+    state = diagnostic._set_qr_axis_override(
+        state,
+        "a-custom",
+        "horizontal",
+        diagnostic._QRPosition("center"),
+        horizontal,
+        vertical,
+    )
     overrides = dict(state.geometry_overrides)["a-custom"]
     _, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource, overrides)
     assert horizontal.method == "center"
@@ -563,17 +575,23 @@ def test_geometry_override_rendering_aspect_and_debug_bounds(workspace):
         diagnostics_out=details,
         geometry_overrides=overrides,
     )
+    clean, _ = diagnostic._render(
+        configuration,
+        "a-custom",
+        resource.manifest,
+        0,
+        False,
+        aspect_ratio=state.aspect_ratio,
+        geometry_overrides=overrides,
+    )
     try:
         assert details[0].geometry.working_region == (500, 324, 2816, 2076)
         assert details[0].qr_placement.working_bounds[0] == 60
         assert details[0].qr_placement.image_size == image.size == (1920, 1440)
-        assert image.getpixel((details[0].geometry.output_region[0], details[0].geometry.output_region[1])) != (
-            255,
-            255,
-            255,
-        )
+        assert image.tobytes() != clean.tobytes()
     finally:
         image.close()
+        clean.close()
 
 
 def test_geometry_overrides_are_per_decoration_and_reset_independently():
@@ -584,6 +602,21 @@ def test_geometry_overrides_are_per_decoration_and_reset_independently():
     assert dict(state.geometry_overrides)["b"].presentation_insets == (("right", 200),)
     reset_a = diagnostic._reset_geometry_overrides(state, "a")
     assert set(dict(reset_a.geometry_overrides)) == {"b"}
+
+
+def test_geometry_validation_rejects_degenerate_insets_and_unresolvable_qr(workspace):
+    config, _ = workspace
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    with pytest.raises(diagnostic.PresentationGeometryError, match="no positive literary rectangle"):
+        diagnostic.resolve_presentation_geometry(
+            configuration.output_size,
+            diagnostic.PresentationInsets(1920, 1920, 324, 324),
+        )
+
+    invalid_qr = diagnostic.GeometryOverrides(qr_horizontal=diagnostic._QRPosition("left", 100_000))
+    with pytest.raises(diagnostic.QRCodePlacementError, match="extends outside"):
+        diagnostic._geometry_manifest_values(configuration, resource, invalid_qr, configuration.output_size)
 
 
 def test_reload_preserves_valid_selection_and_overrides(workspace):

@@ -293,6 +293,28 @@ def _set_geometry_override(
     return replace(state, geometry_overrides=tuple(sorted(by_decoration.items())))
 
 
+def _set_qr_axis_override(
+    state: DiagnosticState,
+    decoration_id: str,
+    axis: str,
+    position: _QRPosition,
+    current_horizontal: _QRPosition,
+    current_vertical: _QRPosition,
+) -> DiagnosticState:
+    if axis not in {"horizontal", "vertical"}:
+        raise ValueError("QR axis must be horizontal or vertical")
+    other = current_vertical if axis == "horizontal" else current_horizontal
+    reset_other = None
+    if position.method == other.method == "center":
+        reset_other = _QRPosition("bottom" if axis == "horizontal" else "right", 20)
+    return _set_geometry_override(
+        state,
+        decoration_id,
+        qr_horizontal=position if axis == "horizontal" else reset_other,
+        qr_vertical=position if axis == "vertical" else reset_other,
+    )
+
+
 def _reset_geometry_overrides(state: DiagnosticState, decoration_id: str) -> DiagnosticState:
     return replace(
         state,
@@ -874,6 +896,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     displayed_image = [None]
     displayed_size = [None]
     last_rendered_state = [None]
+    last_rendered_status = [""]
     geometry_error = [None]
     bound_decoration = [None]
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="refrain-decoration-preview")
@@ -897,6 +920,10 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         geometry_status.configure(
             text=f"Geometry validation: {error}" if error else "Coordinates are working-canvas pixels."
         )
+        if error:
+            status_var.set(f"Geometry validation error: {error}\n{last_rendered_status[0]}")
+        elif last_rendered_status[0]:
+            status_var.set(last_rendered_status[0])
         if error and error != previous_error:
             print(f"Decoration geometry validation: {error}", file=sys.stderr, flush=True)
 
@@ -1000,11 +1027,13 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         }[selected]
         current = horizontal if axis == "horizontal" else vertical
         position = _QRPosition(method, current.offset if method != "center" else 20)
-        candidate = _set_geometry_override(
+        candidate = _set_qr_axis_override(
             state_box[0],
             identifier,
-            qr_horizontal=position if axis == "horizontal" else None,
-            qr_vertical=position if axis == "vertical" else None,
+            axis,
+            position,
+            horizontal,
+            vertical,
         )
         try:
             _decoration_geometry(configuration_box[0], resource, dict(candidate.geometry_overrides).get(identifier))
@@ -1314,7 +1343,8 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
                     rendered_size,
                     display_size,
                 )
-                status_var.set(f"{rendered.message}\n{status}" if rendered.message else status)
+                last_rendered_status[0] = f"{rendered.message}\n{status}" if rendered.message else status
+                status_var.set(last_rendered_status[0])
                 last_rendered_state[0] = rendered.state
                 resize_preview()
                 if previous_image is not None:
