@@ -12,6 +12,43 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Classify pull request changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for changes outside documentation
+        id: diff
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Compare the PR diff and check both paths of any rename.
+          changed_paths="$RUNNER_TEMP/refrain-pr-paths"
+          if ! git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"; then
+            exit 0
+          fi
+
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              README.md|AGENTS.md|docs/*.md) ;;
+              *) exit 0 ;;
+            esac
+          done < "$changed_paths"
+
+          echo "docs_only=true" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint / Ruff + Black
     runs-on: ubuntu-24.04
@@ -38,8 +75,13 @@ jobs:
 
   tests:
     name: Tests / ${{ matrix.os }}
+    needs: changes
+    # Run full tests when classification is skipped or fails.
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      DOCS_ONLY: ${{ needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'true' }}
 
     strategy:
       fail-fast: false
@@ -49,17 +91,25 @@ jobs:
           - windows-2022
 
     steps:
+      - name: Report documentation-only change
+        if: env.DOCS_ONLY == 'true'
+        run: echo "Documentation-only pull request. Skipping pytest."
+
       - name: Check out repository
+        if: env.DOCS_ONLY != 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: env.DOCS_ONLY != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
 
       - name: Install development dependencies
+        if: env.DOCS_ONLY != 'true'
         run: python -m pip install -e ".[dev]"
 
       - name: Run pytest
+        if: env.DOCS_ONLY != 'true'
         run: python -m pytest -q
