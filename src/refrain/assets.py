@@ -438,10 +438,10 @@ def discover_decorations(
                     report,
                 )
                 method = definition.get("method", "contain")
-                if not isinstance(method, str) or method not in {"contain", "nine-slice"}:
+                if not isinstance(method, str) or method not in {"contain", "cover", "nine-slice"}:
                     report(
                         f"{layer_field}.method",
-                        "must be 'contain' or 'nine-slice'; decoration excluded",
+                        "must be 'contain', 'cover', or 'nine-slice'; decoration excluded",
                         logging.WARNING,
                     )
                     invalid_layers = True
@@ -460,10 +460,10 @@ def discover_decorations(
                     report(f"{layer_field}.tintable", "must be a YAML boolean; using true", logging.WARNING)
                     layer_tintable = True
                 nine_slice: NineSliceParameters | None = None
-                if method == "contain" and "slices" in definition:
+                if method in {"contain", "cover"} and "slices" in definition:
                     report(
                         f"{layer_field}.slices",
-                        "is not supported with method 'contain'; decoration excluded",
+                        f"is not supported with method {method!r}; decoration excluded",
                         logging.WARNING,
                     )
                     invalid_layers = True

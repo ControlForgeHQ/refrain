@@ -130,6 +130,90 @@ def test_nine_slice_rejects_corner_and_crop_destinations_that_cannot_fit() -> No
         background.close()
 
 
+@pytest.mark.parametrize(
+    "canvas",
+    [
+        (3200, 2400),
+        (3840, 2160),
+        (3840, 2400),
+    ],
+)
+def test_cover_crops_reference_artwork_without_scaling(canvas: tuple[int, int]) -> None:
+    source = Image.new("RGB", (3840, 2400), (0, 255, 0))
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((0, 0, 319, 2399), fill="red")
+    draw.rectangle((3520, 0, 3839, 2399), fill="blue")
+    draw.rectangle((0, 0, 3839, 119), fill="yellow")
+    draw.rectangle((0, 2280, 3839, 2399), fill="magenta")
+    draw.rectangle((1900, 1180, 1939, 1219), fill="white")
+    background = Image.new("RGB", canvas, "black")
+    try:
+        preparation._compose_cover(background, source)
+
+        assert background.getpixel((canvas[0] // 2, canvas[1] // 2)) == (255, 255, 255)
+        if canvas == (3200, 2400):
+            assert background.getpixel((0, 1200)) == (0, 255, 0)
+        elif canvas == (3840, 2160):
+            assert background.getpixel((1920, 0)) == (0, 255, 0)
+        else:
+            assert background.getpixel((0, 1200)) == (255, 0, 0)
+            assert background.getpixel((3839, 1200)) == (0, 0, 255)
+    finally:
+        source.close()
+        background.close()
+
+
+def test_cover_enlarges_uniformly_and_crops_odd_excess_deterministically() -> None:
+    source = Image.new("RGB", (5, 3))
+    for x in range(source.width):
+        for y in range(source.height):
+            source.putpixel((x, y), (x * 40, y * 80, 0))
+    expected = source.resize((7, 4), Image.Resampling.LANCZOS).crop((1, 0, 5, 4))
+    background = Image.new("RGB", (4, 4), "black")
+    try:
+        preparation._compose_cover(background, source)
+
+        assert background.tobytes() == expected.tobytes()
+        assert background.getpixel((1, 1)) == expected.getpixel((1, 1))
+    finally:
+        source.close()
+        expected.close()
+        background.close()
+
+
+def test_cover_enlarges_matching_aspect_ratio_without_cropping() -> None:
+    source = Image.new("RGB", (4, 3), "black")
+    source.putpixel((1, 1), (255, 0, 0))
+    expected = source.resize((8, 6), Image.Resampling.LANCZOS)
+    background = Image.new("RGB", (8, 6), "white")
+    try:
+        preparation._compose_cover(background, source)
+
+        assert background.tobytes() == expected.tobytes()
+    finally:
+        source.close()
+        expected.close()
+        background.close()
+
+
+def test_cover_matching_source_avoids_resampling(monkeypatch) -> None:
+    source = Image.new("RGB", (4, 2), "red")
+    background = Image.new("RGB", source.size, "black")
+
+    def reject_resampling(*_args, **_kwargs):
+        raise AssertionError("matching cover source must not be transformed")
+
+    monkeypatch.setattr(source, "resize", reject_resampling)
+    monkeypatch.setattr(source, "crop", reject_resampling)
+    try:
+        preparation._compose_cover(background, source)
+
+        assert background.getpixel((0, 0)) == (255, 0, 0)
+    finally:
+        source.close()
+        background.close()
+
+
 def test_invalid_crop_geometry_leaves_destination_unchanged(tmp_path: Path, caplog) -> None:
     image_path = tmp_path / "narrow.png"
     source = Image.new("RGBA", (1000, 2400), (200, 30, 40, 255))
@@ -169,7 +253,7 @@ def _write_layer(path: Path, color: tuple[int, int, int, int], *, size: tuple[in
 
 def test_conditional_layers_keep_order_and_use_the_resolved_qr_state(tmp_path: Path) -> None:
     paths = [tmp_path / f"layer-{index}.png" for index in range(4)]
-    with Image.new("RGBA", (4, 2), (255, 0, 0, 255)) as always:
+    with Image.new("RGBA", (2, 1), (255, 0, 0, 255)) as always:
         always.save(paths[0])
     with Image.new("RGBA", (4, 2), (0, 0, 0, 0)) as qr:
         qr.putpixel((0, 0), (0, 0, 255, 255))
@@ -183,9 +267,9 @@ def test_conditional_layers_keep_order_and_use_the_resolved_qr_state(tmp_path: P
     decoration = DecorationResource(
         "layers",
         (
-            DecorationLayerResource(paths[0], "contain", tintable=False),
-            DecorationLayerResource(paths[1], "contain", condition="qr", tintable=False),
-            DecorationLayerResource(paths[2], "contain", condition="no-qr", tintable=False),
+            DecorationLayerResource(paths[0], "cover", tintable=False),
+            DecorationLayerResource(paths[1], "cover", condition="qr", tintable=False),
+            DecorationLayerResource(paths[2], "cover", condition="no-qr", tintable=False),
             DecorationLayerResource(paths[3], "contain", tintable=False),
         ),
         False,
@@ -223,7 +307,7 @@ def test_tinting_preserves_alpha_and_untinted_layer_rgb(tmp_path: Path) -> None:
     decoration = DecorationResource(
         "tinted",
         (
-            DecorationLayerResource(tinted_path, "contain"),
+            DecorationLayerResource(tinted_path, "cover"),
             DecorationLayerResource(accent_path, "contain", tintable=False),
         ),
         False,

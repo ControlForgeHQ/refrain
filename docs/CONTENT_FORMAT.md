@@ -662,6 +662,8 @@ layers:
   - image: accent.png
     method: contain
     tintable: false
+  - image: centered-flourish.png
+    method: cover
   - image: qr-corner.png
     method: contain
     condition: qr
@@ -712,12 +714,12 @@ Each `layers` item is a mapping with the following fields:
 | Field | Type | Required | Default |
 |---|---|---|---|
 | `image` | Relative single-frame RGB or RGBA PNG path | Yes | — |
-| `method` | `"contain"` or `"nine-slice"` | No | `"contain"` |
+| `method` | `"contain"`, `"cover"`, or `"nine-slice"` | No | `"contain"` |
 | `slices` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` accepts no `slices` mapping. `nine-slice` requires a `slices` mapping:
+For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. `cover` preserves aspect ratio, uniformly scales the source until it covers the selected working canvas, then crops excess artwork symmetrically around its center. For example, a 3840 × 2400 image used with `cover` on the 3200 × 2400 working canvas is cropped by 320 pixels from each horizontal edge. Cover uses the source dimensions directly for this transform, not an intermediate reference-envelope scale. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` and `cover` accept no `slices` mapping. `nine-slice` requires a `slices` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|

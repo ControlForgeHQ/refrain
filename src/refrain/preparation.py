@@ -222,6 +222,8 @@ def _apply_daily_decoration(
                             _paste_decoration_region(background, contained, position)
                         finally:
                             contained.close()
+                    elif layer.method == "cover":
+                        _compose_cover(background, source)
                     else:
                         _compose_nine_slice(background, source, layer)
                 finally:
@@ -266,6 +268,33 @@ def _paste_decoration_region(background: Image.Image, region: Image.Image, posit
 
 def _rounded_fraction(value: Fraction) -> int:
     return (2 * value.numerator + value.denominator) // (2 * value.denominator)
+
+
+def _compose_cover(background: Image.Image, source: Image.Image) -> None:
+    if source.size == background.size:
+        _paste_decoration_region(background, source, (0, 0))
+        return
+
+    scale = max(Fraction(background.width, source.width), Fraction(background.height, source.height))
+    scaled_size = (
+        max(background.width, _rounded_fraction(source.width * scale)),
+        max(background.height, _rounded_fraction(source.height * scale)),
+    )
+    scaled = source if scaled_size == source.size else source.resize(scaled_size, Image.Resampling.LANCZOS)
+    try:
+        left = (scaled.width - background.width) // 2
+        top = (scaled.height - background.height) // 2
+        if left or top:
+            covered = scaled.crop((left, top, left + background.width, top + background.height))
+            try:
+                _paste_decoration_region(background, covered, (0, 0))
+            finally:
+                covered.close()
+        else:
+            _paste_decoration_region(background, scaled, (0, 0))
+    finally:
+        if scaled is not source:
+            scaled.close()
 
 
 def _mapped_boundaries(size: tuple[int, int], nine_slice) -> tuple[tuple[int, ...], tuple[int, ...]]:
