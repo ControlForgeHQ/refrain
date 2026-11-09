@@ -18,6 +18,7 @@ from datetime import date
 from importlib.resources import files
 from math import gcd
 from pathlib import Path
+from types import MappingProxyType
 from typing import Callable
 
 from PIL import Image, ImageDraw, ImageFont
@@ -33,8 +34,15 @@ from .assets import discover_decorations
 from .config import _BUNDLED_DECORATION_IDS, _parse_presentation_insets
 from .content import ContentEntry, Quotation, normalize_quotation
 from .display.coordinator import DisplayPublicationCoordinator
-from .geometry import PixelBounds, resolve_presentation_geometry, round_half_up
+from .geometry import (
+    PixelBounds,
+    PresentationGeometryError,
+    PresentationInsets,
+    resolve_presentation_geometry,
+    round_half_up,
+)
 from .preparation import PreparationDiagnostics, prepare_daily_images
+from .qr import QRCodePlacementError, resolve_qr_placement
 from .renderer import annotate_literary_region
 from .scheduling import resolve_reveal_stages
 
@@ -117,12 +125,28 @@ class DiagnosticState:
     tinting_enabled: bool = True
     debug_layout: bool = False
     all_decorations: bool = True
+    geometry_overrides: tuple[tuple[str, GeometryOverrides], ...] = ()
 
     @property
     def decoration(self) -> str | None:
         if not self.decoration_ids:
             return None
         return self.decoration_ids[self.decoration_index]
+
+
+@dataclass(frozen=True)
+class _QRPosition:
+    method: str
+    offset: int = 20
+
+
+@dataclass(frozen=True)
+class GeometryOverrides:
+    """Temporary per-decoration geometry changes for this diagnostic session."""
+
+    presentation_insets: tuple[tuple[str, int], ...] = ()
+    qr_horizontal: _QRPosition | None = None
+    qr_vertical: _QRPosition | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +214,128 @@ def _with_aspect(configuration, aspect_ratio: str):
     return replace(configuration, output_size=(units * unit_width, units * unit_height))
 
 
+def _decoration_geometry(configuration, decoration, overrides: GeometryOverrides | None = None):
+    """Resolve effective geometry and its source without mutating shared resources."""
+    overrides = overrides or GeometryOverrides()
+    insets = decoration.presentation_insets or configuration.presentation_insets
+    values = {
+        name: getattr(insets, name)
+        for name in ("left", "right", "top", "bottom")
+    }
+    values.update(dict(overrides.presentation_insets))
+
+    metadata = dict(decoration.qr_positioning)
+
+    def axis_position(axis: str) -> _QRPosition:
+        if axis == "horizontal":
+            if metadata.get("qr_centered") == "horizontal":
+                return _QRPosition("center")
+            for name in ("left", "right"):
+                key = f"qr_from_{name}"
+                if key in metadata:
+                    return _QRPosition(name, metadata[key] if type(metadata[key]) is int else 20)
+            return _QRPosition("right", 20)
+        if metadata.get("qr_centered") == "vertical":
+            return _QRPosition("center")
+        for name in ("top", "bottom"):
+            key = f"qr_from_{name}"
+            if key in metadata:
+                return _QRPosition(name, metadata[key] if type(metadata[key]) is int else 20)
+        return _QRPosition("bottom", 20)
+
+    horizontal = overrides.qr_horizontal or axis_position("horizontal")
+    vertical = overrides.qr_vertical or axis_position("vertical")
+    if overrides.qr_horizontal is None and overrides.qr_vertical is None:
+        effective_qr = metadata
+    else:
+        if horizontal.method == vertical.method == "center":
+            raise QRCodePlacementError("QR cannot be centered on both axes at once")
+        effective_qr = {}
+        if horizontal.method == "center":
+            effective_qr["qr_centered"] = "horizontal"
+        else:
+            effective_qr[f"qr_from_{horizontal.method}"] = horizontal.offset
+        if vertical.method == "center":
+            effective_qr["qr_centered"] = "vertical"
+        else:
+            effective_qr[f"qr_from_{vertical.method}"] = vertical.offset
+
+    return (
+        PresentationInsets(**values),
+        effective_qr,
+        horizontal,
+        vertical,
+        "decoration" if decoration.presentation_insets is not None else "inherited",
+        "decoration" if decoration.qr_positioning else "default",
+    )
+
+
+def _set_geometry_override(
+    state: DiagnosticState,
+    decoration_id: str,
+    *,
+    inset: tuple[str, int] | None = None,
+    qr_horizontal: _QRPosition | None = None,
+    qr_vertical: _QRPosition | None = None,
+) -> DiagnosticState:
+    """Update only supplied geometry fields for one decoration."""
+    overrides = dict(state.geometry_overrides).get(decoration_id, GeometryOverrides())
+    insets = dict(overrides.presentation_insets)
+    if inset is not None:
+        insets[inset[0]] = inset[1]
+    horizontal = qr_horizontal or overrides.qr_horizontal
+    vertical = qr_vertical or overrides.qr_vertical
+    if horizontal is not None and vertical is not None and horizontal.method == vertical.method == "center":
+        if qr_horizontal is not None:
+            vertical = _QRPosition("bottom", 20)
+        else:
+            horizontal = _QRPosition("right", 20)
+    updated = GeometryOverrides(tuple(sorted(insets.items())), horizontal, vertical)
+    by_decoration = dict(state.geometry_overrides)
+    by_decoration[decoration_id] = updated
+    return replace(state, geometry_overrides=tuple(sorted(by_decoration.items())))
+
+
+def _reset_geometry_overrides(state: DiagnosticState, decoration_id: str) -> DiagnosticState:
+    return replace(
+        state,
+        geometry_overrides=tuple((key, value) for key, value in state.geometry_overrides if key != decoration_id),
+    )
+
+
+def _geometry_manifest_values(configuration, decoration, overrides: GeometryOverrides | None, output_size):
+    insets, qr_metadata, horizontal, vertical, _, _ = _decoration_geometry(configuration, decoration, overrides)
+    resolve_presentation_geometry(output_size, insets)
+    placement = resolve_qr_placement(output_size, qr_metadata)
+    lines = ["presentation_insets:"]
+    lines.extend(f"  {name}: {getattr(insets, name)}" for name in ("left", "right", "top", "bottom"))
+    if horizontal.method == "center":
+        lines.append("qr_centered: horizontal")
+    else:
+        lines.append(f"qr_from_{horizontal.method}: {horizontal.offset}")
+    if vertical.method == "center":
+        lines.append("qr_centered: vertical")
+    else:
+        lines.append(f"qr_from_{vertical.method}: {vertical.offset}")
+    return "\n".join(lines) + "\n", placement
+
+
+def _qr_axis_source(decoration, overrides: GeometryOverrides | None, axis: str) -> str:
+    overrides = overrides or GeometryOverrides()
+    if getattr(overrides, f"qr_{axis}") is not None:
+        return "temporary"
+    metadata = decoration.qr_positioning
+    if axis == "horizontal":
+        explicit = metadata.get("qr_centered") == "horizontal" or any(
+            name in metadata for name in ("qr_from_left", "qr_from_right")
+        )
+    else:
+        explicit = metadata.get("qr_centered") == "vertical" or any(
+            name in metadata for name in ("qr_from_top", "qr_from_bottom")
+        )
+    return "decoration" if explicit else "default"
+
+
 def _mapped_output_size(output_size: tuple[int, int], available_size: tuple[int, int]) -> tuple[int, int]:
     """Fit an output image uniformly inside an available preview rectangle."""
     width, height = output_size
@@ -227,6 +373,7 @@ def preview_window_layout(
     toolbar_size: tuple[int, int],
     *,
     status_height: int = 72,
+    geometry_height: int = 0,
     margin: int = 24,
 ) -> tuple[tuple[int, int], tuple[int, int, int, int]]:
     """Fit the preview and center a window that also contains its complete controls."""
@@ -234,7 +381,7 @@ def preview_window_layout(
     toolbar_width, toolbar_height = toolbar_size
     outer = 16
     available_width = max(1, min(screen_width - margin * 2 - outer, screen_width - toolbar_width - margin * 2))
-    reserved_height = toolbar_height + status_height + margin * 2 + outer
+    reserved_height = toolbar_height + geometry_height + status_height + margin * 2 + outer
     available_height = max(1, screen_height - reserved_height)
     preview = _mapped_output_size(output_size, (available_width, available_height))
     window_width = min(screen_width - margin, max(preview[0] + outer, toolbar_width + outer))
@@ -409,8 +556,15 @@ def _render(
     background_enabled=True,
     tinting_enabled=True,
     diagnostics_out: list[PreparationDiagnostics] | None = None,
+    geometry_overrides: GeometryOverrides | None = None,
 ):
     resource = _validated_decoration(configuration, identifier, manifest, initial_warnings)
+    insets, qr_positioning, _, _, _, _ = _decoration_geometry(configuration, resource, geometry_overrides)
+    resource = replace(
+        resource,
+        presentation_insets=insets,
+        qr_positioning=MappingProxyType(dict(qr_positioning)),
+    )
     registry = dict(configuration.decorations)
     registry[identifier] = resource
     requested_qr = configuration.qr_enabled if qr_enabled is None else qr_enabled
@@ -489,6 +643,26 @@ def _diagnostic_status(
     displayed = preview_size or image_size
     manifest = configuration.decorations.get(decoration)
     manifest_path = "unavailable" if manifest is None else str(manifest.manifest)
+    overrides = dict(state.geometry_overrides).get(decoration, GeometryOverrides())
+    if manifest is None:
+        effective_insets = configuration.presentation_insets
+        inset_source = "inherited"
+        qr_horizontal = qr_vertical = _QRPosition("right")
+    else:
+        effective_insets, _, qr_horizontal, qr_vertical, inset_source, _ = _decoration_geometry(
+            configuration, manifest, overrides
+        )
+    inset_sources = dict(overrides.presentation_insets)
+    inset_values = ", ".join(
+        f"{name}={getattr(effective_insets, name)} ({'temporary' if name in inset_sources else inset_source})"
+        for name in ("left", "right", "top", "bottom")
+    )
+    horizontal_source = "temporary" if overrides.qr_horizontal is not None else (
+        "decoration" if manifest is not None else "default"
+    )
+    vertical_source = "temporary" if overrides.qr_vertical is not None else (
+        "decoration" if manifest is not None else "default"
+    )
     status = (
         f"Decoration: {decoration} ({position}); manifest: {manifest_path}\n"
         f"Quotation: {_QUOTATION_NAMES[state.quotation_index]}; aspect: {ratio}; "
@@ -497,6 +671,11 @@ def _diagnostic_status(
         f"QR: {qr}{reason}; bounds: {details.qr_placement.allocation_bounds if qr_effective else 'unavailable'}; "
         f"background: {'on' if state.background_enabled else 'white'}; "
         f"tinting: {'on' if state.tinting_enabled else 'black'}; debug: {'on' if state.debug_layout else 'off'}\n"
+        f"Presentation insets (working px): {inset_values}; "
+        f"QR horizontal={qr_horizontal.method} "
+        f"{qr_horizontal.offset if qr_horizontal.method != 'center' else ''} ({horizontal_source}), "
+        f"vertical={qr_vertical.method} {qr_vertical.offset if qr_vertical.method != 'center' else ''} "
+        f"({vertical_source}); temporary overrides={'active' if overrides != GeometryOverrides() else 'none'}\n"
         f"Nine-slice guides: {', '.join(layers) if layers else 'none'}"
     )
     print(status, flush=True)
@@ -544,6 +723,7 @@ def _render_request(
         background_enabled=state.background_enabled,
         tinting_enabled=state.tinting_enabled,
         diagnostics_out=details,
+        geometry_overrides=dict(state.geometry_overrides).get(identifier),
     )
     return _RenderedPreview(image, snapshot, details[0], current_configuration, state, message)
 
@@ -617,6 +797,66 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     image_label.pack()
     toolbar = tk.Frame(root)
     toolbar.pack(anchor="center", pady=(8, 4))
+    geometry_panel = tk.Frame(root, relief="groove", borderwidth=1, padx=4, pady=3)
+    geometry_open = [False]
+    presentation_vars = {name: tk.StringVar() for name in ("left", "right", "top", "bottom")}
+    qr_horizontal_var = tk.StringVar()
+    qr_vertical_var = tk.StringVar()
+    qr_horizontal_offset = tk.StringVar()
+    qr_vertical_offset = tk.StringVar()
+    presentation_row = tk.Frame(geometry_panel)
+    presentation_row.pack(fill="x")
+    tk.Label(presentation_row, text="Presentation (working px):").pack(side="left", padx=(0, 4))
+    presentation_entries = {}
+    for name in ("left", "right", "top", "bottom"):
+        tk.Label(presentation_row, text=f"{name.title()}").pack(side="left", padx=(3, 1))
+        entry = tk.Entry(presentation_row, textvariable=presentation_vars[name], width=7)
+        entry.pack(side="left")
+        entry.bind("<Return>", lambda event, field=name: apply_inset(field))
+        entry.bind("<FocusOut>", lambda event, field=name: apply_inset(field))
+        presentation_entries[name] = entry
+    presentation_source = tk.Label(presentation_row, text="")
+    presentation_source.pack(side="left", padx=5)
+
+    qr_row = tk.Frame(geometry_panel)
+    qr_row.pack(fill="x", pady=(2, 0))
+    tk.Label(qr_row, text="QR horizontal:").pack(side="left")
+    qr_horizontal = ttk.Combobox(
+        qr_row,
+        textvariable=qr_horizontal_var,
+        values=("From left", "From right", "Centered"),
+        state="readonly",
+        width=11,
+    )
+    qr_horizontal.pack(side="left", padx=(2, 3))
+    qr_horizontal.bind("<<ComboboxSelected>>", lambda event: apply_qr_method("horizontal"))
+    qr_horizontal_entry = tk.Entry(qr_row, textvariable=qr_horizontal_offset, width=6)
+    qr_horizontal_entry.pack(side="left")
+    qr_horizontal_entry.bind("<Return>", lambda event: apply_qr_offset("horizontal"))
+    qr_horizontal_entry.bind("<FocusOut>", lambda event: apply_qr_offset("horizontal"))
+    qr_horizontal_source = tk.Label(qr_row, text="")
+    qr_horizontal_source.pack(side="left", padx=3)
+    tk.Label(qr_row, text="QR vertical:").pack(side="left", padx=(8, 0))
+    qr_vertical = ttk.Combobox(
+        qr_row, textvariable=qr_vertical_var, values=("From top", "From bottom", "Centered"), state="readonly", width=11
+    )
+    qr_vertical.pack(side="left", padx=(2, 3))
+    qr_vertical.bind("<<ComboboxSelected>>", lambda event: apply_qr_method("vertical"))
+    qr_vertical_entry = tk.Entry(qr_row, textvariable=qr_vertical_offset, width=6)
+    qr_vertical_entry.pack(side="left")
+    qr_vertical_entry.bind("<Return>", lambda event: apply_qr_offset("vertical"))
+    qr_vertical_entry.bind("<FocusOut>", lambda event: apply_qr_offset("vertical"))
+    qr_vertical_source = tk.Label(qr_row, text="")
+    qr_vertical_source.pack(side="left", padx=3)
+
+    geometry_actions = tk.Frame(geometry_panel)
+    geometry_actions.pack(fill="x", pady=(2, 0))
+    reset_button = tk.Button(geometry_actions, text="Reset to manifest", command=lambda: reset_geometry())
+    reset_button.pack(side="left", padx=2)
+    copy_button = tk.Button(geometry_actions, text="Copy values", command=lambda: copy_geometry())
+    copy_button.pack(side="left", padx=2)
+    geometry_status = tk.Label(geometry_actions, text="Coordinates are working-canvas pixels.", anchor="w")
+    geometry_status.pack(side="left", padx=6)
     status_var = tk.StringVar(value=message or "Rendering preview…")
     status_label = tk.Label(root, textvariable=status_var, justify="left", anchor="w")
     status_label.pack(fill="x")
@@ -632,12 +872,225 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     state_box = [state]
     configuration_box = [configuration]
     current_photo = [None]
+    current_image = [None]
+    displayed_image = [None]
+    displayed_size = [None]
+    last_rendered_state = [None]
+    last_status = [""]
+    geometry_error = [None]
+    bound_decoration = [None]
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="refrain-decoration-preview")
     result_queue: queue.Queue[tuple[Future, DiagnosticState]] = queue.Queue()
     render_pending = [False]
     reload_pending = [False]
     rendering = [False]
     closed = [False]
+
+    def selected_geometry():
+        identifier = state_box[0].decoration
+        resource = configuration_box[0].decorations.get(identifier)
+        if identifier is None or resource is None:
+            return None
+        overrides = dict(state_box[0].geometry_overrides).get(identifier)
+        return identifier, resource, overrides
+
+    def set_geometry_error(error):
+        geometry_error[0] = error
+        geometry_status.configure(
+            text=f"Geometry validation: {error}" if error else "Coordinates are working-canvas pixels."
+        )
+        if error and error != last_status[0]:
+            print(f"Decoration geometry validation: {error}", file=sys.stderr, flush=True)
+            last_status[0] = error
+
+    def refresh_geometry_controls(force=False):
+        selected = selected_geometry()
+        if selected is None:
+            return
+        identifier, resource, overrides = selected
+        if not force and bound_decoration[0] == identifier and last_rendered_state[0] is not None:
+            pass
+        else:
+            insets, _, horizontal, vertical, inset_source, _ = _decoration_geometry(
+                configuration_box[0], resource, overrides
+            )
+            for name in presentation_vars:
+                presentation_vars[name].set(str(getattr(insets, name)))
+            qr_horizontal_var.set(
+                "Centered" if horizontal.method == "center" else f"From {horizontal.method}"
+            )
+            qr_vertical_var.set("Centered" if vertical.method == "center" else f"From {vertical.method}")
+            qr_horizontal_offset.set("" if horizontal.method == "center" else str(horizontal.offset))
+            qr_vertical_offset.set("" if vertical.method == "center" else str(vertical.offset))
+            bound_decoration[0] = identifier
+            inset_overrides = dict(overrides.presentation_insets) if overrides else {}
+            for name in presentation_vars:
+                source = "Temporary" if name in inset_overrides else inset_source.title()
+                presentation_source.configure(text=source)
+            qr_horizontal_source.configure(text=_qr_axis_source(resource, overrides, "horizontal").title())
+            qr_vertical_source.configure(text=_qr_axis_source(resource, overrides, "vertical").title())
+        horizontal_centered = qr_horizontal_var.get() == "Centered"
+        vertical_centered = qr_vertical_var.get() == "Centered"
+        qr_horizontal_entry.configure(state="disabled" if horizontal_centered else "normal")
+        qr_vertical_entry.configure(state="disabled" if vertical_centered else "normal")
+        active = overrides is not None and overrides != GeometryOverrides()
+        reset_button.configure(state="normal" if active else "disabled")
+        try:
+            output = _with_aspect(configuration_box[0], state_box[0].aspect_ratio).output_size
+            _geometry_manifest_values(configuration_box[0], resource, overrides, output)
+        except (PresentationGeometryError, QRCodePlacementError, ValueError):
+            copy_button.configure(state="disabled")
+        else:
+            copy_button.configure(state="normal")
+
+    def parse_geometry_integer(value, label):
+        value = value.strip()
+        if not value or not value.isascii() or not value.isdigit():
+            raise ValueError(f"{label} must be a nonnegative integer")
+        return int(value)
+
+    def apply_inset(name):
+        try:
+            value = parse_geometry_integer(presentation_vars[name].get(), f"{name.title()} inset")
+            identifier, resource, _ = selected_geometry()
+            current_insets, *_ = _decoration_geometry(
+                configuration_box[0],
+                resource,
+                dict(state_box[0].geometry_overrides).get(identifier),
+            )
+            if value == getattr(current_insets, name):
+                set_geometry_error(None)
+                return "break"
+            candidate = _set_geometry_override(state_box[0], identifier, inset=(name, value))
+            resolved_insets, _, _, _, _, _ = _decoration_geometry(
+                configuration_box[0], resource, dict(candidate.geometry_overrides).get(identifier)
+            )
+            output = _with_aspect(configuration_box[0], candidate.aspect_ratio).output_size
+            resolve_presentation_geometry(output, resolved_insets)
+        except (ValueError, PresentationGeometryError) as error:
+            set_geometry_error(str(error))
+            return "break"
+        state_box[0] = candidate
+        set_geometry_error(None)
+        refresh_buttons()
+        refresh_geometry_controls(force=True)
+        submit_render()
+        return "break"
+
+    def apply_qr_method(axis):
+        identifier, resource, overrides = selected_geometry()
+        insets, _, horizontal, vertical, _, _ = _decoration_geometry(configuration_box[0], resource, overrides)
+        variable = qr_horizontal_var if axis == "horizontal" else qr_vertical_var
+        selected = variable.get()
+        method = {
+            "From left": "left",
+            "From right": "right",
+            "From top": "top",
+            "From bottom": "bottom",
+            "Centered": "center",
+        }[selected]
+        current = horizontal if axis == "horizontal" else vertical
+        position = _QRPosition(method, current.offset if method != "center" else 20)
+        candidate = _set_geometry_override(
+            state_box[0],
+            identifier,
+            qr_horizontal=position if axis == "horizontal" else None,
+            qr_vertical=position if axis == "vertical" else None,
+        )
+        try:
+            _decoration_geometry(
+                configuration_box[0], resource, dict(candidate.geometry_overrides).get(identifier)
+            )
+        except QRCodePlacementError as error:
+            set_geometry_error(str(error))
+            refresh_geometry_controls(force=True)
+            return "break"
+        state_box[0] = candidate
+        set_geometry_error(None)
+        refresh_geometry_controls(force=True)
+        submit_render()
+        return "break"
+
+    def apply_qr_offset(axis):
+        identifier, resource, overrides = selected_geometry()
+        _, _, horizontal, vertical, _, _ = _decoration_geometry(configuration_box[0], resource, overrides)
+        variable = qr_horizontal_offset if axis == "horizontal" else qr_vertical_offset
+        current = horizontal if axis == "horizontal" else vertical
+        if current.method == "center":
+            return "break"
+        try:
+            offset = parse_geometry_integer(variable.get(), f"QR {axis} offset")
+        except ValueError as error:
+            set_geometry_error(str(error))
+            return "break"
+        if offset == current.offset:
+            set_geometry_error(None)
+            return "break"
+        position = _QRPosition(current.method, offset)
+        candidate = _set_geometry_override(
+            state_box[0],
+            identifier,
+            qr_horizontal=position if axis == "horizontal" else None,
+            qr_vertical=position if axis == "vertical" else None,
+        )
+        state_box[0] = candidate
+        set_geometry_error(None)
+        refresh_geometry_controls(force=True)
+        submit_render()
+        return "break"
+
+    def reset_geometry():
+        identifier = state_box[0].decoration
+        if identifier is None:
+            return
+        state_box[0] = _reset_geometry_overrides(state_box[0], identifier)
+        set_geometry_error(None)
+        refresh_geometry_controls(force=True)
+        submit_render()
+
+    def copy_geometry():
+        selected = selected_geometry()
+        if selected is None:
+            return
+        identifier, resource, overrides = selected
+        try:
+            output = _with_aspect(configuration_box[0], state_box[0].aspect_ratio).output_size
+            fragment, _ = _geometry_manifest_values(configuration_box[0], resource, overrides, output)
+            root.clipboard_clear()
+            root.clipboard_append(fragment)
+        except Exception as error:
+            set_geometry_error(f"cannot copy geometry: {error}")
+            return
+        set_geometry_error(None)
+        geometry_status.configure(text="Manifest values copied to the clipboard.")
+
+    def resize_preview():
+        if current_image[0] is None or closed[0]:
+            return (1, 1)
+        root.update_idletasks()
+        toolbar_size = (toolbar.winfo_reqwidth(), toolbar.winfo_reqheight())
+        status_height = status_label.winfo_reqheight() + help_label.winfo_reqheight() + 24
+        panel_height = geometry_panel.winfo_reqheight() if geometry_open[0] else 0
+        display_size, geometry = preview_window_layout(
+            current_image[0].size,
+            screen_size,
+            toolbar_size,
+            status_height=status_height,
+            geometry_height=panel_height,
+        )
+        root.geometry(f"{geometry[0]}x{geometry[1]}+{geometry[2]}+{geometry[3]}")
+        if displayed_image[0] is current_image[0] and displayed_size[0] == display_size:
+            return display_size
+        resized = current_image[0].resize(display_size, Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+        resized.close()
+        image_label.configure(image=photo)
+        current_photo[0] = photo
+        displayed_image[0] = current_image[0]
+        displayed_size[0] = display_size
+        return display_size
+
+    refresh_geometry_controls(force=True)
 
     def render_worker(target_state, reload_configuration):
         return _render_request(
@@ -677,6 +1130,9 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         closed[0] = True
         executor.shutdown(wait=False, cancel_futures=True)
         current_photo[0] = None
+        if current_image[0] is not None:
+            current_image[0].close()
+            current_image[0] = None
         root.destroy()
 
     def update_state(action, decoration_id: str | None = None):
@@ -685,6 +1141,15 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             return
         if action == "reload":
             submit_render(reload_configuration=True)
+            return
+        if action == "toggle-geometry":
+            geometry_open[0] = not geometry_open[0]
+            if geometry_open[0]:
+                geometry_panel.pack(fill="x", pady=(0, 4), before=status_label)
+            else:
+                geometry_panel.pack_forget()
+            buttons["Geometry"].configure(text=f"Geometry {'▾' if geometry_open[0] else '▸'}")
+            resize_preview()
             return
         if action == "select-decoration" and decoration_id in state_box[0].decoration_ids:
             state_box[0] = replace(
@@ -707,6 +1172,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         ("Q▶", "next-quotation", "Next quotation length (Up)"),
         ("D▶", "next-decoration", "Next decoration (Right or Space)"),
         ("aspect", "next-aspect", "Cycle output aspect ratio (A)"),
+        ("Geometry ▸", "toggle-geometry", "Show or hide geometry controls"),
         ("Reload", "reload", "Reload configuration and assets (R or F5)"),
         ("Exit", "exit", "Close the preview (X)"),
     )
@@ -738,6 +1204,8 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         picker.configure(values=state_box[0].decoration_ids)
         picker_value.set(state_box[0].decoration or "")
         aspect_button.configure(text=state_box[0].aspect_ratio)
+        buttons["Geometry"].configure(text=f"Geometry {'▾' if geometry_open[0] else '▸'}")
+        refresh_geometry_controls()
 
     def picker_selected(_event=None):
         update_state("select-decoration", picker_value.get())
@@ -773,7 +1241,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             continue
         button = tk.Button(toolbar, text=label, command=lambda selected=action: update_state(selected), takefocus=True)
         button.pack(side="left", padx=2)
-        name = label.removesuffix(" ✓").removesuffix(" —")
+        name = label.removesuffix(" ✓").removesuffix(" —").removesuffix(" ▸").removesuffix(" ▾")
         buttons[name] = button
         button.bind("<Enter>", lambda event, text=tooltip: help_var.set(text))
         button.bind(
@@ -783,6 +1251,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
                 "T tint · D debug · R/F5 reload · X exit"
             ),
         )
+    geometry_panel.pack_forget()
     refresh_buttons()
 
     def key_pressed(event):
@@ -813,29 +1282,22 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
                 rendered.image.close()
             else:
                 rendered_size = rendered.image.size
-                previous_image = current_photo[0]
-                root.update_idletasks()
-                toolbar_size = (
-                    toolbar.winfo_reqwidth(),
-                    toolbar.winfo_reqheight(),
-                )
-                status_height = status_label.winfo_reqheight() + help_label.winfo_reqheight() + 24
-                display_size, geometry = preview_window_layout(
-                    rendered_size,
-                    screen_size,
-                    toolbar_size,
-                    status_height=status_height,
-                )
-                root.geometry(f"{geometry[0]}x{geometry[1]}+{geometry[2]}+{geometry[3]}")
-                resized = rendered.image.resize(display_size, Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(resized)
-                resized.close()
-                rendered.image.close()
-                image_label.configure(image=photo)
-                current_photo[0] = photo
+                previous_image = current_image[0]
+                previous_state = last_rendered_state[0]
+                previous_configuration = configuration_box[0]
+                current_image[0] = rendered.image
                 state_box[0] = rendered.state
                 configuration_box[0] = rendered.configuration
+                geometry_changed = (
+                    previous_state is None
+                    or previous_state.decoration != rendered.state.decoration
+                    or previous_state.geometry_overrides != rendered.state.geometry_overrides
+                    or previous_configuration is not rendered.configuration
+                )
+                if geometry_changed:
+                    refresh_geometry_controls(force=True)
                 refresh_buttons()
+                display_size = resize_preview()
                 status = _diagnostic_status(
                     rendered.state,
                     rendered.configuration,
@@ -843,9 +1305,12 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
                     rendered_size,
                     display_size,
                 )
+                last_status[0] = status
                 status_var.set(f"{rendered.message}\n{status}" if rendered.message else status)
+                last_rendered_state[0] = rendered.state
+                resize_preview()
                 if previous_image is not None:
-                    previous_image = None
+                    previous_image.close()
         except Exception as error:
             status_var.set(f"Cannot render decoration preview: {error}")
             print(f"Cannot render decoration preview: {error}", file=sys.stderr, flush=True)

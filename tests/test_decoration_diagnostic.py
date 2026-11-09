@@ -8,6 +8,7 @@ from dataclasses import replace
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import yaml
 from PIL import Image
 
 import refrain.__main__ as cli
@@ -473,6 +474,134 @@ def test_aspect_override_resolves_exact_geometry_for_other_configured_widths(wor
     assert diagnostic._with_aspect(configuration, "16:10").output_size == (1000, 625)
 
 
+def test_geometry_initialization_inheritance_and_independent_inset_overrides(workspace):
+    config, package = workspace
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    insets, qr, horizontal, vertical, inset_source, qr_source = diagnostic._decoration_geometry(
+        configuration, resource
+    )
+    assert (insets.left, insets.right, insets.top, insets.bottom) == (384, 384, 324, 324)
+    assert (horizontal.method, horizontal.offset) == ("right", 20)
+    assert (vertical.method, vertical.offset) == ("bottom", 20)
+    assert inset_source == "decoration" and qr_source == "default"
+    assert qr == {}
+
+    state = diagnostic.DiagnosticState(("a-custom",))
+    state = diagnostic._set_geometry_override(state, "a-custom", inset=("left", 510))
+    (package / "decoration.yaml").write_text(
+        _MANIFEST.replace(
+            "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}",
+            "presentation_insets: {left: 111, right: 222, top: 333, bottom: 444}",
+        ),
+        encoding="utf-8",
+    )
+    reloaded = diagnostic._load_configuration(config)
+    insets, *_ = diagnostic._decoration_geometry(
+        reloaded, reloaded.decorations["a-custom"], dict(state.geometry_overrides)["a-custom"]
+    )
+    assert (insets.left, insets.right, insets.top, insets.bottom) == (510, 222, 333, 444)
+    assert reloaded.decorations["a-custom"].presentation_insets.left == 111
+
+    inherited_manifest = _MANIFEST.replace(
+        "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}\n", ""
+    )
+    (package / "decoration.yaml").write_text(inherited_manifest, encoding="utf-8")
+    inherited = diagnostic._load_configuration(config)
+    resolved, *_rest, source, _qr_source = diagnostic._decoration_geometry(
+        inherited, inherited.decorations["a-custom"]
+    )
+    assert (resolved.left, resolved.right, resolved.top, resolved.bottom) == (384, 384, 324, 324)
+    assert source == "inherited"
+
+
+def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
+    config, package = workspace
+    (package / "decoration.yaml").write_text(
+        _MANIFEST.replace("presentation_insets:", "qr_from_left: 35\nqr_from_top: 45\npresentation_insets:"),
+        encoding="utf-8",
+    )
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    state = diagnostic.DiagnosticState(("a-custom",))
+    state = diagnostic._set_geometry_override(state, "a-custom", qr_horizontal=diagnostic._QRPosition("right", 51))
+    state = diagnostic._set_geometry_override(state, "a-custom", qr_vertical=diagnostic._QRPosition("center"))
+    overrides = dict(state.geometry_overrides)["a-custom"]
+    insets, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, overrides
+    )
+    assert (horizontal.method, horizontal.offset) == ("right", 51)
+    assert vertical.method == "center"
+    assert metadata == {"qr_from_right": 51, "qr_centered": "vertical"}
+    placement = diagnostic.resolve_qr_placement(configuration.output_size, metadata)
+    assert placement.working_bounds[0] == 3840 - 246 - 51
+    fragment, _ = diagnostic._geometry_manifest_values(
+        configuration, resource, overrides, configuration.output_size
+    )
+    parsed = yaml.safe_load(fragment)
+    assert parsed == {
+        "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
+        "qr_from_right": 51,
+        "qr_centered": "vertical",
+    }
+
+    state = diagnostic._set_geometry_override(
+        state, "a-custom", qr_horizontal=diagnostic._QRPosition("center")
+    )
+    overrides = dict(state.geometry_overrides)["a-custom"]
+    _, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
+        configuration, resource, overrides
+    )
+    assert horizontal.method == "center"
+    assert (vertical.method, vertical.offset) == ("bottom", 20)
+    assert metadata == {"qr_centered": "horizontal", "qr_from_bottom": 20}
+    assert diagnostic._reset_geometry_overrides(state, "a-custom").geometry_overrides == ()
+
+
+def test_geometry_override_rendering_aspect_and_debug_bounds(workspace):
+    config, _ = workspace
+    configuration = diagnostic._load_configuration(config)
+    resource = configuration.decorations["a-custom"]
+    state = diagnostic.DiagnosticState(("a-custom",), aspect_ratio="4:3")
+    state = diagnostic._set_geometry_override(state, "a-custom", inset=("left", 500))
+    state = diagnostic._set_geometry_override(
+        state, "a-custom", qr_horizontal=diagnostic._QRPosition("left", 60)
+    )
+    overrides = dict(state.geometry_overrides)["a-custom"]
+    details = []
+    image, _ = diagnostic._render(
+        configuration,
+        "a-custom",
+        resource.manifest,
+        0,
+        True,
+        aspect_ratio=state.aspect_ratio,
+        diagnostics_out=details,
+        geometry_overrides=overrides,
+    )
+    try:
+        assert details[0].geometry.working_region == (500, 324, 2816, 2076)
+        assert details[0].qr_placement.working_bounds[0] == 60
+        assert details[0].qr_placement.image_size == image.size == (1920, 1440)
+        assert image.getpixel((details[0].geometry.output_region[0], details[0].geometry.output_region[1])) != (
+            255,
+            255,
+            255,
+        )
+    finally:
+        image.close()
+
+
+def test_geometry_overrides_are_per_decoration_and_reset_independently():
+    state = diagnostic.DiagnosticState(("a", "b"))
+    state = diagnostic._set_geometry_override(state, "a", inset=("left", 100))
+    state = diagnostic._set_geometry_override(state, "b", inset=("right", 200))
+    assert dict(state.geometry_overrides)["a"].presentation_insets == (("left", 100),)
+    assert dict(state.geometry_overrides)["b"].presentation_insets == (("right", 200),)
+    reset_a = diagnostic._reset_geometry_overrides(state, "a")
+    assert set(dict(reset_a.geometry_overrides)) == {"b"}
+
+
 def test_reload_preserves_valid_selection_and_overrides(workspace):
     config, _ = workspace
     configuration = diagnostic._load_configuration(config)
@@ -882,6 +1011,9 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         def pack(self, **_options):
             pass
 
+        def pack_forget(self):
+            pass
+
         def bind(self, event, callback):
             self.bindings[event] = callback
 
@@ -959,7 +1091,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
                     self.bindings["<KeyPress>"](SimpleNamespace(keysym="a", char="a"))
                     aspect_dispatched = True
                 elif photo_count[0] == 3 and not picker_dispatched:
-                    picker = comboboxes[0]
+                    picker = next(combo for combo in comboboxes if "a-custom" in combo.options.get("values", ()))
                     picker.options["textvariable"].set("a-custom")
                     picker.bindings["<<ComboboxSelected>>"](None)
                     picker_dispatched = True
@@ -985,6 +1117,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
     tkinter.Tk = Root
     tkinter.Frame = Widget
     tkinter.Label = Widget
+    tkinter.Entry = Widget
     tkinter.StringVar = Variable
 
     def create_button(parent, **options):
