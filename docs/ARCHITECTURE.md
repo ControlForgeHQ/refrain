@@ -962,7 +962,7 @@ Artwork authoring measurements use the fixed reference envelope and map to the c
 
 The literary region is defined by four independent working-canvas pixel insets: `left`, `right`, `top`, and `bottom`. Each is measured inward from the corresponding edge of the canonical canvas for the selected aspect ratio. For example, `left: 180` means 180 working-canvas pixels from the left edge regardless of output resolution. Insets are not first applied to the full reference envelope and are not intersected with a cropped reference rectangle. Scale the resulting working-space rectangle uniformly to each variant's native render resolution using deterministic nearest-integer, half-up edge rounding.
 
-Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the same rectangle and layout for all stages generated together. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
+Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the rectangle and layout independently for each raster variant, then keep them unchanged across that variant's reveal stages. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
 
 Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
 
@@ -1004,15 +1004,15 @@ Select uniformly among distinct usable identifiers at the first applicable level
 
 #### QR generation and conditional artwork
 
-The presentation-level QR policy defaults to enabled and may be disabled. Effective QR availability is resolved once for the complete preparation before selecting decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, and valid placement maps to an output rectangle large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the working canvas, or insufficient output pixels produce an actionable warning and suppress QR without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order.
+The presentation-level QR policy defaults to enabled and may be disabled. Effective QR viability is resolved independently for each raster variant before selecting its conditional decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, and valid placement maps to a native-render-resolution rectangle large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the canonical working canvas, or insufficient native render pixels produce an actionable warning and suppress QR for that variant without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order.
 
 For Version 0.1, an available literary QR code encodes `https://github.com/ControlForgeHQ/refrain`, independently of the selected quotation, entry, display date, or reveal stage. Resolve the destination separately from encoding, rasterization, and placement so a future companion experience can change destination resolution without redesigning those operations. Do not add a configurable destination or depend on the deferred companion experience.
 
-Version 0.1 uses QR version 4, error-correction level M, UTF-8 byte encoding, and a complete four-module quiet zone. The 33 × 33 symbol and eight quiet-zone modules occupy a fixed application-level allocation of 246 × 246 pixels on the selected working canvas. This allocation is independent of aspect ratio, output resolution, decoration, and literary insets; decorations cannot redefine its dimensions. A payload that does not fit the selected version and error-correction level produces an actionable preparation error.
+Version 0.1 uses QR version 4, error-correction level M, UTF-8 byte encoding, and a complete four-module quiet zone. The 33 × 33 symbol and eight quiet-zone modules occupy a fixed application-level allocation of 246 × 246 pixels on the selected canonical working canvas. This allocation is independent of aspect ratio, output resolution, decoration, and literary insets; decorations cannot redefine its dimensions. A payload that does not fit the selected version and error-correction level produces an actionable preparation error.
 
-Resolve QR payload independently from encoding, rasterization, and placement. A selected decoration may position the complete allocation with one horizontal method (`qr_from_left`, `qr_from_right`, or `qr_centered: horizontal`) and one vertical method (`qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical`). Directional offsets are nonnegative working-canvas pixels. When an axis has no method, its independent default is 20 pixels from the right or bottom edge. `qr_centered` is one scalar value and cannot center both axes. Positioning fields are mutually exclusive per axis; malformed or conflicting values suppress QR instead of selecting a precedence or silently using defaults. Centering and bounds validation use the ratio-specific working canvas. Map the allocation's four edges independently to final output coordinates using deterministic nearest-integer, half-up rounding.
+Resolve QR payload independently from encoding, rasterization, and placement. A selected decoration may position the complete allocation with one horizontal method (`qr_from_left`, `qr_from_right`, or `qr_centered: horizontal`) and one vertical method (`qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical`). Directional offsets are nonnegative canonical working-canvas pixels. When an axis has no method, its independent default is 20 pixels from the right or bottom edge. `qr_centered` is one scalar value and cannot center both axes. Positioning fields are mutually exclusive per axis; malformed or conflicting values suppress QR instead of selecting a precedence or silently using defaults. Centering and bounds validation use the canonical canvas for the variant's declared aspect. Map the allocation's four edges independently to native render coordinates using deterministic nearest-integer, half-up rounding.
 
-Use the mapped output allocation rectangle as authoritative, including any width or height difference caused by independent edge rounding. Choose the largest fitting module size as `min(output_width, output_height) // 41`. If this is zero, warn and suppress QR. Otherwise rasterize square integer-pixel modules and the complete quiet zone without antialiasing. Center the complete square footprint inside the allocation using half-up rounding when unused pixels are odd; do not clip, distort, or resample it. Resolve the same placement and QR pixels for every reveal stage in one complete preparation.
+Use the mapped native-render allocation rectangle as authoritative, including any width or height difference caused by independent edge rounding. Choose the largest fitting module size for each variant as `min(render_width, render_height) // 41`. If this is zero, warn and suppress QR for that variant. Otherwise rasterize square integer-pixel modules and the complete quiet zone without antialiasing. Center the complete square footprint inside the allocation using half-up rounding when unused pixels are odd; do not clip, distort, or resample it before any required complete-image resampling. Resolve the same placement and QR pixels across every reveal stage of one variant.
 
 QR output is composited after literary text. The literary renderer must fit the complete literary composition within the configured literary rectangle, but this does not protect text from independently composited artwork or QR output. QR placement does not change literary insets, rearrange text, or reserve additional space. Refrain does not detect or correct QR/text overlap. A complete valid prepared-image cache remains reusable without reevaluating QR placement; regeneration may use current configuration without changing committed selection state. The information view remains outside literary QR behavior.
 
@@ -1119,7 +1119,7 @@ Optional runtime details must be omitted gracefully when unavailable. Missing di
 
 The information view is independent of the committed daily selection. Preparing or displaying it must not create a new selection, modify selection histories, or advance reveal progress.
 
-The same complete information-view image is supplied to all configured display backends through the normal publication facilities.
+The information view is prepared for the required output specifications, with consistent presentation-wide choices and raster-specific rendering. Each configured backend receives the matching complete image through the normal publication facilities.
 
 Automatic presentation occurs once on each application start, subject to the configured duration. It does not repeat at ordinary display-day boundaries.
 
@@ -1179,7 +1179,7 @@ The byline retains its applicable leading dash and separator punctuation through
 
 Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
-Presentation insets are working-canvas pixels, measured inward from each edge of the active working canvas. Apply them directly in working space, then uniformly scale the resulting geometry to final output dimensions.
+Presentation insets are canonical working-canvas pixels, measured inward from each edge of the canvas for the declared aspect ratio. Apply them directly in working space, then uniformly scale the resulting geometry to each variant's native render resolution.
 
 Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
@@ -1230,9 +1230,9 @@ Automatic font selection requires at least one usable member in the effective de
 
 Font selection is independent for each complete image preparation. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
-Resolve the selected decoration and font bundle, then resolve all role faces for one complete preparation. Do not select fonts independently for reveal stages within the same generated set.
+Resolve the selected decoration and font bundle, then resolve all role faces once for the complete required variant set. Preserve those font identities across its raster variants and reveal stages; do not select fonts independently for a variant or stage.
 
-Reuse a valid complete cached image set without resolving fonts. When regeneration is required, resolve bundle and face preferences from the selected content properties and current decoration, registry, and global configuration, using the precedence and failure behavior above. Font identifiers, paths, face choices, and font contents are not persisted in operational state. Use one consistent bundle and role-face resolution across all stages generated together.
+Reuse a valid complete cached image set without resolving fonts. When regeneration is required, resolve bundle and face preferences from the selected content properties and current decoration, registry, and global configuration, using the precedence and failure behavior above. Font identifiers, paths, face choices, and font contents are not persisted in operational state. Use one consistent bundle and role-face resolution across all variants and stages prepared together.
 
 If the selected font or a required face cannot be loaded during preparation, report an actionable preparation error. Font failure must not authorize reselection of literary content or alter reveal progression.
 
@@ -1288,11 +1288,11 @@ Preparation errors are reported without changing the committed selection, repeti
 
 ### Complete stage preparation
 
-Presentation preparation resolves the complete literary composition once and produces every image requested for the committed selection. The caller supplies the cumulative stage sequence; preparation does not calculate reveal times or determine the current stage.
+Presentation preparation resolves presentation-wide choices consistently and produces every image requested for the committed selection, each required output specification, and every reveal stage. The caller supplies the cumulative stage sequence; preparation does not calculate reveal times or determine the current stage.
 
-Each image represents a cumulative visibility stage of the same composition.
+Each image represents a cumulative visibility stage for one output specification.
 
-All stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes.
+Within one raster variant, all stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes. Across variants, selected presentation resources and other presentation-wide choices remain consistent, while raster-dependent sizes, geometry, wrapping, and QR results are resolved independently.
 
 The renderer does not independently recalculate the composition for each reveal stage.
 
@@ -1304,14 +1304,14 @@ Prepared images are persisted as a disposable cache for reuse throughout the cur
 
 Normal reveal transitions select an existing prepared image. They do not invoke quotation fitting, layout calculation, or image rendering.
 
-The preparation process must not expose incomplete images as a valid complete set. Cache metadata need only associate a complete set with the current selection and expected stages and detect incomplete or damaged files. Do not require a fingerprint of all rendering decisions.
+The preparation process must not expose incomplete images as a valid complete set. Cache metadata must associate complete variants with the current selection, output specifications, and expected stages, and detect incomplete or damaged files. Do not require a fingerprint of all rendering decisions.
 
 
 ### Rendering recovery
 
-The durable daily selection record, not the image cache, is authoritative. If the prepared set is missing, damaged, incomplete, or unusable, regenerate all reveal-stage images together using the selected content, effective schedule, current configuration, and currently available assets. Safely replace the unusable cache only after a complete new set is ready.
+The durable daily selection record, not the image cache, is authoritative. If required variants are missing, damaged, incomplete, or unusable, regenerate the required complete stage sets using the selected content, effective schedule, current output specifications, configuration, and currently available assets. Prepare variants coherently with shared presentation-wide choices, and safely publish complete usable artifacts.
 
-Regeneration preserves the selected quotation, content identity, schedule, selection revision, and highest reached reveal stage. It does not consult the original content library, repeat selection, modify repetition history, or move reveal progression backward. Visual appearance may differ from the prior cache after configuration or resource changes; exact pixel reproduction is not required.
+Regeneration preserves the selected quotation, content identity, schedule, selection revision, and highest reached reveal stage. A changed output requirement may add variants prepared from this existing committed selection; it must not trigger reselection or alter reveal progress. Regeneration does not consult the original content library, modify repetition history, or move reveal progression backward. Visual appearance may differ from the prior cache after configuration or resource changes; exact pixel reproduction is not required.
 
 If image generation fails, the application must report the error and preserve the existing display image where practical.
 
@@ -1345,7 +1345,7 @@ Version 0.1 provides three built-in display backends:
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
 - `image-server`: Makes the current complete image available to network clients through a read-only HTTP service.
 
-All configured backends receive the same complete, globally prepared final-resolution image for each reveal stage. Backend selection does not introduce independent content selection, reveal scheduling, or core presentation geometry.
+Each configured backend receives the complete prepared raster variant matching its resolved output specification for each reveal stage. Backends may share a variant when their output specifications are identical. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux. Its image-display area matches the supplied image dimensions and presents the image at native pixel size. A later update with different dimensions resizes the display area; it does not resample, crop, or letterbox the image.
 
@@ -1362,13 +1362,13 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare panel's native output is 1600 × 1200 landscape. The backend passes an already native-size image through without resizing. Otherwise, it resizes the complete image directly to 1600 × 1200, scaling each axis independently without preserving aspect ratio, cropping, padding, or letterboxing. This destination adaptation never changes the prepared image or global renderer configuration. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare panel's native output is 1600 × 1200 landscape. Its backend-specific default output specification requests that native raster. The backend passes an already native-size image through without resizing. If a configured request differs from the panel's native size, it resizes the complete image directly to 1600 × 1200, scaling each axis independently without preserving aspect ratio, cropping, padding, or letterboxing. This destination adaptation never changes a prepared variant or presentation policy. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete destination image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
 
 The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. The Waveshare backend owns the direct resize and hardware color conversion described above. The window backend displays at native pixel size, and the image-server backend exposes the prepared image without resizing or cropping. No backend may mutate the image supplied by the coordinator. A backend unable to perform its required operation reports a backend-specific update failure; that failure does not alter global geometry, persistent state, selection, or publication to other backends.
 
-The image-server backend serves the globally prepared image with its dimensions and pixel content unchanged. Backend adaptation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
+The image-server backend serves its matching prepared variant with its dimensions and pixel content unchanged. Backend adaptation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
 
 A completed `update()` indicates that the individual backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
 
@@ -1382,7 +1382,7 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 Refrain coordinates publication of the current prepared presentation independently to every configured display backend.
 
-A single committed daily selection and its prepared-image cache are shared by all destinations. Only the selection is authoritative.
+A single committed daily selection and its coherent set of prepared raster variants are shared by all destinations. Only the selection is authoritative.
 
 Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent subsequent scheduling evaluation.
 
@@ -1394,13 +1394,13 @@ Reveal progression advances monotonically when a later stage becomes required an
 
 The application coordinator maintains independent successful-publication status for each backend during the application lifetime.
 
-The application must distinguish the currently required prepared presentation from the presentation last successfully published to each backend. A successful update to one destination does not establish successful publication to another.
+The application must distinguish the currently required variant for each destination from the variant last successfully published to that backend. A successful update to one destination does not establish successful publication to another.
 
 Publication tracking is owned by the application coordinator, not by individual display backends. Backends receive complete images and do not interpret selection revisions, reveal stages, or persistent operational state.
 
 Backend-specific publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available backend.
 
-If a new presentation becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
+If a new presentation or variant becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
 
 An active hardware update need not be interrupted when a newer presentation becomes available.
 
@@ -1418,7 +1418,7 @@ The backend exposes one read-only HTTP endpoint:
 
 `GET /display/current`
 
-A successful request returns the complete current image in PNG format with the appropriate HTTP content type.
+A successful request returns the complete image for this backend's resolved output specification in PNG format with the appropriate HTTP content type.
 
 The endpoint must be usable by standard HTTP clients, including ordinary web browsers, without requiring client-specific software or protocols.
 
@@ -1428,7 +1428,7 @@ When no image has been accepted, the service returns `503 Service Unavailable`.
 
 The backend retains the current encoded PNG and its associated entity tag in memory. It does not create or manage a separate persistent image store.
 
-Each successful `update(image)` produces a complete replacement representation before making it available to clients. Concurrent requests must observe a consistent, complete image and entity tag, never partially updated content.
+Each successful `update(image)` produces a complete replacement representation for this output specification before making it available to clients. Concurrent requests must observe a consistent, complete image and entity tag, never partially updated content.
 
 The existing prepared-image persistence and recovery mechanisms remain authoritative. After application startup or recovery, the scheduler supplies the appropriate prepared image through the normal backend interface.
 
