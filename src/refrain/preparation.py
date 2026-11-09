@@ -6,6 +6,7 @@ import io
 import logging
 import random
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from fractions import Fraction
 
 from PIL import Image, ImageFont, ImageOps
@@ -52,6 +53,27 @@ _LOGGER = logging.getLogger(__name__)
 
 class DailyImagePreparationError(ValueError):
     """Raised when a daily snapshot cannot produce its requested images."""
+
+
+@dataclass(frozen=True)
+class NineSliceGuide:
+    """Resolved nine-slice boundaries used by the decoration compositor."""
+
+    layer: DecorationLayerResource
+    layer_index: int
+    x_bounds: tuple[int, ...]
+    y_bounds: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class PreparationDiagnostics:
+    """Resolved presentation details for an isolated diagnostic preview."""
+
+    geometry: PresentationGeometry
+    qr_placement: QRCodePlacement | None
+    qr_unavailable_reason: str | None
+    active_layers: tuple[DecorationLayerResource, ...]
+    nine_slice_guides: tuple[NineSliceGuide, ...]
 
 
 def _resolve_presentation(
@@ -130,9 +152,12 @@ def _resolve_decoration_tint(
     decoration: DecorationResource | None,
     chooser: random.Random,
     layers: Sequence[DecorationLayerResource],
+    forced_tint: tuple[int, int, int] | None = None,
 ) -> tuple[int, int, int] | None:
     if decoration is None or not any(decoration.tintable and layer.tintable for layer in layers):
         return None
+    if forced_tint is not None:
+        return forced_tint
 
     identifier, color = _resolve_palette_preference(
         configuration,
@@ -184,6 +209,7 @@ def _apply_daily_decoration(
     strict: bool = False,
     qr_available: bool = True,
     eligible_layers: Sequence[DecorationLayerResource] | None = None,
+    on_nine_slice_guide: Callable[[DecorationLayerResource, tuple[int, ...], tuple[int, ...]], None] | None = None,
 ) -> Image.Image:
     if identifier == "none":
         return background
@@ -225,7 +251,9 @@ def _apply_daily_decoration(
                     elif layer.method == "cover":
                         _compose_cover(background, source)
                     else:
-                        _compose_nine_slice(background, source, layer)
+                        x_bounds, y_bounds = _compose_nine_slice(background, source, layer)
+                        if on_nine_slice_guide is not None:
+                            on_nine_slice_guide(layer, x_bounds, y_bounds)
                 finally:
                     if tinted is not None:
                         tinted.close()
@@ -331,7 +359,7 @@ def _compose_nine_slice(
     background: Image.Image,
     source: Image.Image,
     layer: DecorationLayerResource,
-) -> None:
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
     parameters = layer.nine_slice
     if parameters is None:
         raise ValueError("nine-slice parameters are missing")
@@ -462,6 +490,10 @@ def _compose_nine_slice(
             _paste_decoration_region(background, transformed, (dest_x, dest_y))
         finally:
             transformed.close()
+    return (
+        (0, left_width, canvas_width - right_width, canvas_width),
+        (0, top_height, canvas_height - bottom_height, canvas_height),
+    )
 
 
 def _resample_graphical_composition(image: Image.Image, output_size: tuple[int, int]) -> Image.Image:
@@ -632,6 +664,10 @@ def prepare_daily_images(
     chooser: random.Random | None = None,
     strict_decoration: bool = False,
     on_resolved_bounds: Callable[[PixelBounds], None] | None = None,
+    force_white_background: bool = False,
+    forced_decoration_tint: tuple[int, int, int] | None = None,
+    qr_disabled_reason: str | None = None,
+    on_diagnostics: Callable[[PreparationDiagnostics], None] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -651,6 +687,7 @@ def prepare_daily_images(
     )
     image_size = geometry.output_size
     qr_placement: QRCodePlacement | None = None
+    qr_unavailable_reason: str | None = None
     if configuration.qr_enabled and (decoration is None or decoration.qr_ready):
         try:
             qr_placement = resolve_qr_placement(
@@ -658,14 +695,31 @@ def prepare_daily_images(
                 None if decoration is None else decoration.qr_positioning,
             )
         except QRCodePlacementError as error:
+            qr_unavailable_reason = str(error)
             _LOGGER.warning("QR generation is disabled for this preparation: %s", error)
+    elif not configuration.qr_enabled:
+        qr_unavailable_reason = qr_disabled_reason or "QR generation is disabled by configuration"
+    else:
+        qr_unavailable_reason = f"decoration {decoration.identifier!r} is not marked qr_ready"
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
-    background_identifier = _resolve_background(snapshot, decoration, configuration, chooser)
+    background_identifier = (
+        "none" if force_white_background else _resolve_background(snapshot, decoration, configuration, chooser)
+    )
     if on_resolved_bounds is not None:
         on_resolved_bounds(geometry.output_region)
     text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
     qr_parameters = PRODUCTION_QR_PARAMETERS
-    decoration_tint = _resolve_decoration_tint(configuration, snapshot, decoration, chooser, decoration_layers)
+    decoration_tint = _resolve_decoration_tint(
+        configuration, snapshot, decoration, chooser, decoration_layers, forced_decoration_tint
+    )
+    nine_slice_guides: list[NineSliceGuide] = []
+
+    def collect_nine_slice_guide(
+        layer: DecorationLayerResource, x_bounds: tuple[int, ...], y_bounds: tuple[int, ...]
+    ) -> None:
+        layer_index = next(index for index, candidate in enumerate(decoration.layers, start=1) if candidate is layer)
+        nine_slice_guides.append(NineSliceGuide(layer, layer_index, x_bounds, y_bounds))
+
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser)
     try:
         layout = layout_composition(
@@ -690,6 +744,7 @@ def prepare_daily_images(
                 strict=strict_decoration,
                 qr_available=qr_placement is not None,
                 eligible_layers=decoration_layers,
+                on_nine_slice_guide=collect_nine_slice_guide if on_diagnostics is not None else None,
             )
             background = _resample_graphical_composition(background, image_size)
             images = render_reveal_stages(
@@ -708,6 +763,16 @@ def prepare_daily_images(
                     qr_code = render_qr_code(qr_parameters, image_size, qr_placement)
                     for image in images:
                         composite_qr_code(image, qr_code)
+                if on_diagnostics is not None:
+                    on_diagnostics(
+                        PreparationDiagnostics(
+                            geometry,
+                            qr_placement,
+                            qr_unavailable_reason,
+                            tuple(decoration_layers),
+                            tuple(nine_slice_guides),
+                        )
+                    )
                 return images
             except Exception:
                 for image in images:
@@ -724,4 +789,9 @@ def prepare_daily_images(
         raise DailyImagePreparationError(f"cannot prepare daily snapshot images: {error}") from error
 
 
-__all__ = ["DailyImagePreparationError", "prepare_daily_images"]
+__all__ = [
+    "DailyImagePreparationError",
+    "NineSliceGuide",
+    "PreparationDiagnostics",
+    "prepare_daily_images",
+]

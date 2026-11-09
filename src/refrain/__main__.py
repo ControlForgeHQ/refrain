@@ -136,8 +136,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--test-qr", action="store_true", help="publish a QR calibration image without changing daily state"
     )
     modes.add_argument(
-        "--test-decorations", action="store_true", help="interactively inspect decorations without changing daily state"
+        "--test-decoration",
+        metavar="ID|all",
+        help="preview one decoration or all decorations without changing daily state",
     )
+    parser.add_argument(
+        "--test-output",
+        metavar="PATH",
+        help="save a native-resolution diagnostic PNG instead of opening the preview (requires one decoration ID)",
+    )
+    parser.add_argument("--test-aspect", choices=("4:3", "16:9", "16:10"), help="decoration-preview aspect ratio")
+    parser.add_argument(
+        "--test-quotation",
+        choices=("short", "medium", "long"),
+        help="initial decoration-preview quotation length (default: short)",
+    )
+    parser.add_argument(
+        "--no-qr", action="store_true", help="initially disable QR generation in the decoration preview"
+    )
+    parser.add_argument(
+        "--no-background", action="store_true", help="initially use a white background in the decoration preview"
+    )
+    parser.add_argument("--no-tinting", action="store_true", help="initially force tintable decoration layers to black")
     parser.add_argument("--qr-payload", help="text or URL encoded into the QR code (default: https://example.com/)")
     parser.add_argument(
         "--qr-version",
@@ -167,6 +187,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     specified_qr_options = [option for option, value in qr_options if value is not None]
     if not arguments.test_qr and specified_qr_options:
         parser.error("QR-specific options are only available with --test-qr: " + ", ".join(specified_qr_options))
+    specified_decoration_options = [
+        option
+        for option, value in (
+            ("--test-aspect", arguments.test_aspect),
+            ("--test-quotation", arguments.test_quotation),
+            ("--no-qr", arguments.no_qr),
+            ("--no-background", arguments.no_background),
+            ("--no-tinting", arguments.no_tinting),
+            ("--test-output", arguments.test_output),
+        )
+        if value is not None and value is not False
+    ]
+    if arguments.test_decoration is None and specified_decoration_options:
+        parser.error(
+            "decoration-preview options are only available with --test-decoration: "
+            + ", ".join(specified_decoration_options)
+        )
+    if arguments.test_output is not None and arguments.test_decoration is None:
+        parser.error("--test-output is only available with --test-decoration")
+    if arguments.test_output is not None and arguments.test_decoration == "all":
+        parser.error("--test-output requires exactly one decoration ID; 'all' cannot be exported")
+    conflicting_modes = [
+        option
+        for option, selected in (
+            ("--once", arguments.once),
+            ("--demo", arguments.demo is not None),
+            ("--initialize", arguments.initialize),
+            ("--reset", arguments.reset),
+            ("--purge", arguments.purge),
+            ("--show-entry", arguments.show_entry is not None),
+            ("--test-qr", arguments.test_qr),
+        )
+        if selected
+    ]
+    if arguments.test_decoration is not None and conflicting_modes:
+        parser.error("--test-decoration cannot be combined with other modes: " + ", ".join(conflicting_modes))
     default_qr_parameters = QRCalibrationParameters()
     qr_parameters = QRCalibrationParameters(
         payload=arguments.qr_payload if arguments.qr_payload is not None else default_qr_parameters.payload,
@@ -275,7 +331,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.demo is None
             and arguments.show_entry is None
             and not arguments.test_qr
-            and not arguments.test_decorations
+            and arguments.test_decoration is None
         ):
             state_path = arguments.state if arguments.state is not None else paths.state_file
             artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
@@ -296,7 +352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_absolute,
                 (
                     "diagnostic presentation does not use production persistence"
-                    if arguments.show_entry is not None or arguments.test_qr or arguments.test_decorations
+                    if arguments.show_entry is not None or arguments.test_qr or arguments.test_decoration is not None
                     else "demo persistence uses isolated temporary storage"
                 ),
             )
@@ -329,8 +385,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             output, _ = run_test_qr(config_path, qr_parameters)
             print(f"QR diagnostic image saved to {output}")
             return 0
-        elif arguments.test_decorations:
-            run_decoration_diagnostic(config_path, debug_layout=arguments.debug_layout)
+        elif arguments.test_decoration is not None:
+            run_decoration_diagnostic(
+                config_path,
+                selection=arguments.test_decoration,
+                aspect_ratio=arguments.test_aspect or "configured",
+                quotation=arguments.test_quotation or "short",
+                qr_enabled=False if arguments.no_qr else None,
+                background_enabled=not arguments.no_background,
+                tinting_enabled=not arguments.no_tinting,
+                debug_layout=arguments.debug_layout,
+                output_path=arguments.test_output,
+            )
             return 0
         else:
             shutdown = Event()
