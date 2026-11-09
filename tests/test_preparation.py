@@ -537,6 +537,75 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
             image.close()
 
 
+@pytest.mark.parametrize(
+    ("output_size", "cover_sample", "top_sample"),
+    [
+        ((1600, 1200), (40, 80, 120), (255, 255, 0)),
+        ((1920, 1080), (255, 0, 0), (40, 80, 120)),
+        ((1920, 1200), (255, 0, 0), (255, 255, 0)),
+    ],
+)
+def test_cover_decoration_prepares_all_aspects_and_reveal_stages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output_size: tuple[int, int],
+    cover_sample: tuple[int, int, int],
+    top_sample: tuple[int, int, int],
+) -> None:
+    artwork_path = tmp_path / "cover.png"
+    with Image.new("RGB", (3840, 2400), (40, 80, 120)) as artwork:
+        artwork.paste((255, 0, 0), (0, 0, 320, 2400))
+        artwork.paste((0, 0, 255), (3520, 0, 3840, 2400))
+        artwork.paste((255, 255, 0), (0, 0, 3840, 120))
+        artwork.paste((255, 0, 255), (0, 2280, 3840, 2400))
+        artwork.save(artwork_path)
+
+    decoration = DecorationResource(
+        "cover",
+        (DecorationLayerResource(artwork_path, "cover", tintable=False),),
+        False,
+        qr_positioning={"qr_from_left": 20, "qr_from_top": 20},
+    )
+    snapshot = replace(make_snapshot("lora"), decoration="cover")
+    stages = resolve_reveal_stages(snapshot)
+    layouts = []
+    original_layout = preparation.layout_composition
+
+    def capture_layout(*args, **kwargs):
+        layout = original_layout(*args, **kwargs)
+        layouts.append(layout)
+        return layout
+
+    monkeypatch.setattr(preparation, "layout_composition", capture_layout)
+    images = prepare_daily_images(
+        snapshot,
+        stages,
+        _FONT_REGISTRY,
+        decoration_registry={"cover": decoration},
+        output_size=output_size,
+    )
+    try:
+        assert len(images) == len(stages) == 3
+        assert all(image.size == output_size for image in images)
+        assert len(layouts) == 1
+        assert layouts[0].quotation.bounds[2] <= output_size[0]
+        assert layouts[0].quotation.bounds[3] <= output_size[1]
+
+        cover_point = (50, output_size[1] // 2)
+        top_point = (output_size[0] // 2, 40)
+        for image in images:
+            assert image.getpixel(cover_point) == cover_sample
+            assert image.getpixel(top_point) == top_sample
+            assert image.getpixel((10, 10)) == (255, 255, 255)
+        assert all(image.getpixel(cover_point) == images[0].getpixel(cover_point) for image in images)
+
+        with images[0].crop(layouts[0].quotation.bounds) as quotation:
+            assert any(pixel == (0, 0, 0) for pixel in quotation.get_flattened_data())
+    finally:
+        for image in images:
+            image.close()
+
+
 def test_decoration_color_preference_resolves_during_preparation_and_preserves_alpha(tmp_path: Path) -> None:
     decoration_path = tmp_path / "overlay.png"
     with Image.new("RGBA", _IMAGE_SIZE, (20, 40, 60, 255)) as decoration:
