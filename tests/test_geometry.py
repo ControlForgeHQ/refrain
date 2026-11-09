@@ -79,6 +79,15 @@ def test_mismatched_requested_resolution_uses_nearest_native_aspect_raster() -> 
     assert specification.requires_resampling
 
 
+def test_mismatched_sixteen_ten_request_uses_reduced_native_ratio_lattice() -> None:
+    aspect = SUPPORTED_PRESENTATION_ASPECTS["16:10"]
+    specification = ResolvedOutputSpecification("16:10", (809, 505))
+
+    assert aspect.reduced_ratio == (8, 5)
+    assert specification.native_render_size == (808, 505)
+    assert specification.requires_resampling
+
+
 def test_native_resolution_exact_tie_rounds_up_to_the_larger_raster() -> None:
     specification = ResolvedOutputSpecification("5:3", (9, 2))
 

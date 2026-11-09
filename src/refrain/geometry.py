@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import gcd
 from types import MappingProxyType
 from typing import Mapping
 
@@ -26,6 +27,12 @@ class PresentationAspect:
     height: int
     working_size: tuple[int, int]
     crop_origin: tuple[int, int]
+
+    @property
+    def reduced_ratio(self) -> tuple[int, int]:
+        """Return primitive integer components for the native-raster lattice."""
+        divisor = gcd(self.width, self.height)
+        return self.width // divisor, self.height // divisor
 
 
 SUPPORTED_PRESENTATION_ASPECTS: Mapping[str, PresentationAspect] = MappingProxyType(
@@ -58,12 +65,13 @@ class ResolvedOutputSpecification:
         if width * aspect.height == height * aspect.width:
             return self.requested_size
 
+        ratio_width, ratio_height = aspect.reduced_ratio
         projected_scale = round_half_up(
-            aspect.width * width + aspect.height * height,
-            aspect.width * aspect.width + aspect.height * aspect.height,
+            ratio_width * width + ratio_height * height,
+            ratio_width * ratio_width + ratio_height * ratio_height,
         )
         scale = max(1, projected_scale)
-        return aspect.width * scale, aspect.height * scale
+        return ratio_width * scale, ratio_height * scale
 
     @property
     def requires_resampling(self) -> bool:
