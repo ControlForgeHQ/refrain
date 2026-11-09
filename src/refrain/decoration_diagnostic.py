@@ -9,6 +9,7 @@ import os
 import queue
 import random
 import select
+import shutil
 import sys
 import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -16,7 +17,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import date
 from importlib.resources import files
-from math import gcd
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable
@@ -40,6 +40,7 @@ from .geometry import (
     PresentationInsets,
     resolve_presentation_geometry,
     round_half_up,
+    working_canvas_for_output,
 )
 from .preparation import PreparationDiagnostics, prepare_daily_images
 from .qr import QRCodePlacementError, resolve_qr_placement
@@ -206,14 +207,9 @@ def _validated_decoration(configuration, identifier, manifest, initial_warnings=
 
 
 def _with_aspect(configuration, aspect_ratio: str):
-    if aspect_ratio == "configured":
-        return configuration
-    width = configuration.output_size[0]
-    aspect_width, aspect_height = _ASPECTS[aspect_ratio]
-    divisor = gcd(aspect_width, aspect_height)
-    unit_width, unit_height = aspect_width // divisor, aspect_height // divisor
-    units = max(1, (2 * width + unit_width) // (2 * unit_width))
-    return replace(configuration, output_size=(units * unit_width, units * unit_height))
+    aspect_basis = configuration.output_size if aspect_ratio == "configured" else _ASPECTS[aspect_ratio]
+    working_size, _ = working_canvas_for_output(aspect_basis)
+    return replace(configuration, output_size=working_size)
 
 
 def _decoration_geometry(configuration, decoration, overrides: GeometryOverrides | None = None):
@@ -418,7 +414,7 @@ def _mapped_output_size(output_size: tuple[int, int], available_size: tuple[int,
     max_width, max_height = available_size
     divisor = math.gcd(width, height)
     unit_width, unit_height = width // divisor, height // divisor
-    scale = min(max_width // unit_width, max_height // unit_height)
+    scale = min(divisor, max_width // unit_width, max_height // unit_height)
     if scale < 1:
         return 1, 1
     return unit_width * scale, unit_height * scale
@@ -470,7 +466,7 @@ def preview_window_layout(
 
 
 def _configured_aspect_name(output_size: tuple[int, int]) -> str:
-    divisor = gcd(*output_size)
+    divisor = math.gcd(*output_size)
     ratio = (output_size[0] // divisor, output_size[1] // divisor)
     return next(name for name, dimensions in _ASPECTS.items() if dimensions == ratio)
 
@@ -802,16 +798,14 @@ def _render_request(
     return _RenderedPreview(image, snapshot, details[0], current_configuration, state, message)
 
 
-def export_decoration_png(config_file: str | Path, state: DiagnosticState, output_path: str | Path) -> Path:
-    """Render one deterministic native-resolution presentation without opening a display."""
-    rendered = _render_request(config_file, state, reload_configuration=True)
-    rendered_size = rendered.image.size
+def _absolute_output_path(output_path: str | Path) -> Path:
     target = Path(output_path).expanduser()
-    if not target.is_absolute():
-        target = Path.cwd() / target
+    return target if target.is_absolute() else Path.cwd() / target
+
+
+def _save_png_atomically(image: Image.Image, target: Path) -> None:
     temporary_path: Path | None = None
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="wb",
             prefix=f".{target.name}.",
@@ -820,7 +814,7 @@ def export_decoration_png(config_file: str | Path, state: DiagnosticState, outpu
             delete=False,
         ) as stream:
             temporary_path = Path(stream.name)
-            rendered.image.save(stream, format="PNG")
+            image.save(stream, format="PNG")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, target)
@@ -828,12 +822,33 @@ def export_decoration_png(config_file: str | Path, state: DiagnosticState, outpu
     except (OSError, ValueError) as error:
         raise ApplicationError(f"cannot save diagnostic PNG to {target}: {error}") from error
     finally:
-        rendered.image.close()
         if temporary_path is not None:
             try:
                 temporary_path.unlink()
             except OSError:
                 pass
+
+
+def export_decoration_png(config_file: str | Path, state: DiagnosticState, output_path: str | Path) -> Path:
+    """Render one deterministic full-working-canvas presentation without opening a display."""
+    target = _absolute_output_path(output_path)
+    if target.is_dir():
+        suggested = str(Path(output_path).expanduser() / "preview.png")
+        raise ApplicationError(
+            f"Cannot write diagnostic PNG to '{output_path}': the destination is a directory. "
+            f"Specify a filename such as '{suggested}'."
+        )
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ApplicationError(f"cannot create diagnostic PNG directory {target.parent}: {error}") from error
+
+    rendered = _render_request(config_file, state, reload_configuration=True)
+    rendered_size = rendered.image.size
+    try:
+        _save_png_atomically(rendered.image, target)
+    finally:
+        rendered.image.close()
 
     _diagnostic_status(
         rendered.state,
@@ -843,6 +858,114 @@ def export_decoration_png(config_file: str | Path, state: DiagnosticState, outpu
     )
     print(f"Diagnostic PNG saved to {target}", flush=True)
     return target
+
+
+def export_decoration_variants(
+    config_file: str | Path,
+    state: DiagnosticState,
+    output_directory: str | Path,
+    configuration=None,
+) -> tuple[Path, int]:
+    """Render and atomically publish a deterministic set of full-canvas variants."""
+    identifier = state.decoration
+    if identifier is None or state.all_decorations:
+        raise ApplicationError("--test-variants requires one specific decoration ID; 'all' is not supported")
+    configuration = _load_configuration(config_file) if configuration is None else configuration
+    if identifier not in configuration.decorations or identifier == "none":
+        raise ApplicationError(f"unknown decoration {identifier!r}; select one available decoration ID")
+
+    parent = _absolute_output_path(output_directory)
+    target = parent / identifier
+    if target.exists() or target.is_symlink():
+        raise ApplicationError(f"diagnostic variant directory already exists: {target}; choose a new output directory")
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ApplicationError(f"cannot create diagnostic variant parent directory {parent}: {error}") from error
+    if target.exists() or target.is_symlink():
+        raise ApplicationError(f"diagnostic variant directory already exists: {target}; choose a new output directory")
+
+    try:
+        staging = Path(tempfile.mkdtemp(prefix=f".{identifier}-", dir=parent))
+    except OSError as error:
+        raise ApplicationError(f"cannot create temporary diagnostic variant directory in {parent}: {error}") from error
+
+    generated = 0
+
+    def render_variant(variant_state: DiagnosticState, relative_path: Path) -> _RenderedPreview:
+        try:
+            return _render_request(config_file, variant_state, configuration=configuration)
+        except Exception as error:
+            raise ApplicationError(f"cannot render diagnostic variant {relative_path}: {error}") from error
+
+    def save_variant(image: Image.Image, relative_path: Path) -> None:
+        destination = staging / relative_path
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _save_png_atomically(image, destination)
+        except (ApplicationError, OSError) as error:
+            raise ApplicationError(f"cannot write diagnostic variant {relative_path}: {error}") from error
+
+    try:
+        for aspect_ratio in _ASPECTS:
+            aspect_directory = aspect_ratio.replace(":", "x")
+            probe_path = Path(aspect_directory) / "short-qr-on.png"
+            probe_state = replace(
+                state,
+                aspect_ratio=aspect_ratio,
+                quotation_index=0,
+                qr_enabled=True,
+            )
+            probe = render_variant(probe_state, probe_path)
+            qr_available = probe.diagnostics.qr_placement is not None
+            reason = probe.diagnostics.qr_unavailable_reason
+            if qr_available:
+                try:
+                    save_variant(probe.image, probe_path)
+                    generated += 1
+                finally:
+                    probe.image.close()
+            print(
+                f"Diagnostic variants {aspect_ratio}: effective QR "
+                f"{'available' if qr_available else 'unavailable'}"
+                + (f" ({reason})" if reason and not qr_available else ""),
+                flush=True,
+            )
+            if not qr_available:
+                probe.image.close()
+
+            for quotation_index, quotation_name in enumerate(_QUOTATION_NAMES):
+                for qr_on in ((True, False) if qr_available else (False,)):
+                    relative_path = Path(aspect_directory) / f"{quotation_name}-qr-{'on' if qr_on else 'off'}.png"
+                    if quotation_index == 0 and qr_on:
+                        continue
+                    variant_state = replace(
+                        state,
+                        aspect_ratio=aspect_ratio,
+                        quotation_index=quotation_index,
+                        qr_enabled=qr_on,
+                    )
+                    rendered = render_variant(variant_state, relative_path)
+                    try:
+                        save_variant(rendered.image, relative_path)
+                        generated += 1
+                    finally:
+                        rendered.image.close()
+
+        if target.exists() or target.is_symlink():
+            raise ApplicationError(
+                f"diagnostic variant directory already exists: {target}; choose a new output directory"
+            )
+        try:
+            os.rename(staging, target)
+        except OSError as error:
+            raise ApplicationError(f"cannot publish diagnostic variant directory {target}: {error}") from error
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    print(f"Diagnostic variants saved to {target} ({generated} PNGs)", flush=True)
+    return target, generated
 
 
 def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
@@ -1473,7 +1596,8 @@ def _run_terminal_test_adapter(
                         if decoration is None or decoration.presentation_insets is None
                         else decoration.presentation_insets
                     )
-                    geometry = resolve_presentation_geometry(current_configuration.output_size, insets)
+                    diagnostic_configuration = _with_aspect(current_configuration, "configured")
+                    geometry = resolve_presentation_geometry(diagnostic_configuration.output_size, insets)
                     print(
                         f"Rendered dimensions: {image.width} x {image.height}; "
                         f"Literary output bounds: {geometry.output_region} "
@@ -1536,6 +1660,7 @@ def run_decoration_diagnostic(
     tinting_enabled: bool = True,
     debug_layout: bool = False,
     output_path: str | Path | None = None,
+    variants_directory: str | Path | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
     input_factory=None,
     preview_factory: Callable[[str | Path, DiagnosticState], None] | None = None,
@@ -1560,8 +1685,14 @@ def run_decoration_diagnostic(
         raise ApplicationError("quotation length must be short, medium, or long")
     if output_path is not None and selection == "all":
         raise ApplicationError("--test-output requires exactly one decoration ID; 'all' cannot be exported")
+    if output_path is not None and variants_directory is not None:
+        raise ApplicationError("--test-output and --test-variants are mutually exclusive")
+    if variants_directory is not None and selection == "all":
+        raise ApplicationError("--test-variants requires one specific decoration ID; 'all' is not supported")
     if output_path is not None and input_factory is not None:
         raise ApplicationError("--test-output cannot be combined with terminal display publication")
+    if variants_directory is not None and input_factory is not None:
+        raise ApplicationError("--test-variants cannot be combined with terminal display publication")
     if selection == "all":
         decoration_index = 0
     else:
@@ -1582,6 +1713,9 @@ def run_decoration_diagnostic(
     )
     if output_path is not None:
         export_decoration_png(config_file, state, output_path)
+        return
+    if variants_directory is not None:
+        export_decoration_variants(config_file, state, variants_directory, configuration=configuration)
         return
     if input_factory is not None:
         _run_terminal_test_adapter(config_file, state, debug_layout, backend_factory, input_factory)
