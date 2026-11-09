@@ -1,3 +1,5 @@
 format: 1
 id: top-bottom-borders
-image: top-bottom-borders.png
+layers:
+  - image: top-bottom-borders.png
+    method: contain

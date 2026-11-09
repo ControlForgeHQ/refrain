@@ -99,18 +99,41 @@ class BackgroundResource:
 
 
 @dataclass(frozen=True)
+class NineSliceParameters:
+    """Validated source-pixel boundaries and edge transformation modes."""
+
+    left: int
+    right: int
+    top: int
+    bottom: int
+    horizontal: str = "stretch"
+    vertical: str = "stretch"
+
+
+@dataclass(frozen=True)
+class DecorationLayerResource:
+    """A validated image layer in a decoration manifest."""
+
+    image: Union[Path, Traversable]
+    method: str
+    nine_slice: NineSliceParameters | None = None
+    condition: str = "always"
+    tintable: bool = True
+
+
+@dataclass(frozen=True)
 class DecorationResource:
-    """A validated bundled or discovered decorative PNG and its preferences."""
+    """A validated bundled or discovered decoration and its ordered layers."""
 
     identifier: str
-    path: Union[Path, Traversable]
+    layers: tuple[DecorationLayerResource, ...]
     bundled: bool
     presentation_insets: PresentationInsets | None = None
     font: str | None = None
     background: str | None = None
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     text_color: tuple[str, ...] | None = None
-    tintable: bool = False
+    tintable: bool = True
     decoration_color: tuple[str, ...] | None = None
     qr_ready: bool = True
     qr_positioning: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
@@ -290,17 +313,17 @@ def load_background_image(resource: BackgroundResource) -> Image.Image:
         return image
 
 
-def load_decoration_image(resource: DecorationResource) -> Image.Image:
-    """Revalidate and return a fully decoded RGBA image owned by the caller."""
-    with resource.path.open("rb") as decoration_file:
+def load_decoration_layer_image(resource: DecorationLayerResource) -> Image.Image:
+    """Revalidate and return a fully decoded RGB or RGBA layer owned by the caller."""
+    with resource.image.open("rb") as decoration_file:
         image = Image.open(decoration_file)
         try:
             if image.format != "PNG":
                 raise ValueError("decoration must be a PNG image")
             if getattr(image, "n_frames", 1) != 1:
                 raise ValueError("decoration must be a single-frame PNG image")
-            if image.mode != "RGBA":
-                raise ValueError("decoration mode must be RGBA")
+            if image.mode not in {"RGB", "RGBA"}:
+                raise ValueError("decoration mode must be RGB or RGBA")
             image.load()
         except Exception:
             image.close()

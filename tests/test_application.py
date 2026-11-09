@@ -73,7 +73,13 @@ def at(day: int, hour: int, minute: int = 0) -> datetime:
 
 def write_decoration_manifest(directory: Path, identifier: str, **metadata: object) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    manifest = {"format": 1, "id": identifier, "image": "overlay.png", **metadata}
+    manifest = {
+        "format": 1,
+        "id": identifier,
+        "tintable": False,
+        "layers": [{"image": "overlay.png", "method": "contain"}],
+        **metadata,
+    }
     (directory / "decoration.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
 

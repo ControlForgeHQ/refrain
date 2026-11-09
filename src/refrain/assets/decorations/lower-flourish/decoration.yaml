@@ -1,3 +1,5 @@
 format: 1
 id: lower-flourish
-image: lower-flourish.png
+layers:
+  - image: lower-flourish.png
+    method: contain

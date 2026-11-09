@@ -1,3 +1,5 @@
 format: 1
 id: simple-border
-image: simple-border.png
+layers:
+  - image: simple-border.png
+    method: contain

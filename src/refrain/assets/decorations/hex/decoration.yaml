@@ -1,3 +1,5 @@
 format: 1
 id: hex
-image: hex.png
+layers:
+  - image: hex.png
+    method: contain

@@ -24,7 +24,7 @@ from refrain import (
 from refrain import (
     prepare_daily_images as _prepare_daily_images,
 )
-from refrain.config import BackgroundResource, DecorationResource
+from refrain.config import BackgroundResource, DecorationLayerResource, DecorationResource
 
 _IMAGE_SIZE = (1920, 1080)
 _LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
@@ -113,6 +113,16 @@ def _configuration(
         palette={"black": "#000000", "burnt-orange": "#C65A20", "blue": "#0000FF"},
         default_text_colors=("black",),
         default_decoration_colors=("black",),
+    )
+
+
+def _decoration_resource(identifier: str, image_path: Path, bundled: bool = False, **kwargs) -> DecorationResource:
+    kwargs.setdefault("tintable", False)
+    return DecorationResource(
+        identifier,
+        (DecorationLayerResource(image_path, "contain"),),
+        bundled,
+        **kwargs,
     )
 
 
@@ -239,7 +249,7 @@ def test_graphical_composition_uses_working_canvas_and_resamples_once_when_neede
     snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration="overlay")
     configuration = _configuration(
         _FONT_REGISTRY,
-        decorations={"overlay": DecorationResource("overlay", decoration_path, False)},
+        decorations={"overlay": _decoration_resource("overlay", decoration_path)},
         output_size=output_size,
         qr_enabled=False,
     )
@@ -382,7 +392,7 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
         stages,
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", background_path, False)},
-        {"overlay": DecorationResource("overlay", decoration_path, False)},
+        {"overlay": _decoration_resource("overlay", decoration_path)},
         insets=PresentationInsets(2400, 160, 1800, 120),
         output_size=(1600, 1200),
         min_font_size=16,
@@ -407,7 +417,7 @@ def test_intentional_qr_disabling_skips_placement_without_warning(monkeypatch, c
         make_snapshot("lora"),
         decoration="frame" if reason == "decoration" else None,
     )
-    decoration = DecorationResource("frame", Path("/unused.png"), False, qr_ready=reason != "decoration")
+    decoration = _decoration_resource("frame", Path("/unused.png"), qr_ready=reason != "decoration")
     configuration = _configuration(
         _FONT_REGISTRY,
         decorations={"frame": decoration},
@@ -429,10 +439,9 @@ def test_intentional_qr_disabling_skips_placement_without_warning(monkeypatch, c
 
 def test_invalid_qr_placement_warns_before_artwork_and_preserves_decoration(monkeypatch, caplog) -> None:
     snapshot = replace(make_snapshot("lora"), decoration="frame")
-    decoration = DecorationResource(
+    decoration = _decoration_resource(
         "frame",
         Path("/unused.png"),
-        False,
         qr_positioning={"qr_from_left": -1},
     )
     configuration = _configuration(_FONT_REGISTRY, decorations={"frame": decoration})
@@ -512,7 +521,7 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
         (CompositionVisibility(),),
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", background_path, False)},
-        {"overlay": DecorationResource("overlay", decoration_path, False)},
+        {"overlay": _decoration_resource("overlay", decoration_path)},
         output_size=(1600, 1200),
     )
     try:
@@ -554,7 +563,7 @@ def test_decoration_color_preference_resolves_during_preparation_and_preserves_a
         snapshot,
         (CompositionVisibility(), CompositionVisibility()),
         _FONT_REGISTRY,
-        decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=True)},
+        decoration_registry={"overlay": _decoration_resource("overlay", decoration_path, tintable=True)},
     )
     try:
         for image in images:
@@ -580,7 +589,7 @@ def test_unrequested_decoration_color_uses_current_default_palette(tmp_path: Pat
         snapshot,
         (CompositionVisibility(),),
         _FONT_REGISTRY,
-        decoration_registry={"overlay": DecorationResource("overlay", decoration_path, False, tintable=True)},
+        decoration_registry={"overlay": _decoration_resource("overlay", decoration_path, tintable=True)},
     )
     try:
         assert images[0].getpixel((0, 0)) == (0, 0, 0)
@@ -633,7 +642,7 @@ def test_decoration_contain_scaling_centres_transparent_portrait(tmp_path: Path)
     composed = preparation._apply_daily_decoration(
         background,
         "portrait",
-        {"portrait": DecorationResource("portrait", path, False)},
+        {"portrait": _decoration_resource("portrait", path)},
     )
     try:
         assert composed.size == (8, 4)
