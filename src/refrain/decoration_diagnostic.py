@@ -10,6 +10,7 @@ import queue
 import random
 import select
 import sys
+import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -220,6 +221,35 @@ def preview_size_for_screen(
     )
 
 
+def preview_window_layout(
+    output_size: tuple[int, int],
+    screen_size: tuple[int, int],
+    toolbar_size: tuple[int, int],
+    *,
+    status_height: int = 72,
+    margin: int = 24,
+) -> tuple[tuple[int, int], tuple[int, int, int, int]]:
+    """Fit the preview and center a window that also contains its complete controls."""
+    screen_width, screen_height = screen_size
+    toolbar_width, toolbar_height = toolbar_size
+    outer = 16
+    available_width = max(1, min(screen_width - margin * 2 - outer, screen_width - toolbar_width - margin * 2))
+    reserved_height = toolbar_height + status_height + margin * 2 + outer
+    available_height = max(1, screen_height - reserved_height)
+    preview = _mapped_output_size(output_size, (available_width, available_height))
+    window_width = min(screen_width - margin, max(preview[0] + outer, toolbar_width + outer))
+    window_height = min(screen_height - margin, preview[1] + reserved_height)
+    left = max(0, (screen_width - window_width) // 2)
+    top = max(0, (screen_height - window_height) // 2)
+    return preview, (window_width, window_height, left, top)
+
+
+def _configured_aspect_name(output_size: tuple[int, int]) -> str:
+    divisor = gcd(*output_size)
+    ratio = (output_size[0] // divisor, output_size[1] // divisor)
+    return next(name for name, dimensions in _ASPECTS.items() if dimensions == ratio)
+
+
 def transition_state(state: DiagnosticState, action: str) -> DiagnosticState:
     """Apply one named navigation or toggle action to diagnostic state."""
     if action == "next-decoration" and state.decoration_ids:
@@ -230,6 +260,10 @@ def transition_state(state: DiagnosticState, action: str) -> DiagnosticState:
         return replace(state, quotation_index=(state.quotation_index + 1) % len(_QUOTATIONS))
     if action == "previous-quotation":
         return replace(state, quotation_index=(state.quotation_index - 1) % len(_QUOTATIONS))
+    if action == "next-aspect":
+        ratios = tuple(_ASPECTS)
+        current = state.aspect_ratio if state.aspect_ratio in _ASPECTS else "16:9"
+        return replace(state, aspect_ratio=ratios[(ratios.index(current) + 1) % len(ratios)])
     if action == "toggle-qr":
         return replace(state, qr_enabled=not state.qr_enabled)
     if action == "toggle-background":
@@ -266,7 +300,11 @@ def normalize_key(key: str) -> str | None:
     if key in normalized:
         return normalized[key]
     lowered = key.lower()
-    return lowered if lowered in {"right", "left", "up", "down", "f5", "space", "q", "b", "t", "d", "r", "x"} else None
+    return (
+        lowered
+        if lowered in {"right", "left", "up", "down", "f5", "space", "q", "b", "t", "d", "r", "x", "a"}
+        else None
+    )
 
 
 def _guide_color(index: int, count: int) -> str:
@@ -295,6 +333,7 @@ def _state_action(key: str) -> str | None:
         "d": "toggle-debug",
         "r": "reload",
         "f5": "reload",
+        "a": "next-aspect",
         "x": "exit",
     }.get(normalized)
 
@@ -469,12 +508,7 @@ def _reconcile_state(state: DiagnosticState, configuration) -> tuple[DiagnosticS
     if not available:
         return replace(state, decoration_ids=(), decoration_index=0), "No usable decorations remain after reload."
     previous = state.decoration
-    if state.all_decorations:
-        ids = available
-    elif previous in available:
-        ids = (previous,)
-    else:
-        ids = available
+    ids = available
     if previous in ids:
         index = ids.index(previous)
         message = None
@@ -514,9 +548,53 @@ def _render_request(
     return _RenderedPreview(image, snapshot, details[0], current_configuration, state, message)
 
 
+def export_decoration_png(config_file: str | Path, state: DiagnosticState, output_path: str | Path) -> Path:
+    """Render one deterministic native-resolution presentation without opening a display."""
+    rendered = _render_request(config_file, state, reload_configuration=True)
+    rendered_size = rendered.image.size
+    target = Path(output_path).expanduser()
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    temporary_path: Path | None = None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=target.parent,
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            rendered.image.save(stream, format="PNG")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    except (OSError, ValueError) as error:
+        raise ApplicationError(f"cannot save diagnostic PNG to {target}: {error}") from error
+    finally:
+        rendered.image.close()
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+    _diagnostic_status(
+        rendered.state,
+        rendered.configuration,
+        rendered.diagnostics,
+        rendered_size,
+    )
+    print(f"Diagnostic PNG saved to {target}", flush=True)
+    return target
+
+
 def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     try:
         import tkinter as tk
+        from tkinter import ttk
 
         from PIL import ImageTk
     except Exception as error:
@@ -533,8 +611,8 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     root.configure(padx=8, pady=8)
     screen_size = (root.winfo_screenwidth(), root.winfo_screenheight())
     output_configuration = _with_aspect(configuration, state.aspect_ratio)
-    available_size = preview_size_for_screen(output_configuration.output_size, screen_size)
-    root.geometry(f"{available_size[0] + 24}x{available_size[1] + 112}")
+    initial_preview, initial_geometry = preview_window_layout(output_configuration.output_size, screen_size, (720, 30))
+    root.geometry(f"{initial_geometry[0]}x{initial_geometry[1]}+{initial_geometry[2]}+{initial_geometry[3]}")
     image_label = tk.Label(root, borderwidth=0)
     image_label.pack()
     toolbar = tk.Frame(root)
@@ -543,7 +621,10 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     status_label = tk.Label(root, textvariable=status_var, justify="left", anchor="w")
     status_label.pack(fill="x")
     help_var = tk.StringVar(
-        value="Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
+        value=(
+            "Keys: ←/→ decoration · ↑/↓ quotation · A aspect · Q QR · B background · "
+            "T tint · D debug · R/F5 reload · X exit"
+        )
     )
     help_label = tk.Label(root, textvariable=help_var, justify="center")
     help_label.pack(fill="x", pady=(4, 0))
@@ -598,19 +679,26 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         current_photo[0] = None
         root.destroy()
 
-    def update_state(action):
+    def update_state(action, decoration_id: str | None = None):
         if action == "exit":
             close_window()
             return
         if action == "reload":
             submit_render(reload_configuration=True)
             return
-        state_box[0] = transition_state(state_box[0], action)
+        if action == "select-decoration" and decoration_id in state_box[0].decoration_ids:
+            state_box[0] = replace(
+                state_box[0],
+                decoration_index=state_box[0].decoration_ids.index(decoration_id),
+            )
+        else:
+            state_box[0] = transition_state(state_box[0], action)
         refresh_buttons()
         submit_render()
 
     button_specs = (
         ("◀D", "previous-decoration", "Previous decoration (Left)"),
+        ("picker", "select-decoration", "Choose a decoration directly"),
         ("◀Q", "previous-quotation", "Previous quotation length (Down)"),
         ("QR ✓", "toggle-qr", "Toggle QR generation (Q)"),
         ("BG ✓", "toggle-background", "Toggle graphical background (B)"),
@@ -618,10 +706,19 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         ("Debug ✓", "toggle-debug", "Toggle geometry overlays (D)"),
         ("Q▶", "next-quotation", "Next quotation length (Up)"),
         ("D▶", "next-decoration", "Next decoration (Right or Space)"),
+        ("aspect", "next-aspect", "Cycle output aspect ratio (A)"),
         ("Reload", "reload", "Reload configuration and assets (R or F5)"),
         ("Exit", "exit", "Close the preview (X)"),
     )
     buttons = {}
+    picker_value = tk.StringVar(value=state.decoration)
+    picker = ttk.Combobox(
+        toolbar,
+        textvariable=picker_value,
+        values=state.decoration_ids,
+        state="readonly",
+        width=16,
+    )
 
     def refresh_buttons():
         for name, enabled in (
@@ -638,20 +735,42 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             f"{state_box[0].decoration_index + 1}/{len(state_box[0].decoration_ids)}"
         )
         indicator.configure(text=position)
+        picker.configure(values=state_box[0].decoration_ids)
+        picker_value.set(state_box[0].decoration or "")
+        aspect_button.configure(text=state_box[0].aspect_ratio)
 
-    for label, action, tooltip in button_specs[:2]:
+    def picker_selected(_event=None):
+        update_state("select-decoration", picker_value.get())
+
+    picker.bind("<<ComboboxSelected>>", picker_selected)
+
+    for label, action, tooltip in button_specs[:1]:
         button = tk.Button(toolbar, text=label, command=lambda selected=action: update_state(selected), takefocus=True)
         button.pack(side="left", padx=2)
         button.bind("<Enter>", lambda event, text=tooltip: help_var.set(text))
         button.bind(
             "<Leave>",
             lambda event: help_var.set(
-                "Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
+                "Keys: ←/→ decoration · ↑/↓ quotation · A aspect · Q QR · B background · "
+                "T tint · D debug · R/F5 reload · X exit"
             ),
         )
+    picker.pack(side="left", padx=2)
+    picker.bind("<Enter>", lambda event: help_var.set(button_specs[1][2]))
     indicator = tk.Label(toolbar, width=18, anchor="center")
     indicator.pack(side="left", padx=5)
+    aspect_button = None
     for label, action, tooltip in button_specs[2:]:
+        if action == "next-aspect":
+            aspect_button = tk.Button(
+                toolbar,
+                text=state_box[0].aspect_ratio,
+                command=lambda: update_state("next-aspect"),
+                takefocus=True,
+            )
+            aspect_button.pack(side="left", padx=2)
+            aspect_button.bind("<Enter>", lambda event, text=tooltip: help_var.set(text))
+            continue
         button = tk.Button(toolbar, text=label, command=lambda selected=action: update_state(selected), takefocus=True)
         button.pack(side="left", padx=2)
         name = label.removesuffix(" ✓").removesuffix(" —")
@@ -660,7 +779,8 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         button.bind(
             "<Leave>",
             lambda event: help_var.set(
-                "Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
+                "Keys: ←/→ decoration · ↑/↓ quotation · A aspect · Q QR · B background · "
+                "T tint · D debug · R/F5 reload · X exit"
             ),
         )
     refresh_buttons()
@@ -694,7 +814,19 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             else:
                 rendered_size = rendered.image.size
                 previous_image = current_photo[0]
-                display_size = _mapped_output_size(rendered.image.size, available_size)
+                root.update_idletasks()
+                toolbar_size = (
+                    toolbar.winfo_reqwidth(),
+                    toolbar.winfo_reqheight(),
+                )
+                status_height = status_label.winfo_reqheight() + help_label.winfo_reqheight() + 24
+                display_size, geometry = preview_window_layout(
+                    rendered_size,
+                    screen_size,
+                    toolbar_size,
+                    status_height=status_height,
+                )
+                root.geometry(f"{geometry[0]}x{geometry[1]}+{geometry[2]}+{geometry[3]}")
                 resized = rendered.image.resize(display_size, Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(resized)
                 resized.close()
@@ -843,6 +975,7 @@ def run_decoration_diagnostic(
     background_enabled: bool = True,
     tinting_enabled: bool = True,
     debug_layout: bool = False,
+    output_path: str | Path | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
     input_factory=None,
     preview_factory: Callable[[str | Path, DiagnosticState], None] | None = None,
@@ -856,7 +989,7 @@ def run_decoration_diagnostic(
         identifiers = available
         all_decorations = True
     elif selection in available:
-        identifiers = (selection,)
+        identifiers = available
         all_decorations = False
     else:
         selections = ", ".join(("all", *available))
@@ -865,16 +998,31 @@ def run_decoration_diagnostic(
         raise ApplicationError("aspect ratio must be 4:3, 16:9, or 16:10")
     if quotation not in _QUOTATION_NAMES:
         raise ApplicationError("quotation length must be short, medium, or long")
+    if output_path is not None and selection == "all":
+        raise ApplicationError("--test-output requires exactly one decoration ID; 'all' cannot be exported")
+    if output_path is not None and input_factory is not None:
+        raise ApplicationError("--test-output cannot be combined with terminal display publication")
+    if selection == "all":
+        decoration_index = 0
+    else:
+        decoration_index = available.index(selection)
+    selected_aspect = (
+        aspect_ratio if aspect_ratio != "configured" else _configured_aspect_name(configuration.output_size)
+    )
     state = DiagnosticState(
         identifiers,
+        decoration_index=decoration_index,
         quotation_index=_QUOTATION_NAMES.index(quotation),
-        aspect_ratio=aspect_ratio,
+        aspect_ratio=selected_aspect,
         qr_enabled=configuration.qr_enabled if qr_enabled is None else qr_enabled,
         background_enabled=background_enabled,
         tinting_enabled=tinting_enabled,
         debug_layout=debug_layout,
         all_decorations=all_decorations,
     )
+    if output_path is not None:
+        export_decoration_png(config_file, state, output_path)
+        return
     if input_factory is not None:
         _run_terminal_test_adapter(config_file, state, debug_layout, backend_factory, input_factory)
         return

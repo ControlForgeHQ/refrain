@@ -140,6 +140,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="ID|all",
         help="preview one decoration or all decorations without changing daily state",
     )
+    parser.add_argument(
+        "--test-output",
+        metavar="PATH",
+        help="save a native-resolution diagnostic PNG instead of opening the preview (requires one decoration ID)",
+    )
     parser.add_argument("--test-aspect", choices=("4:3", "16:9", "16:10"), help="decoration-preview aspect ratio")
     parser.add_argument(
         "--test-quotation",
@@ -190,6 +195,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ("--no-qr", arguments.no_qr),
             ("--no-background", arguments.no_background),
             ("--no-tinting", arguments.no_tinting),
+            ("--test-output", arguments.test_output),
         )
         if value is not None and value is not False
     ]
@@ -198,6 +204,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             "decoration-preview options are only available with --test-decoration: "
             + ", ".join(specified_decoration_options)
         )
+    if arguments.test_output is not None and arguments.test_decoration is None:
+        parser.error("--test-output is only available with --test-decoration")
+    if arguments.test_output is not None and arguments.test_decoration == "all":
+        parser.error("--test-output requires exactly one decoration ID; 'all' cannot be exported")
+    conflicting_modes = [
+        option
+        for option, selected in (
+            ("--once", arguments.once),
+            ("--demo", arguments.demo is not None),
+            ("--initialize", arguments.initialize),
+            ("--reset", arguments.reset),
+            ("--purge", arguments.purge),
+            ("--show-entry", arguments.show_entry is not None),
+            ("--test-qr", arguments.test_qr),
+        )
+        if selected
+    ]
+    if arguments.test_decoration is not None and conflicting_modes:
+        parser.error("--test-decoration cannot be combined with other modes: " + ", ".join(conflicting_modes))
     default_qr_parameters = QRCalibrationParameters()
     qr_parameters = QRCalibrationParameters(
         payload=arguments.qr_payload if arguments.qr_payload is not None else default_qr_parameters.payload,
@@ -370,6 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 background_enabled=not arguments.no_background,
                 tinting_enabled=not arguments.no_tinting,
                 debug_layout=arguments.debug_layout,
+                output_path=arguments.test_output,
             )
             return 0
         else:

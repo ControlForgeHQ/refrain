@@ -539,6 +539,91 @@ def test_cli_decoration_preview_options_are_passed_as_initial_state(workspace, m
     assert observed["debug_layout"] is True
 
 
+def test_cli_headless_png_export_uses_pipeline_without_gui_or_state(workspace, monkeypatch, capsys):
+    config, _ = workspace
+    output_one = config.parent / "new" / "nested" / "preview.png"
+    output_two = config.parent / "other" / "preview.png"
+    monkeypatch.setattr(
+        diagnostic,
+        "_run_tk_preview",
+        lambda *_: pytest.fail("headless output must not initialize Tk"),
+    )
+    arguments = [
+        "--config",
+        str(config),
+        "--test-decoration",
+        "a-custom",
+        "--test-output",
+        str(output_one),
+        "--test-aspect",
+        "4:3",
+        "--test-quotation",
+        "medium",
+        "--no-qr",
+        "--no-background",
+        "--no-tinting",
+        "--debug-layout",
+    ]
+    assert cli.main(arguments) == 0
+    with Image.open(output_one) as first:
+        assert first.format == "PNG"
+        assert first.size == (1920, 1440)
+        first_bytes = output_one.read_bytes()
+
+    second_arguments = list(arguments)
+    second_arguments[second_arguments.index(str(output_one))] = str(output_two)
+    assert cli.main(second_arguments) == 0
+    assert output_two.read_bytes() == first_bytes
+    assert "Diagnostic PNG saved to" in capsys.readouterr().out
+    assert not (config.parent / "state.json").exists()
+    assert not (config.parent / "global-history.jsonl").exists()
+    assert not (config.parent / "artifacts").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--test-output", "preview.png"],
+        ["--test-decoration", "all", "--test-output", "preview.png"],
+    ],
+)
+def test_test_output_requires_one_decoration_id(arguments):
+    with pytest.raises(SystemExit) as error:
+        cli.main(arguments)
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("mode", ["--once", "--test-qr"])
+def test_decoration_preview_rejects_other_modes(mode):
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--test-decoration", "all", mode])
+    assert error.value.code == 2
+
+
+def test_test_output_reports_unwritable_parent(workspace):
+    config, _ = workspace
+    parent = config.parent / "not-a-directory"
+    parent.write_text("file", encoding="utf-8")
+    state = diagnostic.DiagnosticState(("a-custom",))
+    with pytest.raises(application.ApplicationError, match="cannot save diagnostic PNG"):
+        diagnostic.export_decoration_png(config, state, parent / "preview.png")
+
+
+def test_test_output_reports_render_failure(workspace, monkeypatch):
+    config, _ = workspace
+    monkeypatch.setattr(
+        diagnostic,
+        "_render_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(application.ApplicationError("render failed")),
+    )
+    with pytest.raises(application.ApplicationError, match="render failed"):
+        diagnostic.export_decoration_png(
+            config,
+            diagnostic.DiagnosticState(("a-custom",)),
+            config.parent / "preview.png",
+        )
+
+
 @pytest.mark.parametrize("option", ["--test-aspect", "--test-quotation", "--no-qr", "--no-background", "--no-tinting"])
 def test_diagnostic_cli_options_are_rejected_outside_mode(option):
     value = "16:9" if option == "--test-aspect" else "medium"
@@ -566,7 +651,7 @@ def test_individual_selection_stays_targeted_on_start(workspace):
     diagnostic.run_decoration_diagnostic(
         config, selection="a-custom", preview_factory=lambda _config, state: states.append(state)
     )
-    assert states[0].decoration_ids == ("a-custom",)
+    assert "a-custom" in states[0].decoration_ids
     assert states[0].decoration == "a-custom"
     assert not states[0].all_decorations
 
@@ -736,6 +821,26 @@ def test_gui_runner_receives_same_keyboard_and_toolbar_state_transitions(workspa
     assert not captured[0][1].qr_enabled
 
 
+def test_aspect_cycle_order_and_centered_preview_window():
+    state = diagnostic.DiagnosticState(("a",), aspect_ratio="4:3")
+    assert diagnostic.normalize_key("a") == "a"
+    assert diagnostic._state_action("a") == "next-aspect"
+    state = diagnostic.transition_state(state, "next-aspect")
+    assert state.aspect_ratio == "16:9"
+    state = diagnostic.transition_state(state, "next-aspect")
+    assert state.aspect_ratio == "16:10"
+    state = diagnostic.transition_state(state, "next-aspect")
+    assert state.aspect_ratio == "4:3"
+
+    preview, (width, height, left, top) = diagnostic.preview_window_layout((1920, 1440), (1366, 768), (900, 32))
+    assert preview[0] * 3 == preview[1] * 4
+    assert width >= preview[0] + 16
+    assert height >= preview[1]
+    assert left == (1366 - width) // 2
+    assert top == (768 - height) // 2
+    assert left + width <= 1366 and top + height <= 768
+
+
 def test_debug_toggle_regenerates_clean_presentation(workspace):
     config, _ = workspace
     configuration = diagnostic._load_configuration(config)
@@ -755,15 +860,19 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
     configuration = diagnostic._load_configuration(config)
     roots = []
     buttons = []
+    comboboxes = []
     submitted_states = []
     photo_count = [0]
 
     class Widget:
-        def __init__(self, _parent=None, **options):
+        def __init__(self, parent=None, **options):
             self.options = options
             self.command = options.get("command")
             self.bindings = {}
             self.destroyed = False
+            self.children = []
+            if parent is not None and hasattr(parent, "children"):
+                parent.children.append(self)
 
         def pack(self, **_options):
             pass
@@ -774,6 +883,12 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         def configure(self, **options):
             self.options.update(options)
 
+        def winfo_reqwidth(self):
+            return max(40, len(str(self.options.get("text", ""))) * 8 + 20)
+
+        def winfo_reqheight(self):
+            return 32
+
     class Root:
         def __init__(self):
             self.callbacks = []
@@ -781,6 +896,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
             self.protocols = {}
             self.destroyed = False
             self.closing = False
+            self.geometries = []
             roots.append(self)
 
         def title(self, _value):
@@ -790,6 +906,9 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
             pass
 
         def geometry(self, _value):
+            self.geometries.append(_value)
+
+        def update_idletasks(self):
             pass
 
         def winfo_screenwidth(self):
@@ -814,6 +933,8 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         def mainloop(self):
             deadline = time.monotonic() + 10
             keyboard_dispatched = False
+            aspect_dispatched = False
+            picker_dispatched = False
             mouse_dispatched = False
             while not self.closing:
                 if self.callbacks:
@@ -823,10 +944,18 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
                 if photo_count[0] == 1 and not keyboard_dispatched:
                     self.bindings["<KeyPress>"](SimpleNamespace(keysym="Right", char=""))
                     keyboard_dispatched = True
-                elif photo_count[0] == 2 and not mouse_dispatched:
+                elif photo_count[0] == 2 and not aspect_dispatched:
+                    self.bindings["<KeyPress>"](SimpleNamespace(keysym="a", char="a"))
+                    aspect_dispatched = True
+                elif photo_count[0] == 3 and not picker_dispatched:
+                    picker = comboboxes[0]
+                    picker.options["textvariable"].set("a-custom")
+                    picker.bindings["<<ComboboxSelected>>"](None)
+                    picker_dispatched = True
+                elif photo_count[0] == 4 and not mouse_dispatched:
                     next(button for button in buttons if button.options["text"] == "QR ✓").command()
                     mouse_dispatched = True
-                elif photo_count[0] == 3:
+                elif photo_count[0] == 5:
                     self.protocols["WM_DELETE_WINDOW"]()
                 if time.monotonic() > deadline:
                     raise TimeoutError("preview did not process its render/close sequence")
@@ -837,6 +966,9 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
 
         def set(self, value):
             self.value = value
+
+        def get(self):
+            return self.value
 
     tkinter = ModuleType("tkinter")
     tkinter.Tk = Root
@@ -850,6 +982,15 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         return button
 
     tkinter.Button = create_button
+    ttk = ModuleType("tkinter.ttk")
+
+    def create_combobox(parent, **options):
+        combobox = Widget(parent, **options)
+        comboboxes.append(combobox)
+        return combobox
+
+    ttk.Combobox = create_combobox
+    tkinter.ttk = ttk
     image_tk = ModuleType("PIL.ImageTk")
 
     class PhotoImage:
@@ -859,24 +1000,28 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
 
     image_tk.PhotoImage = PhotoImage
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
+    monkeypatch.setitem(sys.modules, "tkinter.ttk", ttk)
     monkeypatch.setitem(sys.modules, "PIL.ImageTk", image_tk)
 
     def render_request(_config_file, state, _configuration, reload_configuration=False):
         submitted_states.append(state)
+        current_configuration = diagnostic._with_aspect(configuration, state.aspect_ratio)
         geometry = diagnostic.resolve_presentation_geometry(
-            configuration.output_size, configuration.presentation_insets
+            current_configuration.output_size, current_configuration.presentation_insets
         )
         return diagnostic._RenderedPreview(
-            Image.new("RGB", configuration.output_size, "white"),
+            Image.new("RGB", current_configuration.output_size, "white"),
             None,
             diagnostic.PreparationDiagnostics(geometry, None, "disabled", (), ()),
-            configuration,
+            current_configuration,
             state,
         )
 
     monkeypatch.setattr(diagnostic, "_render_request", render_request)
-    initial = diagnostic.DiagnosticState(("a", "b"))
+    initial = diagnostic.DiagnosticState(("a", "b"), aspect_ratio="16:9")
     diagnostic._run_tk_preview(config, initial)
-    assert [state.decoration_index for state in submitted_states] == [0, 1, 1]
+    assert [state.aspect_ratio for state in submitted_states] == ["16:9", "16:9", "16:10", "16:10", "16:10"]
+    assert submitted_states[3].decoration == "a-custom"
     assert submitted_states[-1].qr_enabled is False
     assert roots[0].destroyed
+    assert len(roots[0].geometries) >= 2
