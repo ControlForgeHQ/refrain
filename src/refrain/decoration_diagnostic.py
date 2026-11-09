@@ -854,7 +854,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             render_pending[0] = False
             reload_pending[0] = False
             submit_render(reload_configuration=reload_requested)
-        else:
+        if not closed[0]:
             root.after(30, poll_results)
 
     root.after(30, poll_results)

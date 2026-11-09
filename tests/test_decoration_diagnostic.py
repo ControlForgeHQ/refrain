@@ -856,13 +856,18 @@ def test_debug_toggle_regenerates_clean_presentation(workspace):
 
 
 def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch):
+    from threading import Event
+
     config, _ = workspace
     configuration = diagnostic._load_configuration(config)
     roots = []
     buttons = []
     comboboxes = []
     submitted_states = []
+    displayed_states = []
     photo_count = [0]
+    initial_render_started = Event()
+    release_initial_render = Event()
 
     class Widget:
         def __init__(self, parent=None, **options):
@@ -932,6 +937,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
 
         def mainloop(self):
             deadline = time.monotonic() + 10
+            burst_dispatched = False
             keyboard_dispatched = False
             aspect_dispatched = False
             picker_dispatched = False
@@ -941,7 +947,12 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
                     self.callbacks.pop(0)()
                 else:
                     time.sleep(0.005)
-                if photo_count[0] == 1 and not keyboard_dispatched:
+                if initial_render_started.is_set() and not burst_dispatched:
+                    self.bindings["<KeyPress>"](SimpleNamespace(keysym="Right", char=""))
+                    self.bindings["<KeyPress>"](SimpleNamespace(keysym="b", char="b"))
+                    release_initial_render.set()
+                    burst_dispatched = True
+                elif photo_count[0] == 1 and not keyboard_dispatched:
                     self.bindings["<KeyPress>"](SimpleNamespace(keysym="Right", char=""))
                     keyboard_dispatched = True
                 elif photo_count[0] == 2 and not aspect_dispatched:
@@ -1005,6 +1016,9 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
 
     def render_request(_config_file, state, _configuration, reload_configuration=False):
         submitted_states.append(state)
+        if len(submitted_states) == 1:
+            initial_render_started.set()
+            assert release_initial_render.wait(5)
         current_configuration = diagnostic._with_aspect(configuration, state.aspect_ratio)
         geometry = diagnostic.resolve_presentation_geometry(
             current_configuration.output_size, current_configuration.presentation_insets
@@ -1018,10 +1032,26 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         )
 
     monkeypatch.setattr(diagnostic, "_render_request", render_request)
-    initial = diagnostic.DiagnosticState(("a", "b"), aspect_ratio="16:9")
+    monkeypatch.setattr(
+        diagnostic,
+        "_diagnostic_status",
+        lambda state, *_args: displayed_states.append(state) or "preview",
+    )
+    initial = diagnostic.DiagnosticState(diagnostic._configuration_decoration_ids(configuration), aspect_ratio="16:9")
     diagnostic._run_tk_preview(config, initial)
-    assert [state.aspect_ratio for state in submitted_states] == ["16:9", "16:9", "16:10", "16:10", "16:10"]
-    assert submitted_states[3].decoration == "a-custom"
+    assert [state.aspect_ratio for state in submitted_states] == [
+        "16:9",
+        "16:9",
+        "16:9",
+        "16:10",
+        "16:10",
+        "16:10",
+    ]
+    assert submitted_states[1].decoration == initial.decoration_ids[1]
+    assert not submitted_states[1].background_enabled
+    assert displayed_states[0].decoration == initial.decoration_ids[1]
+    assert not displayed_states[0].background_enabled
+    assert submitted_states[4].decoration == "a-custom"
     assert submitted_states[-1].qr_enabled is False
     assert roots[0].destroyed
     assert len(roots[0].geometries) >= 2
