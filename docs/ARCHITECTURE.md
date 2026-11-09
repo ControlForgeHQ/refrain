@@ -49,11 +49,11 @@ Selection determines which quotation is assigned to a display day.
 
 Commitment makes the selected quotation and its associated presentation information authoritative.
 
-Preparation generates and persists all images required for the committed selection.
+Preparation generates and persists all images required for the committed selection and its configured output specifications.
 
 Scheduling determines which prepared image should currently be presented.
 
-Display output communicates that image to physical hardware.
+Display output publishes the prepared image variant appropriate to each configured destination.
 
 Each responsibility must remain independently understandable and testable.
 
@@ -128,13 +128,19 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Reveal Stage:** A cumulative set of content fields eligible for presentation at a particular point in the configured reveal schedule.
 
-**Prepared Image:** A complete, persisted image representing one reveal stage of the committed daily selection.
+**Presentation Aspect Ratio:** The declared ratio that determines composition and selects a canonical working/design canvas independently of raster dimensions.
 
-**Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared images.
+**Output Specification:** The resolved presentation aspect ratio and requested raster resolution for a configured destination, according to that backend's configuration and defaults.
+
+**Prepared Raster Variant:** A complete, persisted image for one reveal stage and one output specification. Destinations with identical output specifications may share a variant.
+
+**Prepared Image:** A complete, persisted image representing one reveal stage of the committed daily selection for a particular output specification.
+
+**Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared raster variants.
 
 **Renderer:** The hardware-independent component responsible for composing complete presentation images.
 
-**Display Backend:** The component responsible for presenting prepared images through a configured output destination, including directly connected display hardware or a network-accessible image service.
+**Display Backend:** The component responsible for presenting the prepared raster variant matching its configured output specification through a destination, including directly connected display hardware or a network-accessible image service.
 
 **Persistent State:** The authoritative operational state containing the current daily selection, selection revision, active repetition history, reveal progress, and scheduling context required for recovery across application restarts.
 
@@ -178,7 +184,7 @@ Atomic operational-state commitment
 Presentation preparation
     |
     v
-Persisted reveal-stage images
+Persisted output variants for every reveal stage
     |
     v
 Display scheduler
@@ -213,15 +219,15 @@ Failure to record global history must not cause a committed quotation to be sele
 
 ### Preparation
 
-Preparation generates the complete set of images required for the committed quotation's reveal stages.
+Preparation resolves the unique output specifications required by configured destinations and generates a complete prepared raster variant for every required reveal stage and output specification.
 
-Prepared images are persisted independently of the content library.
+Destinations with identical output specifications share the same prepared raster variants. Prepared images are persisted independently of the content library.
 
 Preparation does not modify the committed selection or its selection histories.
 
 ### Presentation
 
-The display scheduler determines which prepared image should currently be presented.
+The display scheduler determines which reveal stage should currently be presented. Each destination receives the prepared raster variant matching its output specification.
 
 Normal scheduled reveals do not invoke the renderer or consult the content library.
 
@@ -740,9 +746,11 @@ The exact storage formats, rotation mechanics, and persistence operations belong
 
 ### Prepared images
 
-After selection commitment, Refrain resolves current presentation configuration and available resources, then generates every required reveal-stage image together.
+After selection commitment, Refrain resolves current presentation configuration, available resources, and the unique output specifications required by configured destinations. It generates every required reveal-stage image for each specification.
 
-Prepared images are persisted on disk.
+Variants for all required output specifications are a coherent prepared presentation. Presentation-wide choices are resolved consistently across variants; raster-dependent layout and rendering results are resolved independently for each variant.
+
+Prepared images are persisted on disk and associated with the committed selection and their output specifications.
 
 They are derived artifacts, not independently authoritative application state.
 
@@ -750,11 +758,11 @@ Prepared images must remain associated with the committed selection revision and
 
 A complete, valid set is reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate it.
 
-If the set is absent, damaged, incomplete, or unusable, regenerate the complete stage set from the durable current selection using currently available configuration and assets, then safely replace the unusable cache.
+If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation.
 
-All stages generated in one preparation use one consistent resolution of visual resources, configuration, layout, and QR policy.
+All output variants prepared together use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior.
 
-Regeneration may change the visual appearance. It must not trigger a new daily selection, change repetition history, or move reveal progression backward.
+When output requirements change, any newly required variants are prepared from the existing committed selection without changing the quotation or reveal progress. Variants may share preparation-wide choices; if existing cached variants cannot form a consistent required set with new variants, regenerate the required set coherently. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward.
 
 The runtime must not require all prepared images to remain decoded in memory.
 
@@ -808,7 +816,7 @@ Authoritative operational state owns:
 
 Global history owns chronological historical selection records but does not determine operational behavior.
 
-Prepared images are disposable cache entries derived from the current daily selection, its reveal stages, and the configuration and resources available when the set was prepared.
+Prepared images are disposable cache entries derived from the current daily selection, its reveal stages, the required output specifications, and the configuration and resources available when the variants were prepared.
 
 The appropriate reveal stage is initially determined by the committed schedule and current time.
 
