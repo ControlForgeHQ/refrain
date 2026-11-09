@@ -256,6 +256,7 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
             "id": "multi",
             "layers": [
                 {"image": "base.png", "method": "contain", "condition": "always"},
+                {"image": "base.png", "method": "cover", "condition": "always"},
                 {
                     "image": "frame.png",
                     "method": "nine-slice",
@@ -273,11 +274,16 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
     assert config.decorations["single"].layers[0].method == "contain"
     assert config.decorations["single"].layers[0].condition == "always"
     assert config.decorations["single"].layers[0].tintable is True
-    assert tuple(layer.image.name for layer in config.decorations["multi"].layers) == ("base.png", "frame.png")
-    assert config.decorations["multi"].layers[1].nine_slice.horizontal == "crop"
-    assert config.decorations["multi"].layers[1].nine_slice.vertical == "stretch"
-    assert config.decorations["multi"].layers[1].condition == "qr"
-    assert config.decorations["multi"].layers[1].tintable is False
+    assert tuple(layer.image.name for layer in config.decorations["multi"].layers) == (
+        "base.png",
+        "base.png",
+        "frame.png",
+    )
+    assert config.decorations["multi"].layers[1].method == "cover"
+    assert config.decorations["multi"].layers[2].nine_slice.horizontal == "crop"
+    assert config.decorations["multi"].layers[2].nine_slice.vertical == "stretch"
+    assert config.decorations["multi"].layers[2].condition == "qr"
+    assert config.decorations["multi"].layers[2].tintable is False
 
 
 @pytest.mark.parametrize(
@@ -287,6 +293,7 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
         ([], ".layers"),
         ([{"method": "contain"}], ".image"),
         ([{"image": "border.png", "method": "fit"}], ".method"),
+        ([{"image": "border.png", "method": "cover", "slices": {}}], ".slices"),
         ([{"image": "border.png", "method": "contain", "condition": "sometimes"}], ".condition"),
         (
             [{"image": "border.png", "method": "contain", "slices": {"left": 1}}],
