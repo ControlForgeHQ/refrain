@@ -146,13 +146,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=("short", "medium", "long"),
         help="initial decoration-preview quotation length (default: short)",
     )
-    parser.add_argument("--no-qr", action="store_true", help="initially disable QR generation in the decoration preview")
+    parser.add_argument(
+        "--no-qr", action="store_true", help="initially disable QR generation in the decoration preview"
+    )
     parser.add_argument(
         "--no-background", action="store_true", help="initially use a white background in the decoration preview"
     )
-    parser.add_argument(
-        "--no-tinting", action="store_true", help="initially force tintable decoration layers to black"
-    )
+    parser.add_argument("--no-tinting", action="store_true", help="initially force tintable decoration layers to black")
     parser.add_argument("--qr-payload", help="text or URL encoded into the QR code (default: https://example.com/)")
     parser.add_argument(
         "--qr-version",

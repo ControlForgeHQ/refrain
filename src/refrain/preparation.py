@@ -60,6 +60,7 @@ class NineSliceGuide:
     """Resolved nine-slice boundaries used by the decoration compositor."""
 
     layer: DecorationLayerResource
+    layer_index: int
     x_bounds: tuple[int, ...]
     y_bounds: tuple[int, ...]
 
@@ -489,7 +490,10 @@ def _compose_nine_slice(
             _paste_decoration_region(background, transformed, (dest_x, dest_y))
         finally:
             transformed.close()
-    return x_bounds, y_bounds
+    return (
+        (0, left_width, canvas_width - right_width, canvas_width),
+        (0, top_height, canvas_height - bottom_height, canvas_height),
+    )
 
 
 def _resample_graphical_composition(image: Image.Image, output_size: tuple[int, int]) -> Image.Image:
@@ -662,6 +666,7 @@ def prepare_daily_images(
     on_resolved_bounds: Callable[[PixelBounds], None] | None = None,
     force_white_background: bool = False,
     forced_decoration_tint: tuple[int, int, int] | None = None,
+    qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[PreparationDiagnostics], None] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
@@ -693,7 +698,7 @@ def prepare_daily_images(
             qr_unavailable_reason = str(error)
             _LOGGER.warning("QR generation is disabled for this preparation: %s", error)
     elif not configuration.qr_enabled:
-        qr_unavailable_reason = "QR generation is disabled by the diagnostic setting"
+        qr_unavailable_reason = qr_disabled_reason or "QR generation is disabled by configuration"
     else:
         qr_unavailable_reason = f"decoration {decoration.identifier!r} is not marked qr_ready"
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
@@ -712,7 +717,8 @@ def prepare_daily_images(
     def collect_nine_slice_guide(
         layer: DecorationLayerResource, x_bounds: tuple[int, ...], y_bounds: tuple[int, ...]
     ) -> None:
-        nine_slice_guides.append(NineSliceGuide(layer, x_bounds, y_bounds))
+        layer_index = next(index for index, candidate in enumerate(decoration.layers, start=1) if candidate is layer)
+        nine_slice_guides.append(NineSliceGuide(layer, layer_index, x_bounds, y_bounds))
 
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser)
     try:

@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
 import colorsys
+import hashlib
 import math
 import os
 import queue
 import random
+import select
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import date
 from importlib.resources import files
+from math import gcd
 from pathlib import Path
 from typing import Callable
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from .application import (
     ApplicationError,
@@ -30,8 +32,9 @@ from .assets import discover_decorations
 from .config import _BUNDLED_DECORATION_IDS, _parse_presentation_insets
 from .content import ContentEntry, Quotation, normalize_quotation
 from .display.coordinator import DisplayPublicationCoordinator
-from .geometry import PixelBounds, round_half_up
+from .geometry import PixelBounds, resolve_presentation_geometry, round_half_up
 from .preparation import PreparationDiagnostics, prepare_daily_images
+from .renderer import annotate_literary_region
 from .scheduling import resolve_reveal_stages
 
 _QUOTATIONS = (
@@ -81,7 +84,19 @@ def single_key_input():
             raise ApplicationError(f"cannot access interactive terminal input: {error}") from error
         try:
             tty.setcbreak(fd)
-            yield lambda: sys.stdin.read(1)
+
+            def read_posix_key():
+                key = sys.stdin.read(1)
+                if key != "\x1b":
+                    return key
+                sequence = key
+                while len(sequence) < 6 and select.select([sys.stdin], [], [], 0.03)[0]:
+                    sequence += sys.stdin.read(1)
+                    if sequence[-1] in "~ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz":
+                        break
+                return sequence
+
+            yield read_posix_key
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, settings)
         return
@@ -168,16 +183,22 @@ def _with_aspect(configuration, aspect_ratio: str):
         return configuration
     width = configuration.output_size[0]
     aspect_width, aspect_height = _ASPECTS[aspect_ratio]
-    height = width * aspect_height // aspect_width
-    return replace(configuration, output_size=(width, height))
+    divisor = gcd(aspect_width, aspect_height)
+    unit_width, unit_height = aspect_width // divisor, aspect_height // divisor
+    units = max(1, (2 * width + unit_width) // (2 * unit_width))
+    return replace(configuration, output_size=(units * unit_width, units * unit_height))
 
 
 def _mapped_output_size(output_size: tuple[int, int], available_size: tuple[int, int]) -> tuple[int, int]:
     """Fit an output image uniformly inside an available preview rectangle."""
     width, height = output_size
     max_width, max_height = available_size
-    scale = min(max_width / width, max_height / height)
-    return max(1, int(width * scale)), max(1, int(height * scale))
+    divisor = math.gcd(width, height)
+    unit_width, unit_height = width // divisor, height // divisor
+    scale = min(max_width // unit_width, max_height // unit_height)
+    if scale < 1:
+        return 1, 1
+    return unit_width * scale, unit_height * scale
 
 
 def preview_size_for_screen(
@@ -192,7 +213,10 @@ def preview_size_for_screen(
     screen_width, screen_height = screen_size
     return _mapped_output_size(
         output_size,
-        (max(1, screen_width - margin), max(1, screen_height - toolbar_height - window_chrome - margin)),
+        (
+            max(1, screen_width - window_chrome - margin),
+            max(1, screen_height - toolbar_height - window_chrome - margin),
+        ),
     )
 
 
@@ -253,7 +277,7 @@ def _guide_color(index: int, count: int) -> str:
 def _guide_groups(details: PreparationDiagnostics):
     groups = {}
     for guide in details.nine_slice_guides:
-        groups.setdefault((guide.x_bounds, guide.y_bounds), []).append(guide.layer)
+        groups.setdefault((guide.x_bounds, guide.y_bounds), []).append(guide)
     return groups
 
 
@@ -278,6 +302,7 @@ def _state_action(key: str) -> str | None:
 def _overlay_diagnostics(image: Image.Image, state: DiagnosticState, details: PreparationDiagnostics) -> Image.Image:
     if not state.debug_layout:
         return image
+    literary = annotate_literary_region(image, details.geometry.output_region)
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
@@ -285,9 +310,9 @@ def _overlay_diagnostics(image: Image.Image, state: DiagnosticState, details: Pr
         left, top, right, bottom = bounds
         draw.rectangle((left, top, right - 1, bottom - 1), outline=color, width=width)
 
-    outlined(details.geometry.output_region, "#FF3030")
     if details.qr_placement is not None:
-        outlined(details.qr_placement.allocation_bounds, _QR_COLOR, 5)
+        outlined(details.qr_placement.allocation_bounds, "#000000", 8)
+        outlined(details.qr_placement.allocation_bounds, _QR_COLOR, 4)
 
     groups = _guide_groups(details)
     for color_index, (x_bounds, y_bounds) in enumerate(groups):
@@ -295,14 +320,40 @@ def _overlay_diagnostics(image: Image.Image, state: DiagnosticState, details: Pr
         for x in x_bounds[1:-1]:
             output_x = round_half_up(x * image.width, details.geometry.working_size[0])
             if 0 <= output_x < image.width:
+                draw.line((output_x, 0, output_x, image.height - 1), fill="#000000", width=4)
                 draw.line((output_x, 0, output_x, image.height - 1), fill=color, width=2)
         for y in y_bounds[1:-1]:
             output_y = round_half_up(y * image.height, details.geometry.working_size[1])
             if 0 <= output_y < image.height:
+                draw.line((0, output_y, image.width - 1, output_y), fill="#000000", width=4)
                 draw.line((0, output_y, image.width - 1, output_y), fill=color, width=2)
 
-    result = Image.alpha_composite(image.convert("RGBA"), overlay).convert(image.mode)
+    if groups:
+        font = ImageFont.load_default()
+        entries = [
+            (", ".join(f"Layer {guide.layer_index}" for guide in guides), _guide_color(index, len(groups)))
+            for index, guides in enumerate(groups.values())
+        ]
+        line_height = 18
+        text_width = max(draw.textbbox((0, 0), label, font=font)[2] for label, _ in entries)
+        legend_left = 12
+        legend_top = 12
+        legend_right = min(image.width - 1, legend_left + text_width + 42)
+        legend_bottom = min(image.height - 1, legend_top + len(entries) * line_height + 8)
+        draw.rectangle((legend_left, legend_top, legend_right, legend_bottom), fill=(0, 0, 0, 210))
+        for index, (label, color) in enumerate(entries):
+            top = legend_top + 4 + index * line_height
+            draw.line((legend_left + 6, top + 5, legend_left + 22, top + 5), fill="#FFFFFF", width=5)
+            draw.line((legend_left + 6, top + 5, legend_left + 22, top + 5), fill=color, width=3)
+            draw.text((legend_left + 28, top), label, font=font, fill="#FFFFFF")
+
+    background = literary.convert("RGBA")
+    try:
+        result = Image.alpha_composite(background, overlay).convert(image.mode)
+    finally:
+        background.close()
     overlay.close()
+    literary.close()
     return result
 
 
@@ -315,7 +366,7 @@ def _render(
     initial_warnings=(),
     *,
     aspect_ratio="configured",
-    qr_enabled=True,
+    qr_enabled: bool | None = None,
     background_enabled=True,
     tinting_enabled=True,
     diagnostics_out: list[PreparationDiagnostics] | None = None,
@@ -323,9 +374,15 @@ def _render(
     resource = _validated_decoration(configuration, identifier, manifest, initial_warnings)
     registry = dict(configuration.decorations)
     registry[identifier] = resource
+    requested_qr = configuration.qr_enabled if qr_enabled is None else qr_enabled
+    qr_disabled_reason = (
+        "QR generation is disabled by configuration"
+        if not configuration.qr_enabled
+        else "QR generation is disabled by the diagnostic setting"
+    )
     configuration = replace(
         _with_aspect(replace(configuration, decorations=registry), aspect_ratio),
-        qr_enabled=qr_enabled,
+        qr_enabled=configuration.qr_enabled and requested_qr,
     )
     text, source, attribution = _QUOTATIONS[variant]
     quotation = Quotation(text, normalize_quotation(text))
@@ -347,6 +404,7 @@ def _render(
         strict_decoration=True,
         force_white_background=not background_enabled,
         forced_decoration_tint=None if tinting_enabled else (0, 0, 0),
+        qr_disabled_reason=qr_disabled_reason,
         on_diagnostics=resolved.append,
     )
     image = images[0]
@@ -375,19 +433,19 @@ def _diagnostic_status(
     decoration = state.decoration or "(none)"
     position = f"{state.decoration_index + 1} of {len(state.decoration_ids)}" if state.decoration_ids else "0 of 0"
     divisor = math.gcd(*image_size)
-    ratio = state.aspect_ratio if state.aspect_ratio != "configured" else f"{image_size[0] // divisor}:{image_size[1] // divisor}"
+    ratio = (
+        state.aspect_ratio
+        if state.aspect_ratio != "configured"
+        else f"{image_size[0] // divisor}:{image_size[1] // divisor}"
+    )
     qr_effective = details is not None and details.qr_placement is not None
     qr = f"requested={'on' if state.qr_enabled else 'off'}, effective={'on' if qr_effective else 'off'}"
     reason = "" if qr_effective else f", reason={details.qr_unavailable_reason if details else 'not rendered'}"
     layers = []
     if details is not None:
-        resource = configuration.decorations.get(decoration)
         groups = _guide_groups(details)
         for color_index, group_layers in enumerate(groups.values()):
-            names = []
-            for layer in group_layers:
-                index = next((i + 1 for i, candidate in enumerate(resource.layers) if candidate is layer), 0)
-                names.append(f"{decoration} layer {index}")
+            names = [f"{decoration} layer {guide.layer_index}" for guide in group_layers]
             layers.append(f"{', '.join(names)}={_guide_color(color_index, len(groups))}")
     displayed = preview_size or image_size
     manifest = configuration.decorations.get(decoration)
@@ -432,7 +490,9 @@ def _render_request(
     configuration=None,
     reload_configuration: bool = False,
 ) -> _RenderedPreview:
-    current_configuration = _load_configuration(config_file) if configuration is None or reload_configuration else configuration
+    current_configuration = (
+        _load_configuration(config_file) if configuration is None or reload_configuration else configuration
+    )
     state, message = _reconcile_state(state, current_configuration)
     identifier = state.decoration
     if identifier is None:
@@ -482,7 +542,9 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     status_var = tk.StringVar(value=message or "Rendering preview…")
     status_label = tk.Label(root, textvariable=status_var, justify="left", anchor="w")
     status_label.pack(fill="x")
-    help_var = tk.StringVar(value="Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit")
+    help_var = tk.StringVar(
+        value="Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
+    )
     help_label = tk.Label(root, textvariable=help_var, justify="center")
     help_label.pack(fill="x", pady=(4, 0))
 
@@ -492,6 +554,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="refrain-decoration-preview")
     result_queue: queue.Queue[tuple[Future, DiagnosticState]] = queue.Queue()
     render_pending = [False]
+    reload_pending = [False]
     rendering = [False]
     closed = [False]
 
@@ -507,13 +570,25 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         if closed[0]:
             return
         if rendering[0]:
-            render_pending[0] = render_pending[0] or reload_configuration
+            render_pending[0] = True
+            reload_pending[0] = reload_pending[0] or reload_configuration
             status_var.set("Rendering…")
             return
         rendering[0] = True
         status_var.set("Reloading configuration and rendering…" if reload_configuration else "Rendering preview…")
-        future = executor.submit(render_worker, state_box[0], reload_configuration)
-        future.add_done_callback(lambda completed: result_queue.put((completed, state_box[0])))
+        submitted_state = state_box[0]
+        future = executor.submit(render_worker, submitted_state, reload_configuration)
+
+        def finish_render(completed, selected_state=submitted_state):
+            if closed[0]:
+                try:
+                    completed.result().image.close()
+                except Exception:
+                    pass
+                return
+            result_queue.put((completed, selected_state))
+
+        future.add_done_callback(finish_render)
 
     def close_window():
         if closed[0]:
@@ -535,14 +610,14 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         submit_render()
 
     button_specs = (
-        ("◀ Decor", "previous-decoration", "Previous decoration (Left)"),
-        ("◀ Quote", "previous-quotation", "Previous quotation length (Down)"),
-        ("QR", "toggle-qr", "Toggle QR generation (Q)"),
-        ("Background", "toggle-background", "Toggle graphical background (B)"),
-        ("Tint", "toggle-tinting", "Toggle decoration tint (T)"),
-        ("Debug", "toggle-debug", "Toggle geometry overlays (D)"),
-        ("Quote ▶", "next-quotation", "Next quotation length (Up)"),
-        ("Decor ▶", "next-decoration", "Next decoration (Right or Space)"),
+        ("◀D", "previous-decoration", "Previous decoration (Left)"),
+        ("◀Q", "previous-quotation", "Previous quotation length (Down)"),
+        ("QR ✓", "toggle-qr", "Toggle QR generation (Q)"),
+        ("BG ✓", "toggle-background", "Toggle graphical background (B)"),
+        ("Tint ✓", "toggle-tinting", "Toggle decoration tint (T)"),
+        ("Debug ✓", "toggle-debug", "Toggle geometry overlays (D)"),
+        ("Q▶", "next-quotation", "Next quotation length (Up)"),
+        ("D▶", "next-decoration", "Next decoration (Right or Space)"),
         ("Reload", "reload", "Reload configuration and assets (R or F5)"),
         ("Exit", "exit", "Close the preview (X)"),
     )
@@ -551,7 +626,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     def refresh_buttons():
         for name, enabled in (
             ("QR", state_box[0].qr_enabled),
-            ("Background", state_box[0].background_enabled),
+            ("BG", state_box[0].background_enabled),
             ("Tint", state_box[0].tinting_enabled),
             ("Debug", state_box[0].debug_layout),
         ):
@@ -568,9 +643,12 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         button = tk.Button(toolbar, text=label, command=lambda selected=action: update_state(selected), takefocus=True)
         button.pack(side="left", padx=2)
         button.bind("<Enter>", lambda event, text=tooltip: help_var.set(text))
-        button.bind("<Leave>", lambda event: help_var.set(
-            "Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
-        ))
+        button.bind(
+            "<Leave>",
+            lambda event: help_var.set(
+                "Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
+            ),
+        )
     indicator = tk.Label(toolbar, width=18, anchor="center")
     indicator.pack(side="left", padx=5)
     for label, action, tooltip in button_specs[2:]:
@@ -579,13 +657,18 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         name = label.removesuffix(" ✓").removesuffix(" —")
         buttons[name] = button
         button.bind("<Enter>", lambda event, text=tooltip: help_var.set(text))
-        button.bind("<Leave>", lambda event: help_var.set(
-            "Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
-        ))
+        button.bind(
+            "<Leave>",
+            lambda event: help_var.set(
+                "Keys: ←/→ decoration · ↑/↓ quotation · Q QR · B background · T tint · D debug · R/F5 reload · X exit"
+            ),
+        )
     refresh_buttons()
 
     def key_pressed(event):
-        action = _state_action(event.keysym if event.keysym in {"Left", "Right", "Up", "Down", "F5", "space"} else event.char)
+        action = _state_action(
+            event.keysym if event.keysym in {"Left", "Right", "Up", "Down", "F5", "space"} else event.char
+        )
         if action is not None:
             update_state(action)
             return "break"
@@ -605,36 +688,39 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         rendering[0] = False
         try:
             rendered = future.result()
-            rendered_size = rendered.image.size
-            previous_image = current_photo[0]
-            display_size = _mapped_output_size(rendered.image.size, available_size)
-            resized = rendered.image.resize(display_size, Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(resized)
-            resized.close()
-            rendered.image.close()
-            image_label.configure(image=photo)
-            current_photo[0] = photo
-            state_box[0] = rendered.state
-            configuration_box[0] = rendered.configuration
-            refresh_buttons()
-            status = _diagnostic_status(
-                rendered.state,
-                rendered.configuration,
-                rendered.diagnostics,
-                rendered_size,
-                display_size,
-            )
-            status_var.set(
-                f"{rendered.message}\n{status}" if rendered.message else status
-            )
-            if previous_image is not None:
-                previous_image = None
+            stale = render_pending[0] or state_box[0] != submitted_state
+            if stale:
+                rendered.image.close()
+            else:
+                rendered_size = rendered.image.size
+                previous_image = current_photo[0]
+                display_size = _mapped_output_size(rendered.image.size, available_size)
+                resized = rendered.image.resize(display_size, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(resized)
+                resized.close()
+                rendered.image.close()
+                image_label.configure(image=photo)
+                current_photo[0] = photo
+                state_box[0] = rendered.state
+                configuration_box[0] = rendered.configuration
+                refresh_buttons()
+                status = _diagnostic_status(
+                    rendered.state,
+                    rendered.configuration,
+                    rendered.diagnostics,
+                    rendered_size,
+                    display_size,
+                )
+                status_var.set(f"{rendered.message}\n{status}" if rendered.message else status)
+                if previous_image is not None:
+                    previous_image = None
         except Exception as error:
             status_var.set(f"Cannot render decoration preview: {error}")
             print(f"Cannot render decoration preview: {error}", file=sys.stderr, flush=True)
         if render_pending[0]:
-            reload_requested = render_pending[0]
+            reload_requested = reload_pending[0]
             render_pending[0] = False
+            reload_pending[0] = False
             submit_render(reload_configuration=reload_requested)
         else:
             root.after(30, poll_results)
@@ -663,32 +749,44 @@ def _run_terminal_test_adapter(
     state = replace(state, decoration_ids=identifiers)
     manifests = {identifier: configuration.decorations[identifier].manifest for identifier in identifiers}
     _, initial_warnings = _discover(configuration)
-    position = state.decoration_index * len(_QUOTATIONS) + state.quotation_index
+    position = state.decoration_index * 2 + (state.quotation_index != 0)
     serial = 0
     with input_factory() as read_key:
         coordinator = DisplayPublicationCoordinator(configuration.display_backends, backend_factory, retry=False)
         try:
             while True:
-                identifier = identifiers[position // len(_QUOTATIONS)]
-                variant = position % len(_QUOTATIONS)
-                details: list[PreparationDiagnostics] = []
+                identifier = identifiers[position // 2]
+                variant = 0 if position % 2 == 0 else 2
                 print(
                     f"\nRefrain decoration diagnostic\nDecoration: {identifier}\n"
-                    f"Presentation: {position + 1} of {len(identifiers) * len(_QUOTATIONS)}\n"
+                    f"Presentation: {position + 1} of {len(identifiers) * 2}\n"
                     f"Quotation: {_QUOTATION_NAMES[variant].upper()}\nManifest: {manifests[identifier]}\n"
                     f"Debug layout: {'enabled' if debug_layout else 'disabled'}\n"
                     "SPACE/Right Next | Left Previous | Up/Down Quotation | R/F5 Reload | X Exit",
                     flush=True,
                 )
                 try:
+                    current_configuration = _load_configuration(config_file)
                     image, snapshot = _render(
-                        _load_configuration(config_file),
+                        current_configuration,
                         identifier,
                         manifests[identifier],
                         variant,
                         debug_layout,
                         initial_warnings,
-                        diagnostics_out=details,
+                    )
+                    decoration = current_configuration.decorations.get(identifier)
+                    insets = (
+                        current_configuration.presentation_insets
+                        if decoration is None or decoration.presentation_insets is None
+                        else decoration.presentation_insets
+                    )
+                    geometry = resolve_presentation_geometry(current_configuration.output_size, insets)
+                    print(
+                        f"Rendered dimensions: {image.width} x {image.height}; "
+                        f"Literary output bounds: {geometry.output_region} "
+                        f"(working canvas {geometry.working_size[0]} x {geometry.working_size[1]})",
+                        flush=True,
                     )
                     serial += 1
                     identity = (0, serial)
@@ -708,27 +806,29 @@ def _run_terminal_test_adapter(
                     raw = read_key()
                     if not raw:
                         raise ApplicationError("terminal input ended; run the diagnostic in an interactive terminal")
-                    action = _state_action(raw)
-                    if action == "exit" or raw in ("\x03",):
+                    if raw.lower() == "q" or raw == "\x03":
                         return
+                    action = "previous-decoration" if raw.lower() == "b" else _state_action(raw)
                     if action == "next-decoration":
-                        position = (position + 1) % (len(identifiers) * len(_QUOTATIONS))
+                        position = (position + 1) % (len(identifiers) * 2)
                         break
                     if action == "previous-decoration":
-                        position = (position - 1) % (len(identifiers) * len(_QUOTATIONS))
+                        position = (position - 1) % (len(identifiers) * 2)
                         break
                     if action == "next-quotation":
-                        decoration_index = position // len(_QUOTATIONS)
-                        quotation_index = (position % len(_QUOTATIONS) + 1) % len(_QUOTATIONS)
-                        position = decoration_index * len(_QUOTATIONS) + quotation_index
+                        decoration_index = position // 2
+                        quotation_index = 1 - position % 2
+                        position = decoration_index * 2 + quotation_index
                         break
                     if action == "previous-quotation":
-                        decoration_index = position // len(_QUOTATIONS)
-                        quotation_index = (position % len(_QUOTATIONS) - 1) % len(_QUOTATIONS)
-                        position = decoration_index * len(_QUOTATIONS) + quotation_index
+                        decoration_index = position // 2
+                        quotation_index = 1 - position % 2
+                        position = decoration_index * 2 + quotation_index
                         break
                     if action == "reload":
                         break
+        except KeyboardInterrupt:
+            pass
         finally:
             coordinator.close()
 
