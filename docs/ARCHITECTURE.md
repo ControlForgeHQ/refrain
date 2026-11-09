@@ -83,7 +83,7 @@ The intended presentation is predominantly black typography on a paper-white bac
 
 The initial display is a full-frame output device. Refrain must not depend on partial refresh, animation, or frequent screen updates.
 
-The renderer must produce images independently of the display backend and physical display characteristics. Backend-specific orientation and pixel format do not constrain the renderer's landscape working canvases or globally configured output resolution.
+The renderer must produce images independently of the display backend and physical display characteristics. Backend-specific orientation and pixel format do not constrain the renderer's supported presentation aspects or requested raster resolutions.
 
 Hardware-independent content, selection, scheduling, persistence, and rendering components must remain portable across operating systems supported by the Python runtime and required dependencies, without unnecessary operating-system-specific assumptions. This permits their development and testing on non-Linux systems but does not imply that full application deployment has been validated or is supported there.
 
@@ -917,7 +917,7 @@ The former observer-dependent scheduling interface and behavior are superseded: 
 
 The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
 
-The coordinator presents the corresponding prepared image when a reveal advancement is required. Scheduling evaluation does not determine whether an image was successfully presented.
+When a reveal advancement is required, the coordinator publishes the corresponding prepared variant to each destination. Scheduling evaluation does not determine whether an image was successfully presented.
 
 A failed display update does not invalidate the committed selection or its prepared images.
 
@@ -1272,7 +1272,7 @@ The treatment must not reveal readable text through insufficient distortion or i
 
 Additional configurable concealment styles are not required.
 
-All reveal stages use the same resolved composition layout.
+Each raster variant's reveal stages use the same resolved composition layout.
 
 Content that cannot be rendered legibly within the supported literary rectangle must be handled explicitly rather than silently clipped, truncated, or omitted.
 
@@ -1601,7 +1601,7 @@ The optional `--demo SECONDS` operating mode repeatedly selects quotations and p
 
 The session determines its eligibility display date once from host-local time and the configured day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
 
-Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each daily selection is committed before its canonical image set is prepared or reused from cache. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
+Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each daily selection is committed before its complete required output-variant set is prepared or reused from cache. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
 
 The initial stage is requested as soon as it is ready. Each stage receives the requested minimum monotonic viewing interval beginning at its first successful backend acknowledgement. After the final stage's interval, the controller commits another selection. Failed preparation or publication does not complete a stage or authorize reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
 
@@ -1611,25 +1611,25 @@ Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/E
 
 ### One-shot diagnostic entry presentation
 
-The optional `--show-entry ENTRY_ID` mode presents one targeted image without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal image preparation and renders the final canonical reveal stage, with every supplied field visible.
+The optional `--show-entry ENTRY_ID` mode presents one targeted composition without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal image preparation and prepares the final canonical reveal stage for each required output specification, with every supplied field visible.
 
-The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares one image through the shared renderer. Before initializing display backends, it saves that exact image as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. The output is independent of the configuration file location and is not production state.
+The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares the required output variants through the shared preparation pipeline. Before initializing display backends, it saves a prepared diagnostic variant as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. The output is independent of the configuration file location and is not production state.
 
 The reserved target `information` is recognized before content-library loading. It uses `prepare_information_view()` directly, without constructing a daily selection record, evaluating a reveal schedule, waiting for the configured information-view duration, or transitioning to a daily quotation. A content entry with that ID remains valid for ordinary selection but cannot override this diagnostic target.
 
-After saving the PNG, the mode publishes one image through the existing display publication coordinator. It waits until every configured backend acknowledges the image or reaches a terminal publication failure, reports each result, and exits nonzero if any destination fails. It closes the backends after the attempts complete and does not start the continuous loop or hold serving backends open. A physical e-paper panel normally retains its image after process exit; the window and image-server backends are process-scoped and stop serving when Refrain exits. Publication failure does not remove the diagnostic PNG or alter production state.
+After saving the PNG, the mode publishes each backend's matching variant through the existing display publication coordinator. It waits until every configured backend acknowledges its variant or reaches a terminal publication failure, reports each result, and exits nonzero if any destination fails. It closes the backends after the attempts complete and does not start the continuous loop or hold serving backends open. A physical e-paper panel normally retains its image after process exit; the window and image-server backends are process-scoped and stop serving when Refrain exits. Publication failure does not remove the diagnostic PNG or alter production state.
 
 ### Standalone QR calibration
 
-The optional `--test-qr` mode generates a final-resolution RGB calibration image using the configured output dimensions, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
+The optional `--test-qr` mode generates an RGB calibration variant for each required output specification, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
 
-The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. The image is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output, and the same image is published through the existing coordinator to every configured backend. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
+The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. A calibration variant is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output; each configured backend receives its matching variant through the existing coordinator. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
 
 ### Interactive decoration preview
 
-Use `--test-decoration all` to preview all available decorations or `--test-decoration ID` to inspect one. A sorted decoration picker allows direct selection. The preview starts with a short quotation; `--test-quotation medium|long` selects another initial length, and `--test-aspect 4:3|16:9|16:10` selects its working canvas. The configured output ratio is used when no override is given, but configured output width and height do not determine diagnostic render dimensions. Diagnostics render directly at the authoritative working-canvas sizes: 3200 × 2400 for 4:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. `--no-qr`, `--no-background`, and `--no-tinting` establish diagnostic-only initial overrides; `--debug-layout` also enables diagnostic geometry overlays.
+Use `--test-decoration all` to preview all available decorations or `--test-decoration ID` to inspect one. A sorted decoration picker allows direct selection. The preview starts with a short quotation; `--test-quotation medium|long` selects another initial length, and `--test-aspect 4:3|5:3|16:9|16:10` selects its working canvas. The configured aspect is used when no override is given; requested output dimensions do not determine diagnostic render dimensions. Diagnostics render directly at the canonical working-canvas sizes: 3200 × 2400 for 4:3, 3840 × 2304 for 5:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. `--no-qr`, `--no-background`, and `--no-tinting` establish diagnostic-only initial overrides; `--debug-layout` also enables diagnostic geometry overlays.
 
-The desktop preview uses the normal preparation and rendering pipeline. Only after the complete full-working-canvas composition is rendered is it uniformly downscaled to fit the available screen area. The image is not stretched, cropped, or scrolled. Window fitting accounts for the toolbar, status/help area, and optional expanded Geometry panel; all controls remain outside the composition. Right/Space and Left navigate decorations; the picker selects an ID directly; Up and Down cycle quotation lengths; A cycles 4:3, 16:9, and 16:10 and resizes and centers the window; Q, B, T, and D toggle QR, graphical background, decoration tinting, and geometry overlays; R/F5 reload configuration and assets; X exits. Mouse toolbar controls perform the same state transitions.
+The desktop preview uses the normal preparation and rendering pipeline. Only after the complete full-working-canvas composition is rendered is it uniformly downscaled to fit the available screen area. The image is not stretched, cropped, or scrolled. Window fitting accounts for the toolbar, status/help area, and optional expanded Geometry panel; all controls remain outside the composition. Right/Space and Left navigate decorations; the picker selects an ID directly; Up and Down cycle quotation lengths; A cycles 4:3, 5:3, 16:9, and 16:10 and resizes and centers the window; Q, B, T, and D toggle QR, graphical background, decoration tinting, and geometry overlays; R/F5 reload configuration and assets; X exits. Mouse toolbar controls perform the same state transitions.
 
 The collapsed Geometry panel exposes presentation insets and QR anchoring for interactive inspection only. Its values are in working-canvas pixels, independent of output resolution and desktop preview scaling. The panel identifies decoration-defined values separately from inherited configuration/default values and temporary overrides. Numeric edits apply on Enter or focus loss; valid edits rerender through the normal preparation pipeline, while invalid literary insets leave the last successfully rendered image intact. QR placement continues to use the authoritative resolver and its normal unavailable-QR behavior. Expanding the panel reduces only the desktop preview scale; it does not change the rendered composition or its aspect ratio.
 
@@ -1637,7 +1637,7 @@ Temporary inset overrides are independent per edge, and QR overrides are indepen
 
 `--test-decoration ID --test-output PATH` renders exactly one composition to a full-working-canvas PNG without opening Tk or initializing a display backend. The output path's parent directories are created when needed. A directory cannot be used as `PATH`; provide a filename. Individual PNGs are written atomically. `all` is not valid with `--test-output`; select an ID. The export applies the selected aspect, quotation, and diagnostic presentation options, and contains no preview scaling or toolbar.
 
-`--test-decoration ID --test-variants DIRECTORY` writes a complete batch under a new `DIRECTORY/ID` subdirectory. Existing `DIRECTORY/ID` paths are never overwritten or merged. Aspect directories are generated in stable order (`4x3`, `16x9`, `16x10`), with quotation lengths (`short`, `medium`, `long`) and QR-on before QR-off when effective QR is available. Filenames are `<length>-qr-on.png` and `<length>-qr-off.png`; when QR is unavailable for an aspect, only its QR-off files are written. Configuration QR policy, decoration readiness, placement, and normal conditional-layer selection determine effective availability. Batch mode generates every aspect and quotation length automatically, so it rejects `--test-aspect`, `--test-quotation`, and `--no-qr`; it is also mutually exclusive with `--test-output` and does not accept `all`. `--no-background`, `--no-tinting`, and `--debug-layout` apply to every image.
+`--test-decoration ID --test-variants DIRECTORY` writes a complete batch under a new `DIRECTORY/ID` subdirectory. Existing `DIRECTORY/ID` paths are never overwritten or merged. Aspect directories are generated in stable order (`4x3`, `5x3`, `16x9`, `16x10`), with quotation lengths (`short`, `medium`, `long`) and QR-on before QR-off when effective QR is available. Filenames are `<length>-qr-on.png` and `<length>-qr-off.png`; when QR is unavailable for an aspect, only its QR-off files are written. Configuration QR policy, decoration readiness, placement, and normal conditional-layer selection determine effective availability. Batch mode generates every aspect and quotation length automatically, so it rejects `--test-aspect`, `--test-quotation`, and `--no-qr`; it is also mutually exclusive with `--test-output` and does not accept `all`. `--no-background`, `--no-tinting`, and `--debug-layout` apply to every image.
 
 Batch rendering uses stable diagnostic choices for fonts, backgrounds, and tint colors across variants. It renders into a temporary sibling directory and publishes the completed set only after every requested image succeeds; a failure reports the affected variant and removes staging output. Diagnostic PNGs are deterministic for identical resources, configuration, and arguments and contain no timestamps or random identifiers. These files support composition inspection only: desktop scaling and PNG dimensions do not model physical display rendering, and generated QR artwork does not establish physical scan reliability.
 
@@ -1651,11 +1651,11 @@ An interruption before selection commitment permits selection to be repeated.
 
 An interruption after commitment preserves the committed selection.
 
-Missing or incomplete prepared images are regenerated as a complete set from the durable daily selection and current presentation inputs.
+Missing or incomplete prepared variants are regenerated as complete stage sets from the durable daily selection and current presentation inputs, without reselection or reveal regression.
 
 Individual display backend failures are handled through independent recovery policies without delaying other available destinations.
 
-After restart, each available backend is supplied with the currently required prepared image without relying on persisted backend-specific presentation progress.
+After restart, each available backend is supplied with its currently required prepared variant without relying on persisted backend-specific presentation progress.
 
 Recovery must not introduce additional history entries or silently substitute content.
 
@@ -1761,16 +1761,20 @@ The following must remain true as the project evolves:
 14. Selection revisions increase monotonically and are maintained independently of global history.
 15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
 16. A committed daily selection preserves the selected content and effective reveal schedule independently of subsequent content-library changes.
-17. Every required reveal-stage image is generated together using one consistent resolution of current presentation inputs.
-18. Complete prepared-image sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
-19. Missing or unusable prepared images can be regenerated without selecting new content or moving reveal progression backward.
-20. A restart retains the committed selection and reveal progression only while the current logical display date matches the committed date.
-21. Reveal progression never moves backward within a committed selection.
-22. The active selection remains authoritative while the current logical display date matches its committed date; a mismatch requires a new selection regardless of clock direction or restart.
-23. Within one logical display date, reveal progression is monotonic. A new selection for another logical display date begins its own reveal progression.
-24. Hardware failures do not invalidate committed selections.
-25. Ordinary operation does not require internet access or external services.
-26. Public presentation does not grant privileged local control.
-27. Future integrations must not become prerequisites for displaying ordinary quotations.
+17. Every required reveal-stage image is generated for each unique required output specification.
+18. Presentation-wide choices remain consistent across raster variants, while raster-dependent layout and rendering results are resolved independently for each variant.
+19. Aspect ratio is distinct from requested raster resolution and determines composition and the canonical working/design canvas.
+20. A correctly proportioned requested resolution is rendered natively; an aspect-mismatched request is rendered at the nearest matching integer-pixel resolution and the complete image is then resampled to the exact request.
+21. Destinations with identical output specifications may share a prepared variant, and each backend receives its matching variant without owning literary composition or presentation policy.
+22. Complete prepared-variant sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
+23. Missing or unusable variants can be prepared from the committed selection without reselection, history changes, or reveal regression.
+24. A restart retains the committed selection and reveal progression only while the current logical display date matches the committed date.
+25. Reveal progression never moves backward within a committed selection.
+26. The active selection remains authoritative while the current logical display date matches its committed date; a mismatch requires a new selection regardless of clock direction or restart.
+27. Within one logical display date, reveal progression is monotonic. A new selection for another logical display date begins its own reveal progression.
+28. Hardware failures do not invalidate committed selections.
+29. Ordinary operation does not require internet access or external services.
+30. Public presentation does not grant privileged local control.
+31. Future integrations must not become prerequisites for displaying ordinary quotations.
 
 Architectural changes must be evaluated against these invariants before implementation work is accepted.
