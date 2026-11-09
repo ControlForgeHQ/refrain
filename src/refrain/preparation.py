@@ -383,31 +383,47 @@ def _compose_nine_slice(
             None,
         ),
     )
+    operations: list[tuple[tuple[int, int, int, int], int, int, int, int, str | None, int, int]] = []
     for x0, y0, x1, y1, dest_x, dest_y, dest_width, dest_height, mode in regions:
         if dest_width <= 0 or dest_height <= 0:
             continue
         source_bounds = (source_x[x0], source_y[y0], source_x[x1], source_y[y1])
+        if source_bounds[2] <= source_bounds[0] or source_bounds[3] <= source_bounds[1]:
+            raise ValueError(f"source region {source_bounds} has no artwork for its destination")
         mapped_width = x_bounds[x1] - x_bounds[x0]
         mapped_height = y_bounds[y1] - y_bounds[y0]
+        if mode == "horizontal-crop" and dest_width > mapped_width:
+            raise ValueError(
+                f"horizontal crop destination length {dest_width} exceeds source edge length {mapped_width}"
+            )
+        if mode == "vertical-crop" and dest_height > mapped_height:
+            raise ValueError(
+                f"vertical crop destination length {dest_height} exceeds source edge length {mapped_height}"
+            )
+        if mode == "horizontal-crop" and mapped_width <= 0:
+            raise ValueError("horizontal crop source edge has no length")
+        if mode == "vertical-crop" and mapped_height <= 0:
+            raise ValueError("vertical crop source edge has no length")
+        operations.append((source_bounds, dest_x, dest_y, dest_width, dest_height, mode, mapped_width, mapped_height))
+
+    for source_bounds, dest_x, dest_y, dest_width, dest_height, mode, mapped_width, mapped_height in operations:
         if mode == "horizontal-crop":
-            if dest_width > mapped_width:
-                raise ValueError(
-                    f"horizontal crop destination length {dest_width} exceeds source edge length {mapped_width}"
-                )
             resized = _resize_source_region(source, source_bounds, (mapped_width, dest_height))
-            crop_left = round_half_up(mapped_width - dest_width, 2)
-            transformed = resized.crop((crop_left, 0, crop_left + dest_width, dest_height)) if resized else None
-            if resized is not None:
+            if resized is None:
+                continue
+            try:
+                crop_left = round_half_up(mapped_width - dest_width, 2)
+                transformed = resized.crop((crop_left, 0, crop_left + dest_width, dest_height))
+            finally:
                 resized.close()
         elif mode == "vertical-crop":
-            if dest_height > mapped_height:
-                raise ValueError(
-                    f"vertical crop destination length {dest_height} exceeds source edge length {mapped_height}"
-                )
             resized = _resize_source_region(source, source_bounds, (dest_width, mapped_height))
-            crop_top = round_half_up(mapped_height - dest_height, 2)
-            transformed = resized.crop((0, crop_top, dest_width, crop_top + dest_height)) if resized else None
-            if resized is not None:
+            if resized is None:
+                continue
+            try:
+                crop_top = round_half_up(mapped_height - dest_height, 2)
+                transformed = resized.crop((0, crop_top, dest_width, crop_top + dest_height))
+            finally:
                 resized.close()
         else:
             transformed = _resize_source_region(source, source_bounds, (dest_width, dest_height))

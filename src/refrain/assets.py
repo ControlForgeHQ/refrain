@@ -437,7 +437,7 @@ def discover_decorations(
                     layer_field,
                     report,
                 )
-                method = definition.get("method")
+                method = definition.get("method", "contain")
                 if not isinstance(method, str) or method not in {"contain", "nine-slice"}:
                     report(
                         f"{layer_field}.method",

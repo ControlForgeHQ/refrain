@@ -712,12 +712,12 @@ Each `layers` item is a mapping with the following fields:
 | Field | Type | Required | Default |
 |---|---|---|---|
 | `image` | Relative single-frame RGB or RGBA PNG path | Yes | — |
-| `method` | `"contain"` or `"nine-slice"` | Yes | — |
+| `method` | `"contain"` or `"nine-slice"` | No | `"contain"` |
 | `nine_slice` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
+For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` accepts no `nine_slice` parameters. `nine-slice` requires a `nine_slice` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|

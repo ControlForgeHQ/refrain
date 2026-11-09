@@ -130,6 +130,37 @@ def test_nine_slice_rejects_corner_and_crop_destinations_that_cannot_fit() -> No
         background.close()
 
 
+def test_invalid_crop_geometry_leaves_destination_unchanged(tmp_path: Path, caplog) -> None:
+    image_path = tmp_path / "narrow.png"
+    source = Image.new("RGBA", (1000, 2400), (200, 30, 40, 255))
+    try:
+        source.save(image_path)
+    finally:
+        source.close()
+    layer = DecorationLayerResource(
+        image_path,
+        "nine-slice",
+        NineSliceParameters(20, 20, 20, 20, horizontal="crop"),
+        tintable=False,
+    )
+    decoration = DecorationResource("crop-too-long", (layer,), False)
+    background = Image.new("RGB", (3840, 2400), (17, 23, 31))
+    original_pixel = background.getpixel((0, 0))
+
+    composed = preparation._apply_daily_decoration(
+        background,
+        "crop-too-long",
+        {"crop-too-long": decoration},
+    )
+
+    assert composed is background
+    assert background.getpixel((0, 0)) == original_pixel
+    assert background.getpixel((24, 24)) == original_pixel
+    assert background.getpixel((3839, 2399)) == original_pixel
+    assert "horizontal crop destination length" in caplog.text
+    background.close()
+
+
 def _write_layer(path: Path, color: tuple[int, int, int, int], *, size: tuple[int, int] = (4, 2)) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGBA", size, color).save(path)

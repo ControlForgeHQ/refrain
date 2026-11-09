@@ -243,7 +243,7 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
     _write_manifest(
         single,
         "decoration.yaml",
-        {"format": 1, "id": "single", "layers": [{"image": "single.png", "method": "contain"}]},
+        {"format": 1, "id": "single", "layers": [{"image": "single.png"}]},
     )
     multi = root / "multi"
     _write_png(multi / "base.png", "RGBA")
@@ -286,7 +286,6 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
         (None, ".layers"),
         ([], ".layers"),
         ([{"method": "contain"}], ".image"),
-        ([{"image": "border.png"}], ".method"),
         ([{"image": "border.png", "method": "fit"}], ".method"),
         ([{"image": "border.png", "method": "contain", "condition": "sometimes"}], ".condition"),
         (
