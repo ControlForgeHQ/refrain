@@ -11,6 +11,7 @@ from refrain.geometry import (
     PresentationInsets,
     ResolvedOutputSpecification,
     resolve_aspect_first_geometry,
+    resolve_legacy_output_specification,
     resolve_presentation_geometry,
     validate_output_size,
     working_canvas_for_aspect,
@@ -37,6 +38,16 @@ def test_reference_and_documented_defaults_are_fixed() -> None:
     assert REFERENCE_SIZE == (3840, 2400)
     assert DEFAULT_OUTPUT_SIZE == (1920, 1080)
     assert DEFAULT_PRESENTATION_INSETS == (384, 384, 324, 324)
+
+
+@pytest.mark.parametrize(
+    ("output_size", "aspect_ratio"),
+    [((1600, 1200), "4:3"), ((1920, 1080), "16:9"), ((3840, 2400), "16:10")],
+)
+def test_legacy_output_size_resolves_to_declared_output_specification(output_size, aspect_ratio) -> None:
+    specification = resolve_legacy_output_specification(output_size)
+    assert specification == ResolvedOutputSpecification(aspect_ratio, output_size)
+    assert specification.native_render_size == output_size
 
 
 @pytest.mark.parametrize(

@@ -351,7 +351,8 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
 
     def inspect_prepared_stage(_coordinator, _identity):
         if not pixels:
-            with demo.prepared[0][2].load_stage(0) as image:
+            specification = demo.prepared[0][2].output_specifications[0]
+            with demo.prepared[0][2].load_stage(specification, 0) as image:
                 pixels.append(image.getpixel((320, 400)))
 
     monkeypatch.setattr(application, "_debug_layout_image", inspect_debug_image)
@@ -554,14 +555,14 @@ def test_recoverable_operations_retry_same_selection_and_stage(demo, monkeypatch
     elif failure == "artifact-load":
         original = PreparedImageArtifactSet.load_stage
 
-        def operation(self, stage):
+        def operation(self, output_specification, stage):
             nonlocal failed
             if stage == 1 and not failed and demo.coordinators[-1].desired_identity == (1, 0):
                 assert [identity for identity, *_ in demo.publications] == [(1, 0)]
                 assert demo.stores[-1].load().highest_reveal_stage == 1
                 failed = True
-                self.stage_paths[stage].unlink()
-            return original(self, stage)
+                self.variant_for(output_specification).stage_paths[stage].unlink()
+            return original(self, output_specification, stage)
 
         monkeypatch.setattr(PreparedImageArtifactSet, "load_stage", operation)
     elif failure == "publication":
@@ -596,7 +597,13 @@ def test_recoverable_operations_retry_same_selection_and_stage(demo, monkeypatch
     if failure == "artifact-load":
         assert len(demo.prepared) == 2
         assert demo.prepared[0][0].snapshot == demo.prepared[1][0].snapshot
-        assert demo.prepared[0][2].stage_paths != demo.prepared[1][2].stage_paths
+        first_artifacts = demo.prepared[0][2]
+        second_artifacts = demo.prepared[1][2]
+        specification = first_artifacts.output_specifications[0]
+        assert (
+            first_artifacts.variant_for(specification).stage_paths
+            != second_artifacts.variant_for(specification).stage_paths
+        )
     demo.assert_clean()
 
 

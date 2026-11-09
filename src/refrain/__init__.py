@@ -18,6 +18,7 @@ from .artifacts import (
     ArtifactWriteError,
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
+    PreparedImageArtifactVariant,
 )
 from .config import (
     ApplicationConfiguration,
@@ -62,6 +63,7 @@ from .geometry import (
     PresentationInsets,
     ResolvedOutputSpecification,
     resolve_aspect_first_geometry,
+    resolve_legacy_output_specification,
     resolve_presentation_geometry,
     working_canvas_for_aspect,
     working_canvas_for_output,
@@ -119,6 +121,7 @@ __all__ = [
     "ArtifactValidationError",
     "ArtifactWriteError",
     "PreparedImageArtifactSet",
+    "PreparedImageArtifactVariant",
     "PreparedImageArtifactStore",
     "ApplicationConfiguration",
     "ApplicationConfigurationError",
@@ -151,6 +154,7 @@ __all__ = [
     "ResolvedOutputSpecification",
     "SUPPORTED_PRESENTATION_ASPECTS",
     "resolve_aspect_first_geometry",
+    "resolve_legacy_output_specification",
     "resolve_presentation_geometry",
     "working_canvas_for_aspect",
     "working_canvas_for_output",
