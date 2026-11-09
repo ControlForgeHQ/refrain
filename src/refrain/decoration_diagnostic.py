@@ -218,10 +218,7 @@ def _decoration_geometry(configuration, decoration, overrides: GeometryOverrides
     """Resolve effective geometry and its source without mutating shared resources."""
     overrides = overrides or GeometryOverrides()
     insets = decoration.presentation_insets or configuration.presentation_insets
-    values = {
-        name: getattr(insets, name)
-        for name in ("left", "right", "top", "bottom")
-    }
+    values = {name: getattr(insets, name) for name in ("left", "right", "top", "bottom")}
     values.update(dict(overrides.presentation_insets))
 
     metadata = dict(decoration.qr_positioning)
@@ -374,17 +371,19 @@ def preview_window_layout(
     *,
     status_height: int = 72,
     geometry_height: int = 0,
+    geometry_width: int = 0,
     margin: int = 24,
 ) -> tuple[tuple[int, int], tuple[int, int, int, int]]:
     """Fit the preview and center a window that also contains its complete controls."""
     screen_width, screen_height = screen_size
     toolbar_width, toolbar_height = toolbar_size
+    controls_width = max(toolbar_width, geometry_width)
     outer = 16
-    available_width = max(1, min(screen_width - margin * 2 - outer, screen_width - toolbar_width - margin * 2))
+    available_width = max(1, screen_width - margin * 2 - outer)
     reserved_height = toolbar_height + geometry_height + status_height + margin * 2 + outer
     available_height = max(1, screen_height - reserved_height)
     preview = _mapped_output_size(output_size, (available_width, available_height))
-    window_width = min(screen_width - margin, max(preview[0] + outer, toolbar_width + outer))
+    window_width = min(screen_width - margin, max(preview[0] + outer, controls_width + outer))
     window_height = min(screen_height - margin, preview[1] + reserved_height)
     left = max(0, (screen_width - window_width) // 2)
     top = max(0, (screen_height - window_height) // 2)
@@ -657,12 +656,8 @@ def _diagnostic_status(
         f"{name}={getattr(effective_insets, name)} ({'temporary' if name in inset_sources else inset_source})"
         for name in ("left", "right", "top", "bottom")
     )
-    horizontal_source = "temporary" if overrides.qr_horizontal is not None else (
-        "decoration" if manifest is not None else "default"
-    )
-    vertical_source = "temporary" if overrides.qr_vertical is not None else (
-        "decoration" if manifest is not None else "default"
-    )
+    horizontal_source = "default" if manifest is None else _qr_axis_source(manifest, overrides, "horizontal")
+    vertical_source = "default" if manifest is None else _qr_axis_source(manifest, overrides, "vertical")
     status = (
         f"Decoration: {decoration} ({position}); manifest: {manifest_path}\n"
         f"Quotation: {_QUOTATION_NAMES[state.quotation_index]}; aspect: {ratio}; "
@@ -812,6 +807,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         tk.Label(presentation_row, text=f"{name.title()}").pack(side="left", padx=(3, 1))
         entry = tk.Entry(presentation_row, textvariable=presentation_vars[name], width=7)
         entry.pack(side="left")
+        entry.bind("<KeyRelease>", lambda event: refresh_geometry_controls())
         entry.bind("<Return>", lambda event, field=name: apply_inset(field))
         entry.bind("<FocusOut>", lambda event, field=name: apply_inset(field))
         presentation_entries[name] = entry
@@ -832,6 +828,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     qr_horizontal.bind("<<ComboboxSelected>>", lambda event: apply_qr_method("horizontal"))
     qr_horizontal_entry = tk.Entry(qr_row, textvariable=qr_horizontal_offset, width=6)
     qr_horizontal_entry.pack(side="left")
+    qr_horizontal_entry.bind("<KeyRelease>", lambda event: refresh_geometry_controls())
     qr_horizontal_entry.bind("<Return>", lambda event: apply_qr_offset("horizontal"))
     qr_horizontal_entry.bind("<FocusOut>", lambda event: apply_qr_offset("horizontal"))
     qr_horizontal_source = tk.Label(qr_row, text="")
@@ -844,6 +841,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     qr_vertical.bind("<<ComboboxSelected>>", lambda event: apply_qr_method("vertical"))
     qr_vertical_entry = tk.Entry(qr_row, textvariable=qr_vertical_offset, width=6)
     qr_vertical_entry.pack(side="left")
+    qr_vertical_entry.bind("<KeyRelease>", lambda event: refresh_geometry_controls())
     qr_vertical_entry.bind("<Return>", lambda event: apply_qr_offset("vertical"))
     qr_vertical_entry.bind("<FocusOut>", lambda event: apply_qr_offset("vertical"))
     qr_vertical_source = tk.Label(qr_row, text="")
@@ -876,7 +874,6 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     displayed_image = [None]
     displayed_size = [None]
     last_rendered_state = [None]
-    last_status = [""]
     geometry_error = [None]
     bound_decoration = [None]
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="refrain-decoration-preview")
@@ -895,30 +892,28 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         return identifier, resource, overrides
 
     def set_geometry_error(error):
+        previous_error = geometry_error[0]
         geometry_error[0] = error
         geometry_status.configure(
             text=f"Geometry validation: {error}" if error else "Coordinates are working-canvas pixels."
         )
-        if error and error != last_status[0]:
+        if error and error != previous_error:
             print(f"Decoration geometry validation: {error}", file=sys.stderr, flush=True)
-            last_status[0] = error
 
     def refresh_geometry_controls(force=False):
         selected = selected_geometry()
         if selected is None:
             return
         identifier, resource, overrides = selected
+        insets, _, horizontal, vertical, inset_source, _ = _decoration_geometry(
+            configuration_box[0], resource, overrides
+        )
         if not force and bound_decoration[0] == identifier and last_rendered_state[0] is not None:
             pass
         else:
-            insets, _, horizontal, vertical, inset_source, _ = _decoration_geometry(
-                configuration_box[0], resource, overrides
-            )
             for name in presentation_vars:
                 presentation_vars[name].set(str(getattr(insets, name)))
-            qr_horizontal_var.set(
-                "Centered" if horizontal.method == "center" else f"From {horizontal.method}"
-            )
+            qr_horizontal_var.set("Centered" if horizontal.method == "center" else f"From {horizontal.method}")
             qr_vertical_var.set("Centered" if vertical.method == "center" else f"From {vertical.method}")
             qr_horizontal_offset.set("" if horizontal.method == "center" else str(horizontal.offset))
             qr_vertical_offset.set("" if vertical.method == "center" else str(vertical.offset))
@@ -935,13 +930,27 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         qr_vertical_entry.configure(state="disabled" if vertical_centered else "normal")
         active = overrides is not None and overrides != GeometryOverrides()
         reset_button.configure(state="normal" if active else "disabled")
+        copy_is_current = all(
+            presentation_vars[name].get().strip() == str(getattr(insets, name))
+            for name in ("left", "right", "top", "bottom")
+        )
+        copy_is_current = copy_is_current and qr_horizontal_var.get() == (
+            "Centered" if horizontal.method == "center" else f"From {horizontal.method}"
+        )
+        copy_is_current = copy_is_current and qr_vertical_var.get() == (
+            "Centered" if vertical.method == "center" else f"From {vertical.method}"
+        )
+        if horizontal.method != "center":
+            copy_is_current = copy_is_current and qr_horizontal_offset.get().strip() == str(horizontal.offset)
+        if vertical.method != "center":
+            copy_is_current = copy_is_current and qr_vertical_offset.get().strip() == str(vertical.offset)
         try:
             output = _with_aspect(configuration_box[0], state_box[0].aspect_ratio).output_size
             _geometry_manifest_values(configuration_box[0], resource, overrides, output)
         except (PresentationGeometryError, QRCodePlacementError, ValueError):
             copy_button.configure(state="disabled")
         else:
-            copy_button.configure(state="normal")
+            copy_button.configure(state="normal" if copy_is_current else "disabled")
 
     def parse_geometry_integer(value, label):
         value = value.strip()
@@ -979,7 +988,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
 
     def apply_qr_method(axis):
         identifier, resource, overrides = selected_geometry()
-        insets, _, horizontal, vertical, _, _ = _decoration_geometry(configuration_box[0], resource, overrides)
+        _, _, horizontal, vertical, _, _ = _decoration_geometry(configuration_box[0], resource, overrides)
         variable = qr_horizontal_var if axis == "horizontal" else qr_vertical_var
         selected = variable.get()
         method = {
@@ -998,9 +1007,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             qr_vertical=position if axis == "vertical" else None,
         )
         try:
-            _decoration_geometry(
-                configuration_box[0], resource, dict(candidate.geometry_overrides).get(identifier)
-            )
+            _decoration_geometry(configuration_box[0], resource, dict(candidate.geometry_overrides).get(identifier))
         except QRCodePlacementError as error:
             set_geometry_error(str(error))
             refresh_geometry_controls(force=True)
@@ -1071,12 +1078,14 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         toolbar_size = (toolbar.winfo_reqwidth(), toolbar.winfo_reqheight())
         status_height = status_label.winfo_reqheight() + help_label.winfo_reqheight() + 24
         panel_height = geometry_panel.winfo_reqheight() if geometry_open[0] else 0
+        panel_width = geometry_panel.winfo_reqwidth() if geometry_open[0] else 0
         display_size, geometry = preview_window_layout(
             current_image[0].size,
             screen_size,
             toolbar_size,
             status_height=status_height,
             geometry_height=panel_height,
+            geometry_width=panel_width,
         )
         root.geometry(f"{geometry[0]}x{geometry[1]}+{geometry[2]}+{geometry[3]}")
         if displayed_image[0] is current_image[0] and displayed_size[0] == display_size:
@@ -1305,7 +1314,6 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
                     rendered_size,
                     display_size,
                 )
-                last_status[0] = status
                 status_var.set(f"{rendered.message}\n{status}" if rendered.message else status)
                 last_rendered_state[0] = rendered.state
                 resize_preview()

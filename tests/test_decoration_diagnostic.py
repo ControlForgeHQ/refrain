@@ -478,9 +478,7 @@ def test_geometry_initialization_inheritance_and_independent_inset_overrides(wor
     config, package = workspace
     configuration = diagnostic._load_configuration(config)
     resource = configuration.decorations["a-custom"]
-    insets, qr, horizontal, vertical, inset_source, qr_source = diagnostic._decoration_geometry(
-        configuration, resource
-    )
+    insets, qr, horizontal, vertical, inset_source, qr_source = diagnostic._decoration_geometry(configuration, resource)
     assert (insets.left, insets.right, insets.top, insets.bottom) == (384, 384, 324, 324)
     assert (horizontal.method, horizontal.offset) == ("right", 20)
     assert (vertical.method, vertical.offset) == ("bottom", 20)
@@ -503,14 +501,10 @@ def test_geometry_initialization_inheritance_and_independent_inset_overrides(wor
     assert (insets.left, insets.right, insets.top, insets.bottom) == (510, 222, 333, 444)
     assert reloaded.decorations["a-custom"].presentation_insets.left == 111
 
-    inherited_manifest = _MANIFEST.replace(
-        "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}\n", ""
-    )
+    inherited_manifest = _MANIFEST.replace("presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}\n", "")
     (package / "decoration.yaml").write_text(inherited_manifest, encoding="utf-8")
     inherited = diagnostic._load_configuration(config)
-    resolved, *_rest, source, _qr_source = diagnostic._decoration_geometry(
-        inherited, inherited.decorations["a-custom"]
-    )
+    resolved, *_rest, source, _qr_source = diagnostic._decoration_geometry(inherited, inherited.decorations["a-custom"])
     assert (resolved.left, resolved.right, resolved.top, resolved.bottom) == (384, 384, 324, 324)
     assert source == "inherited"
 
@@ -527,17 +521,13 @@ def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
     state = diagnostic._set_geometry_override(state, "a-custom", qr_horizontal=diagnostic._QRPosition("right", 51))
     state = diagnostic._set_geometry_override(state, "a-custom", qr_vertical=diagnostic._QRPosition("center"))
     overrides = dict(state.geometry_overrides)["a-custom"]
-    insets, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
-        configuration, resource, overrides
-    )
+    insets, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource, overrides)
     assert (horizontal.method, horizontal.offset) == ("right", 51)
     assert vertical.method == "center"
     assert metadata == {"qr_from_right": 51, "qr_centered": "vertical"}
     placement = diagnostic.resolve_qr_placement(configuration.output_size, metadata)
     assert placement.working_bounds[0] == 3840 - 246 - 51
-    fragment, _ = diagnostic._geometry_manifest_values(
-        configuration, resource, overrides, configuration.output_size
-    )
+    fragment, _ = diagnostic._geometry_manifest_values(configuration, resource, overrides, configuration.output_size)
     parsed = yaml.safe_load(fragment)
     assert parsed == {
         "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
@@ -545,13 +535,9 @@ def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
         "qr_centered": "vertical",
     }
 
-    state = diagnostic._set_geometry_override(
-        state, "a-custom", qr_horizontal=diagnostic._QRPosition("center")
-    )
+    state = diagnostic._set_geometry_override(state, "a-custom", qr_horizontal=diagnostic._QRPosition("center"))
     overrides = dict(state.geometry_overrides)["a-custom"]
-    _, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(
-        configuration, resource, overrides
-    )
+    _, metadata, horizontal, vertical, _, _ = diagnostic._decoration_geometry(configuration, resource, overrides)
     assert horizontal.method == "center"
     assert (vertical.method, vertical.offset) == ("bottom", 20)
     assert metadata == {"qr_centered": "horizontal", "qr_from_bottom": 20}
@@ -564,9 +550,7 @@ def test_geometry_override_rendering_aspect_and_debug_bounds(workspace):
     resource = configuration.decorations["a-custom"]
     state = diagnostic.DiagnosticState(("a-custom",), aspect_ratio="4:3")
     state = diagnostic._set_geometry_override(state, "a-custom", inset=("left", 500))
-    state = diagnostic._set_geometry_override(
-        state, "a-custom", qr_horizontal=diagnostic._QRPosition("left", 60)
-    )
+    state = diagnostic._set_geometry_override(state, "a-custom", qr_horizontal=diagnostic._QRPosition("left", 60))
     overrides = dict(state.geometry_overrides)["a-custom"]
     details = []
     image, _ = diagnostic._render(
@@ -968,6 +952,19 @@ def test_aspect_cycle_order_and_centered_preview_window():
     assert left == (1366 - width) // 2
     assert top == (768 - height) // 2
     assert left + width <= 1366 and top + height <= 768
+    expanded_preview, (expanded_width, expanded_height, expanded_left, expanded_top) = diagnostic.preview_window_layout(
+        (1920, 1440),
+        (1366, 768),
+        (900, 32),
+        status_height=100,
+        geometry_height=130,
+        geometry_width=1040,
+    )
+    assert expanded_preview[0] * 3 == expanded_preview[1] * 4
+    assert expanded_preview[1] < preview[1]
+    assert expanded_left + expanded_width <= 1366
+    assert expanded_top + expanded_height <= 768
+    assert expanded_width >= 1040
 
 
 def test_debug_toggle_regenerates_clean_presentation(workspace):
@@ -992,6 +989,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
     roots = []
     buttons = []
     comboboxes = []
+    entries = []
     submitted_states = []
     displayed_states = []
     photo_count = [0]
@@ -1071,6 +1069,8 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
             deadline = time.monotonic() + 10
             burst_dispatched = False
             keyboard_dispatched = False
+            geometry_dispatched = False
+            geometry_edit_dispatched = False
             aspect_dispatched = False
             picker_dispatched = False
             mouse_dispatched = False
@@ -1084,21 +1084,36 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
                     self.bindings["<KeyPress>"](SimpleNamespace(keysym="b", char="b"))
                     release_initial_render.set()
                     burst_dispatched = True
-                elif photo_count[0] == 1 and not keyboard_dispatched:
+                elif photo_count[0] == 1 and not geometry_dispatched:
+                    next(button for button in buttons if button.options["text"] == "Geometry ▸").command()
+                    geometry_dispatched = True
+                elif photo_count[0] == 2 and not geometry_edit_dispatched:
+                    left_entry = entries[0]
+                    left_entry.options["textvariable"].set("")
+                    left_entry.bindings["<KeyRelease>"](None)
+                    assert (
+                        next(button for button in buttons if button.options["text"] == "Copy values").options["state"]
+                        == "disabled"
+                    )
+                    left_entry.options["textvariable"].set("500")
+                    left_entry.bindings["<KeyRelease>"](None)
+                    left_entry.bindings["<Return>"](None)
+                    geometry_edit_dispatched = True
+                elif photo_count[0] == 3 and not keyboard_dispatched:
                     self.bindings["<KeyPress>"](SimpleNamespace(keysym="Right", char=""))
                     keyboard_dispatched = True
-                elif photo_count[0] == 2 and not aspect_dispatched:
+                elif photo_count[0] == 4 and not aspect_dispatched:
                     self.bindings["<KeyPress>"](SimpleNamespace(keysym="a", char="a"))
                     aspect_dispatched = True
-                elif photo_count[0] == 3 and not picker_dispatched:
+                elif photo_count[0] == 5 and not picker_dispatched:
                     picker = next(combo for combo in comboboxes if "a-custom" in combo.options.get("values", ()))
                     picker.options["textvariable"].set("a-custom")
                     picker.bindings["<<ComboboxSelected>>"](None)
                     picker_dispatched = True
-                elif photo_count[0] == 4 and not mouse_dispatched:
+                elif photo_count[0] == 6 and not mouse_dispatched:
                     next(button for button in buttons if button.options["text"] == "QR ✓").command()
                     mouse_dispatched = True
-                elif photo_count[0] == 5:
+                elif photo_count[0] == 7:
                     self.protocols["WM_DELETE_WINDOW"]()
                 if time.monotonic() > deadline:
                     raise TimeoutError("preview did not process its render/close sequence")
@@ -1117,7 +1132,13 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
     tkinter.Tk = Root
     tkinter.Frame = Widget
     tkinter.Label = Widget
-    tkinter.Entry = Widget
+
+    def create_entry(parent, **options):
+        entry = Widget(parent, **options)
+        entries.append(entry)
+        return entry
+
+    tkinter.Entry = create_entry
     tkinter.StringVar = Variable
 
     def create_button(parent, **options):
@@ -1176,6 +1197,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         "16:9",
         "16:9",
         "16:9",
+        "16:9",
         "16:10",
         "16:10",
         "16:10",
@@ -1184,7 +1206,13 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
     assert not submitted_states[1].background_enabled
     assert displayed_states[0].decoration == initial.decoration_ids[1]
     assert not displayed_states[0].background_enabled
-    assert submitted_states[4].decoration == "a-custom"
+    assert submitted_states[5].decoration == "a-custom"
+    assert dict(submitted_states[5].geometry_overrides).get("a-custom") is None
     assert submitted_states[-1].qr_enabled is False
+    assert any(
+        dict(state.geometry_overrides).get(state.decoration) is not None
+        and dict(state.geometry_overrides)[state.decoration].presentation_insets == (("left", 500),)
+        for state in submitted_states
+    )
     assert roots[0].destroyed
     assert len(roots[0].geometries) >= 2
