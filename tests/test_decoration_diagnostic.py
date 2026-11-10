@@ -366,12 +366,30 @@ def test_reload_updates_font_face_background_and_colours(workspace):
     second.close()
 
 
-@pytest.mark.parametrize(
-    "mode", ["--once", "--demo=1", "--show-entry=x", "--test-qr", "--initialize", "--reset", "--purge"]
-)
+@pytest.mark.parametrize("mode", ["--once", "--demo=1", "--show-entry=x", "--initialize", "--reset", "--purge"])
 def test_cli_modes_are_mutually_exclusive(mode):
     with pytest.raises(SystemExit) as error:
         cli.main(["--test-decoration", "all", mode])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--test-qr", None),
+        ("--qr-payload", "https://example.org"),
+        ("--qr-version", "auto"),
+        ("--qr-error-correction", "M"),
+        ("--qr-module-size", "4"),
+        ("--qr-quiet-zone", "4"),
+        ("--qr-right-offset", "40"),
+        ("--qr-bottom-offset", "40"),
+    ],
+)
+def test_removed_standalone_qr_cli_options_are_rejected(option, value):
+    arguments = [option] if value is None else [option, value]
+    with pytest.raises(SystemExit) as error:
+        cli.main(arguments)
     assert error.value.code == 2
 
 
@@ -1116,7 +1134,7 @@ def test_batch_cli_rejects_all_decorations():
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("mode", ["--once", "--test-qr"])
+@pytest.mark.parametrize("mode", ["--once"])
 def test_decoration_preview_rejects_other_modes(mode):
     with pytest.raises(SystemExit) as error:
         cli.main(["--test-decoration", "all", mode])

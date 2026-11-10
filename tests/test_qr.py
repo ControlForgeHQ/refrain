@@ -16,7 +16,6 @@ from refrain.qr import (
     render_qr_code,
     resolve_qr_placement,
 )
-from refrain.qr_diagnostic import QRCalibrationParameters, create_qr_calibration_image
 
 
 def _output_specification(size: tuple[int, int]) -> ResolvedOutputSpecification:
@@ -63,7 +62,7 @@ def test_production_qr_defaults_have_exact_geometry_and_pixel_modules() -> None:
         result.image.close()
 
 
-def test_explicit_url_and_absent_url_fallback_match_standalone_qr() -> None:
+def test_explicit_url_and_absent_url_fallback_use_expected_payloads() -> None:
     parameters = QRCodeParameters(
         url="https://example.org/alternate",
         version=4,
@@ -86,50 +85,14 @@ def test_explicit_url_and_absent_url_fallback_match_standalone_qr() -> None:
         ),
         (1600, 1200),
     )
-    default_diagnostic = create_qr_calibration_image(
-        QRCalibrationParameters(
-            payload=parameters.url,
-            version=parameters.version,
-            error_correction=parameters.error_correction,
-            module_size=parameters.module_size,
-            quiet_zone=parameters.quiet_zone,
-            right_offset=parameters.right_offset,
-            bottom_offset=parameters.bottom_offset,
-        )
-    )
-    diagnostic = create_qr_calibration_image(
-        QRCalibrationParameters(
-            payload=parameters.url,
-            version=parameters.version,
-            error_correction=parameters.error_correction,
-            module_size=parameters.module_size,
-            quiet_zone=parameters.quiet_zone,
-            right_offset=parameters.right_offset,
-            bottom_offset=parameters.bottom_offset,
-        ),
-        output_size=(1600, 1200),
-    )
     try:
-        assert default_diagnostic.geometry.output_image_size == (1920, 1080)
-        assert diagnostic.geometry.output_image_size == (1600, 1200)
         assert explicit.geometry.version == fallback.geometry.version == 4
-        with diagnostic.image.crop(
-            (
-                explicit.geometry.bounds[0],
-                explicit.geometry.bounds[1],
-                explicit.geometry.bounds[2] + 1,
-                explicit.geometry.bounds[3] + 1,
-            )
-        ) as diagnostic_footprint:
-            assert explicit.image.tobytes() == diagnostic_footprint.tobytes()
         assert explicit.image.tobytes() != fallback.image.tobytes()
         assert qr_parameters_to_metadata(QRCodeParameters(None, 4, "M", 3, 4, 40, 40))["url"] == REPOSITORY_URL
         assert qr_parameters_from_metadata(qr_parameters_to_metadata(parameters)) == parameters
     finally:
         explicit.image.close()
         fallback.image.close()
-        default_diagnostic.image.close()
-        diagnostic.image.close()
 
 
 def test_qr_geometry_and_capacity_failures_are_actionable() -> None:
