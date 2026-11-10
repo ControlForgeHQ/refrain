@@ -658,11 +658,11 @@ Do not allow the renderer to depend directly on Waveshare-specific objects or AP
 
 ### Output geometry and diagnostics
 
-Use Pillow for high-resolution raster composition and resampling. Keep configured output dimensions, the fixed 3840 × 2400 authoring envelope, and working-canvas dimensions as distinct values. Validate dimensions and aspect ratios before allocating images. Apply literary insets directly from the selected working canvas's edges, then uniformly scale the resulting rectangle to final output dimensions with deterministic nearest-integer, half-up rounding. Map nine-slice source coordinates into working-space measurements according to the fixed-reference artwork rules, then preserve resolved corner dimensions across supported aspect ratios.
+Use Pillow for raster composition and resampling. Follow the three image-space responsibilities and pipeline in `docs/ARCHITECTURE.md`; do not introduce a competing rendering sequence. Validate each resolved output specification and dimensions before allocating images. Keep the design canvas, presentation canvas, and requested output-image dimensions distinct. Resolve design-space geometry and scale it to presentation-canvas coordinates with the architecture's deterministic rounding rules. Render literary content, QR, and diagnostics on the presentation canvas; only the completed image may then be resized once as a whole to the requested output dimensions.
 
-Compose backgrounds and decorations on the resolved working canvas, then resample the graphical result to final output dimensions when needed, whether reducing or enlarging it. Do not resample when working and output dimensions already match. Avoid unnecessary upscaling of source raster resources and unnecessary full-canvas copies; enlargement of the completed composition is permitted when required by output dimensions. Render literary typography and the QR symbol only after this step, at final output resolution, without subsequent resizing or resampling.
+Nine-slice values are source-image pixel distances: partition the original source directly with those values and preserve the same numerical edge and corner thicknesses on the design canvas. Do not map source coordinates through the reference envelope. For example, a 1920 × 1200 source with `20 / 20 / 20 / 20` slices used on a 3840 × 2400 design canvas retains 20-pixel thicknesses, not 40-pixel thicknesses.
 
-Keep decoration diagnostics independent of configured output dimensions: use `working_canvas_for_output()` to render directly on the selected ratio's authoritative full working canvas. The configured output ratio may select the initial aspect, but configured width and height must not set the diagnostic canvas. Interactive desktop scaling is applied only to the completed composition and must reserve space for all controls. A diagnostic must not mutate committed presentation state or generated daily artifacts.
+Avoid unnecessary upscaling of source raster resources and unnecessary full-canvas copies. Manage Pillow image and font resources explicitly, closing decoded or temporary images when their owners are finished with them. Diagnostic tools must follow their documented output-specification behavior and must not mutate committed presentation state or generated daily artifacts.
 
 ### Font loading and resolution
 
@@ -698,11 +698,11 @@ Do not add font downloading. Keep role-specific face resolution limited to quota
 
 Background identifiers, registration requirements, and default-pool validation are defined in [Background registry](CONTENT_FORMAT.md#background-registry). Selection precedence and recovery behavior are defined in [Presentation and rendering](ARCHITECTURE.md#presentation-and-rendering).
 
-Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Use deterministic aspect-preserving centered cover scaling and cropping on the working canvas. Preserve transparency over the paper-white base.
+Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Use deterministic aspect-preserving centered cover scaling and cropping on the design canvas. Preserve transparency over the paper-white base.
 
 Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background for a complete image-preparation operation, not during selection commitment or independently for reveal stages.
 
-Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base, preserving RGBA transparency. Resolve and compose once per complete preparation operation, resample the graphic composition to final output dimensions only when needed, then reuse it for every stage. Use an appropriate high-quality Pillow resampling filter when dimensions differ, retain deterministic geometry, and close decoded resources promptly.
+Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base on the design canvas, preserving RGBA transparency. Scale the completed graphical composition to the presentation canvas as specified in `docs/ARCHITECTURE.md`, then reuse preparation-wide results for every stage where appropriate. Use an appropriate high-quality Pillow resampling filter when dimensions differ, retain deterministic geometry, and close decoded resources promptly.
 
 Daily-image preparation accepts the selected content, effective reveal stages, and current resource registries. It resolves a background from current preferences or pool configuration for the whole generated set. A supplied empty registry represents unavailable resources and applies the paper-white fallback policy.
 
@@ -712,9 +712,9 @@ When preparation cannot resolve or decode an optional background, report a warni
 
 Decoration identifiers, the initial ordered-layer manifest schema, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
 
-Resolve decoration, font, background, output dimensions, working-canvas insets, QR enablement, and layer transforms once per complete preparation. Keep selection outside rendering. Process eligible layers in manifest order over the background at working resolution, before literary text. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
+Resolve decoration, font, background, output specifications, design-canvas insets, QR availability, and layer transforms once per complete preparation. Keep selection outside rendering. Resolve effective QR availability before selecting conditional decoration layers; compose the resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
 
-Test centered cover scaling and cropping directly on each selected working canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd crop differences, and matching-size sources that need no transform. Test nine-slice source boundaries, preserved corner dimensions across 4:3, 16:9, and 16:10 working canvases, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. For example, verify that a resolved 240 × 180 corner remains 240 × 180 where it fits. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
+Test centered cover scaling and cropping directly on the design canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd crop differences, and matching-size sources that need no transform. Test nine-slice source boundaries, 1:1 preservation of configured source-pixel thicknesses on the design canvas, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. For example, a 1920 × 1200 source with 20-pixel slices on a 3840 × 2400 design canvas must retain 20-pixel edge/corner thicknesses. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
 
 Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. When any layer is effectively tintable, select one color using content-entry, decoration, global-pool, then built-in black precedence; a successful selection activates tinting. Preserve each layer's source alpha when applying that single preparation-wide decoration color. Artwork retaining authored RGB must explicitly be non-tintable. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
 
@@ -722,13 +722,9 @@ Image preparation accepts the effective decoration registry independently of the
 
 ### QR composition
 
-Resolve the explicit presentation-level QR policy and the selected decoration's `qr_ready` preference before composing artwork. Resolve the same effective availability for all reveal stages. Generate a symbol only when the policy permits it, `qr_ready` is not false, the position metadata is valid, and the complete allocated symbol fits the final output at a positive integer module size. The effective state is the input for conditional artwork; do not make a second QR decision in the decoration renderer. For Version 0.1, the payload is the fixed repository URL `https://github.com/ControlForgeHQ/refrain`; it is independent of quotation, entry, display date, and reveal stage. Preserve Version 4, error-correction level M, UTF-8 byte encoding, and the complete four-module quiet zone. Keep payload resolution separate from encoding, rasterization, placement, and publication.
+Follow the two-phase QR dependency in `docs/ARCHITECTURE.md`: resolve design-space placement, map the allocation to presentation-canvas pixels, and evaluate effective availability before choosing `always`, `qr`, or `no-qr` decoration layers. Availability includes presentation-level policy, selected-decoration `qr_ready`, valid in-bounds placement, and at least one presentation pixel per QR module. Rasterization and composition happen later on the presentation canvas, after literary rendering. Do not decide availability from policy and `qr_ready` alone or make a second decision in the decoration renderer.
 
-The application owns a fixed 246 × 246 working-canvas allocation, including the complete quiet zone. Resolve mutually exclusive directional offsets or single-axis centering on the selected ratio-specific working canvas; independently default unspecified axes to 20 pixels from the right and bottom. Reject malformed offsets, centering values, and axis conflicts without clamping or fallback. Validate the complete allocation against working-canvas bounds. Map all four edges independently to final output coordinates using the established half-up rule, derive the actual output rectangle from those edges, and use `min(width, height) // 41` as the largest fitting module size. Suppress QR with an actionable warning when placement is invalid or this calculation is zero; do not fail literary preparation or exclude the selected decoration. Other encoding or payload errors remain preparation errors.
-
-Rasterize the complete QR at final output resolution after literary text. Center the square integer-module footprint within the mapped allocation using half-up rounding, retain the opaque white quiet zone, and do not antialias, clip, distort, or resample the result. Resolve the placement once per preparation and composite identical QR pixels onto every reveal stage. Release the generated QR image with the other preparation resources. Do not generate QR images during scheduling, cache loading, or backend publication; valid prepared-image caches remain reusable without QR re-evaluation.
-
-Test default and all directional placements, per-axis defaults, single-axis centering, conflicts, malformed values (including booleans), bounds failures, edge-rounding and odd centering cases, and 4:3, 16:9, and 16:10 canvases. Verify the 1600 × 1200 and 1920 × 1080 outputs have 3-pixel modules and a 123 × 123 footprint; cover reduced modules, insufficient output sizes, exact Version 0.1 encoding, a complete four-module quiet zone, opaque black-and-white pixels, and identical QR placement across reveal stages. Test intentional policy and `qr_ready` suppression without warnings, invalid-placement and size suppression with warnings, and preservation of the selected decoration and literary preparation. Keep the standalone QR calibration diagnostic's explicit module and offset controls separate from production placement. Do not perform automatic collision avoidance or alter literary insets or artwork to reserve QR space. The information view remains independent of literary QR behavior.
+Test default and all directional placements, per-axis defaults, single-axis centering, conflicts, malformed values (including booleans), design-canvas bounds failures, edge-rounding and odd centering cases, and the supported canvases. Verify effective availability under each policy/readiness/placement/raster-viability condition before conditional-layer selection, then verify QR rasterization and composition on the presentation canvas after literary rendering. Cover exact Version 0.1 encoding, a complete four-module quiet zone, opaque black-and-white pixels, and consistent placement across reveal stages. Test intentional policy and `qr_ready` suppression without warnings, invalid-placement and insufficient-raster-size suppression with warnings, and preservation of the selected decoration and literary preparation. Keep the standalone QR calibration diagnostic's explicit module and offset controls separate from production placement. Do not perform automatic collision avoidance or alter literary insets or artwork to reserve QR space. The information view remains independent of literary QR behavior.
 
 Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
 
@@ -736,9 +732,9 @@ Wheel and source-distribution tests must verify that bundled manifests, referenc
 
 The initial release provides one configurable presentation layout.
 
-Use the configurable output dimensions, working-canvas pixel presentation insets, and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
+Use the configurable output dimensions, design-canvas pixel presentation insets, and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
 
-Resolve artwork reference measurements deterministically against the selected working canvas. Apply literary insets directly in working-canvas pixels, then scale to final output dimensions. Keep output, working, and reference canvases distinct; use one output resolution per application instance.
+Resolve configured geometry in design-canvas units and map it to the presentation canvas with deterministic rounding. Follow `docs/ARCHITECTURE.md` for destination-specific output specifications and the optional final whole-image resize.
 
 The shared quotation renderer is responsible for arranging and drawing the quotation and its optional source and attribution within that region.
 
@@ -764,7 +760,7 @@ Prefer a straightforward deterministic fitting procedure over a general-purpose 
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
-Validate the renderer's supported aspect-ratio and resolution matrix, including 1600 × 1200 and representative 16:9 and 16:10 outputs. Exercise 1080p and 4K working/output cases without treating hardware-independent results as physical display validation. Separately test the Waveshare backend's adaptation to its native 1600 × 1200 destination.
+Validate each destination's supported aspect-ratio and resolution specification, including aspect-mismatched requests. Exercise 1080p and 4K presentation/output cases without treating hardware-independent results as physical display validation. Verify that preparation produces the Waveshare's fixed 4:3 @ 1600 × 1200 output and that the backend rejects any image with different dimensions rather than resizing, cropping, or padding it.
 
 Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
 
@@ -806,7 +802,7 @@ The same rendering facilities must support preparation of a single fully visible
 
 Test image dimensions, supported output formats, presentation styles, field visibility, layout stability, and significant fitting constraints without physical display hardware.
 
-Tests must Verify that all present quotation, source, and attribution text remains within the configured working-canvas presentation region without overlap or clipping.
+Tests must verify that all present quotation, source, and attribution text remains within the configured presentation-canvas literary region without overlap or clipping.
 
 Visual inspection remains appropriate for typography and layout quality.
 
@@ -988,10 +984,11 @@ The backend must stop accepting requests and release its listening resources dur
 
 Test the backend without physical display hardware or external network services. Automated tests should exercise the HTTP interface through a real local listening socket, including:
 
-- successful retrieval of the current PNG image;
+- successful retrieval of every named output PNG;
 - correct response content type and image contents;
-- entity-tag generation and conditional requests;
-- replacement of the current image and invalidation of the previous entity tag;
+- independent entity tags and conditional requests for each named output;
+- replacement of each output image and invalidation of that output's previous entity tag;
+- correct delivery when multiple outputs share a prepared variant or use distinct variants;
 - requests made before the first successful image update;
 - failed image replacement preserving the previous representation;
 - concurrent requests and image updates;
@@ -1087,7 +1084,7 @@ Hardware validation must distinguish between driver-call success and visibly cor
 
 Include hardware-independent tests covering:
 
-- Multiple configured backends receiving the same prepared image.
+- Configured destinations receiving the prepared variant matching their output specification, with variants shared only for identical specifications.
 - Duplicate backend rejection.
 - Independent initialization and failure reporting.
 - One backend continuing while another is blocked or slow.
@@ -1178,6 +1175,7 @@ Log meaningful lifecycle and state changes, including:
 
 - application startup and shutdown;
 - application configuration defaults and recoverable validation problems;
+- output-specification defaults and paired-field validation for window and image-server outputs, fixed Waveshare dimensions, unique named output IDs, and preparation of all unique required specifications;
 - excluded content files and entries;
 - fatal configuration or content-library failures;
 - daily selection commitments;
@@ -1230,17 +1228,17 @@ The ability to import and test core components without Raspberry Pi hardware is 
 
 Use temporary configuration, content, output, and production-persistence paths to test `--show-entry` without hardware. Verify exact identifier matching, first-quotation selection without eligibility or history selection, final-stage visibility, shared resource resolution, the reserved information target without content loading or duration scheduling, and the absence of production state/history/artifact access.
 
-Verify that the PNG is created exclusively in the current working directory before backend publication and preserves the exact image mode, dimensions, and pixels given to every backend. Cover existing-file refusal, output-write errors, partial and complete publication failures, per-backend reporting, backend cleanup, and preservation of the PNG after publication failure. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
+Verify that `--show-entry` does not require explicit output geometry, prepares every output specification required by configured destinations, and publishes the matching variant to every backend. Cover exact identifier matching, first-quotation selection without eligibility or history selection, final-stage visibility, shared resource resolution, the reserved information target without content loading or duration scheduling, and the absence of production state/history/artifact access. Test publication failures and confirm they do not affect operational state. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
 
 ### QR calibration diagnostic tests
 
-Test enabled and disabled QR policies, decoration `qr_ready`, each conditional layer state, exact integer-pixel modules, complete quiet-zone and footprint geometry, and placement across the supported output matrix. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
+Test enabled and disabled QR policies, decoration `qr_ready`, each conditional layer state, exact integer-pixel modules, complete quiet-zone and footprint geometry, placement across required output specifications, atomic replacement of the saved calibration PNG, matching-variant publication to configured backends, backend failures, and absence of content-library or daily-state access. Keep the existing QR calibration CLI contract; do not add output-specification selection semantics here.
 
 ### Decoration diagnostic tests
 
-Test the `--test-decoration ID|all`, `--test-output PATH`, and `--test-variants DIRECTORY` CLI arguments, invalid selections, mode restrictions, initial toggles, all three deterministic quotation lengths, navigation wrapping, key normalization, state preservation during reload, and state isolation. Verify each aspect uses the full dimensions returned by authoritative working-canvas geometry, independent of configured output width and height. Test A-key cycling, centered window resizing, screen-fit scaling with controls and the expanded Geometry panel, QR availability and reason reporting, white-background and black-tint overrides, debug-overlay removal, active nine-slice guides, guide-coordinate reuse, deduplication, and color assignment through the existing preparation/composition pipeline. Cover Geometry-panel initialization from decoration and inherited values, independent per-edge and per-axis temporary overrides, supported QR method changes and mutual exclusion, numeric and canvas-bound validation, aspect changes, per-decoration isolation, reload and reset, valid YAML clipboard generation, debug outlines, preservation of other diagnostic toggles, and the absence of manifest/configuration or production-state mutation.
+Test the `--test-decoration ID|all`, `--test-output PATH`, and `--test-variants DIRECTORY` CLI arguments, invalid selections, mode restrictions, initial toggles, all three deterministic quotation lengths, navigation wrapping, key normalization, state preservation during reload, and state isolation. Verify each aspect uses the full dimensions of its design canvas, independent of configured destination output specifications. The headless single-file `--test-output` mode requires an explicit supported aspect; verify that omitted resolution uses the design-canvas dimensions and that an explicit mismatched resolution produces the expected presentation-canvas and output-image dimensions. Test A-key cycling, centered window resizing, screen-fit scaling with controls and the expanded Geometry panel, QR availability and reason reporting, white-background and black-tint overrides, debug-overlay removal, active nine-slice guides, guide-coordinate reuse, deduplication, and color assignment through the existing preparation/composition pipeline. Cover Geometry-panel initialization from decoration and inherited values, independent per-edge and per-axis temporary overrides, supported QR method changes and mutual exclusion, numeric and canvas-bound validation, aspect changes, per-decoration isolation, reload and reset, valid YAML clipboard generation, debug outlines, preservation of other diagnostic toggles, and the absence of manifest/configuration or production-state mutation.
 
-Mock Tk where suitable to verify direct picker selection, synchronization with keyboard navigation and reload, aspect toolbar and keyboard command dispatch, responsive reload/render scheduling, dynamic window sizing and centering with the Geometry panel expanded, field editing and validation, reset/copy actions, window-close cleanup, and toolbar/panel exclusion from rendered output. Verify headless single-file export validates directory destinations before rendering, requires one ID, applies the complete requested diagnostic state at full working-canvas size, creates missing parent directories, preserves atomic replacement, reports filesystem/render failures, and produces deterministic bytes without Tk or configured display-backend initialization. Verify batch export produces the complete stable aspect/quotation/eligible-QR matrix and expected filenames, shares visual choices, propagates background/tint/debug overrides, rejects incompatible options and existing destination subdirectories, publishes only complete results, cleans failed staging output, and is deterministic. Verify manifests and artwork are reread, invalid or removed selections are reported, and no production persistence or generated artifacts are read or modified. Manually exercise the desktop GUI on available graphical environments; report platform-specific GUI validation limitations explicitly. Do not treat scaled previews or mocked tests as physical QR or display validation.
+Mock Tk where suitable to verify direct picker selection, synchronization with keyboard navigation and reload, aspect toolbar and keyboard command dispatch, responsive reload/render scheduling, dynamic window sizing and centering with the Geometry panel expanded, field editing and validation, reset/copy actions, window-close cleanup, and toolbar/panel exclusion from rendered output. Verify headless single-file export requires one ID and an explicit supported aspect, defaults an omitted output resolution to that aspect's design-canvas dimensions, applies the complete requested diagnostic state, creates missing parent directories, preserves atomic replacement, reports filesystem/render failures, and produces deterministic bytes without Tk or configured display-backend initialization. Verify batch export produces the complete stable aspect/quotation/eligible-QR matrix and expected filenames, shares visual choices, propagates background/tint/debug overrides, rejects incompatible options and existing destination subdirectories, publishes only complete results, cleans failed staging output, and is deterministic. Verify manifests and artwork are reread, invalid or removed selections are reported, and no production persistence or generated artifacts are read or modified. Manually exercise the desktop GUI on available graphical environments; report platform-specific GUI validation limitations explicitly. Do not treat scaled previews or mocked tests as physical QR or display validation.
 
 ### Core test coverage
 
@@ -1300,9 +1298,9 @@ Where practical, test recovery using a newly initialized application instance ra
 
 ### Rendering tests
 
-Verify rendered-image dimensions, stage completeness, stable layout geometry, and equality of all reveal-stage output dimensions.
+Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification have identical output dimensions; destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. Verify that each configured destination resolves its own output specification and that the prepared variant set contains exactly the unique required specifications.
 
-Exercise 4:3, 16:9, and 16:10 configurations, including 1600 × 1200, 1920 × 1080, 3840 × 2160, and 1920 × 1200. Verify the fixed 3840 × 2400 reference envelope and working canvases of 3200 × 2400, 3840 × 2160, and 3840 × 2400. Apply inset values directly from each working canvas's edges: for example, `left: 180` resolves to 180 working pixels for every aspect ratio. Verify final-output scaling, deterministic half-up rounding, and rejection of degenerate insets and unsupported dimensions.
+Include an aspect-mismatched output specification with declared aspect 4:3 and requested resolution 1600 × 1190. Assert that the design canvas is 3200 × 2400 and background/decorative composition occurs there; literary geometry and font fitting, QR viability and rasterization, and diagnostic overlays resolve on the 1596 × 1197 presentation canvas; and only the completed image is resized to the 1600 × 1190 output image. This case must not be replaced by tests where presentation-canvas and output-image dimensions happen to match. Also exercise exact-aspect supported configurations. Verify deterministic half-up rounding and rejection of degenerate geometry.
 
 Use representative quotations of different lengths and combinations of optional metadata.
 
@@ -1315,9 +1313,9 @@ Test automatic text fitting with:
 - quotations requiring a smaller permitted font size;
 - quotations that cannot fit at the minimum permitted size.
 
-Verify that all rendered literary content stays within the effective rectangle derived from working-canvas insets, uniformly scaled to final output dimensions.
+Verify that all rendered literary content stays within the effective rectangle mapped from design-canvas insets to the presentation canvas.
 
-Verify that artwork is composed at working resolution and resampled to final output dimensions when needed, for both reduction and enlargement; confirm no resampling occurs when dimensions match. Then verify final-resolution typography and QR generation, with no later resizing or resampling of text or QR pixels.
+Verify that backgrounds and decorations are composed on the design canvas, that the completed graphical composition is scaled to the presentation canvas, and that literary text, QR, and diagnostics are composed there. Verify the optional final whole-image resize for both reduction and enlargement, and no resize when requested and presentation dimensions match. Do not require text or QR pixels to remain individually unchanged through that final resize.
 
 Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
 
@@ -1358,13 +1356,13 @@ Visual inspection remains appropriate for typography and layout quality.
 
 ### Hardware validation
 
-Validate hardware-dependent behavior on the supported display, and verify that destination adaptation remains a backend responsibility independent of the renderer's global output geometry.
+Validate hardware-dependent behavior on the supported display. Backends receive the output image matching their resolved output specification and must not geometrically resize, crop, pad, or otherwise adapt it unless an explicit backend contract permits that operation. Backend-specific pixel-format or orientation conversion remains permitted where defined by that contract.
 
 Hardware validation should include:
 
 - driver initialization;
 - complete image transfer and refresh;
-- backend adaptation of globally prepared images to the Waveshare's native 1600 × 1200 landscape panel, including any selected scaling, cropping, padding, rotation, dithering, or color conversion policy;
+- delivery of the prepared `4:3 @ 1600 × 1200` output image to the Waveshare backend, with rejection of any image with different dimensions;
 - correct destination orientation and representative color rendering;
 - representative resolution-independent output on a non-e-paper destination;
 - repeated scheduled updates;

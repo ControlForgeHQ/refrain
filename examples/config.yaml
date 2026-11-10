@@ -17,12 +17,17 @@ information_view:
 display:
   backends:
     - type: "window"
+      aspect_ratio: "16:9"
+      resolution: [1920, 1080]
     - type: "image-server"
       host: "127.0.0.1"
       port: 8080
+      outputs:
+        - id: "default"
+          aspect_ratio: "16:10"
+          resolution: [3840, 2400]
 
 layout:
-  output_size: [1920, 1080]
   presentation_insets:
     left: 384
     right: 384
