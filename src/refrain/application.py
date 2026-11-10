@@ -35,11 +35,11 @@ from .persistence import (
     GlobalHistoryWriteError,
     PersistentState,
     PersistentStateStore,
-    SchedulingContext,
     StateCommitError,
     StateRecoveryError,
 )
 from .preparation import DailyImagePreparationError, prepare_daily_images
+from .presentation import build_presentation_snapshot
 from .recovery import recover_prepared_daily_images
 from .scheduling import (
     SchedulingAction,
@@ -149,35 +149,10 @@ def _build_snapshot(
     quotation: Quotation,
     display_date: date,
 ) -> DailySnapshot:
-    reveal = entry.reveal
     try:
-        snapshot = DailySnapshot(
-            entry_id=entry.id,
-            quotation_text=quotation.text,
-            quotation_identity=quotation.identity,
-            source=entry.source,
-            attribution=entry.attribution,
-            presentation_style=entry.presentation_style,
-            font=entry.font,
-            font_faces=entry.font_faces,
-            background=entry.background,
-            decoration=entry.decoration,
-            text_color=entry.text_color,
-            decoration_color=entry.decoration_color,
-            reveal_schedule={
-                "quotation": configuration.day_start.strftime("%H:%M"),
-                "source": (reveal.source or configuration.reveal.source).strftime("%H:%M"),
-                "attribution": (reveal.attribution or configuration.reveal.attribution).strftime("%H:%M"),
-            },
-            scheduling=SchedulingContext(
-                display_date,
-                configuration.day_start.strftime("%H:%M"),
-            ),
-        )
-        resolve_reveal_stages(snapshot)
+        return build_presentation_snapshot(configuration, entry, quotation, display_date)
     except (ValueError, TypeError) as error:
         raise ApplicationError(f"entry {entry.id!r} cannot produce a valid daily selection: {error}") from error
-    return snapshot
 
 
 def run_show_entry(

@@ -81,7 +81,8 @@ from .persistence import (
     StateRecoveryError,
     UnsupportedStateVersionError,
 )
-from .preparation import DailyImagePreparationError, prepare_daily_images
+from .preparation import DailyImagePreparationError, PresentationOverrides, prepare_daily_images
+from .presentation import build_presentation_snapshot
 from .recovery import recover_prepared_daily_images
 from .renderer import (
     BylineLayout,
@@ -135,6 +136,8 @@ __all__ = [
     "ContentLibraryError",
     "DailySnapshot",
     "DailyImagePreparationError",
+    "PresentationOverrides",
+    "build_presentation_snapshot",
     "EligibilityRule",
     "EligibilitySpecificity",
     "EligibleQuotationPool",

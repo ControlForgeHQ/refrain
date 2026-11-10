@@ -9,6 +9,9 @@ dependencies = [
     "qrcode>=8.2,<9",
 ]
 
+[project.scripts]
+refrain-viewer = "refrain.viewer:main"
+
 [project.optional-dependencies]
 hardware = [
     "gpiod>=2.2.1,<3",
