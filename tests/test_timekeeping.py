@@ -31,7 +31,6 @@ def make_configuration(*, day_start: str = "06:00") -> ApplicationConfiguration:
         day_start=time.fromisoformat(day_start),
         content_directory=Path("/content"),
         reveal=RevealSchedule(time(12), time(18)),
-        output_size=(1920, 1080),
         presentation_insets=PresentationInsets(0, 0, 0, 0),
         fonts={},
         default_fonts=(),

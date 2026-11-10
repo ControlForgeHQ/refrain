@@ -134,16 +134,19 @@ class DemoWorkspace:
                 self.requested = []
                 workspace.coordinators.append(self)
 
-            def publish(self, identity, image):
+            def publish(self, identity, images):
                 try:
                     state = workspace.stores[-1].load()
-                    workspace.publications.append((identity, workspace.clock.elapsed, state, image.size))
+                    workspace.publications.append(
+                        (identity, workspace.clock.elapsed, state, tuple(image.size for image in images.values()))
+                    )
                     self.requested.append(identity)
                     self.desired_identity = identity
                     if workspace.on_publish is not None:
                         workspace.on_publish(self, identity)
                 finally:
-                    image.close()
+                    for image in images.values():
+                        image.close()
 
             def wait_for_any_publication(self, identity, *, cancellation_event):
                 assert cancellation_event is workspace.clock
@@ -298,7 +301,7 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
         (2, 0),
     ]
     assert [when for _, when, *_ in demo.publications] == [2.5 * n for n in range(len(expected) + 1)]
-    assert all(size == (1920, 1080) for *_, size in demo.publications)
+    assert all(sizes == ((1920, 1080),) for *_, sizes in demo.publications)
     state, stages, _ = demo.prepared[0]
     assert [(stage.quotation, stage.source, stage.attribution) for stage in stages] == expected
     assert state.snapshot.display_date == date(2026, 3, 9)
@@ -334,28 +337,14 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     demo.entry(metadata=False)
     demo.clock.limit = 2
     pixels = []
-    debug_pixels = []
-    annotate = application._debug_layout_image
-
-    def inspect_debug_image(image, region, enabled):
-        annotated = annotate(image, region, enabled)
-        if enabled:
-            left, top, right, bottom = region
-            debug_pixels.append(
-                (
-                    {"x": left, "y": top, "width": right - left, "height": bottom - top},
-                    annotated.getpixel((left, top)),
-                )
-            )
-        return annotated
 
     def inspect_prepared_stage(_coordinator, _identity):
         if not pixels:
             specification = demo.prepared[0][2].output_specifications[0]
+            assert demo.prepared[0][2].variant_for(specification).presentation_canvas_literary_bounds is not None
             with demo.prepared[0][2].load_stage(specification, 0) as image:
                 pixels.append(image.getpixel((320, 400)))
 
-    monkeypatch.setattr(application, "_debug_layout_image", inspect_debug_image)
     demo.on_publish = inspect_prepared_stage
 
     demo.run(debug_layout=True)
@@ -363,10 +352,6 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
     state, _, _ = demo.prepared[0]
     assert state.snapshot.decoration is None
     assert pixels[0] == (227, 137, 147)
-    assert debug_pixels == [
-        ({"x": 384, "y": 324, "width": 1152, "height": 432}, (113, 68, 73)),
-        ({"x": 384, "y": 324, "width": 1152, "height": 432}, (113, 68, 73)),
-    ]
     demo.assert_clean()
 
 
@@ -727,7 +712,12 @@ def test_cli_signal_stops_real_demo_and_restores_handlers(demo, monkeypatch, ter
 @pytest.mark.parametrize("other", ["blocked", "unavailable"])
 def test_actual_coordinator_healthy_backend_progresses_independently(demo, monkeypatch, other):
     demo.entry()
-    demo.config.write_text(_CONFIG.replace('    - type: "window"', '    - type: "window"\n    - type: "image-server"'))
+    demo.config.write_text(
+        _CONFIG.replace(
+            '    - type: "window"',
+            '    - type: "window"\n    - type: "image-server"\n      outputs: [{id: "default"}]',
+        )
+    )
     entered = Event()
     release = Event()
     caught_up = Event()
@@ -741,6 +731,13 @@ def test_actual_coordinator_healthy_backend_progresses_independently(demo, monke
             self.name = name
 
         def update(self, image):
+            self._record(image)
+
+        def update_output(self, output_id, image):
+            assert output_id == "default"
+            self._record(image)
+
+        def _record(self, image):
             identity = coordinators[0].desired_identity
             if self.name == "image-server":
                 slow.append(identity)

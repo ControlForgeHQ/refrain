@@ -95,11 +95,12 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
         CompositionVisibility(source=True),
         CompositionVisibility(source=True, attribution=True),
     )
-    images = prepare_daily_images(snapshot, stages, config)
+    images = prepare_daily_images(snapshot, stages, config, config.required_output_specifications)
 
     assert not config_path.exists()
     assert not content_path.exists()
-    assert len(images) == len(stages)
+    assert len(images[config.required_output_specifications[0]]) == len(stages)
+    images = images[config.required_output_specifications[0]]
     assert all(image.mode == "RGB" and image.size == (1920, 1080) for image in images)
 
 
@@ -192,11 +193,13 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
-    image = prepare_daily_images(
+    images = prepare_daily_images(
         snapshot,
         (CompositionVisibility(),),
         config,
-    )[0]
+        config.required_output_specifications,
+    )
+    image = images[config.required_output_specifications[0]][0]
 
     assert config.fonts["family-serif"].path == font_path
     assert config.backgrounds["paper"].path == background_path

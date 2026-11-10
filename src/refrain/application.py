@@ -333,7 +333,7 @@ def _report_qr_diagnostic(parameters: QRCalibrationParameters, geometry: QRCalib
     _LOGGER.info("QR complete footprint: %d x %d pixels", *geometry.footprint_size)
     _LOGGER.info("QR right and bottom offsets: %d, %d pixels", geometry.right_offset, geometry.bottom_offset)
     _LOGGER.info("QR footprint pixel bounds (inclusive): (%d, %d) to (%d, %d)", left, top, right, bottom)
-    _LOGGER.info("QR output image dimensions: %d x %d pixels", *geometry.image_size)
+    _LOGGER.info("QR output image dimensions: %d x %d pixels", *geometry.output_image_size)
     _LOGGER.info("QR diagnostic PNG saved at %s", output)
 
 

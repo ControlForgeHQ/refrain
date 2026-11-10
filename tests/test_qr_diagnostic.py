@@ -53,6 +53,10 @@ class RecordingBackend:
     def update(self, image: Image.Image) -> None:
         self.images.append(image.copy())
 
+    def update_output(self, output_id: str, image: Image.Image) -> None:
+        assert output_id == "default"
+        self.update(image)
+
     def close(self) -> None:
         self.closed = True
 
@@ -62,7 +66,10 @@ def create_config(directory: Path, *, multiple_backends: bool = False) -> Path:
     config = directory / "config.yaml"
     text = _CONFIG
     if multiple_backends:
-        text = text.replace('    - type: "window"', '    - type: "window"\n    - type: "image-server"')
+        text = text.replace(
+            '    - type: "window"',
+            '    - type: "window"\n    - type: "image-server"\n      outputs: [{id: "default"}]',
+        )
     config.write_text(text, encoding="utf-8")
     (directory / "content").mkdir()
     return config
@@ -166,11 +173,11 @@ def test_default_and_configured_geometry_uses_complete_footprint() -> None:
             (default.geometry.symbol_modules + 8) * 4,
             (default.geometry.symbol_modules + 8) * 4,
         )
-        assert default.geometry.bounds[2] == default.geometry.image_size[0] - 40 - 1
-        assert default.geometry.bounds[3] == default.geometry.image_size[1] - 40 - 1
+        assert default.geometry.bounds[2] == default.geometry.output_image_size[0] - 40 - 1
+        assert default.geometry.bounds[3] == default.geometry.output_image_size[1] - 40 - 1
         assert configured.geometry.quiet_zone_pixels == 3
-        assert configured.geometry.bounds[2] == configured.geometry.image_size[0] - 17 - 1
-        assert configured.geometry.bounds[3] == configured.geometry.image_size[1] - 9 - 1
+        assert configured.geometry.bounds[2] == configured.geometry.output_image_size[0] - 17 - 1
+        assert configured.geometry.bounds[3] == configured.geometry.output_image_size[1] - 9 - 1
     finally:
         default.image.close()
         configured.image.close()
@@ -351,19 +358,20 @@ def test_qr_diagnostic_uses_no_content_or_production_persistence_and_publishes_e
 
     assert output == tmp_path / "refrain-qr-test.png"
     assert output.is_file()
-    assert geometry.bounds[2] == geometry.image_size[0] - 13 - 1
-    assert geometry.bounds[3] == geometry.image_size[1] - 7 - 1
+    assert geometry.bounds[2] == geometry.output_image_size[0] - 13 - 1
+    assert geometry.bounds[3] == geometry.output_image_size[1] - 7 - 1
     assert f"QR requested version: {version if version is not None else 'auto'}" in caplog.text
     assert f"QR resolved version: {version if version is not None else geometry.version}" in caplog.text
     assert "QR footprint pixel bounds (inclusive)" in caplog.text
     for backend in backends.values():
         assert backend.closed
         assert len(backend.images) == 1
+    assert backends["window"].images[0].size == (1920, 1080)
+    assert backends["image-server"].images[0].size == (3840, 2400)
     with Image.open(output) as saved:
-        for backend in backends.values():
-            assert saved.mode == backend.images[0].mode
-            assert saved.size == backend.images[0].size
-            assert saved.tobytes() == backend.images[0].tobytes()
+        assert saved.mode == backends["image-server"].images[0].mode
+        assert saved.size == geometry.output_image_size
+        assert saved.tobytes() == backends["image-server"].images[0].tobytes()
     for backend in backends.values():
         for image in backend.images:
             image.close()
@@ -433,7 +441,7 @@ def test_qr_backend_failure_is_reported_and_png_is_kept(tmp_path: Path, monkeypa
             self.closed = True
 
     backend = FailedBackend()
-    with pytest.raises(ApplicationError, match="not published by every configured display backend"):
+    with pytest.raises(ApplicationError, match="not published by every configured display destination"):
         application.run_test_qr(config, backend_factory=lambda _: backend)
     assert backend.closed
     assert (tmp_path / "refrain-qr-test.png").is_file()
