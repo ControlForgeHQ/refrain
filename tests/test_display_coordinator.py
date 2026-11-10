@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from threading import Event
+from threading import Event, Thread
 
 import pytest
 from PIL import Image
@@ -295,3 +295,61 @@ def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, capl
 
     release.set()
     assert backend_closed.wait(1)
+
+
+def test_shutdown_waits_for_successful_update_and_backend_cleanup(monkeypatch) -> None:
+    update_entered, release_update = Event(), Event()
+    join_started, close_entered, release_close, shutdown_finished = Event(), Event(), Event(), Event()
+    active = Event()
+    closed_while_active = []
+
+    class Backend:
+        def update(self, image):
+            active.set()
+            update_entered.set()
+            try:
+                assert release_update.wait(10)
+                assert image.getpixel((0, 0)) == (12, 0, 0)
+            finally:
+                active.clear()
+
+        def close(self):
+            closed_while_active.append(active.is_set())
+            close_entered.set()
+            assert release_close.wait(10)
+
+    coordinator = DisplayPublicationCoordinator((configuration("window"),), lambda _configuration: Backend())
+    worker = coordinator._threads[0]
+    original_join = worker.join
+
+    def join(timeout=None):
+        join_started.set()
+        original_join(timeout)
+
+    monkeypatch.setattr(worker, "join", join)
+    shutdown = Thread(target=lambda: (coordinator.close(), shutdown_finished.set()))
+    try:
+        coordinator.publish((11, 2), publication(12))
+        assert update_entered.wait(10)
+        shutdown.start()
+        assert join_started.wait(10)
+        assert not close_entered.is_set()
+        assert coordinator.acknowledgements == {"window:default": None}
+        assert not shutdown_finished.is_set()
+
+        release_update.set()
+        assert close_entered.wait(10)
+        assert not shutdown_finished.is_set()
+        release_close.set()
+        shutdown.join(10)
+        assert not shutdown.is_alive()
+        assert shutdown_finished.is_set()
+        assert coordinator.acknowledgements == {"window:default": (11, 2)}
+        assert closed_while_active == [False]
+    finally:
+        release_update.set()
+        release_close.set()
+        if shutdown.ident is not None:
+            shutdown.join(10)
+        else:
+            coordinator.close()

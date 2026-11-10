@@ -2398,14 +2398,28 @@ def test_continuous_shutdown_during_update_persists_successful_reveal(workspace,
     clock = RuntimeClock(at(10, 19))
     display = FakeDisplay()
     original = display.update
+    coordinators = []
+
+    class RecordingCoordinator(DisplayPublicationCoordinator):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            coordinators.append(self)
 
     def update(image):
         original(image)
         clock.set()
 
+    def wait_for_shutdown(_deadline, shutdown, **_kwargs):
+        assert Event.wait(shutdown, 10)
+        return True
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", RecordingCoordinator)
     display.update = update
+    clock.scheduling_wait = wait_for_shutdown
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 2)] and display.closed == 1
+    assert len(display.images) == 1
+    assert coordinators[0].acknowledgements == {"waveshare-13in3-e:waveshare-13in3-e": (1, 2)}
     assert workspace.load().highest_reveal_stage == 2
 
 
