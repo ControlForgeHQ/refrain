@@ -11,7 +11,7 @@ from typing import Sequence
 
 from PIL import Image, ImageOps
 
-from .config import ApplicationConfigurationError, load_application_config
+from .config import ApplicationConfiguration, ApplicationConfigurationError, load_application_config
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library, normalize_quotation
 from .geometry import (
     SUPPORTED_PRESENTATION_ASPECTS,
@@ -82,7 +82,7 @@ def _identifier(value: str) -> str:
 
 
 def _select_entry(
-    configuration,
+    configuration: ApplicationConfiguration,
     selector: tuple[str, int],
 ) -> tuple[ContentEntry, Quotation]:
     entry_id, quotation_number = selector
@@ -119,7 +119,7 @@ def _output_specification(aspect: str, resolution: tuple[int, int] | None) -> Re
 
 
 def render_preview(
-    configuration,
+    configuration: ApplicationConfiguration,
     selector: tuple[str, int] = _DEFAULT_SELECTOR,
     output_specification: ResolvedOutputSpecification | None = None,
     *,
@@ -141,8 +141,6 @@ def render_preview(
             debug_layout=debug_layout,
         )
     except (ValueError, TypeError) as error:
-        if isinstance(error, ViewerError):
-            raise
         raise ViewerError(f"cannot prepare preview for entry {entry.id!r}: {error}") from error
     return prepared[specification][0]
 
@@ -156,25 +154,33 @@ def show_preview_window(image: Image.Image) -> None:
     except (ImportError, RuntimeError) as error:
         raise ViewerError(f"window display is unavailable because Tk support is missing: {error}") from error
 
+    root = None
+    desktop_image = None
     try:
         root = tk.Tk()
+        root.title("Refrain Viewer")
+        max_size = (max(1, root.winfo_screenwidth() - 80), max(1, root.winfo_screenheight() - 120))
+        desktop_image = _fit_preview_image(image, max_size)
+        photo = ImageTk.PhotoImage(desktop_image, master=root)
+        label = tk.Label(root, image=photo)
+        label.image = photo
+        label.pack()
+        root.mainloop()
     except tk.TclError as error:
         raise ViewerError(f"window display is unavailable; start a graphical desktop session: {error}") from error
-    root.title("Refrain Viewer")
-    max_size = (max(1, root.winfo_screenwidth() - 80), max(1, root.winfo_screenheight() - 120))
-    desktop_image = ImageOps.contain(image.copy(), max_size, method=Image.Resampling.LANCZOS)
-    photo = ImageTk.PhotoImage(desktop_image, master=root)
-    label = tk.Label(root, image=photo)
-    label.image = photo
-    label.pack()
-    try:
-        root.mainloop()
     finally:
-        desktop_image.close()
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
+        if desktop_image is not None:
+            desktop_image.close()
+        if root is not None:
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
+
+
+def _fit_preview_image(image: Image.Image, available_size: tuple[int, int]) -> Image.Image:
+    """Return a proportionally scaled desktop copy without changing the output image."""
+    return ImageOps.contain(image.copy(), available_size, method=Image.Resampling.LANCZOS)
 
 
 def run_viewer(

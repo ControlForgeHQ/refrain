@@ -91,6 +91,9 @@ class PresentationOverrides:
     style: str | None = None
     qr_enabled: bool | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "font_faces", MappingProxyType(dict(self.font_faces)))
+
 
 @dataclass(frozen=True)
 class _PresentationChoices:
@@ -104,6 +107,7 @@ class _PresentationChoices:
     fonts: Mapping[str, ResolvedFont]
     presentation_style: str
     qr_enabled: bool
+    qr_policy_overridden: bool
 
 
 def _resolve_presentation_choices(
@@ -154,6 +158,7 @@ def _resolve_presentation_choices(
         MappingProxyType(fonts),
         style,
         configuration.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled,
+        overrides.qr_enabled is not None,
     )
 
 
@@ -162,6 +167,7 @@ def _resolve_presentation(
     configuration: ApplicationConfiguration,
     decoration: DecorationResource | None,
     output_specification: ResolvedOutputSpecification,
+    presentation_style: str,
 ) -> tuple[LiteraryComposition, PresentationGeometry, int, int, str]:
     composition = LiteraryComposition(
         quotation=snapshot.quotation_text,
@@ -184,7 +190,7 @@ def _resolve_presentation(
         geometry,
         max(1, round_half_up(configuration.min_font_size * presentation_width, design_width)),
         max(1, round_half_up(configuration.max_font_size * presentation_width, design_width)),
-        snapshot.presentation_style,
+        presentation_style,
     )
 
 
@@ -823,9 +829,8 @@ def _prepare_daily_images_for_specification(
     decoration_identifier = choices.decoration_identifier
     decoration = choices.decoration
     composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-        snapshot, configuration, decoration, output_specification
+        snapshot, configuration, decoration, output_specification, choices.presentation_style
     )
-    style = choices.presentation_style
     presentation_canvas_size = geometry.presentation_canvas_size
     qr_placement: QRCodePlacement | None = None
     qr_unavailable_reason: str | None = None
@@ -839,7 +844,11 @@ def _prepare_daily_images_for_specification(
             qr_unavailable_reason = str(error)
             _LOGGER.warning("QR generation is disabled for this preparation: %s", error)
     elif not choices.qr_enabled:
-        qr_unavailable_reason = qr_disabled_reason or "QR generation is disabled by presentation policy"
+        qr_unavailable_reason = qr_disabled_reason or (
+            "QR generation is disabled by viewer override"
+            if choices.qr_policy_overridden
+            else "QR generation is disabled by configuration"
+        )
     else:
         qr_unavailable_reason = f"decoration {decoration.identifier!r} is not marked qr_ready"
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)

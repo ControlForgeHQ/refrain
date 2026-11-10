@@ -664,6 +664,14 @@ Nine-slice values are source-image pixel distances: partition the original sourc
 
 Avoid unnecessary upscaling of source raster resources and unnecessary full-canvas copies. Manage Pillow image and font resources explicitly, closing decoded or temporary images when their owners are finished with them. Diagnostic tools must follow their documented output-specification behavior and must not mutate committed presentation state or generated daily artifacts.
 
+### Shared presentation and viewer
+
+Runtime and `refrain-viewer` must call the same presentation-construction, preference-resolution, geometry, QR, and image-preparation operations. Keep precedence and fallback rules authoritative in shared presentation machinery; represent optional viewer choices with a typed override model and apply them there, not in a second viewer-side resolver. Normal runtime preparation supplies no viewer overrides.
+
+The viewer selects a validated content entry and one 1-based quotation directly, without eligibility, priority, repetition, scheduling, or selection commitment. Its built-in `@preview` fixture belongs only to the viewer. It resolves one viewer-owned output specification, uses the same design/presentation/output pipeline, and writes or displays the final output image without using configured display backends.
+
+Keep the viewer independent of operational state, global history, and prepared-artifact storage, including configuration-relative paths. Window presentation is viewer-owned, display-only UI: it may scale a copy for desktop fit but must not alter the rendered output image. It must not import or initialize the configured backend lifecycle.
+
 ### Font loading and resolution
 
 Use Pillow-compatible font files for text rendering.
@@ -1224,13 +1232,21 @@ Every substantive behavior change should include focused regression coverage whe
 
 The ability to import and test core components without Raspberry Pi hardware is a project requirement.
 
-### Diagnostic entry presentation tests
+### Legacy runtime diagnostic regression tests
+
+Retain these tests while the legacy runtime diagnostics remain during migration. They preserve existing behavior but do not define the viewer architecture or a permanent runtime presentation responsibility.
 
 Use temporary configuration, content, output, and production-persistence paths to test `--show-entry` without hardware. Verify exact identifier matching, first-quotation selection without eligibility or history selection, final-stage visibility, shared resource resolution, the reserved information target without content loading or duration scheduling, and the absence of production state/history/artifact access.
 
 Verify that `--show-entry` does not require explicit output geometry, prepares every output specification required by configured destinations, and publishes the matching variant to every backend. Cover exact identifier matching, first-quotation selection without eligibility or history selection, final-stage visibility, shared resource resolution, the reserved information target without content loading or duration scheduling, and the absence of production state/history/artifact access. Test publication failures and confirm they do not affect operational state. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
 
-### Decoration diagnostic tests
+### Viewer presentation tests
+
+Test default and explicit `@preview` selection, exact normal-entry selection, omitted and explicit 1-based quotation numbers, malformed/zero/negative/out-of-range selectors, and independence from eligibility, priority, and repetition. Verify that runtime and viewer use the shared preparation/resolution machinery, normal preference precedence remains unchanged, and each explicit override takes precedence only for its property. Cover strict rejection of unavailable requested resources, ordinary pool resolution for unspecified properties, and QR placement/readiness constraints when QR is forced on.
+
+Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. Use sentinel persistence locations and backend factories to verify that viewer execution never reads or modifies state, history, or artifacts and never initializes or publishes to configured backends. Do not treat mocked window behavior as graphical-session validation.
+
+### Legacy decoration diagnostic regression tests
 
 Test the `--test-decoration ID|all`, `--test-output PATH`, and `--test-variants DIRECTORY` CLI arguments, invalid selections, mode restrictions, initial toggles, all three deterministic quotation lengths, navigation wrapping, key normalization, state preservation during reload, and state isolation. Verify each aspect uses the full dimensions of its design canvas, independent of configured destination output specifications. The headless single-file `--test-output` mode requires an explicit supported aspect; verify that omitted resolution uses the design-canvas dimensions and that an explicit mismatched resolution produces the expected presentation-canvas and output-image dimensions. Test A-key cycling, centered window resizing, screen-fit scaling with controls and the expanded Geometry panel, QR availability and reason reporting, white-background and black-tint overrides, debug-overlay removal, active nine-slice guides, guide-coordinate reuse, deduplication, and color assignment through the existing preparation/composition pipeline. Cover Geometry-panel initialization from decoration and inherited values, independent per-edge and per-axis temporary overrides, supported QR method changes and mutual exclusion, numeric and canvas-bound validation, aspect changes, per-decoration isolation, reload and reset, valid YAML clipboard generation, debug outlines, preservation of other diagnostic toggles, and the absence of manifest/configuration or production-state mutation.
 
