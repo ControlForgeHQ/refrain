@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from threading import Event
 
-from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup, run_test_qr
+from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup
 from .decoration_diagnostic import run_decoration_diagnostic
 from .installation import (
     InitializationError,
@@ -23,7 +23,6 @@ from .installation import (
     reset_installation,
 )
 from .paths import ApplicationPathError, resolve_application_paths
-from .qr_diagnostic import QRCalibrationError, QRCalibrationParameters, validate_qr_calibration_parameters
 
 _SERVING_BACKENDS = {"window", "image-server"}
 _LOGGER = logging.getLogger(__name__)
@@ -37,20 +36,6 @@ def _entry_id(value: str) -> str:
             "ASCII letters, digits, hyphens, and underscores"
         )
     return value
-
-
-def _qr_version(value: str) -> str | int:
-    if value == "auto":
-        return value
-    if not re.fullmatch(r"[+-]?[0-9]+", value):
-        raise argparse.ArgumentTypeError("QR version must be 'auto' or an integer from 1 through 40") from None
-    try:
-        version = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError("QR version must be 'auto' or an integer from 1 through 40") from None
-    if not 1 <= version <= 40:
-        raise argparse.ArgumentTypeError("QR version must be 'auto' or an integer from 1 through 40")
-    return version
 
 
 def _hold_open(backend: str) -> None:
@@ -133,9 +118,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="render and publish one content entry without changing operational state",
     )
     modes.add_argument(
-        "--test-qr", action="store_true", help="publish a QR calibration image without changing daily state"
-    )
-    modes.add_argument(
         "--test-decoration",
         metavar="ID|all",
         help="preview one decoration or all decorations without changing daily state",
@@ -174,35 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-background", action="store_true", help="initially use a white background in the decoration preview"
     )
     parser.add_argument("--no-tinting", action="store_true", help="initially force tintable decoration layers to black")
-    parser.add_argument("--qr-payload", help="text or URL encoded into the QR code (default: https://example.com/)")
-    parser.add_argument(
-        "--qr-version",
-        type=_qr_version,
-        help="QR version: auto or a fixed version from 1 through 40 (default: auto)",
-    )
-    parser.add_argument(
-        "--qr-error-correction",
-        choices=("L", "M", "Q", "H"),
-        help="QR error-correction level (default: M)",
-    )
-    parser.add_argument("--qr-module-size", type=int, help="QR module size in pixels (default: 4)")
-    parser.add_argument("--qr-quiet-zone", type=int, help="quiet-zone width in modules (default: 4)")
-    parser.add_argument("--qr-right-offset", type=int, help="right edge offset in pixels (default: 40)")
-    parser.add_argument("--qr-bottom-offset", type=int, help="bottom edge offset in pixels (default: 40)")
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    qr_options = (
-        ("--qr-payload", arguments.qr_payload),
-        ("--qr-version", arguments.qr_version),
-        ("--qr-error-correction", arguments.qr_error_correction),
-        ("--qr-module-size", arguments.qr_module_size),
-        ("--qr-quiet-zone", arguments.qr_quiet_zone),
-        ("--qr-right-offset", arguments.qr_right_offset),
-        ("--qr-bottom-offset", arguments.qr_bottom_offset),
-    )
-    specified_qr_options = [option for option, value in qr_options if value is not None]
-    if not arguments.test_qr and specified_qr_options:
-        parser.error("QR-specific options are only available with --test-qr: " + ", ".join(specified_qr_options))
     specified_decoration_options = [
         option
         for option, value in (
@@ -258,41 +213,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             ("--reset", arguments.reset),
             ("--purge", arguments.purge),
             ("--show-entry", arguments.show_entry is not None),
-            ("--test-qr", arguments.test_qr),
         )
         if selected
     ]
     if arguments.test_decoration is not None and conflicting_modes:
         parser.error("--test-decoration cannot be combined with other modes: " + ", ".join(conflicting_modes))
-    default_qr_parameters = QRCalibrationParameters()
-    qr_parameters = QRCalibrationParameters(
-        payload=arguments.qr_payload if arguments.qr_payload is not None else default_qr_parameters.payload,
-        error_correction=(
-            arguments.qr_error_correction
-            if arguments.qr_error_correction is not None
-            else default_qr_parameters.error_correction
-        ),
-        version=None if arguments.qr_version in (None, "auto") else arguments.qr_version,
-        module_size=(
-            arguments.qr_module_size if arguments.qr_module_size is not None else default_qr_parameters.module_size
-        ),
-        quiet_zone=(
-            arguments.qr_quiet_zone if arguments.qr_quiet_zone is not None else default_qr_parameters.quiet_zone
-        ),
-        right_offset=(
-            arguments.qr_right_offset if arguments.qr_right_offset is not None else default_qr_parameters.right_offset
-        ),
-        bottom_offset=(
-            arguments.qr_bottom_offset
-            if arguments.qr_bottom_offset is not None
-            else default_qr_parameters.bottom_offset
-        ),
-    )
-    if arguments.test_qr:
-        try:
-            validate_qr_calibration_parameters(qr_parameters)
-        except QRCalibrationError as error:
-            parser.error(str(error))
     try:
         if arguments.initialize:
             overrides = [
@@ -371,7 +296,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if (
             arguments.demo is None
             and arguments.show_entry is None
-            and not arguments.test_qr
             and arguments.test_decoration is None
         ):
             state_path = arguments.state if arguments.state is not None else paths.state_file
@@ -393,7 +317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_absolute,
                 (
                     "diagnostic presentation does not use production persistence"
-                    if arguments.show_entry is not None or arguments.test_qr or arguments.test_decoration is not None
+                    if arguments.show_entry is not None or arguments.test_decoration is not None
                     else "demo persistence uses isolated temporary storage"
                 ),
             )
@@ -420,10 +344,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif arguments.show_entry is not None:
             run_show_entry(config_path, arguments.show_entry, debug_layout=arguments.debug_layout)
-            return 0
-        elif arguments.test_qr:
-            output, _ = run_test_qr(config_path, qr_parameters)
-            print(f"QR diagnostic image saved to {output}")
             return 0
         elif arguments.test_decoration is not None:
             run_decoration_diagnostic(

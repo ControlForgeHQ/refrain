@@ -1669,12 +1669,6 @@ The reserved target `information` is recognized before content-library loading. 
 
 Publication failures are reported without altering production state.
 
-### Standalone QR calibration
-
-The optional `--test-qr` mode generates an RGB calibration variant for each required output specification, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
-
-The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. A calibration variant is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output; each configured backend receives its matching variant through the existing coordinator. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
-
 ### Interactive decoration preview
 
 Use `--test-decoration all` to preview all available decorations or `--test-decoration ID` to inspect one. A sorted decoration picker allows direct selection. The preview starts with a short quotation; `--test-quotation medium|long` selects another initial length. With no `--test-aspect` override, the interactive preview starts at 16:10 using the full 3840 × 2400 design canvas. `--test-aspect 4:3|5:3|16:9|16:10` selects another supported design canvas, and the interactive controls continue to cycle all supported aspects. For each selected aspect, the diagnostic uses the design-canvas dimensions as its requested exact-aspect size, so the presentation canvas has the same dimensions: 3200 × 2400 for 4:3, 3840 × 2304 for 5:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. `--no-qr`, `--no-background`, and `--no-tinting` establish diagnostic-only initial overrides; `--debug-layout` also enables diagnostic geometry overlays.
