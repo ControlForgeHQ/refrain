@@ -293,11 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = resolve_application_paths()
         config_path = arguments.config if arguments.config is not None else paths.config_file
         config_absolute = Path(config_path).absolute()
-        if (
-            arguments.demo is None
-            and arguments.show_entry is None
-            and arguments.test_decoration is None
-        ):
+        if arguments.demo is None and arguments.show_entry is None and arguments.test_decoration is None:
             state_path = arguments.state if arguments.state is not None else paths.state_file
             artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
             history_path = arguments.history

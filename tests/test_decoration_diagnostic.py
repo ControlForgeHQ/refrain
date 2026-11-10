@@ -366,9 +366,7 @@ def test_reload_updates_font_face_background_and_colours(workspace):
     second.close()
 
 
-@pytest.mark.parametrize(
-    "mode", ["--once", "--demo=1", "--show-entry=x", "--initialize", "--reset", "--purge"]
-)
+@pytest.mark.parametrize("mode", ["--once", "--demo=1", "--show-entry=x", "--initialize", "--reset", "--purge"])
 def test_cli_modes_are_mutually_exclusive(mode):
     with pytest.raises(SystemExit) as error:
         cli.main(["--test-decoration", "all", mode])
