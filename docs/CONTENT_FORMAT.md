@@ -196,7 +196,7 @@ Fonts, packaged backgrounds, and decorations use YAML manifests whose referenced
 
 Custom visual resources are selected by registered identifier; there is no arbitrary absolute-path resource registration interface. The configuration-file, content-directory, and operational-path rules above remain separate.
 
-When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly.
+When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly. Explicit `storage` paths use the same configuration-relative rule; omitted storage values continue to use independent platform-standard locations.
 
 The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
 
@@ -376,6 +376,22 @@ Times use 24-hour `HH:MM` notation with two-digit hours and minutes.
 Examples of valid times are `"00:00"`, `"06:00"`, and `"18:30"`.
 
 Seconds, timezone suffixes, and loosely formatted times are not supported in Version 0.1.
+
+### Storage settings
+
+The optional top-level `storage` mapping selects runtime persistence and prepared-artifact locations.
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `storage.state` | Path string | No | Platform-standard operational-state file |
+| `storage.history` | Path string | No | Platform-standard global-history file |
+| `storage.artifacts` | Path string | No | Platform-standard prepared-artifact directory |
+
+Each field is independent. In particular, setting `storage.state` does not change the default location of global history.
+
+An absolute path is used as specified. A relative path is resolved from the directory containing the selected configuration file. An omitted field continues to use its corresponding platform-standard Refrain location; selecting another file with `--config` does not itself relocate storage.
+
+When present, `storage` must be a mapping and each supported value must be a nonempty string. Unsupported fields are reported and ignored according to the configuration unknown-field policy. An explicitly invalid storage value is an error; Refrain does not replace it with a platform default.
 
 ### Information view settings
 

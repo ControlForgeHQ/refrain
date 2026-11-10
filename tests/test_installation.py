@@ -774,7 +774,7 @@ def test_reset_removes_artifact_junction_without_following_external_target(tmp_p
 def _install_cli_paths(monkeypatch: pytest.MonkeyPatch, paths: ApplicationPaths) -> None:
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     paths.config_directory.mkdir(parents=True, exist_ok=True)
-    paths.config_file.write_text("packaged or test config", encoding="utf-8")
+    paths.config_file.write_text(Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8"))
     monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
 
 
@@ -788,11 +788,13 @@ def test_default_cli_paths_work_without_arguments(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setattr(cli, "run_application", run)
     assert cli.main([]) == 0
-    assert calls[0][:3] == (paths.config_file, paths.state_file, paths.artifacts_directory)
-    assert calls[0][3]["history_path"] is None
+    configuration, state_path, artifacts_path, kwargs = calls[0]
+    assert configuration.file == paths.config_file.absolute()
+    assert (state_path, artifacts_path) == (paths.state_file, paths.artifacts_directory)
+    assert kwargs["history_path"] == paths.history_file
 
 
-def test_once_and_explicit_paths_keep_their_existing_meaning(
+def test_alternate_config_does_not_relocate_omitted_storage_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level("INFO")
@@ -811,14 +813,45 @@ def test_once_and_explicit_paths_keep_their_existing_meaning(
 
     monkeypatch.setattr(cli, "run_startup", run)
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "custom.yaml").write_text("config", encoding="utf-8")
-    assert cli.main(["--once", "--config", "custom.yaml", "--state", "state.json", "--artifacts", "images"]) == 0
-    assert calls[0][:3] == ("custom.yaml", "state.json", "images")
-    assert calls[0][3]["history_path"] is None
-    assert str(tmp_path / "state.json").replace("state.json", "global-history.jsonl") in caplog.text
+    config_path = tmp_path / "custom.yaml"
+    config_path.write_text(Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8"))
+    assert cli.main(["--once", "--config", str(config_path)]) == 0
+    configuration, state_path, artifacts_path, kwargs = calls[0]
+    assert configuration.file == config_path.absolute()
+    assert (state_path, artifacts_path) == (paths.state_file, paths.artifacts_directory)
+    assert kwargs["history_path"] == paths.history_file
+    assert str(paths.history_file) in caplog.text
 
 
-def test_explicit_history_override_is_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custom_state_path_does_not_relocate_omitted_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    paths = _paths(tmp_path)
+    _install_cli_paths(monkeypatch, paths)
+    calls = []
+
+    def startup(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(
+            state=SimpleNamespace(revision=1, snapshot=SimpleNamespace(display_date=date(2026, 1, 1))),
+            selected_initial_quotation=True,
+            presented_stage=0,
+        )
+
+    monkeypatch.setattr(cli, "run_startup", startup)
+    config_path = tmp_path / "custom.yaml"
+    config_path.write_text(
+        Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8")
+        + "\nstorage:\n  state: ./custom-state.json\n",
+        encoding="utf-8",
+    )
+
+    assert cli.main(["--once", "--config", str(config_path)]) == 0
+
+    assert calls[0][0][1] == config_path.parent / "custom-state.json"
+    assert calls[0][1]["history_path"] == paths.history_file
+    assert calls[0][1]["history_path"] != calls[0][0][1].with_name("global-history.jsonl")
+
+
+def test_storage_configuration_overrides_each_runtime_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paths = _paths(tmp_path)
     _install_cli_paths(monkeypatch, paths)
     calls = []
@@ -832,8 +865,24 @@ def test_explicit_history_override_is_passed_through(tmp_path: Path, monkeypatch
         )
 
     monkeypatch.setattr(cli, "run_startup", run)
-    assert cli.main(["--once", "--history", "custom-history.jsonl"]) == 0
-    assert calls[0][3]["history_path"] == "custom-history.jsonl"
+    config_path = tmp_path / "alternate" / "config.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8")
+        + (
+            "\nstorage:\n"
+            "  state: ./runtime/state.json\n"
+            "  history: ./runtime/history.jsonl\n"
+            "  artifacts: ./runtime/artifacts\n"
+        ),
+        encoding="utf-8",
+    )
+    assert cli.main(["--once", "--config", str(config_path)]) == 0
+    configuration, state_path, artifacts_path, kwargs = calls[0]
+    assert configuration.file == config_path
+    assert state_path == config_path.parent / "runtime/state.json"
+    assert kwargs["history_path"] == config_path.parent / "runtime/history.jsonl"
+    assert artifacts_path == config_path.parent / "runtime/artifacts"
 
 
 def test_demo_uses_default_configuration_and_never_receives_production_persistence(
@@ -846,7 +895,7 @@ def test_demo_uses_default_configuration_and_never_receives_production_persisten
 
     assert cli.main(["--demo", "5"]) == 0
     assert calls[0][0] == (paths.config_file, 5.0)
-    assert not {"state_path", "artifact_root", "history_path"}.intersection(calls[0][1])
+    assert set(calls[0][1]) == {"debug_layout", "shutdown_event"}
 
 
 def test_missing_configuration_is_actionable_and_does_not_fall_back(
@@ -878,29 +927,55 @@ def test_explicit_missing_configuration_does_not_fall_back_to_installed_default(
 
 
 @pytest.mark.parametrize(
-    "operation,override",
-    [
-        ("--initialize", ["--config", "custom.yaml"]),
-        ("--initialize", ["--state", "state.json"]),
-        ("--initialize", ["--artifacts", "images"]),
-        ("--initialize", ["--history", "history.jsonl"]),
-        ("--reset", ["--config", "custom.yaml"]),
-        ("--reset", ["--state", "state.json"]),
-        ("--reset", ["--artifacts", "images"]),
-        ("--reset", ["--history", "history.jsonl"]),
-        ("--purge", ["--config", "custom.yaml"]),
-        ("--purge", ["--state", "state.json"]),
-        ("--purge", ["--artifacts", "images"]),
-        ("--purge", ["--history", "history.jsonl"]),
-    ],
+    "option",
+    ["--state", "--artifacts", "--history", "--history-segment-size", "--history-max-segments"],
 )
-def test_administrative_operations_reject_all_path_overrides(
-    operation: str, override: list[str], capsys: pytest.CaptureFixture[str]
+def test_removed_storage_options_are_rejected(option: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main([option, "value"])
+
+    assert error.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
+def test_installation_operations_ignore_configured_storage_paths(
+    operation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    custom_storage = tmp_path / "custom-storage"
+    custom_files = [
+        custom_storage / "state.json",
+        custom_storage / "global-history.jsonl",
+        custom_storage / "artifacts" / "prepared.png",
+    ]
+    for path in custom_files:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("custom data", encoding="utf-8")
+    paths.config_file.write_text(
+        "storage:\n"
+        f"  state: {custom_files[0]}\n"
+        f"  history: {custom_files[1]}\n"
+        f"  artifacts: {custom_files[2].parent}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: True)
+
+    assert cli.main([operation]) == 0
+
+    assert [path.read_text(encoding="utf-8") for path in custom_files] == ["custom data"] * 3
+
+
+@pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
+def test_administrative_operations_reject_alternate_configuration(
+    operation: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as error:
-        cli.main([operation, *override])
+        cli.main([operation, "--config", "custom.yaml"])
     assert error.value.code == 2
-    assert "cannot be combined with path overrides" in capsys.readouterr().err
+    assert "cannot be combined with --config" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("mode", [["--once"], ["--demo", "5"]])

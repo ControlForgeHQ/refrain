@@ -337,7 +337,9 @@ def present_prepared_stage(
         image.close()
 
 
-def _load_configuration(config_file: str | Path) -> ApplicationConfiguration:
+def _load_configuration(config_file: str | Path | ApplicationConfiguration) -> ApplicationConfiguration:
+    if isinstance(config_file, ApplicationConfiguration):
+        return config_file
     try:
         return load_application_config(config_file)
     except ApplicationConfigurationError as error:
@@ -387,11 +389,9 @@ def _recover_images(
 
 def _create_history_store(
     state_path: Path,
-    history_path: str | Path | None,
-    history_segment_size: int,
-    history_max_segments: int,
+    history_path: str | Path,
 ) -> GlobalHistoryStore:
-    path = state_path.with_name("global-history.jsonl") if history_path is None else Path(history_path).absolute()
+    path = Path(history_path).absolute()
     state_file = state_path.resolve()
     resolved_history_path = path.resolve()
     segments = re.compile(rf"{re.escape(path.stem)}\.\d+{re.escape(path.suffix)}\Z")
@@ -399,7 +399,7 @@ def _create_history_store(
         path.parent.resolve() == state_path.parent.resolve() and segments.fullmatch(state_path.name)
     ):
         raise ValueError("global-history path and its rotated segments must not overlap the operational state file")
-    return GlobalHistoryStore(path, max_segment_size=history_segment_size, max_segments=history_max_segments)
+    return GlobalHistoryStore(path)
 
 
 def _record_selection_history(history_store: GlobalHistoryStore, state: PersistentState) -> None:
@@ -410,16 +410,14 @@ def _record_selection_history(history_store: GlobalHistoryStore, state: Persiste
 
 
 def run_startup(
-    config_file: str | Path,
+    config_file: str | Path | ApplicationConfiguration,
     state_path: str | Path,
     artifact_root: str | Path,
     *,
+    history_path: str | Path,
     debug_layout: bool = False,
     now: datetime | None = None,
     random_source: random.Random | None = None,
-    history_path: str | Path | None = None,
-    history_segment_size: int = 1_048_576,
-    history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     keep_open: Callable[[str], None] | None = None,
     wall_clock: Callable[[], datetime] | None = None,
@@ -434,7 +432,7 @@ def run_startup(
     """
     configuration = _load_configuration(config_file)
     store = PersistentStateStore(Path(state_path).absolute())
-    history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
+    history_store = _create_history_store(store.path, history_path)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
     current_time = (
         wall_clock() if now is None and wall_clock is not None else (datetime.now(timezone.utc) if now is None else now)
@@ -576,16 +574,14 @@ def run_startup(
 
 
 def run_application(
-    config_file: str | Path,
+    config_file: str | Path | ApplicationConfiguration,
     state_path: str | Path,
     artifact_root: str | Path,
     *,
+    history_path: str | Path,
     debug_layout: bool = False,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
-    history_path: str | Path | None = None,
-    history_segment_size: int = 1_048_576,
-    history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     monotonic_clock: Callable[[], float] = time.monotonic,
@@ -599,7 +595,7 @@ def run_application(
     """
     configuration = _load_configuration(config_file)
     store = PersistentStateStore(Path(state_path).absolute())
-    history_store = _create_history_store(store.path, history_path, history_segment_size, history_max_segments)
+    history_store = _create_history_store(store.path, history_path)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
     shutdown = shutdown_event if shutdown_event is not None else Event()
     chooser = random_source if random_source is not None else random.Random()
@@ -814,8 +810,6 @@ def run_demo(
     debug_layout: bool = False,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
-    history_segment_size: int = 1_048_576,
-    history_max_segments: int = 20,
     backend_factory: BackendFactory = _default_backend_factory,
     wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     monotonic_clock: Callable[[], float] = time.monotonic,
@@ -842,10 +836,7 @@ def run_demo(
     try:
         root = Path(session.name)
         store = PersistentStateStore(root / "state.json")
-        try:
-            history_store = _create_history_store(store.path, None, history_segment_size, history_max_segments)
-        except ValueError as error:
-            raise ApplicationError(f"invalid demo history retention: {error}") from error
+        history_store = _create_history_store(store.path, root / "global-history.jsonl")
         artifact_store = PreparedImageArtifactStore(root / "artifacts")
         try:
             display_date = evaluate_scheduling(wall_clock(), configuration, None).display_date

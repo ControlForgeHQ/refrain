@@ -747,6 +747,81 @@ def test_omitted_content_directory_uses_default_without_information_diagnostic(
     assert not any("content.directory" in record.message for record in caplog.records)
 
 
+@pytest.mark.parametrize("storage", [None, {}])
+def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
+    data = configuration_data()
+    if storage is None:
+        data.pop("storage", None)
+    else:
+        data["storage"] = storage
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.storage.state is None
+    assert config.storage.history is None
+    assert config.storage.artifacts is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("state", "runtime/state.json"),
+        ("history", "runtime/global-history.jsonl"),
+        ("artifacts", "runtime/artifacts"),
+    ],
+)
+def test_each_configured_storage_path_resolves_relative_to_config_file(tmp_path: Path, field: str, value: str) -> None:
+    config_path = tmp_path / "alternate" / "config.yaml"
+    config = load_application_config(write_config(config_path, configuration_data(storage={field: value})))
+
+    assert getattr(config.storage, field) == config_path.parent / value
+    assert all(getattr(config.storage, other) is None for other in {"state", "history", "artifacts"} - {field})
+
+
+def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: Path) -> None:
+    configured = {
+        "state": tmp_path / "state.json",
+        "history": tmp_path / "global-history.jsonl",
+        "artifacts": tmp_path / "artifacts",
+    }
+
+    config = load_application_config(
+        write_config(
+            tmp_path / "nested" / "config.yaml",
+            configuration_data(storage={field: str(path) for field, path in configured.items()}),
+        )
+    )
+
+    assert config.storage.state == configured["state"]
+    assert config.storage.history == configured["history"]
+    assert config.storage.artifacts == configured["artifacts"]
+
+
+@pytest.mark.parametrize("field", ["state", "history", "artifacts"])
+@pytest.mark.parametrize("value", [None, 1, True, "", []])
+def test_invalid_storage_path_values_are_errors(tmp_path: Path, field: str, value: object) -> None:
+    data = configuration_data(storage={field: value})
+
+    assert f"storage.{field}" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+
+
+@pytest.mark.parametrize("storage", [None, [], "runtime"])
+def test_storage_must_be_a_mapping(tmp_path: Path, storage: object) -> None:
+    data = configuration_data(storage=storage)
+
+    assert "storage" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+
+
+def test_unknown_storage_fields_follow_configuration_warning_policy(tmp_path: Path, caplog) -> None:
+    config = load_application_config(
+        write_config(tmp_path / "config.yaml", configuration_data(storage={"state": "state.json", "other": "ignored"}))
+    )
+
+    assert config.storage.state == tmp_path / "state.json"
+    assert "storage.other" in caplog.text
+    assert "is not a supported configuration field; it is ignored" in caplog.text
+
+
 def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 

@@ -227,7 +227,7 @@ def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, tmp_pa
     assert cli.main(["--config", config.name, "--demo", value, "--debug-layout"]) == 0
     assert calls[0][:2] == (config.name, float(value))
     assert calls[0][2]["debug_layout"] is True
-    assert set(calls[0][2]) == {"debug_layout", "shutdown_event", "history_segment_size", "history_max_segments"}
+    assert set(calls[0][2]) == {"debug_layout", "shutdown_event"}
     assert handlers == {signal.SIGINT: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
 
 
@@ -256,7 +256,8 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, debu
     config.write_text(_CONFIG, encoding="utf-8")
     state = tmp_path / "state" / "state.json"
     artifacts = tmp_path / "cache" / "artifacts"
-    paths = SimpleNamespace(config_file=config, state_file=state, artifacts_directory=artifacts)
+    history = tmp_path / "state" / "global-history.jsonl"
+    paths = SimpleNamespace(config_file=config, state_file=state, history_file=history, artifacts_directory=artifacts)
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
     calls = []
@@ -273,8 +274,9 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, debu
     monkeypatch.setattr(cli, "run_startup", run)
     arguments = [*mode, *(["--debug-layout"] if debug_layout else [])]
     assert cli.main(arguments) == 0
-    assert calls[0][:3] == (config, state, artifacts)
-    assert calls[0][3]["history_path"] is None
+    assert calls[0][0].file == config.absolute()
+    assert calls[0][1:3] == (state, artifacts)
+    assert calls[0][3]["history_path"] == history
     assert calls[0][3]["debug_layout"] is debug_layout
 
 
@@ -384,7 +386,7 @@ def test_fixed_timezone_date_selection_rules_repetition_and_resources(demo):
         )
 
     demo.clock.on_wait = inspect
-    demo.run(history_segment_size=256, history_max_segments=1)
+    demo.run()
     snapshots = [snapshot for _, snapshot in demo.selected]
     assert [proposal.base_revision for proposal, _ in demo.selected] == [0, 1, 2, 3]
     assert snapshots[0].quotation_identity != snapshots[1].quotation_identity
@@ -399,8 +401,8 @@ def test_fixed_timezone_date_selection_rules_repetition_and_resources(demo):
         states = [state for (identity, _, state, _) in demo.publications if identity[0] == revision]
         assert all(state.snapshot == states[0].snapshot for state in states)
     assert all(len(paths) == 1 for paths in retained)
-    assert all(len(records) == 1 for records in history_records)
-    assert history_records[-1][0]["revision"] == 4
+    assert len(history_records[-1]) == 4
+    assert history_records[-1][-1]["revision"] == 4
     assert snapshots[2].font is None
     assert snapshots[2].background is None
     assert snapshots[3].font == "lora"
@@ -408,13 +410,18 @@ def test_fixed_timezone_date_selection_rules_repetition_and_resources(demo):
     demo.assert_clean()
 
 
-def test_cli_supplied_production_paths_are_never_read_or_modified(demo, monkeypatch):
+def test_configured_production_paths_are_never_read_or_modified_by_demo(demo, monkeypatch):
     demo.entry(metadata=False)
     production = demo.root / "production"
     production.mkdir()
     paths = [production / "state.json", production / "global-history.jsonl", production / "stage-0.png"]
     for number, path in enumerate(paths):
         path.write_bytes(b"production sentinel\x00" + bytes([number]))
+    demo.config.write_text(
+        demo.config.read_text(encoding="utf-8")
+        + f"\nstorage:\n  state: {paths[0]}\n  history: {paths[1]}\n  artifacts: {production}\n",
+        encoding="utf-8",
+    )
     original = {path: path.read_bytes() for path in paths}
     real_path_open = Path.open
     real_open = builtins.open
@@ -443,12 +450,6 @@ def test_cli_supplied_production_paths_are_never_read_or_modified(demo, monkeypa
                     str(demo.config),
                     "--demo",
                     "0.25",
-                    "--state",
-                    str(paths[0]),
-                    "--history",
-                    str(paths[1]),
-                    "--artifacts",
-                    str(production),
                 ]
             )
             == 0

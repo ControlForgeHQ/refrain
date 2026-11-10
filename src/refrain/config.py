@@ -29,7 +29,17 @@ from .geometry import (
     validate_requested_size,
 )
 
-_TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "presentation", "information_view", "palette"}
+_TOP_LEVEL_FIELDS = {
+    "general",
+    "content",
+    "reveal",
+    "display",
+    "layout",
+    "presentation",
+    "information_view",
+    "palette",
+    "storage",
+}
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -169,6 +179,15 @@ class DisplayBackendConfiguration:
 
 
 @dataclass(frozen=True)
+class StorageConfiguration:
+    """Optional configuration-relative runtime storage paths."""
+
+    state: Path | None = None
+    history: Path | None = None
+    artifacts: Path | None = None
+
+
+@dataclass(frozen=True)
 class ApplicationConfiguration:
     """Validated, hardware-independent application configuration."""
 
@@ -182,6 +201,7 @@ class ApplicationConfiguration:
     default_fonts: tuple[str, ...]
     min_font_size: int
     max_font_size: int
+    storage: StorageConfiguration = field(default_factory=StorageConfiguration)
     information_view_duration: int = 60
     qr_enabled: bool = True
     backgrounds: Mapping[str, BackgroundResource] = field(default_factory=lambda: MappingProxyType({}))
@@ -594,6 +614,27 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     if not content_directory.is_absolute():
         content_directory = file.parent / content_directory
 
+    storage_values: dict[str, Path] = {}
+    if "storage" in data:
+        storage_data = data["storage"]
+        if not isinstance(storage_data, dict):
+            report("storage", "must be a mapping", logging.ERROR)
+            storage_data = {}
+        else:
+            _known_fields(storage_data, {"state", "history", "artifacts"}, "storage", report)
+        for storage_field in ("state", "history", "artifacts"):
+            if storage_field not in storage_data:
+                continue
+            value = storage_data[storage_field]
+            if not isinstance(value, str) or not value:
+                report(f"storage.{storage_field}", "must be a nonempty path string", logging.ERROR)
+                continue
+            storage_path = Path(value)
+            if not storage_path.is_absolute():
+                storage_path = file.parent / storage_path
+            storage_values[storage_field] = storage_path
+    storage = StorageConfiguration(**storage_values)
+
     information_view = _mapping(data.get("information_view", {}), "information_view", report)
     _known_fields(information_view, {"duration"}, "information_view", report)
     information_view_duration = information_view.get("duration", 60)
@@ -887,6 +928,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         display_backends=tuple(display_backends),
         day_start=day_start,
         content_directory=content_directory,
+        storage=storage,
         reveal=reveal,
         presentation_insets=presentation_insets,
         fonts=MappingProxyType(font_registry),
