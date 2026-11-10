@@ -897,7 +897,7 @@ Decorations may define presentation insets, but content entries reference decora
 
 Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
-Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared final-resolution image; independent per-backend resolutions are not supported. Each backend is responsible for adapting that image to its physical or network destination. A backend's destination dimensions or capabilities do not constrain core rendering.
+Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared output image; independent per-backend resolutions are not supported. A backend may perform only explicitly permitted destination operations, such as hardware pixel-format or orientation conversion, and must not resize the presentation. A backend's destination dimensions or capabilities do not constrain core rendering.
 
 The renderer derives the aspect-specific design canvas by cropping the fixed reference envelope. It applies configured design-canvas insets there and scales the resulting geometry to the presentation canvas, as defined in `ARCHITECTURE.md`.
 
