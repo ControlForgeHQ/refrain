@@ -135,6 +135,7 @@ class Workspace:
             self.config,
             self.state,
             self.artifacts,
+            history_path=self.history,
             now=now,
             random_source=Random(1),
             backend_factory=lambda configuration: display,
@@ -708,6 +709,7 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         debug_layout=True,
         now=at(10, 7),
         random_source=Random(1),
@@ -744,20 +746,16 @@ def test_history_write_failure_does_not_interrupt_startup_presentation(
 
 def test_history_paths_cannot_overwrite_operational_state(workspace: Workspace) -> None:
     with pytest.raises(ValueError, match="must not overlap the operational state"):
-        application._create_history_store(workspace.state, workspace.state, 1_048_576, 20)
+        application._create_history_store(workspace.state, workspace.state)
     with pytest.raises(ValueError, match="must not overlap the operational state"):
         application._create_history_store(
             workspace.state.with_name("global-history.jsonl"),
-            None,
-            1_048_576,
-            20,
+            workspace.state.with_name("global-history.jsonl"),
         )
     with pytest.raises(ValueError, match="must not overlap the operational state"):
         application._create_history_store(
             workspace.state.with_name("global-history.1.jsonl"),
             workspace.state.with_name("global-history.jsonl"),
-            1_048_576,
-            20,
         )
 
 
@@ -1053,7 +1051,13 @@ def test_naive_timestamp_is_rejected(workspace: Workspace) -> None:
 def test_default_timestamp_is_used_when_omitted(workspace: Workspace) -> None:
     ordinary(workspace)
     display = FakeDisplay()
-    run_startup(workspace.config, workspace.state, workspace.artifacts, backend_factory=lambda c: display)
+    run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        history_path=workspace.history,
+        backend_factory=lambda c: display,
+    )
     assert workspace.load().revision == 1
 
 
@@ -1092,6 +1096,7 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         now=at(10, 19),
         backend_factory=lambda _configuration: first_backend,
     )
@@ -1116,6 +1121,7 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         now=at(10, 19),
         backend_factory=lambda _configuration: current_backend,
     )
@@ -1153,7 +1159,14 @@ def test_display_initialization_failure_preserves_state(workspace: Workspace) ->
         raise DisplayBackendInitializationError("no display")
 
     with pytest.raises(ApplicationError, match="all configured display destinations"):
-        run_startup(workspace.config, workspace.state, workspace.artifacts, now=at(10, 8), backend_factory=factory)
+        run_startup(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            history_path=workspace.history,
+            now=at(10, 8),
+            backend_factory=factory,
+        )
     state = workspace.load()
     assert state.revision == 1 and state.highest_reveal_stage == 0
     result, _ = workspace.run(at(10, 8))
@@ -1274,17 +1287,14 @@ def test_keep_open_runs_before_backend_is_closed(workspace: Workspace) -> None:
 
 def test_command_line_runs_startup(workspace: Workspace, monkeypatch, capsys) -> None:
     ordinary(workspace)
+    workspace.config.write_text(
+        _CONFIG
+        + "\nstorage:\n  state: state/state.json\n  history: state/global-history.jsonl\n  artifacts: artifacts\n",
+        encoding="utf-8",
+    )
     display = FakeDisplay()
     monkeypatch.setattr(application, "create_display_backend", lambda *args, **kwargs: display)
-    arguments = [
-        "--once",
-        "--config",
-        str(workspace.config),
-        "--state",
-        str(workspace.state),
-        "--artifacts",
-        str(workspace.artifacts),
-    ]
+    arguments = ["--once", "--config", str(workspace.config)]
     assert main(arguments) == 0
     assert "Selected selection 1" in capsys.readouterr().out
     assert main(arguments) == 0
@@ -1293,7 +1303,7 @@ def test_command_line_runs_startup(workspace: Workspace, monkeypatch, capsys) ->
 
 
 def test_command_line_reports_errors(workspace: Workspace, capsys) -> None:
-    code = main(["--config", str(workspace.root / "nope.yaml"), "--state", "s.json", "--artifacts", "a"])
+    code = main(["--config", str(workspace.root / "nope.yaml")])
     assert code == 1
     assert "refrain:" in capsys.readouterr().err
 
@@ -1384,6 +1394,7 @@ def run_continuously(
             workspace.config,
             workspace.state,
             workspace.artifacts,
+            history_path=workspace.history,
             shutdown_event=clock,
             wall_clock=lambda: clock.now,
             monotonic_clock=lambda: clock.elapsed,
@@ -1460,6 +1471,7 @@ def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         shutdown_event=clock,
         random_source=Random(1),
         wall_clock=lambda: clock.now,
@@ -1495,6 +1507,7 @@ def test_bounded_information_attempt_transitions_to_current_day_and_reveal(works
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         shutdown_event=clock,
         random_source=Random(1),
         wall_clock=lambda: clock.now,
@@ -1569,6 +1582,7 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
             workspace.config,
             workspace.state,
             workspace.artifacts,
+            history_path=workspace.history,
             shutdown_event=clock,
             random_source=Random(1),
             backend_factory=lambda configuration: displays[configuration.type],
@@ -1642,6 +1656,7 @@ def test_information_view_publication_uses_and_releases_pillow_images(workspace:
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         now=at(10, 7),
         backend_factory=lambda _configuration: display,
         wait=lambda _duration: None,
@@ -1674,7 +1689,13 @@ def test_information_view_images_close_if_publication_never_takes_ownership(work
     monkeypatch.setattr(application, "prepare_information_view", prepare)
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", fail_coordinator)
     with pytest.raises(RuntimeError, match="coordinator initialization failed"):
-        run_startup(workspace.config, workspace.state, workspace.artifacts, now=at(10, 7))
+        run_startup(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            history_path=workspace.history,
+            now=at(10, 7),
+        )
 
     assert len(generated) == 1
     with pytest.raises(ValueError, match="closed"):
@@ -1705,6 +1726,7 @@ def test_shutdown_during_information_publication_releases_backend_safely(workspa
         workspace.config,
         workspace.state,
         workspace.artifacts,
+        history_path=workspace.history,
         shutdown_event=clock,
         random_source=Random(1),
         backend_factory=lambda _configuration: display,
@@ -1832,6 +1854,7 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
             workspace.config,
             workspace.state,
             workspace.artifacts,
+            history_path=workspace.history,
             shutdown_event=clock,
             random_source=Random(1),
             backend_factory=backend_factory,
@@ -2471,6 +2494,11 @@ def test_command_line_defaults_to_continuous_and_restores_signal_handlers(worksp
 
     import refrain.__main__ as command_line
 
+    workspace.config.write_text(
+        _CONFIG
+        + "\nstorage:\n  state: state/state.json\n  history: state/global-history.jsonl\n  artifacts: artifacts\n",
+        encoding="utf-8",
+    )
     calls = []
     handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
 
@@ -2485,13 +2513,10 @@ def test_command_line_defaults_to_continuous_and_restores_signal_handlers(worksp
             [
                 "--config",
                 str(workspace.config),
-                "--state",
-                str(workspace.state),
-                "--artifacts",
-                str(workspace.artifacts),
             ]
         )
         == 0
     )
-    assert calls == [(str(workspace.config), str(workspace.state), str(workspace.artifacts))]
+    assert calls[0][0].file == workspace.config.absolute()
+    assert calls[0][1:] == (workspace.state, workspace.artifacts)
     assert {sig: signal.getsignal(sig) for sig in handlers} == handlers

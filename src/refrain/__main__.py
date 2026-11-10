@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Event
 
 from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup
+from .config import ApplicationConfigurationError, load_application_config
 from .decoration_diagnostic import run_decoration_diagnostic
 from .installation import (
     InitializationError,
@@ -66,31 +67,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Present Refrain quotations and manage its installation.",
     )
     parser.add_argument("--config", help="application configuration YAML file")
-    parser.add_argument("--state", help="persistent state file (ignored in demo and diagnostic modes)")
-    parser.add_argument("--artifacts", help="prepared image directory (ignored in demo and diagnostic modes)")
     parser.add_argument(
         "--debug-layout",
         action="store_true",
         help="outline the effective literary presentation region on published images",
-    )
-    parser.add_argument(
-        "--history",
-        help=(
-            "JSONL global-history file (default: global-history.jsonl beside state; "
-            "ignored in demo and diagnostic modes)"
-        ),
-    )
-    parser.add_argument(
-        "--history-segment-size",
-        type=int,
-        default=1_048_576,
-        help="maximum global-history segment size in bytes (default: 1048576)",
-    )
-    parser.add_argument(
-        "--history-max-segments",
-        type=int,
-        default=20,
-        help="maximum retained global-history segments including the active segment (default: 20)",
     )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--once", action="store_true", help="run one startup/presentation cycle without scheduling")
@@ -220,13 +200,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--test-decoration cannot be combined with other modes: " + ", ".join(conflicting_modes))
     try:
         if arguments.initialize:
-            overrides = [
-                f"--{name}"
-                for name in ("config", "state", "artifacts", "history")
-                if getattr(arguments, name) is not None
-            ]
-            if overrides:
-                parser.error("--initialize cannot be combined with path overrides: " + ", ".join(overrides))
+            if arguments.config is not None:
+                parser.error("--initialize cannot be combined with --config")
             paths = resolve_application_paths()
             print("Initializing Refrain using the platform-standard per-user locations")
             initialize_installation(paths, progress=print)
@@ -234,14 +209,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if arguments.reset or arguments.purge:
-            overrides = [
-                f"--{name}"
-                for name in ("config", "state", "artifacts", "history")
-                if getattr(arguments, name) is not None
-            ]
             operation = "--reset" if arguments.reset else "--purge"
-            if overrides:
-                parser.error(f"{operation} cannot be combined with path overrides: " + ", ".join(overrides))
+            if arguments.config is not None:
+                parser.error(f"{operation} cannot be combined with --config")
             paths = resolve_application_paths()
             if arguments.reset:
                 confirmed = confirm_operation(
@@ -293,21 +263,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = resolve_application_paths()
         config_path = arguments.config if arguments.config is not None else paths.config_file
         config_absolute = Path(config_path).absolute()
-        if arguments.demo is None and arguments.show_entry is None and arguments.test_decoration is None:
-            state_path = arguments.state if arguments.state is not None else paths.state_file
-            artifacts_path = arguments.artifacts if arguments.artifacts is not None else paths.artifacts_directory
-            history_path = arguments.history
-            effective_history = (
-                Path(history_path).absolute()
-                if history_path is not None
-                else Path(state_path).absolute().with_name("global-history.jsonl")
-            )
+        if not config_absolute.exists():
             _LOGGER.info("Effective configuration path: %s", config_absolute)
-            _LOGGER.info("Effective state path: %s", Path(state_path).absolute())
-            _LOGGER.info("Effective artifacts path: %s", Path(artifacts_path).absolute())
-            _LOGGER.info("Effective history path: %s", effective_history)
+            print(
+                f"refrain: configuration file does not exist: {config_absolute}\n"
+                "Initialize the standard per-user configuration with `python -m refrain --initialize`, "
+                "or provide an existing file with --config.",
+                file=sys.stderr,
+            )
+            return 1
+        if arguments.demo is None and arguments.show_entry is None and arguments.test_decoration is None:
+            try:
+                configuration = load_application_config(config_absolute)
+            except ApplicationConfigurationError as error:
+                raise ApplicationError(f"application configuration is invalid: {error}") from error
+            state_path = Path(configuration.storage.state or paths.state_file).absolute()
+            artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
+            history_path = Path(configuration.storage.history or paths.history_file).absolute()
+            _LOGGER.info("Effective configuration path: %s", configuration.file)
+            _LOGGER.info("Effective state path: %s", state_path)
+            _LOGGER.info("Effective artifacts path: %s", artifacts_path)
+            _LOGGER.info("Effective history path: %s", history_path)
         else:
-            state_path = artifacts_path = history_path = None
+            configuration = None
             _LOGGER.info(
                 "Effective configuration path: %s; %s",
                 config_absolute,
@@ -318,24 +296,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
 
-        if not config_absolute.exists():
-            print(
-                f"refrain: configuration file does not exist: {config_absolute}\n"
-                "Initialize the standard per-user configuration with `python -m refrain --initialize`, "
-                "or provide an existing file with --config.",
-                file=sys.stderr,
-            )
-            return 1
-
         if arguments.once:
             result = run_startup(
-                config_path,
+                configuration,
                 state_path,
                 artifacts_path,
                 debug_layout=arguments.debug_layout,
                 history_path=history_path,
-                history_segment_size=arguments.history_segment_size,
-                history_max_segments=arguments.history_max_segments,
                 keep_open=_hold_open,
             )
         elif arguments.show_entry is not None:
@@ -370,19 +337,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         arguments.demo,
                         debug_layout=arguments.debug_layout,
                         shutdown_event=shutdown,
-                        history_segment_size=arguments.history_segment_size,
-                        history_max_segments=arguments.history_max_segments,
                     )
                 else:
                     run_application(
-                        config_path,
+                        configuration,
                         state_path,
                         artifacts_path,
                         debug_layout=arguments.debug_layout,
                         shutdown_event=shutdown,
                         history_path=history_path,
-                        history_segment_size=arguments.history_segment_size,
-                        history_max_segments=arguments.history_max_segments,
                     )
             finally:
                 for termination_signal, handler in previous_handlers.items():

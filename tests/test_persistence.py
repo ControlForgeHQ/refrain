@@ -387,7 +387,7 @@ def test_overridden_state_path_recommends_quarantining_only_that_file(tmp_path: 
 
     assert str(state_path) in str(raised.value)
     assert "quarantine only this file" in str(raised.value)
-    assert "--reset does not manage overridden state paths" in str(raised.value)
+    assert "--reset does not manage configured state paths" in str(raised.value)
     assert state_path.read_bytes() == original
 
 
@@ -602,77 +602,52 @@ def test_global_history_records_committed_selection_as_unicode_jsonl(tmp_path: P
     )
 
 
-def test_global_history_rotates_only_between_records_and_enforces_retention(tmp_path: Path) -> None:
+def test_global_history_uses_fixed_limits_and_rotates_between_records(tmp_path: Path) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
     history_path = tmp_path / "global-history.jsonl"
-    first = commit(state_store, "First.")
-    seed_path = tmp_path / "seed.jsonl"
-    first_line = GlobalHistoryStore(seed_path).record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
-    first_bytes = seed_path.read_bytes()
-    history = GlobalHistoryStore(history_path, max_segment_size=len(first_bytes), max_segments=2)
-    history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
-    assert history_path.stat().st_size == history.max_segment_size
+    history = GlobalHistoryStore(history_path)
+    assert history.max_segment_size == 1_048_576
+    assert history.max_segments == 20
+
+    first = commit(state_store, "x" * ((history.max_segment_size - 180) // 2))
+    first_record = history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    first_bytes = history_path.read_bytes()
+    assert 0 < len(first_bytes) <= history.max_segment_size
+
     second = commit(state_store, "Next.", date(2026, 10, 27))
     second_record = history.record(second, timestamp=datetime(2026, 10, 27, tzinfo=timezone.utc))
     second_bytes = history_path.read_bytes()
 
     assert history_path.with_name("global-history.1.jsonl").read_bytes() == first_bytes
     assert second_bytes.endswith(b"\n")
-    assert json.loads(second_bytes) == {
-        "revision": 2,
-        "display_date": "2026-10-27",
-        "selection_timestamp": "2026-10-27T00:00:00Z",
-        "quotation_text": "Next.",
-        "quotation_identity": "Next.",
-    }
-
-    third = commit(state_store, "Last.", date(2026, 10, 28))
-    history.record(third, timestamp=datetime(2026, 10, 28, tzinfo=timezone.utc))
-    assert history_path.with_name("global-history.1.jsonl").read_bytes() == second_bytes
-    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 3
-    assert not history_path.with_name("global-history.2.jsonl").exists()
-    assert first_line.revision == 1 and second_record.revision == 2
+    assert json.loads(second_bytes)["revision"] == 2
+    assert first_record.revision == 1 and second_record.revision == 2
 
 
-def test_single_segment_history_discards_rotated_records(tmp_path: Path) -> None:
+def test_global_history_retains_at_most_twenty_segments(tmp_path: Path) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
     history_path = tmp_path / "global-history.jsonl"
-    history = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=1)
-    first = commit(state_store, "First.")
-    history.record(first)
-    second = commit(state_store, "Next.", date(2026, 10, 27))
+    history = GlobalHistoryStore(history_path)
+    original_active = b"x" * (history.max_segment_size - 1) + b"\n"
+    history_path.write_bytes(original_active)
+    for index in range(1, history.max_segments + 1):
+        history_path.with_name(f"global-history.{index}.jsonl").write_text(str(index), encoding="utf-8")
 
-    history.record(second)
+    history.record(commit(state_store, "Next."))
 
-    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 2
-    assert not history_path.with_name("global-history.1.jsonl").exists()
-
-
-def test_reduced_retention_is_enforced_on_next_append(tmp_path: Path) -> None:
-    state_store = PersistentStateStore(tmp_path / "state.json")
-    history_path = tmp_path / "global-history.jsonl"
-    history = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=3)
-    for text, day in (("First.", 26), ("Next.", 27), ("Last.", 28)):
-        state = commit(state_store, text, date(2026, 10, day))
-        history.record(state, timestamp=datetime(2026, 10, day, tzinfo=timezone.utc))
-    assert history_path.with_name("global-history.1.jsonl").exists()
-    assert history_path.with_name("global-history.2.jsonl").exists()
-
-    reduced = GlobalHistoryStore(history_path, max_segment_size=256, max_segments=1)
-    fourth = commit(state_store, "Final.", date(2026, 10, 29))
-    reduced.record(fourth, timestamp=datetime(2026, 10, 29, tzinfo=timezone.utc))
-
-    assert not history_path.with_name("global-history.1.jsonl").exists()
-    assert not history_path.with_name("global-history.2.jsonl").exists()
-    assert json.loads(history_path.read_text(encoding="utf-8"))["revision"] == 4
+    segments = list(tmp_path.glob("global-history*.jsonl"))
+    assert len(segments) == history.max_segments
+    assert history_path.with_name("global-history.1.jsonl").read_bytes() == original_active
+    assert history_path.with_name("global-history.19.jsonl").read_text(encoding="utf-8") == "18"
+    assert not history_path.with_name("global-history.20.jsonl").exists()
 
 
 def test_history_rejects_oversized_records_without_touching_state(tmp_path: Path) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
-    state = commit(state_store, "A quotation too large for this history limit.")
-    history = GlobalHistoryStore(tmp_path / "global-history.jsonl", max_segment_size=8)
+    state = commit(state_store, "x" * 600_000)
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
 
-    with pytest.raises(GlobalHistoryWriteError, match="larger than the 8-byte segment limit"):
+    with pytest.raises(GlobalHistoryWriteError, match="larger than the 1048576-byte segment limit"):
         history.record(state)
 
     assert state_store.load() == state

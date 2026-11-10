@@ -382,7 +382,7 @@ def test_show_entry_requires_a_valid_identifier(arguments: list[str]) -> None:
         cli.main(arguments)
 
 
-def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
+def test_cli_diagnostic_ignores_configured_production_storage_and_uses_configured_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config, content = workspace(tmp_path / "selected")
@@ -397,6 +397,11 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
     history.write_bytes(b"unchanged history")
     artifacts.mkdir()
     (artifacts / "production.png").write_bytes(b"unchanged artifact")
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + f"\nstorage:\n  state: {state}\n  history: {history}\n  artifacts: {artifacts}\n",
+        encoding="utf-8",
+    )
     backend = RecordingBackend()
     original = application.run_show_entry
 
@@ -417,12 +422,6 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
                 "--debug-layout",
                 "--config",
                 str(config),
-                "--state",
-                str(state),
-                "--history",
-                str(history),
-                "--artifacts",
-                str(artifacts),
             ]
         )
         == 0

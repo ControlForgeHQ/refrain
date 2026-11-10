@@ -21,8 +21,8 @@ from .paths import ApplicationPathError, resolve_application_paths
 from .selection import SelectionProposal
 
 _FORMAT_VERSION = 1
-_DEFAULT_HISTORY_SEGMENT_SIZE = 1_048_576
-_DEFAULT_HISTORY_MAX_SEGMENTS = 20
+_HISTORY_SEGMENT_SIZE = 1_048_576
+_HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -99,7 +99,7 @@ def _recovery_guidance(path: Path) -> str:
         return "Stop Refrain and use `refrain --reset` to remove standard runtime state before restarting."
     return (
         "Stop Refrain, back up this file, and manually remove or quarantine only this file before restarting; "
-        "--reset does not manage overridden state paths."
+        "--reset does not manage configured state paths."
     )
 
 
@@ -236,22 +236,12 @@ class PersistentState:
 class GlobalHistoryStore:
     """Append committed selection events to a separately retained JSONL log."""
 
-    def __init__(
-        self,
-        path: str | Path,
-        *,
-        max_segment_size: int = _DEFAULT_HISTORY_SEGMENT_SIZE,
-        max_segments: int = _DEFAULT_HISTORY_MAX_SEGMENTS,
-    ) -> None:
+    def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         if not self.path.is_absolute():
             raise ValueError("global-history path must be absolute")
-        if type(max_segment_size) is not int or max_segment_size <= 0:
-            raise ValueError("max_segment_size must be a positive integer")
-        if type(max_segments) is not int or max_segments <= 0:
-            raise ValueError("max_segments must be a positive integer")
-        self.max_segment_size = max_segment_size
-        self.max_segments = max_segments
+        self.max_segment_size = _HISTORY_SEGMENT_SIZE
+        self.max_segments = _HISTORY_MAX_SEGMENTS
 
     def record(self, state: PersistentState, *, timestamp: datetime | None = None) -> GlobalHistoryRecord:
         """Append one event for a committed state, independently of state publication."""
