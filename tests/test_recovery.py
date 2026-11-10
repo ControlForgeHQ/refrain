@@ -145,6 +145,32 @@ def test_missing_preference_falls_back_without_changing_committed_selection(
     assert "Requested background 'removed-paper' from content entry is unavailable" in caplog.text
 
 
+def test_presentation_canvas_bounds_are_preserved_on_the_raster_variant(
+    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, _state_path = committed_state
+    resolved_bounds = []
+    prepare = recovery.prepare_daily_images
+
+    def prepare_with_bounds(snapshot, stages, configuration, **kwargs):
+        callback = kwargs["on_resolved_bounds"]
+
+        def capture(bounds):
+            resolved_bounds.append(bounds)
+            callback(bounds)
+
+        kwargs["on_resolved_bounds"] = capture
+        return prepare(snapshot, stages, configuration, **kwargs)
+
+    monkeypatch.setattr(recovery, "prepare_daily_images", prepare_with_bounds)
+
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
+
+    variant = result.variant_for(_OUTPUT_SPECIFICATION)
+    assert variant.presentation_canvas_literary_bounds == resolved_bounds[0]
+    assert _OUTPUT_SPECIFICATION.native_render_size == _CONFIGURATION.output_size
+
+
 def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
     committed_state, artifact_store, tmp_path: Path, monkeypatch
 ) -> None:

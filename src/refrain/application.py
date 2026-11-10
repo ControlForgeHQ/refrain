@@ -689,7 +689,9 @@ def run_startup(
             except ArtifactStoreError as error:
                 raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
             image = _stage_publication_image(
-                image, artifacts.variant_for(output_specification).literary_bounds, debug_layout
+                image,
+                artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
+                debug_layout,
             )
             try:
                 final_decision = evaluate_scheduling(read_current_time(), configuration, state)
@@ -916,7 +918,9 @@ def run_application(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
                     image = _stage_publication_image(
-                        image, artifacts.variant_for(output_specification).literary_bounds, debug_layout
+                        image,
+                        artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
+                        debug_layout,
                     )
                     coordinator.publish(identity, image)
                     continue
@@ -1051,7 +1055,9 @@ def run_demo(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
                     image = _stage_publication_image(
-                        image, artifacts.variant_for(output_specification).literary_bounds, debug_layout
+                        image,
+                        artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
+                        debug_layout,
                     )
                     coordinator.publish(identity, image)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):

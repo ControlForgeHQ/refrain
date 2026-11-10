@@ -65,11 +65,11 @@ def recover_prepared_daily_images(
     if existing is not None:
         return existing
 
-    resolved_bounds: PixelBounds | None = None
+    presentation_canvas_literary_bounds: PixelBounds | None = None
 
     def remember_bounds(bounds: PixelBounds) -> None:
-        nonlocal resolved_bounds
-        resolved_bounds = bounds
+        nonlocal presentation_canvas_literary_bounds
+        presentation_canvas_literary_bounds = bounds
 
     images = prepare_daily_images(
         state.snapshot,
@@ -81,7 +81,10 @@ def recover_prepared_daily_images(
     try:
         artifact_set = artifact_store.store(state.revision, ordered_stages, {output_specification: images})
         variants = dict(artifact_set.variants)
-        variants[output_specification] = replace(variants[output_specification], literary_bounds=resolved_bounds)
+        variants[output_specification] = replace(
+            variants[output_specification],
+            presentation_canvas_literary_bounds=presentation_canvas_literary_bounds,
+        )
         return replace(artifact_set, variants=MappingProxyType(variants))
     finally:
         for image in images:

@@ -152,13 +152,20 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 @dataclass(frozen=True)
 class PreparedImageArtifactVariant:
-    """Validated metadata for one output specification; close returned stages after use."""
+    """Validated metadata for one output specification.
+
+    ``presentation_canvas_literary_bounds`` uses presentation-canvas coordinates
+    at ``output_specification.native_render_size``; it is not scaled to the
+    requested output-image dimensions. Close returned stages after use.
+    """
 
     output_specification: ResolvedOutputSpecification
     mode: str
     stage_paths: tuple[Path, ...]
     _digests: tuple[str, ...]
-    literary_bounds: tuple[int, int, int, int] | None = field(default=None, compare=False, repr=False)
+    presentation_canvas_literary_bounds: tuple[int, int, int, int] | None = field(
+        default=None, compare=False, repr=False
+    )
 
     @property
     def requested_size(self) -> tuple[int, int]:
