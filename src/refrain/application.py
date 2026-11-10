@@ -592,6 +592,8 @@ def run_startup(
         raise ApplicationError(f"scheduling evaluation failed: {error}") from error
 
     coordinator: DisplayPublicationCoordinator | None = None
+    pending_information_images: dict[ResolvedOutputSpecification, Image.Image] | None = None
+    information_images_transferred = False
     try:
         if configuration.information_view_duration > 0:
             try:
@@ -601,6 +603,7 @@ def run_startup(
                 information_images = {
                     specification: images[-1] for specification, images in prepared_information.items()
                 }
+                pending_information_images = information_images
             except InformationViewPreparationError as error:
                 _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
             else:
@@ -611,6 +614,8 @@ def run_startup(
                     monotonic_clock=monotonic_clock,
                 )
                 coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_images)
+                information_images_transferred = True
+                pending_information_images = None
                 if coordinator.wait_for_any_publication(
                     _INFORMATION_VIEW_IDENTITY,
                     timeout=_INFORMATION_VIEW_PUBLICATION_TIMEOUT,
@@ -693,6 +698,9 @@ def run_startup(
     finally:
         if coordinator is not None:
             coordinator.close()
+        if pending_information_images is not None and not information_images_transferred:
+            for image in pending_information_images.values():
+                image.close()
     return StartupResult(state=state, presented_stage=stage, selected_initial_quotation=initial)
 
 

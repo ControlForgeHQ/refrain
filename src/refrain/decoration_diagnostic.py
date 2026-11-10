@@ -763,7 +763,7 @@ def _diagnostic_status(
         f"{details.qr_placement.presentation_allocation_bounds if qr_effective else 'unavailable'}; "
         f"background: {'on' if state.background_enabled else 'white'}; "
         f"tinting: {'on' if state.tinting_enabled else 'black'}; debug: {'on' if state.debug_layout else 'off'}\n"
-        f"Presentation insets (working px): {inset_values}; "
+        f"Presentation insets (design px): {inset_values}; "
         f"QR horizontal={qr_horizontal.method} "
         f"{qr_horizontal.offset if qr_horizontal.method != 'center' else ''} ({horizontal_source}), "
         f"vertical={qr_vertical.method} {qr_vertical.offset if qr_vertical.method != 'center' else ''} "
@@ -1030,7 +1030,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     qr_vertical_offset = tk.StringVar()
     presentation_row = tk.Frame(geometry_panel)
     presentation_row.pack(fill="x")
-    tk.Label(presentation_row, text="Presentation (working px):").pack(side="left", padx=(0, 4))
+    tk.Label(presentation_row, text="Presentation insets (design px):").pack(side="left", padx=(0, 4))
     presentation_entries = {}
     for name in ("left", "right", "top", "bottom"):
         tk.Label(presentation_row, text=f"{name.title()}").pack(side="left", padx=(3, 1))

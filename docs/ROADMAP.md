@@ -108,7 +108,8 @@ The first release should be useful in normal household operation without dependi
 - Publish prepared output images to their configured destinations, including named outputs of the image-server backend.
 - Update display backends independently so that slow or unavailable destinations do not delay other destinations.
 - Isolate backend failures and provide bounded recovery without interrupting otherwise functional destinations.
-- Perform complete physical display updates at the configured reveal stages and display-day boundary.
+- Perform complete display publication at the configured reveal stages and display-day boundary.
+- During startup and recovery, publish the current stage when needed to synchronize currently configured destinations.
 - Avoid unnecessary physical refreshes.
 - Preserve existing displayed content when practical during application failures or restarts.
 - Support normal unattended operation and graceful shutdown.

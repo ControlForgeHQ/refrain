@@ -29,6 +29,7 @@ from refrain import (
     NoEligibleQuotationError,
     PersistentStateStore,
     PreparedImageArtifactStore,
+    ResolvedOutputSpecification,
     StateCommitError,
     StateRecoveryError,
     run_application,
@@ -98,6 +99,7 @@ class FakeDisplay:
         self.closed = 0
 
     def update(self, image: Image.Image) -> None:
+        assert isinstance(image, Image.Image)
         if self.fail_update:
             raise DisplayBackendUpdateError("update failed")
         self.sizes.append(image.size)
@@ -1055,6 +1057,95 @@ def test_default_timestamp_is_used_when_omitted(workspace: Workspace) -> None:
     assert workspace.load().revision == 1
 
 
+def test_startup_reconciles_changed_and_added_image_server_outputs_without_reselection(
+    workspace: Workspace,
+) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(
+        _CONFIG.replace(
+            '- type: "waveshare-13in3-e"',
+            "- type: image-server\n"
+            "      outputs:\n"
+            "        - id: default\n"
+            '          aspect_ratio: "16:10"\n'
+            "          resolution: [800, 500]",
+        ),
+        encoding="utf-8",
+    )
+
+    class OutputRecordingBackend:
+        def __init__(self) -> None:
+            self.images: dict[str, Image.Image] = {}
+
+        def update_output(self, output_id: str, image: Image.Image) -> None:
+            assert isinstance(image, Image.Image)
+            self.images[output_id] = image.copy()
+
+        def update(self, image: Image.Image) -> None:
+            raise AssertionError("image-server destinations require named output updates")
+
+        def close(self) -> None:
+            pass
+
+    first_backend = OutputRecordingBackend()
+    first_result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 19),
+        backend_factory=lambda _configuration: first_backend,
+    )
+    committed = workspace.load()
+    assert first_result.state == committed
+    assert set(first_backend.images) == {"default"}
+    for image in first_backend.images.values():
+        image.close()
+
+    workspace.config.write_text(
+        _CONFIG.replace(
+            '- type: "waveshare-13in3-e"',
+            "- type: image-server\n      outputs:\n"
+            '        - id: default\n          aspect_ratio: "16:9"\n          resolution: [800, 450]\n'
+            '        - id: kitchen\n          aspect_ratio: "4:3"\n          resolution: [640, 480]\n'
+            '        - id: hallway\n          aspect_ratio: "16:10"\n          resolution: [800, 500]',
+        ),
+        encoding="utf-8",
+    )
+    current_backend = OutputRecordingBackend()
+    second_result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 19),
+        backend_factory=lambda _configuration: current_backend,
+    )
+    state = workspace.load()
+    configuration = application.load_application_config(workspace.config)
+    expected_specifications = {
+        "default": ResolvedOutputSpecification("16:9", (800, 450)),
+        "kitchen": ResolvedOutputSpecification("4:3", (640, 480)),
+        "hallway": ResolvedOutputSpecification("16:10", (800, 500)),
+    }
+
+    assert second_result.state == committed == state
+    assert state.revision == committed.revision
+    assert state.highest_reveal_stage == committed.highest_reveal_stage
+    assert set(current_backend.images) == set(expected_specifications)
+    artifacts = PreparedImageArtifactStore(workspace.artifacts).load(
+        state.revision,
+        application.resolve_reveal_stages(state.snapshot),
+        configuration.required_output_specifications,
+    )
+    assert artifacts is not None
+    assert set(artifacts.output_specifications) == set(expected_specifications.values())
+    for output_id, specification in expected_specifications.items():
+        image = current_backend.images[output_id]
+        assert image.size == specification.requested_output_size
+        with artifacts.load_stage(specification, state.highest_reveal_stage) as prepared:
+            assert image.tobytes() == prepared.tobytes()
+        image.close()
+
+
 def test_display_initialization_failure_preserves_state(workspace: Workspace) -> None:
     ordinary(workspace)
 
@@ -1529,6 +1620,67 @@ def test_information_view_preparation_failure_falls_back_to_daily_presentation(
     assert len(workspace.history_records()) == 1
 
 
+def test_information_view_publication_uses_and_releases_pillow_images(workspace: Workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
+    prepared_images = []
+    prepare = application.prepare_information_view
+
+    def capture(configuration, output_specifications):
+        variants = prepare(configuration, output_specifications)
+        prepared_images.extend(images[-1] for images in variants.values())
+        return variants
+
+    class TypeCheckingDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            assert isinstance(image, Image.Image)
+            super().update(image)
+
+    monkeypatch.setattr(application, "prepare_information_view", capture)
+    display = TypeCheckingDisplay()
+    run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 7),
+        backend_factory=lambda _configuration: display,
+        wait=lambda _duration: None,
+    )
+
+    assert len(display.images) == 2
+    assert len(prepared_images) == 1
+    with pytest.raises(ValueError, match="closed"):
+        prepared_images[0].getpixel((0, 0))
+    for image in display.images:
+        image.close()
+
+
+def test_information_view_images_close_if_publication_never_takes_ownership(workspace: Workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
+    generated = []
+
+    def prepare(_configuration, output_specifications):
+        images = {}
+        for specification in output_specifications:
+            image = Image.new("RGB", specification.requested_output_size, "white")
+            generated.append(image)
+            images[specification] = (image,)
+        return images
+
+    def fail_coordinator(*_args, **_kwargs):
+        raise RuntimeError("coordinator initialization failed")
+
+    monkeypatch.setattr(application, "prepare_information_view", prepare)
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", fail_coordinator)
+    with pytest.raises(RuntimeError, match="coordinator initialization failed"):
+        run_startup(workspace.config, workspace.state, workspace.artifacts, now=at(10, 7))
+
+    assert len(generated) == 1
+    with pytest.raises(ValueError, match="closed"):
+        generated[0].getpixel((0, 0))
+
+
 def test_shutdown_during_information_publication_releases_backend_safely(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 300"))
@@ -1730,14 +1882,22 @@ def test_window_and_image_server_publish_independently() -> None:
     expected = Image.new("RGB", (16, 12), (31, 47, 59))
     identity = (1, 0)
     try:
-        coordinator.publish(identity, expected.copy())
+        window_specification = ResolvedOutputSpecification("16:9", (1920, 1080))
+        server_specification = ResolvedOutputSpecification("16:10", (3840, 2400))
+        coordinator.publish(
+            identity,
+            {
+                window_specification: Image.new("RGB", window_specification.requested_output_size, (31, 47, 59)),
+                server_specification: Image.new("RGB", server_specification.requested_output_size, (31, 47, 59)),
+            },
+        )
         assert update_started.wait(2)
         deadline = monotonic() + 4
         while monotonic() < deadline:
-            if coordinator.acknowledgements["image-server"] == identity:
+            if coordinator.acknowledgements["image-server:default"] == identity:
                 with urlopen(f"http://127.0.0.1:{port}/display/default/current", timeout=1) as response:
                     published = Image.open(BytesIO(response.read()))
-                    assert published.size == expected.size
+                    assert published.size == server_specification.requested_output_size
                     assert published.getpixel((0, 0)) == expected.getpixel((0, 0))
                 break
             sleep(0.02)

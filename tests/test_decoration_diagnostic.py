@@ -14,6 +14,7 @@ from PIL import Image
 import refrain.__main__ as cli
 import refrain.application as application
 import refrain.decoration_diagnostic as diagnostic
+from refrain.geometry import design_canvas_for_aspect
 from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code, resolve_qr_placement
 
 _CONFIG = """\
@@ -94,8 +95,8 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     snapshots = []
     render = diagnostic._render
 
-    def capture(*args):
-        image, snapshot = render(*args)
+    def capture(*args, **kwargs):
+        image, snapshot = render(*args, **kwargs)
         snapshots.append(snapshot)
         return image, snapshot
 
@@ -119,7 +120,7 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     output = capsys.readouterr().out
     assert "Presentation: 1 of 12" in output
     assert "Quotation: SHORT" in output and "Quotation: LONG" in output
-    assert "Literary presentation bounds: (384, 324, 3456, 1836)" in output
+    assert "Literary presentation bounds: (384, 324, 3456, 2076)" in output
     first, second = backends.values()
     assert len(first.images) == len(second.images) == len(snapshots)
     assert [image.tobytes() for image in first.images] == [image.tobytes() for image in second.images]
@@ -158,8 +159,8 @@ def test_variants_share_visual_choices_across_navigation_and_reload(workspace, m
     snapshots = []
     render = diagnostic._render
 
-    def capture(*args):
-        image, snapshot = render(*args)
+    def capture(*args, **kwargs):
+        image, snapshot = render(*args, **kwargs)
         snapshots.append(snapshot)
         return image, snapshot
 
@@ -269,14 +270,13 @@ def test_reload_invalid_recover_image_manifest_and_debug_region(workspace, capsy
     )
     captured = capsys.readouterr()
     assert captured.out.count("Presentation: 1 of 12") == 5
-    assert "Literary presentation bounds: (384, 324, 3456, 1836)" in captured.out
-    assert "Literary presentation bounds: (768, 648, 3072, 1512)" in captured.out
+    assert "Literary presentation bounds: (768, 648, 3072, 1752)" in captured.out
     assert captured.err.count("Cannot present decoration") == 2
     assert len(backend.images) == 6
     assert backend.images[0].tobytes() != backend.images[2].tobytes()
-    assert backend.images[2].getpixel((768, 648)) == (127, 127, 127)
+    assert backend.images[2].getpixel((384, 324)) == (127, 127, 127)
     assert backend.images[4].getpixel((640, 360)) == (0, 0, 255)
-    assert backend.images[4].getpixel((768, 648)) == (0, 0, 127)
+    assert backend.images[4].getpixel((384, 324)) == (0, 0, 127)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -301,7 +301,12 @@ def test_snapshot_preferences_qr_and_fully_revealed(workspace, monkeypatch):
         assert snapshot.background is None
         assert snapshot.text_color is None
         assert snapshot.decoration_color is None
-        qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size, resolve_qr_placement(image.size))
+        specification = diagnostic._output_specification("16:10", image.size)
+        qr = render_qr_code(
+            PRODUCTION_QR_PARAMETERS,
+            specification.presentation_canvas_size,
+            resolve_qr_placement(specification),
+        )
         try:
             left, top, _, _ = qr.geometry.bounds
             quiet_zone = qr.geometry.quiet_zone_pixels
@@ -471,7 +476,7 @@ def test_diagnostic_state_wraps_and_keyboard_controls_match_actions():
 )
 def test_aspect_output_geometry_and_screen_fit(workspace, aspect, size):
     config, _ = workspace
-    assert diagnostic.design_canvas_for_aspect(aspect)[0] == size
+    assert design_canvas_for_aspect(aspect)[0] == size
     preview = diagnostic.preview_size_for_screen(size, (1366, 768))
     assert preview[0] <= 1326 and preview[1] <= 564
     assert preview[0] * size[1] == preview[1] * size[0] or preview == (1, 1)
@@ -480,8 +485,8 @@ def test_aspect_output_geometry_and_screen_fit(workspace, aspect, size):
 
 def test_aspect_override_resolves_exact_geometry_for_other_configured_widths(workspace):
     assert diagnostic._output_specification("4:3", (1000, 750)).presentation_canvas_size == (1000, 750)
-    assert diagnostic.design_canvas_for_aspect("16:9")[0] == (3840, 2160)
-    assert diagnostic.design_canvas_for_aspect("16:10")[0] == (3840, 2400)
+    assert design_canvas_for_aspect("16:9")[0] == (3840, 2160)
+    assert design_canvas_for_aspect("16:10")[0] == (3840, 2400)
 
 
 def test_geometry_initialization_inheritance_and_independent_inset_overrides(workspace):
@@ -985,6 +990,7 @@ def test_batch_export_generates_full_deterministic_variant_matrix(workspace, mon
     output = config.parent / "previews" / "a-custom"
     expected_aspects = {
         "4x3": (3200, 2400),
+        "5x3": (3840, 2304),
         "16x9": (3840, 2160),
         "16x10": (3840, 2400),
     }
@@ -1000,9 +1006,9 @@ def test_batch_export_generates_full_deterministic_variant_matrix(workspace, mon
         ]
         with Image.open(output / aspect / "short-qr-on.png") as image:
             assert image.size == size
-    assert len(list(output.rglob("*.png"))) == 18
-    assert f"Diagnostic variants saved to {output} (18 PNGs)" in capsys.readouterr().out
-    assert len(states) == 18
+    assert len(list(output.rglob("*.png"))) == 24
+    assert f"Diagnostic variants saved to {output} (24 PNGs)" in capsys.readouterr().out
+    assert len(states) == 24
     assert all(not state.background_enabled and not state.tinting_enabled and state.debug_layout for state in states)
     choices = [
         (snapshot.font, snapshot.background, snapshot.text_color, snapshot.decoration_color) for snapshot in snapshots
@@ -1032,9 +1038,9 @@ def test_batch_export_suppresses_qr_for_ineligible_decoration(workspace):
         config.parent / "previews",
     )
 
-    assert count == 9
+    assert count == 12
     assert sorted(path.name for path in output.rglob("*.png")) == sorted(
-        [f"{quotation}-qr-off.png" for _ in range(3) for quotation in ("long", "medium", "short")]
+        [f"{quotation}-qr-off.png" for _ in range(4) for quotation in ("long", "medium", "short")]
     )
 
 
@@ -1318,8 +1324,8 @@ def test_nine_slice_guides_reuse_boundaries_and_deduplicate_sets(workspace):
     groups = diagnostic._guide_groups(resolved)
     assert len(groups) == 2
     assert diagnostic._guide_color(0, 2) != diagnostic._guide_color(1, 2)
-    assert resolved.nine_slice_guides[0].x_bounds == (0, 400, 3440, 3840)
-    assert resolved.nine_slice_guides[0].y_bounds == (0, 400, 1760, 2160)
+    assert resolved.nine_slice_guides[0].x_bounds == (0, 10, 3830, 3840)
+    assert resolved.nine_slice_guides[0].y_bounds == (0, 10, 2390, 2400)
     image.close()
 
 
@@ -1342,6 +1348,8 @@ def test_aspect_cycle_order_and_centered_preview_window():
     state = diagnostic.DiagnosticState(("a",), aspect_ratio="4:3")
     assert diagnostic.normalize_key("a") == "a"
     assert diagnostic._state_action("a") == "next-aspect"
+    state = diagnostic.transition_state(state, "next-aspect")
+    assert state.aspect_ratio == "5:3"
     state = diagnostic.transition_state(state, "next-aspect")
     assert state.aspect_ratio == "16:9"
     state = diagnostic.transition_state(state, "next-aspect")
