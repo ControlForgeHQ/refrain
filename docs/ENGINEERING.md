@@ -734,7 +734,7 @@ The initial release provides one configurable presentation layout.
 
 Use the configurable output dimensions, design-canvas pixel presentation insets, and font-size bounds defined in `docs/CONTENT_FORMAT.md`.
 
-Resolve configured geometry in design-canvas units and map it to the presentation canvas with deterministic rounding. Follow `docs/ARCHITECTURE.md` for the output-specification model and optional final whole-image resize; do not make the current global output setting a permanent architectural constraint.
+Resolve configured geometry in design-canvas units and map it to the presentation canvas with deterministic rounding. Follow `docs/ARCHITECTURE.md` for destination-specific output specifications and the optional final whole-image resize.
 
 The shared quotation renderer is responsible for arranging and drawing the quotation and its optional source and attribution within that region.
 
@@ -760,7 +760,7 @@ Prefer a straightforward deterministic fitting procedure over a general-purpose 
 
 Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
 
-Validate the renderer's supported aspect-ratio and resolution matrix, including 1600 × 1200 and representative 16:9 and 16:10 outputs. Exercise 1080p and 4K working/output cases without treating hardware-independent results as physical display validation. Separately test the Waveshare backend's adaptation to its native 1600 × 1200 destination.
+Validate each destination's supported aspect-ratio and resolution specification, including aspect-mismatched requests. Exercise 1080p and 4K presentation/output cases without treating hardware-independent results as physical display validation. Verify that preparation produces the Waveshare's fixed 4:3 @ 1600 × 1200 output and that the backend rejects any image with different dimensions rather than resizing, cropping, or padding it.
 
 Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
 
@@ -984,10 +984,11 @@ The backend must stop accepting requests and release its listening resources dur
 
 Test the backend without physical display hardware or external network services. Automated tests should exercise the HTTP interface through a real local listening socket, including:
 
-- successful retrieval of the current PNG image;
+- successful retrieval of every named output PNG;
 - correct response content type and image contents;
-- entity-tag generation and conditional requests;
-- replacement of the current image and invalidation of the previous entity tag;
+- independent entity tags and conditional requests for each named output;
+- replacement of each output image and invalidation of that output's previous entity tag;
+- correct delivery when multiple outputs share a prepared variant or use distinct variants;
 - requests made before the first successful image update;
 - failed image replacement preserving the previous representation;
 - concurrent requests and image updates;
@@ -1083,7 +1084,7 @@ Hardware validation must distinguish between driver-call success and visibly cor
 
 Include hardware-independent tests covering:
 
-- Multiple configured backends receiving the same prepared image.
+- Configured destinations receiving the prepared variant matching their output specification, with variants shared only for identical specifications.
 - Duplicate backend rejection.
 - Independent initialization and failure reporting.
 - One backend continuing while another is blocked or slow.
@@ -1174,6 +1175,7 @@ Log meaningful lifecycle and state changes, including:
 
 - application startup and shutdown;
 - application configuration defaults and recoverable validation problems;
+- output-specification defaults and paired-field validation for window and image-server outputs, fixed Waveshare dimensions, unique named output IDs, and preparation of all unique required specifications;
 - excluded content files and entries;
 - fatal configuration or content-library failures;
 - daily selection commitments;
@@ -1226,11 +1228,11 @@ The ability to import and test core components without Raspberry Pi hardware is 
 
 Use temporary configuration, content, output, and production-persistence paths to test `--show-entry` without hardware. Verify exact identifier matching, first-quotation selection without eligibility or history selection, final-stage visibility, shared resource resolution, the reserved information target without content loading or duration scheduling, and the absence of production state/history/artifact access.
 
-Verify that the PNG is created exclusively in the current working directory before backend publication and exactly represents the diagnostic variant selected by the architecture's deterministic rule. Each backend must still receive its matching output-specification variant; do not assume all variants have identical dimensions or pixels. Cover existing-file refusal, output-write errors, partial and complete publication failures, per-backend reporting, backend cleanup, and preservation of the PNG after publication failure. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
+Verify that each diagnostic requires an explicit supported aspect and accepts an optional requested resolution, defaulting to the selected aspect's design-canvas dimensions when omitted. Confirm it resolves exactly one output specification and that the PNG in the current working directory exactly represents that specification, independently of configured display destinations. Where publication is performed, only destinations with the identical specification receive the image. Cover existing-file refusal, output-write errors, partial and complete publication failures, per-destination reporting, backend cleanup, and preservation of the PNG after publication failure. Inject backend implementations, including slow and failing destinations; do not treat mocked tests as physical display validation.
 
 ### QR calibration diagnostic tests
 
-Test enabled and disabled QR policies, decoration `qr_ready`, each conditional layer state, exact integer-pixel modules, complete quiet-zone and footprint geometry, and placement across the supported output matrix. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, identical saved and published pixels, multiple backends, backend failures, and absence of content-library or daily-state access.
+Test enabled and disabled QR policies, decoration `qr_ready`, each conditional layer state, exact integer-pixel modules, complete quiet-zone and footprint geometry, and explicit diagnostic aspect/resolution selection. Verify that omitted resolution selects the design-canvas dimensions for the required aspect and that exactly one output specification supplies the saved PNG. Cover invalid parameters, oversized symbols, CLI mode restrictions, atomic replacement after a successful save, publication only to matching destinations, backend failures, and absence of content-library or daily-state access.
 
 ### Decoration diagnostic tests
 
@@ -1296,7 +1298,7 @@ Where practical, test recovery using a newly initialized application instance ra
 
 ### Rendering tests
 
-Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification have identical output dimensions; destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions.
+Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification have identical output dimensions; destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. Verify that each configured destination resolves its own output specification and that the prepared variant set contains exactly the unique required specifications.
 
 Include an aspect-mismatched output specification with declared aspect 4:3 and requested resolution 1600 × 1190. Assert that the design canvas is 3200 × 2400 and background/decorative composition occurs there; literary geometry and font fitting, QR viability and rasterization, and diagnostic overlays resolve on the 1596 × 1197 presentation canvas; and only the completed image is resized to the 1600 × 1190 output image. This case must not be replaced by tests where presentation-canvas and output-image dimensions happen to match. Also exercise exact-aspect supported configurations. Verify deterministic half-up rounding and rejection of degenerate geometry.
 
@@ -1360,7 +1362,7 @@ Hardware validation should include:
 
 - driver initialization;
 - complete image transfer and refresh;
-- delivery of an output image matching the Waveshare's resolved specification, including contractually permitted pixel-format or orientation conversion;
+- delivery of the prepared `4:3 @ 1600 × 1200` output image to the Waveshare backend, with rejection of any image with different dimensions;
 - correct destination orientation and representative color rendering;
 - representative resolution-independent output on a non-e-paper destination;
 - repeated scheduled updates;

@@ -73,7 +73,7 @@ The first release should be useful in normal household operation without dependi
 
 ### Visual presentation
 
-- Configure output resolution using the current Version 0.1 global single-output interface; per-destination output configuration remains deferred.
+- Allow configured display destinations to use distinct supported presentation aspects and output resolutions.
 - Support configurable output at 4:3, 5:3, 16:9, and 16:10 presentation aspects. Rendering mechanics and image-space behavior are defined in `docs/ARCHITECTURE.md`.
 - Provide one attractive, typography-first default layout.
 - Separate view-specific background composition from shared quotation rendering.
@@ -105,7 +105,7 @@ The first release should be useful in normal household operation without dependi
 - Operate on Raspberry Pi OS Lite, initially targeting Raspberry Pi 3 B+.
 - Support simultaneous presentation through multiple configured display backends.
 - Allow each supported backend type to be configured at most once.
-- Publish prepared output images to configured backends according to the output-configuration capabilities available in Version 0.1.
+- Publish prepared output images to their configured destinations, including named outputs of the image-server backend.
 - Update display backends independently so that slow or unavailable destinations do not delay other destinations.
 - Isolate backend failures and provide bounded recovery without interrupting otherwise functional destinations.
 - Perform complete physical display updates at the configured reveal stages and display-day boundary.
@@ -141,7 +141,7 @@ Version 0.1 does not include:
 - external playback actions;
 - remote administration;
 - content synchronization between devices;
-- independent per-backend output configuration, presentation layouts, or reveal schedules (the output-configuration interface is deferred; see `docs/ARCHITECTURE.md`);
+- independent presentation layouts or reveal schedules for individual display destinations;
 - multiple general-purpose presentation themes;
 - arbitrary decoration placement, drawing scripts, or layout templates;
 - automatic text/background contrast calculation;

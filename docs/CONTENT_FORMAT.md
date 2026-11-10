@@ -147,13 +147,13 @@ presentation:
 
 display:
   backends:
-    - type: "window"
     - type: "image-server"
       host: "127.0.0.1"
       port: 8080
+      outputs:
+        - id: "default"
 
 layout:
-  output_size: [1920, 1080]
   presentation_insets:
     left: 384
     right: 384
@@ -186,7 +186,7 @@ layout:
     max_font_size: 100
 ```
 
-The example illustrates simultaneous display backends, the information view, explicit QR policy, configurable output dimensions, independent literary insets, resource pools, and automatic quotation fitting.
+The example illustrates an image-server output, the information view, explicit QR policy, independent literary insets, resource pools, and automatic quotation fitting.
 
 The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
 
@@ -246,7 +246,7 @@ Version 0.1 defines the following built-in backend identifiers:
 |---|---|
 | `"window"` | Displays complete presentation images in a desktop window on a supported graphical Windows or Linux environment. |
 | `"waveshare-13in3-e"` | Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E). |
-| `"image-server"` | Makes the current complete presentation image available to HTTP clients. |
+| `"image-server"` | Serves one or more named prepared output images to HTTP clients. |
 
 Each backend type may appear at most once in `display.backends`.
 
@@ -262,9 +262,9 @@ The `display.backends` field has no implicit default. Development example config
 
 The former singular `display.backend` field is not supported. No compatibility alias or automatic conversion is provided.
 
-Backend selection is independent of content selection, reveal scheduling, and image preparation.
+Each output destination resolves an output specification consisting of a declared presentation aspect ratio and a requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain prepares one complete set of reveal-stage images for each unique output specification required by the configured destinations. Destinations with identical specifications may share prepared variants; destinations with different specifications receive their matching variants.
 
-The current Version 0.1 public configuration exposes one global output resolution, so configured backends use that single output variant. This is a transitional configuration-interface limitation, not an architectural restriction: the runtime architecture resolves output specifications per destination and prepares variants for each distinct specification. The public schema does not yet expose independent per-backend aspect or resolution fields. Backends publish their matching output image and must not geometrically resize, crop, pad, or otherwise adapt it unless an explicit backend contract permits that operation; contractually defined pixel-format or orientation conversion remains possible. Backend selection does not change the committed daily selection or reveal schedule.
+A backend must not geometrically resize, crop, pad, or otherwise adapt an output image prepared for another destination. Backend-owned pixel-format or orientation conversion is permitted only where explicitly defined by that backend's contract. Backend selection is independent of content selection, reveal scheduling, and image preparation.
 
 Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
 
@@ -272,21 +272,48 @@ Version 0.1 does not support third-party backend discovery, arbitrary Python mod
 
 Each backend mapping contains its required `type` field and any supported settings for that backend.
 
-The `window` and `waveshare-13in3-e` backends require no additional configuration fields in Version 0.1.
+The `window` backend resolves one output specification and accepts `aspect_ratio` and `resolution` as a pair. When neither is supplied, its output specification defaults to `16:9 @ 1920 × 1080`; for example, `- type: "window"` uses that default. When both are supplied, they define its output specification; supplying only one is a configuration error.
 
-The `image-server` backend supports optional `host` and `port` fields.
+The `waveshare-13in3-e` backend has the fixed output specification `4:3 @ 1600 × 1200`. Its aspect ratio and resolution are intrinsic to the backend and cannot be configured; supplying either field is a configuration error.
+
+The `image-server` backend supports optional `host` and `port` fields and a required nonempty `outputs` sequence. Each output has a stable, unique `id` within that backend instance and may specify an `aspect_ratio` and `resolution` pair. If neither is supplied, the output defaults to `16:10 @ 3840 × 2400`; supplying only one is a configuration error. One image-server backend instance may serve multiple named outputs; they are not separate backend instances.
 
 For example:
 
 ```yaml
 display:
   backends:
+    - type: "window"
+      aspect_ratio: "4:3"
+      resolution: [1600, 1200]
+
     - type: "waveshare-13in3-e"
 
     - type: "image-server"
       host: "0.0.0.0"
       port: 8080
+      outputs:
+        - id: "default"
+
+        - id: "repeat-kitchen"
+          aspect_ratio: "4:3"
+          resolution: [1600, 1200]
+
+        - id: "repeat-hallway"
+          aspect_ratio: "16:9"
+          resolution: [1920, 1080]
 ```
+
+The following fields are supported for the `window` backend:
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `aspect_ratio` | Supported aspect ratio string | No | `"16:9"` |
+| `resolution` | Two positive integer pixel dimensions, `[width, height]` | No | `[1920, 1080]` |
+
+These fields must either both be omitted or both be supplied. A resolution does not imply an aspect ratio, and Refrain does not infer a resolution from an aspect ratio or fill one supplied field from the other's default.
+
+The `waveshare-13in3-e` backend accepts neither `aspect_ratio` nor `resolution`. Its fixed output specification is `4:3 @ 1600 × 1200`.
 
 The following fields are supported for the `image-server` backend:
 
@@ -294,8 +321,19 @@ The following fields are supported for the `image-server` backend:
 |---|---|---|---|
 | `host` | String | No | `"127.0.0.1"` |
 | `port` | Integer | No | `8080` |
+| `outputs` | Nonempty sequence of named output mappings | Yes | — |
 
-These fields belong directly to the `image-server` backend mapping, not to a separate application-level configuration section.
+`host` and `port` belong directly to the `image-server` backend mapping. `outputs` contains the output destinations served by this one backend instance.
+
+Each `outputs` item has the following fields:
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `id` | Stable, nonempty string unique within this image-server backend | Yes | — |
+| `aspect_ratio` | Supported aspect ratio string | No | `"16:10"` |
+| `resolution` | Two positive integer pixel dimensions, `[width, height]` | No | `[3840, 2400]` |
+
+For each named output, `aspect_ratio` and `resolution` must either both be omitted or both be supplied. Supplying only one is a configuration error. Do not infer either value from the other. The output ID identifies a destination within the server and does not create another backend instance.
 
 `host` specifies the local address on which the HTTP service listens.
 
@@ -319,9 +357,9 @@ Invalid optional image-server settings are handled according to the application'
 
 Unsupported fields within a backend mapping are reported as unrecognized configuration fields.
 
-The image-server backend uses the fixed HTTP endpoint `/display/current` and serves PNG images. Neither the endpoint path nor the image format is configurable in Version 0.1.
+The image-server exposes each named output as a distinct PNG resource at `/display/<output_id>/current`, as defined in `docs/ARCHITECTURE.md`. A named output's stable ID determines its resource path.
 
-The backend retains its current image representation in memory and requires no separate image-storage directory or filesystem path.
+The backend retains each named output's current image representation in memory and requires no separate image-storage directory or filesystem path.
 
 ### General settings
 
@@ -437,7 +475,6 @@ The complete literary composition consists of the primary quotation and its opti
 
 The Version 0.1 public layout configuration defines:
 
-- one transitional global output resolution for the application instance;
 - default independent literary presentation insets;
 - discovered fonts and their default selection pool;
 - discovered backgrounds and their default selection pool;
@@ -452,13 +489,11 @@ The renderer determines the arrangement and fitting of all present literary fiel
 
 A fixed quotation font size is not required.
 
-### Output resolution and presentation insets
+### Output specifications and presentation insets
 
-The optional `layout.output_size` is the requested output resolution: a two-item sequence of positive integer pixel dimensions in width, height order. It defaults to `[1920, 1080]`. This is the current global single-output configuration interface; the public schema does not yet provide per-backend output specifications or independent per-backend aspect/resolution fields.
+Each configured output destination has an output specification consisting of a declared presentation aspect ratio and a requested resolution. The supported declared landscape aspect ratios are 4:3, 5:3, 16:9, and 16:10. The backend-specific fields and defaults are defined in [Display backends](#display-backends). An aspect ratio and resolution are an inseparable pair where configurable: both are omitted to use that destination's documented defaults, or both are supplied explicitly. Supplying just one is a configuration error. Do not infer the aspect ratio from requested dimensions, infer dimensions from the aspect ratio, or fill one explicit value from the other's default. The fixed Waveshare output accepts neither field.
 
-The architecture models each destination's output specification as a declared presentation aspect ratio and requested resolution. The declared aspect must be one of the supported landscape ratios: 4:3, 5:3, 16:9, or 16:10. The current public configuration has not exposed the future per-destination fields that will explicitly supply or inherit that aspect. Normal configuration is limited to cases where the declared aspect is already unambiguous under the existing public contract, such as dimensions that exactly match a supported aspect. Do not infer a declared aspect from arbitrary mismatched requested dimensions. In particular, `[1600, 1190]` is an architectural renderer example only when paired with a declared 4:3 aspect; `layout.output_size` alone does not currently express that pair. The 3840 × 2400 reference envelope does not limit requested output dimensions.
-
-Boolean values, non-integer dimensions, zero or negative values, and unsupported declared aspect ratios are invalid and produce an actionable configuration error. An omitted size uses the documented default, provided its declared aspect is unambiguous. The future backend/output-configuration work will define how destinations explicitly supply or inherit their declared aspect; it is deferred and introduces no fields to this schema. The architecture already models destinations by output specification, so exposing that interface later does not require redesigning rendering or persistence. Current public configuration limitations do not redefine that architecture. The presentation canvas and final whole-image resize are defined in [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry).
+Requested dimensions are positive integer pixels in width, height order and need not exactly match the declared aspect ratio. For example, an output specification may declare 4:3 and request `[1600, 1190]`; the architecture resolves the presentation canvas separately and resizes only the completed image to the requested dimensions. The 3840 × 2400 reference envelope does not limit requested output dimensions. Boolean values, non-integer dimensions, zero or negative dimensions, and unsupported aspect ratios are configuration errors. See [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry) for design-, presentation-, and output-image geometry.
 
 The optional `layout.presentation_insets` mapping defines the default literary rectangle as four independent design-canvas pixel measurements. If omitted, it defaults to `left: 384`, `right: 384`, `top: 324`, and `bottom: 324`:
 
@@ -475,7 +510,6 @@ For example:
 
 ```yaml
 layout:
-  output_size: [1920, 1080]
   presentation_insets:
     left: 384
     right: 384
@@ -487,7 +521,7 @@ Each opposing pair must leave a positive width or height on the active design ca
 
 The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage. This fitting guarantee does not prevent the text rectangle from overlapping independently composited artwork or QR output. The default configuration and bundled artwork must avoid undesirable overlap; custom configuration and decoration authors are responsible for checking their composition. Refrain does not detect or correct graphical overlap.
 
-YAML supplies the requested output dimensions, design-canvas pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Design-canvas dimensions, presentation-canvas dimensions, and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
+Backend output mappings supply declared aspects and requested dimensions. Layout YAML supplies design-canvas pixel insets and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Design-canvas dimensions, presentation-canvas dimensions, and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
 
 A content entry cannot directly specify presentation insets.
 
@@ -693,7 +727,7 @@ layers:
 
 `format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Each layer's image path is resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, invalid layer definitions, and unreadable manifests or images exclude only the affected decoration.
 
-The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are design-canvas measurements, validated and resolved according to [Output resolution and presentation insets](#output-resolution-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
+The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are design-canvas measurements, validated and resolved according to [Output specifications and presentation insets](#output-specifications-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
 
 An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid inset metadata or artwork excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
@@ -897,7 +931,7 @@ Decorations may define presentation insets, but content entries reference decora
 
 Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
-Version 0.1 currently configures output resolution globally through `layout.output_size`; independent per-backend aspect and resolution fields are not yet in the public schema. Accordingly, current backends consume the same output variant. The architecture already supports resolving and preparing output variants per destination, so this transitional interface is not a permanent rendering restriction. A backend may perform only operations explicitly permitted by its contract, such as pixel-format or orientation conversion; it must not geometrically resize, crop, pad, or otherwise adapt the output image without such authorization.
+Each destination receives the prepared output variant matching its own output specification. Destinations with identical specifications may share variants; destinations with different specifications receive their own variants. A backend may perform only operations explicitly permitted by its contract, such as pixel-format or orientation conversion; it must not geometrically resize, crop, pad, or otherwise adapt another destination's output image.
 
 The renderer derives the aspect-specific design canvas by cropping the fixed reference envelope. It applies configured design-canvas insets there and scales the resulting geometry to the presentation canvas, as defined in `ARCHITECTURE.md`.
 
@@ -1527,6 +1561,7 @@ Apply the following rules:
 - An invalid optional value without a documented default produces a warning and is ignored.
 - An unrecognized configuration field produces a warning and is ignored.
 - A missing or invalid required value without a usable fallback produces an error.
+- Output `aspect_ratio` and `resolution` fields must be supplied together or both omitted; supplying only one, or supplying either field for the fixed Waveshare backend, is a configuration error.
 - An unavailable or invalid discovered font bundle produces a warning and is excluded from the effective font registry.
 - An unavailable or unregistered default-pool identifier produces a warning and is excluded from the effective default pool.
 - An unavailable or invalid discovered background or decoration produces a warning and is excluded from its effective registry.
@@ -1659,7 +1694,6 @@ The initial formats do not define:
 - resource repetition histories or weighted resource selection;
 - automatic contrast adjustment or foreground recolouring;
 - arbitrary graphical transformations or decoration placement instructions;
-- public per-backend output specifications (the current global output setting is transitional; see [Output resolution and presentation insets](#output-resolution-and-presentation-insets));
 - per-entry QR settings;
 - general-purpose themes or style scripting;
 - content-triggered external actions;

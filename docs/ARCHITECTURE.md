@@ -1382,7 +1382,7 @@ Refrain presents complete rendered images through narrow, hardware-independent d
 
 A display backend provides two operations:
 
-- `update(image)` presents a complete Pillow image through the configured output destination.
+- `update(image)` presents a complete Pillow image through a selected output destination. For a backend with multiple named outputs, the coordinator associates each publication with its configured output ID and the backend instance serves that named destination.
 - `close()` releases resources owned by the backend.
 
 Refrain selects one or more built-in display backends through validated runtime configuration. Each backend type may be configured at most once.
@@ -1393,9 +1393,9 @@ Version 0.1 provides three built-in display backends:
 
 - `window`: Presents complete images in a graphical desktop window.
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
-- `image-server`: Makes the current complete image available to network clients through a read-only HTTP service.
+- `image-server`: Serves one or more named prepared output images to network clients through a read-only HTTP service.
 
-Each configured backend receives the complete prepared output image matching its resolved output specification for each reveal stage. Backends may share an image when their output specifications are identical. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
+Each configured output destination receives the complete prepared output image matching its resolved output specification for each reveal stage. Destinations may share an image when their specifications are identical; destinations with different specifications receive different variants. One image-server backend instance may expose multiple named output destinations. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux. Its image-display area matches the supplied image dimensions and presents the image at native pixel size. A later update with different dimensions resizes the display area; it does not resample, crop, or letterbox the image.
 
@@ -1414,11 +1414,11 @@ The Waveshare backend owns model-specific hardware operations, including:
 
 The Waveshare 13.3-inch panel resolves to the fixed 4:3 @ 1600 × 1200 output specification. Its backend receives the matching output image and must not resize it. An update with dimensions other than 1600 × 1200 is invalid and reports a backend update failure as a contract violation; it is not resized to fit. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete output image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
-The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
+The image-server backend owns one HTTP service that exposes the most recently accepted image for each configured named output. Its publication and lifecycle responsibilities are defined separately below.
 
-The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. The Waveshare backend owns hardware-specific color and pixel conversion, transfer, refresh, sleep, and cleanup, but not image resizing or literary composition. The window backend displays at native pixel size, and the image-server backend exposes the prepared image without resizing or cropping. No backend may mutate the image supplied by the coordinator. A backend unable to perform its required operation reports a backend-specific update failure; that failure does not alter global geometry, persistent state, selection, or publication to other backends.
+The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. The Waveshare backend owns hardware-specific color and pixel conversion, transfer, refresh, sleep, and cleanup, but not image resizing or literary composition. The window backend displays at native pixel size, and the image-server backend exposes each prepared output without resizing or cropping. No backend may mutate the image supplied by the coordinator. A backend unable to perform its required operation reports a backend-specific update failure; that failure does not alter any output specification, persistent state, selection, or publication to other destinations.
 
-The image-server backend serves its matching prepared variant with its dimensions and pixel content unchanged. Backend adaptation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
+The image-server backend serves each named output's matching prepared variant with its dimensions and pixel content unchanged. Backend adaptation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
 
 A completed `update()` indicates that the individual backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
 
@@ -1430,7 +1430,7 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 ### Multi-backend publication
 
-Refrain coordinates publication of the current prepared presentation independently to every configured display backend.
+Refrain coordinates publication of the current prepared presentation to every configured output destination. A backend with multiple named outputs remains one backend instance, while each named output is a distinct publication destination.
 
 A single committed daily selection and its coherent set of prepared output images are shared by all destinations. Only the selection is authoritative.
 
@@ -1442,13 +1442,13 @@ The persisted highest reveal stage represents the application's globally reached
 
 Reveal progression advances monotonically when a later stage becomes required and is durably recorded independently of backend publication outcomes.
 
-The application coordinator maintains independent successful-publication status for each backend during the application lifetime.
+The application coordinator maintains independent successful-publication status for each configured destination, including every named image-server output, during the application lifetime.
 
-The application must distinguish the currently required variant for each destination from the variant last successfully published to that backend. A successful update to one destination does not establish successful publication to another.
+The application must distinguish the currently required variant for each destination from the variant last successfully published there. A successful update to one destination does not establish successful publication to another.
 
 Publication tracking is owned by the application coordinator, not by individual display backends. Backends receive complete images and do not interpret selection revisions, reveal stages, or persistent operational state.
 
-Backend-specific publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available backend.
+Publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available destination.
 
 If a new presentation or variant becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
 
@@ -1462,23 +1462,23 @@ Multi-backend publication must preserve bounded memory use and must not require 
 
 ### Network image service
 
-The `image-server` backend provides a network-accessible representation of the current prepared image without requiring directly connected display hardware.
+The `image-server` backend provides network-accessible representations of its named outputs without requiring directly connected display hardware. One backend instance owns one HTTP service and maintains an independent current image representation and entity tag for each configured output ID.
 
-The backend exposes one read-only HTTP endpoint:
+Each named output is available at its own read-only HTTP endpoint:
 
-`GET /display/current`
+`GET /display/<output_id>/current`
 
-A successful request returns the complete image for this backend's resolved output specification in PNG format with the appropriate HTTP content type.
+A successful request returns the complete PNG for that output's resolved specification, with the appropriate HTTP content type. For example, the `default` output is available at `/display/default/current`. The output ID is a path component and must be URL-encoded when necessary.
 
 The endpoint must be usable by standard HTTP clients, including ordinary web browsers, without requiring client-specific software or protocols.
 
-The service supports HTTP entity tags (ETags) derived from the served image content. Clients may submit conditional requests using `If-None-Match`; when the current representation matches, the service returns `304 Not Modified` without transferring the image body.
+Each output resource supports HTTP entity tags (ETags) derived from its served image content. Clients may submit conditional requests using `If-None-Match`; when that output's current representation matches, the service returns `304 Not Modified` without transferring the image body.
 
-When no image has been accepted, the service returns `503 Service Unavailable`.
+When no image has been accepted for the requested output, the service returns `503 Service Unavailable`.
 
-The backend retains the current encoded PNG and its associated entity tag in memory. It does not create or manage a separate persistent image store.
+The backend retains each current encoded PNG and its associated entity tag in memory. It does not create or manage a separate persistent image store.
 
-Each successful `update(image)` produces a complete replacement representation for this output specification before making it available to clients. Concurrent requests must observe a consistent, complete image and entity tag, never partially updated content.
+Publishing a new prepared stage replaces the representation for each named output independently. Concurrent requests must observe a consistent, complete image and entity tag for one output, never partially updated content.
 
 The existing prepared-image persistence and recovery mechanisms remain authoritative. After application startup or recovery, the scheduler supplies the appropriate prepared image through the normal backend interface.
 
@@ -1512,7 +1512,7 @@ Backend updates must be coordinated so that overlapping operations cannot corrup
 
 A backend that has already successfully presented the required image should not repeat an expensive update merely because the scheduler reevaluates its state.
 
-For the image-server backend, an update replaces the currently available image representation. Network clients retrieve that representation independently of the application's scheduling operations.
+For the image-server backend, publication replaces the available image representation for each named output. Network clients retrieve each output independently of the application's scheduling operations.
 
 ### Failure handling
 
@@ -1534,7 +1534,7 @@ The application must distinguish a known successful update from a failed or unce
 
 An uncertain hardware result must not be treated as proof that the desired image was successfully displayed.
 
-For the image-server backend, unsuccessful image preparation or replacement must not expose incomplete content or invalidate the previously accepted image.
+For the image-server backend, unsuccessful image preparation or replacement must not expose incomplete content or invalidate the previously accepted image for the affected named output.
 
 Individual network-client failures do not constitute display-backend update failures. The backend does not require clients to retrieve or acknowledge published images.
 
@@ -1550,7 +1550,7 @@ Refrain should preserve useful displayed content across temporary application an
 
 It must not clear a physical display merely because a recoverable software problem occurred or another backend failed.
 
-The image-server backend retains the last successfully accepted image while the backend remains operational. It does not independently persist that representation across application restarts.
+The image-server backend retains each named output's last successfully accepted image while the backend remains operational. It does not independently persist those representations across application restarts.
 
 Network clients are responsible for retaining their displayed content during temporary network or application unavailability.
 
@@ -1661,19 +1661,21 @@ Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/E
 
 ### One-shot diagnostic entry presentation
 
-The optional `--show-entry ENTRY_ID` mode presents one targeted composition without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal image preparation and prepares the final canonical reveal stage for each required output specification, with every supplied field visible.
+The optional `--show-entry ENTRY_ID` mode presents one targeted composition without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. The invocation must supply one supported presentation aspect ratio and may supply a requested output resolution. If resolution is omitted, the selected aspect's design-canvas dimensions become the requested exact-aspect output resolution. The diagnostic resolves exactly one output specification and prepares the final canonical reveal stage for it, with every supplied field visible.
 
-The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares the required output variants through the shared preparation pipeline. Before initializing display backends, it saves one prepared diagnostic variant as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. When multiple output specifications are required, choose the variant with the lowest declared aspect ratio by numeric value, then the lowest requested width, then the lowest requested height; this canonical ordering is independent of backend declaration order and does not make that specification authoritative for any destination. Under the current single-output configuration, the only variant is saved. The output is independent of the configuration file location and is not production state.
+For example, aspect 4:3 with no requested resolution uses a 3200 × 2400 design canvas, 3200 × 2400 presentation canvas, and 3200 × 2400 output image. Aspect 4:3 with requested resolution 1600 × 1190 uses a 3200 × 2400 design canvas, 1596 × 1197 presentation canvas, and 1600 × 1190 output image.
+
+The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory for its single explicit output specification through the shared preparation pipeline. It saves that prepared diagnostic image as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. The saved PNG is determined only by the diagnostic's supplied output specification, not by configured display destinations, and is not production state.
 
 The reserved target `information` is recognized before content-library loading. It uses `prepare_information_view()` directly, without constructing a daily selection record, evaluating a reveal schedule, waiting for the configured information-view duration, or transitioning to a daily quotation. A content entry with that ID remains valid for ordinary selection but cannot override this diagnostic target.
 
-After saving the PNG, the mode publishes each backend's matching variant through the existing display publication coordinator. It waits until every configured backend acknowledges its variant or reaches a terminal publication failure, reports each result, and exits nonzero if any destination fails. It closes the backends after the attempts complete and does not start the continuous loop or hold serving backends open. A physical e-paper panel normally retains its image after process exit; the window and image-server backends are process-scoped and stop serving when Refrain exits. Publication failure does not remove the diagnostic PNG or alter production state.
+The mode may publish the image through configured destinations with the identical output specification; it does not prepare additional variants or adapt the image for destinations with other specifications. Publication failure does not remove the diagnostic PNG or alter production state.
 
 ### Standalone QR calibration
 
-The optional `--test-qr` mode generates an RGB calibration variant for each required output specification, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
+The optional `--test-qr` mode generates one RGB calibration image without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. The invocation must supply one supported presentation aspect ratio and may supply a requested output resolution. If resolution is omitted, the selected aspect's design-canvas dimensions become the requested exact-aspect output resolution. The diagnostic resolves exactly one output specification. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
 
-The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. One calibration variant is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output. When multiple output specifications are required, use the same canonical ordering defined for `refrain-<entry_id>.png`; each configured backend still receives its matching variant through the existing coordinator. Under the current single-output configuration, the only variant is saved. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
+The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. The resulting image is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output. Its output specification comes only from the diagnostic's supplied aspect and optional resolution, not from configured display destinations. The same aspect/resolution rule applies to `--show-entry` and `--test-qr`. The mode may publish the image through destinations with that identical specification but does not prepare or adapt variants for other destinations. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
 
 ### Interactive decoration preview
 
