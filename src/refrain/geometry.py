@@ -160,6 +160,14 @@ def validate_output_size(output_size: object) -> tuple[int, int]:
     return width, height
 
 
+def resolve_legacy_output_specification(output_size: object) -> ResolvedOutputSpecification:
+    """Resolve the current layout output size to its declared legacy aspect."""
+    size = validate_output_size(output_size)
+    aspect_ratio = _aspect_ratio_for_size(size, legacy_only=True)
+    assert aspect_ratio is not None
+    return ResolvedOutputSpecification(aspect_ratio, size)
+
+
 def working_canvas_for_aspect(aspect_ratio: str) -> tuple[tuple[int, int], tuple[int, int]]:
     """Return canonical working geometry for an explicitly declared aspect ratio."""
     try:
@@ -243,10 +251,7 @@ def resolve_presentation_geometry(
     insets: PresentationInsets,
 ) -> PresentationGeometry:
     """Resolve legacy exact-ratio output geometry through the aspect-first core."""
-    output_size = validate_output_size(output_size)
-    aspect_ratio = _aspect_ratio_for_size(output_size, legacy_only=True)
-    assert aspect_ratio is not None
-    return resolve_aspect_first_geometry(ResolvedOutputSpecification(aspect_ratio, output_size), insets)
+    return resolve_aspect_first_geometry(resolve_legacy_output_specification(output_size), insets)
 
 
 __all__ = [
@@ -261,6 +266,7 @@ __all__ = [
     "ResolvedOutputSpecification",
     "SUPPORTED_PRESENTATION_ASPECTS",
     "resolve_aspect_first_geometry",
+    "resolve_legacy_output_specification",
     "resolve_presentation_geometry",
     "round_half_up",
     "validate_output_size",

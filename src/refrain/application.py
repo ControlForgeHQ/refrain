@@ -28,7 +28,7 @@ from .content import ContentEntry, ContentLibraryError, Quotation, load_content_
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .display.coordinator import DisplayPublicationCoordinator
 from .eligibility import build_eligible_quotation_pool
-from .geometry import PixelBounds
+from .geometry import PixelBounds, ResolvedOutputSpecification, resolve_legacy_output_specification
 from .information_view import InformationViewPreparationError, prepare_information_view
 from .persistence import (
     DailySnapshot,
@@ -478,10 +478,15 @@ def _persist_reveal_progress(store: PersistentStateStore, state: PersistentState
         raise _RetryableApplicationError(f"cannot persist reveal progress: {error}") from error
 
 
-def present_prepared_stage(backend: DisplayBackend, artifacts: PreparedImageArtifactSet, stage: int) -> None:
+def present_prepared_stage(
+    backend: DisplayBackend,
+    artifacts: PreparedImageArtifactSet,
+    output_specification: ResolvedOutputSpecification,
+    stage: int,
+) -> None:
     """Load one prepared stage, submit it to ``backend``, and release the loaded image."""
     try:
-        image: Image.Image = artifacts.load_stage(stage)
+        image: Image.Image = artifacts.load_stage(output_specification, stage)
     except ArtifactStoreError as error:
         raise _RetryableApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
     try:
@@ -678,11 +683,16 @@ def run_startup(
                 configuration,
                 chooser,
             )
+            output_specification = resolve_legacy_output_specification(configuration.output_size)
             try:
-                image = artifacts.load_stage(stage)
+                image = artifacts.load_stage(output_specification, stage)
             except ArtifactStoreError as error:
                 raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-            image = _stage_publication_image(image, artifacts.literary_bounds, debug_layout)
+            image = _stage_publication_image(
+                image,
+                artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
+                debug_layout,
+            )
             try:
                 final_decision = evaluate_scheduling(read_current_time(), configuration, state)
             except SchedulingEvaluationError as error:
@@ -899,14 +909,19 @@ def run_application(
                         )
                         continue
                 if coordinator.desired_identity != identity:
+                    output_specification = resolve_legacy_output_specification(configuration.output_size)
                     try:
-                        image = artifacts.load_stage(stage)
+                        image = artifacts.load_stage(output_specification, stage)
                     except ArtifactStoreError as error:
                         artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(image, artifacts.literary_bounds, debug_layout)
+                    image = _stage_publication_image(
+                        image,
+                        artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
+                        debug_layout,
+                    )
                     coordinator.publish(identity, image)
                     continue
                 if last_failure is not None:
@@ -1031,14 +1046,19 @@ def run_demo(
                     state = _persist_reveal_progress(store, state, stage)
                 identity = (state.revision, stage)
                 if coordinator.desired_identity != identity:
+                    output_specification = resolve_legacy_output_specification(configuration.output_size)
                     try:
-                        image = artifacts.load_stage(stage)
+                        image = artifacts.load_stage(output_specification, stage)
                     except ArtifactStoreError as error:
                         artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(image, artifacts.literary_bounds, debug_layout)
+                    image = _stage_publication_image(
+                        image,
+                        artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
+                        debug_layout,
+                    )
                     coordinator.publish(identity, image)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
                     continue

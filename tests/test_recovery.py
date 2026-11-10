@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 from datetime import date, time
 from importlib.resources import files
@@ -26,6 +28,7 @@ from refrain import (
     PresentationInsets,
     Quotation,
     QuotationCandidate,
+    ResolvedOutputSpecification,
     RevealSchedule,
     SchedulingContext,
     SelectionProposal,
@@ -40,6 +43,7 @@ _STAGES = (
     CompositionVisibility(source=True),
     CompositionVisibility(source=True, attribution=True),
 )
+_OUTPUT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _FONT_REGISTRY = {
     "committed-font": FontResource(
         "committed-font",
@@ -104,10 +108,18 @@ def artifact_store(tmp_path: Path) -> PreparedImageArtifactStore:
 def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
     images = prepare_daily_images(state.snapshot, stages, _CONFIGURATION)
     try:
-        return store.store(state.revision, stages, images)
+        return store.store(state.revision, stages, {_OUTPUT_SPECIFICATION: images})
     finally:
         for image in images:
             image.close()
+
+
+def _variant(artifact_set):
+    return artifact_set.variant_for(_OUTPUT_SPECIFICATION)
+
+
+def _load(store, revision, stages):
+    return store.load(revision, stages, (_OUTPUT_SPECIFICATION,))
 
 
 def _assert_images_closed(images: tuple[Image.Image, ...]) -> None:
@@ -128,9 +140,35 @@ def test_missing_preference_falls_back_without_changing_committed_selection(
 
     assert state.snapshot.background == "removed-paper"
     assert state_path.read_bytes() == state_bytes
-    with result.load_stage(0) as image:
+    with result.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
         assert image.getpixel((0, 0)) == (255, 255, 255)
     assert "Requested background 'removed-paper' from content entry is unavailable" in caplog.text
+
+
+def test_presentation_canvas_bounds_are_preserved_on_the_raster_variant(
+    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, _state_path = committed_state
+    resolved_bounds = []
+    prepare = recovery.prepare_daily_images
+
+    def prepare_with_bounds(snapshot, stages, configuration, **kwargs):
+        callback = kwargs["on_resolved_bounds"]
+
+        def capture(bounds):
+            resolved_bounds.append(bounds)
+            callback(bounds)
+
+        kwargs["on_resolved_bounds"] = capture
+        return prepare(snapshot, stages, configuration, **kwargs)
+
+    monkeypatch.setattr(recovery, "prepare_daily_images", prepare_with_bounds)
+
+    result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
+
+    variant = result.variant_for(_OUTPUT_SPECIFICATION)
+    assert variant.presentation_canvas_literary_bounds == resolved_bounds[0]
+    assert _OUTPUT_SPECIFICATION.native_render_size == _CONFIGURATION.output_size
 
 
 def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
@@ -148,7 +186,7 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
     )
     images = prepare_daily_images(snapshot, _STAGES, configured)
     try:
-        prepared = artifact_store.store(state.revision, _STAGES, images)
+        prepared = artifact_store.store(state.revision, _STAGES, {_OUTPUT_SPECIFICATION: images})
     finally:
         for image in images:
             image.close()
@@ -162,7 +200,7 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
     recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
 
     assert recovered == prepared
-    with recovered.load_stage(0) as image:
+    with recovered.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
         assert image.getpixel((0, 0)) == (255, 0, 0)
     assert state_path.read_bytes() == state_bytes
 
@@ -174,7 +212,7 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
     expected = _store_images(artifact_store, state)
     manifest_path = expected.directory / "manifest.json"
     manifest_before = manifest_path.read_bytes()
-    image_bytes_before = tuple(path.read_bytes() for path in expected.stage_paths)
+    image_bytes_before = tuple(path.read_bytes() for path in _variant(expected).stage_paths)
     state_bytes_before = state_path.read_bytes()
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
@@ -185,24 +223,24 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
 
     assert result == expected
     assert manifest_path.read_bytes() == manifest_before
-    assert tuple(path.read_bytes() for path in result.stage_paths) == image_bytes_before
+    assert tuple(path.read_bytes() for path in _variant(result).stage_paths) == image_bytes_before
     assert state_path.read_bytes() == state_bytes_before
     assert PersistentStateStore(state_path).load() == state
 
 
-def test_output_size_change_does_not_invalidate_a_complete_cached_set(
-    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    state, _state_path = committed_state
+def test_output_size_change_requires_the_new_legacy_output_specification(committed_state, artifact_store) -> None:
+    state, state_path = committed_state
     expected = _store_images(artifact_store, state)
+    state_bytes = state_path.read_bytes()
     changed_configuration = replace(_CONFIGURATION, output_size=(3840, 2400))
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected regeneration"))
 
     recovered = recover_prepared_daily_images(state, artifact_store, _STAGES, changed_configuration)
 
-    assert recovered == expected
-    with recovered.load_stage(0) as image:
-        assert image.size == (1920, 1080)
+    assert recovered != expected
+    assert recovered.output_specifications == (ResolvedOutputSpecification("16:10", (3840, 2400)),)
+    with recovered.load_stage(recovered.output_specifications[0], 0) as image:
+        assert image.size == (3840, 2400)
+    assert state_path.read_bytes() == state_bytes
 
 
 def test_valid_artifacts_are_reused_after_font_resource_changes(
@@ -238,6 +276,7 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
         "truncated-stage",
         "missing-manifest",
         "invalid-manifest",
+        "old-manifest",
         "wrong-stage-count",
     ],
 )
@@ -256,28 +295,43 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
         previous_payloads = tuple(old_set.directory.glob("images-*"))
 
         if damage == "missing-stage":
-            old_set.stage_paths[1].unlink()
+            _variant(old_set).stage_paths[1].unlink()
         elif damage == "corrupted-stage":
-            old_set.stage_paths[1].write_bytes(b"not a PNG")
+            _variant(old_set).stage_paths[1].write_bytes(b"not a PNG")
         elif damage == "truncated-stage":
-            old_set.stage_paths[1].write_bytes(old_set.stage_paths[1].read_bytes()[:45])
+            _variant(old_set).stage_paths[1].write_bytes(_variant(old_set).stage_paths[1].read_bytes()[:45])
         elif damage == "missing-manifest":
             (old_set.directory / "manifest.json").unlink()
         elif damage == "invalid-manifest":
             (old_set.directory / "manifest.json").write_bytes(b"{")
+        elif damage == "old-manifest":
+            metadata = {
+                "revision": state.revision,
+                "image_directory": "images-" + "0" * 32,
+                "image_size": list(_CONFIGURATION.output_size),
+                "mode": "RGB",
+                "stages": [],
+            }
+            serialized = json.dumps(
+                metadata, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            document = {"artifacts": metadata, "sha256": hashlib.sha256(serialized).hexdigest()}
+            (old_set.directory / "manifest.json").write_text(json.dumps(document), encoding="utf-8")
 
     result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
-    reloaded = PreparedImageArtifactStore(artifact_store.root).load(state.revision, _STAGES)
+    reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state.revision, _STAGES)
 
     assert result.revision == state.revision
+    assert result.output_specifications == (_OUTPUT_SPECIFICATION,)
     assert reloaded == result
-    assert len(result.stage_paths) == len(_STAGES)
-    assert all(path.is_file() for path in result.stage_paths)
-    assert all(path.name == f"stage-{index}.png" for index, path in enumerate(result.stage_paths))
+    stage_paths = _variant(result).stage_paths
+    assert len(stage_paths) == len(_STAGES)
+    assert all(path.is_file() for path in stage_paths)
+    assert all(path.name == f"stage-{index}.png" for index, path in enumerate(stage_paths))
     expected_images = prepare_daily_images(state.snapshot, _STAGES, _CONFIGURATION)
     try:
         for index, expected in enumerate(expected_images):
-            with result.load_stage(index) as image:
+            with result.load_stage(_OUTPUT_SPECIFICATION, index) as image:
                 assert image.size == _CONFIGURATION.output_size
                 assert image.mode == "RGB"
                 assert image.tobytes() == expected.tobytes()
@@ -367,7 +421,7 @@ def test_storage_failure_is_preserved_and_closes_generated_images(
 ) -> None:
     state, state_path = committed_state
     before = state_path.read_bytes()
-    images = tuple(Image.new("RGB", (320, 240), color) for color in ("white", "gray", "black"))
+    images = tuple(Image.new("RGB", _CONFIGURATION.output_size, color) for color in ("white", "gray", "black"))
     error = ArtifactWriteError("injected storage failure", published=published)
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: images)
     monkeypatch.setattr(artifact_store, "store", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
@@ -387,11 +441,11 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
 ) -> None:
     state, state_path = committed_state
     before = state_path.read_bytes()
-    images = tuple(Image.new("RGB", (320, 240), color) for color in ("white", "gray", "black"))
+    images = tuple(Image.new("RGB", _CONFIGURATION.output_size, color) for color in ("white", "gray", "black"))
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: images)
 
     result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)
-    reloaded = PreparedImageArtifactStore(artifact_store.root).load(state.revision, _STAGES)
+    reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state.revision, _STAGES)
 
     assert reloaded == result
     _assert_images_closed(images)
@@ -424,7 +478,7 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
 
     def prepare(snapshot, stages, configuration, **_kwargs):
         prepared.append(tuple(stages))
-        return tuple(Image.new("RGB", (320, 240), "white") for _ in stages)
+        return tuple(Image.new("RGB", _CONFIGURATION.output_size, "white") for _ in stages)
 
     monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
     result = recover_prepared_daily_images(state, artifact_store, _STAGES, _CONFIGURATION)

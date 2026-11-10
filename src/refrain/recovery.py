@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from collections.abc import Sequence
 from dataclasses import replace
+from types import MappingProxyType
 
 from .artifacts import (
     ArtifactValidationError,
@@ -12,7 +13,7 @@ from .artifacts import (
     PreparedImageArtifactStore,
 )
 from .config import ApplicationConfiguration
-from .geometry import PixelBounds
+from .geometry import PixelBounds, resolve_legacy_output_specification
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -56,18 +57,19 @@ def recover_prepared_daily_images(
     except QuotationRenderError as error:
         raise DailyImagePreparationError(str(error)) from error
 
+    output_specification = resolve_legacy_output_specification(configuration.output_size)
     try:
-        existing = artifact_store.load(state.revision, ordered_stages)
+        existing = artifact_store.load(state.revision, ordered_stages, (output_specification,))
     except ArtifactValidationError:
         existing = None
     if existing is not None:
         return existing
 
-    resolved_bounds: PixelBounds | None = None
+    presentation_canvas_literary_bounds: PixelBounds | None = None
 
     def remember_bounds(bounds: PixelBounds) -> None:
-        nonlocal resolved_bounds
-        resolved_bounds = bounds
+        nonlocal presentation_canvas_literary_bounds
+        presentation_canvas_literary_bounds = bounds
 
     images = prepare_daily_images(
         state.snapshot,
@@ -77,8 +79,13 @@ def recover_prepared_daily_images(
         on_resolved_bounds=remember_bounds,
     )
     try:
-        artifact_set = artifact_store.store(state.revision, ordered_stages, images)
-        return replace(artifact_set, literary_bounds=resolved_bounds)
+        artifact_set = artifact_store.store(state.revision, ordered_stages, {output_specification: images})
+        variants = dict(artifact_set.variants)
+        variants[output_specification] = replace(
+            variants[output_specification],
+            presentation_canvas_literary_bounds=presentation_canvas_literary_bounds,
+        )
+        return replace(artifact_set, variants=MappingProxyType(variants))
     finally:
         for image in images:
             image.close()
