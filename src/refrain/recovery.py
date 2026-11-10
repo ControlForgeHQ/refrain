@@ -13,7 +13,7 @@ from .artifacts import (
     PreparedImageArtifactStore,
 )
 from .config import ApplicationConfiguration
-from .geometry import PixelBounds, resolve_legacy_output_specification
+from .geometry import PixelBounds, ResolvedOutputSpecification
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
 from .renderer import CompositionVisibility, QuotationRenderError, _validate_reveal_stages
@@ -24,7 +24,9 @@ def recover_prepared_daily_images(
     artifact_store: PreparedImageArtifactStore,
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
+    output_specifications: Sequence[ResolvedOutputSpecification],
     *,
+    debug_layout: bool = False,
     chooser: random.Random | None = None,
 ) -> PreparedImageArtifactSet:
     """Reuse or regenerate the complete images for an existing committed selection.
@@ -57,38 +59,50 @@ def recover_prepared_daily_images(
     except QuotationRenderError as error:
         raise DailyImagePreparationError(str(error)) from error
 
-    output_specification = resolve_legacy_output_specification(configuration.output_size)
     try:
-        existing = artifact_store.load(state.revision, ordered_stages, (output_specification,))
+        existing = artifact_store.load(
+            state.revision,
+            ordered_stages,
+            output_specifications,
+            debug_layout=debug_layout,
+        )
     except ArtifactValidationError:
         existing = None
     if existing is not None:
         return existing
 
-    presentation_canvas_literary_bounds: PixelBounds | None = None
+    presentation_canvas_literary_bounds: dict[ResolvedOutputSpecification, PixelBounds] = {}
 
-    def remember_bounds(bounds: PixelBounds) -> None:
-        nonlocal presentation_canvas_literary_bounds
-        presentation_canvas_literary_bounds = bounds
+    def remember_bounds(output_specification: ResolvedOutputSpecification, bounds: PixelBounds) -> None:
+        presentation_canvas_literary_bounds[output_specification] = bounds
 
-    images = prepare_daily_images(
+    prepared_variants = prepare_daily_images(
         state.snapshot,
         ordered_stages,
         configuration,
+        output_specifications,
         chooser=chooser,
+        debug_layout=debug_layout,
         on_resolved_bounds=remember_bounds,
     )
     try:
-        artifact_set = artifact_store.store(state.revision, ordered_stages, {output_specification: images})
-        variants = dict(artifact_set.variants)
-        variants[output_specification] = replace(
-            variants[output_specification],
-            presentation_canvas_literary_bounds=presentation_canvas_literary_bounds,
+        artifact_set = artifact_store.store(
+            state.revision,
+            ordered_stages,
+            prepared_variants,
+            debug_layout=debug_layout,
         )
-        return replace(artifact_set, variants=MappingProxyType(variants))
+        artifact_variants = dict(artifact_set.variants)
+        for output_specification, bounds in presentation_canvas_literary_bounds.items():
+            artifact_variants[output_specification] = replace(
+                artifact_variants[output_specification],
+                presentation_canvas_literary_bounds=bounds,
+            )
+        return replace(artifact_set, variants=MappingProxyType(artifact_variants))
     finally:
-        for image in images:
-            image.close()
+        for images in prepared_variants.values():
+            for image in images:
+                image.close()
 
 
 __all__ = ["recover_prepared_daily_images"]

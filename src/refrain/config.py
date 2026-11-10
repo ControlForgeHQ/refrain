@@ -19,12 +19,14 @@ from PIL import Image
 from ._yaml import load_yaml, yaml_error_location
 from .assets import parse_font_faces, valid_identifier
 from .geometry import (
-    DEFAULT_OUTPUT_SIZE,
     DEFAULT_PRESENTATION_INSETS,
     PresentationGeometryError,
     PresentationInsets,
-    resolve_presentation_geometry,
-    validate_output_size,
+    ResolvedOutputSpecification,
+    SUPPORTED_PRESENTATION_ASPECTS,
+    validate_presentation_insets,
+    validate_requested_size,
+    design_canvas_for_aspect,
 )
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "presentation", "information_view", "palette"}
@@ -149,12 +151,21 @@ class RevealSchedule:
 
 
 @dataclass(frozen=True)
+class DisplayOutputConfiguration:
+    """Validated identity and output specification for one display destination."""
+
+    identifier: str
+    output_specification: ResolvedOutputSpecification
+
+
+@dataclass(frozen=True)
 class DisplayBackendConfiguration:
     """Validated settings for one configured built-in display backend."""
 
     type: str
     host: str = "127.0.0.1"
     port: int = 8080
+    outputs: tuple[DisplayOutputConfiguration, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,7 +177,6 @@ class ApplicationConfiguration:
     day_start: time
     content_directory: Path
     reveal: RevealSchedule
-    output_size: tuple[int, int]
     presentation_insets: PresentationInsets
     fonts: Mapping[str, FontResource]
     default_fonts: tuple[str, ...]
@@ -182,6 +192,16 @@ class ApplicationConfiguration:
     palette: Mapping[str, str] = field(default_factory=lambda: MappingProxyType(_BUILTIN_PALETTE))
     default_text_colors: tuple[str, ...] = ("black",)
     default_decoration_colors: tuple[str, ...] = ("black",)
+
+    @property
+    def required_output_specifications(self) -> tuple[ResolvedOutputSpecification, ...]:
+        """Return the unique output specifications required by configured destinations."""
+        return tuple(
+            sorted(
+                {output.output_specification for backend in self.display_backends for output in backend.outputs},
+                key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
+            )
+        )
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -206,16 +226,46 @@ def _mapping(value: object, field: str, report: Callable[..., None]) -> dict[str
     return value
 
 
-def _parse_output_size(value: object, field: str, report: Callable[..., None]) -> tuple[int, int]:
+def _parse_requested_output_size(value: object, field: str, report: Callable[..., None]) -> tuple[int, int] | None:
     try:
-        return validate_output_size(value)
+        return validate_requested_size(value)
     except PresentationGeometryError as error:
+        report(field, str(error), logging.ERROR)
+        return None
+
+
+def _resolve_output_specification(
+    value: dict[str, object],
+    field: str,
+    report: Callable[..., None],
+    *,
+    default_aspect: str,
+    default_size: tuple[int, int],
+) -> ResolvedOutputSpecification:
+    has_aspect = "aspect_ratio" in value
+    has_size = "resolution" in value
+    if has_aspect != has_size:
         report(
             field,
-            f"{error}; expected [width, height] in landscape 4:3, 16:9, or 16:10",
+            "aspect_ratio and resolution must either both be supplied or both be omitted",
             logging.ERROR,
         )
-        return DEFAULT_OUTPUT_SIZE
+
+    aspect_ratio = value.get("aspect_ratio", default_aspect)
+    if not isinstance(aspect_ratio, str) or aspect_ratio not in SUPPORTED_PRESENTATION_ASPECTS:
+        report(
+            f"{field}.aspect_ratio",
+            "must be one of the supported presentation aspects: 4:3, 5:3, 16:9, or 16:10",
+            logging.ERROR,
+        )
+        aspect_ratio = default_aspect
+
+    requested_size = default_size
+    if has_size:
+        parsed_size = _parse_requested_output_size(value["resolution"], f"{field}.resolution", report)
+        if parsed_size is not None:
+            requested_size = parsed_size
+    return ResolvedOutputSpecification(aspect_ratio, requested_size)
 
 
 def _parse_presentation_insets(
@@ -249,16 +299,17 @@ def _parse_decoration_insets(
     field: str,
     report: Callable[..., None],
     severity: int,
-    output_size: tuple[int, int],
 ) -> PresentationInsets | None:
     insets = _parse_presentation_insets(value, field, report, severity)
     if insets is None:
         return None
-    try:
-        resolve_presentation_geometry(output_size, insets)
-    except PresentationGeometryError as error:
-        report(field, f"is invalid for the configured output size: {error}", severity)
-        return None
+    for aspect_ratio in SUPPORTED_PRESENTATION_ASPECTS:
+        design_canvas_size, _ = design_canvas_for_aspect(aspect_ratio)
+        try:
+            validate_presentation_insets(insets, design_canvas_size)
+        except PresentationGeometryError as error:
+            report(field, f"is invalid for the {aspect_ratio} design canvas: {error}", severity)
+            return None
     return insets
 
 
@@ -420,10 +471,15 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                 report(f"{field}.type", f"duplicates backend type {backend_type!r}", logging.ERROR)
                 continue
             seen_backends.add(backend_type)
-            allowed = {"type", "host", "port"} if backend_type == "image-server" else {"type"}
+            allowed = (
+                {"type", "host", "port", "outputs"}
+                if backend_type == "image-server"
+                else ({"type", "aspect_ratio", "resolution"} if backend_type == "window" else {"type"})
+            )
             _known_fields(value, allowed, field, report)
             host = "127.0.0.1"
             port = 8080
+            outputs: list[DisplayOutputConfiguration] = []
             if backend_type == "image-server":
                 if "host" not in value:
                     use_default(f"{field}.host", repr(host))
@@ -445,7 +501,74 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                         )
                 else:
                     port = port_value
-            display_backends.append(DisplayBackendConfiguration(backend_type, host, port))
+                configured_outputs = value.get("outputs")
+                if not isinstance(configured_outputs, list) or not configured_outputs:
+                    report(
+                        f"{field}.outputs",
+                        "is required and must be a nonempty sequence of output mappings",
+                        logging.ERROR,
+                    )
+                else:
+                    seen_output_ids: set[str] = set()
+                    for output_index, output_value in enumerate(configured_outputs):
+                        output_field = f"{field}.outputs[{output_index}]"
+                        if not isinstance(output_value, dict):
+                            report(output_field, "must be an output mapping", logging.ERROR)
+                            continue
+                        _known_fields(
+                            output_value,
+                            {"id", "aspect_ratio", "resolution"},
+                            output_field,
+                            report,
+                        )
+                        output_id = output_value.get("id")
+                        if not isinstance(output_id, str) or not output_id.strip():
+                            report(
+                                f"{output_field}.id",
+                                "is required and must be a nonempty string",
+                                logging.ERROR,
+                            )
+                            continue
+                        if output_id in seen_output_ids:
+                            report(
+                                f"{output_field}.id",
+                                f"duplicates output ID {output_id!r}",
+                                logging.ERROR,
+                            )
+                            continue
+                        seen_output_ids.add(output_id)
+                        specification = _resolve_output_specification(
+                            output_value,
+                            output_field,
+                            report,
+                            default_aspect="16:10",
+                            default_size=(3840, 2400),
+                        )
+                        outputs.append(DisplayOutputConfiguration(output_id, specification))
+            elif backend_type == "window":
+                specification = _resolve_output_specification(
+                    value,
+                    field,
+                    report,
+                    default_aspect="16:9",
+                    default_size=(1920, 1080),
+                )
+                outputs.append(DisplayOutputConfiguration(backend_type, specification))
+            else:
+                for forbidden_field in ("aspect_ratio", "resolution"):
+                    if forbidden_field in value:
+                        report(
+                            f"{field}.{forbidden_field}",
+                            "is not valid for the fixed 4:3 @ 1600 × 1200 Waveshare output",
+                            logging.ERROR,
+                        )
+                outputs.append(
+                    DisplayOutputConfiguration(
+                        backend_type,
+                        ResolvedOutputSpecification("4:3", (1600, 1200)),
+                    )
+                )
+            display_backends.append(DisplayBackendConfiguration(backend_type, host, port, tuple(outputs)))
 
     general = _mapping(data.get("general", {}), "general", report)
     _known_fields(general, {"day_start"}, "general", report)
@@ -522,13 +645,10 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     layout = _mapping(data.get("layout", {}), "layout", report)
     _known_fields(
         layout,
-        {"output_size", "presentation_insets", "fonts", "backgrounds", "decorations", "text"},
+        {"presentation_insets", "fonts", "backgrounds", "decorations", "text"},
         "layout",
         report,
     )
-    if "output_size" not in layout:
-        use_default("layout.output_size", "[1920, 1080]")
-    output_size = _parse_output_size(layout.get("output_size", DEFAULT_OUTPUT_SIZE), "layout.output_size", report)
     if "presentation_insets" not in layout:
         use_default("layout.presentation_insets", "{left: 384, right: 384, top: 324, bottom: 324}")
         presentation_insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
@@ -538,10 +658,12 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         )
     if presentation_insets is None:
         presentation_insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
-    try:
-        resolve_presentation_geometry(output_size, presentation_insets)
-    except PresentationGeometryError as error:
-        report("layout.presentation_insets", str(error), logging.ERROR)
+    for aspect_ratio in SUPPORTED_PRESENTATION_ASPECTS:
+        design_canvas_size, _ = design_canvas_for_aspect(aspect_ratio)
+        try:
+            validate_presentation_insets(presentation_insets, design_canvas_size)
+        except PresentationGeometryError as error:
+            report("layout.presentation_insets", str(error), logging.ERROR)
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
     _known_fields(fonts_data, {"default", "available", "font_faces"}, "layout.fonts", report)
@@ -651,7 +773,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         set(background_registry),
         report,
         lambda value, field, reporter, severity=logging.ERROR: _parse_decoration_insets(
-            value, field, reporter, severity, output_size
+            value, field, reporter, severity
         ),
     )
 
@@ -758,7 +880,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     if fatal_diagnostics:
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
 
-    assert output_size is not None
     assert presentation_insets is not None
     assert display_backends
     return ApplicationConfiguration(
@@ -767,7 +888,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         day_start=day_start,
         content_directory=content_directory,
         reveal=reveal,
-        output_size=output_size,
         presentation_insets=presentation_insets,
         fonts=MappingProxyType(font_registry),
         default_fonts=default_fonts,

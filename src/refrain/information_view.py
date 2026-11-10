@@ -8,12 +8,15 @@ import os
 import platform
 import re
 import sys
+from collections.abc import Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
+from types import MappingProxyType
 
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import ApplicationConfiguration
+from .geometry import ResolvedOutputSpecification
 from .persistence import ResolvedFont
 from .renderer import CompositionVisibility, LiteraryComposition, layout_composition, render_reveal_stages
 
@@ -147,8 +150,11 @@ def _draw_fitted_text(
     raise ValueError(f"information text does not fit its allocated region: {text!r}")
 
 
-def prepare_information_view(configuration: ApplicationConfiguration) -> Image.Image:
-    """Render one complete information image at the configured output dimensions."""
+def _prepare_information_view_for_specification(
+    configuration: ApplicationConfiguration,
+    output_specification: ResolvedOutputSpecification,
+) -> Image.Image:
+    """Render one complete information image for an explicit output specification."""
     if not isinstance(configuration, ApplicationConfiguration):
         raise InformationViewPreparationError("configuration must be an ApplicationConfiguration")
 
@@ -294,8 +300,12 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
         background.close()
         background = None
         image = rendered[0]
-        if image.size != configuration.output_size:
-            resized = image.resize(configuration.output_size, Image.Resampling.LANCZOS)
+        if image.size != output_specification.presentation_canvas_size:
+            resized = image.resize(output_specification.presentation_canvas_size, Image.Resampling.LANCZOS)
+            image.close()
+            image = resized
+        if image.size != output_specification.requested_output_size:
+            resized = image.resize(output_specification.requested_output_size, Image.Resampling.LANCZOS)
             image.close()
             image = resized
         draw = ImageDraw.Draw(image)
@@ -312,6 +322,30 @@ def prepare_information_view(configuration: ApplicationConfiguration) -> Image.I
             logo.close()
         if refrain_logo is not None:
             refrain_logo.close()
+
+
+def prepare_information_view(
+    configuration: ApplicationConfiguration,
+    output_specifications: Sequence[ResolvedOutputSpecification],
+) -> Mapping[ResolvedOutputSpecification, tuple[Image.Image, ...]]:
+    """Prepare information-view variants for all configured output specifications."""
+    if not output_specifications or any(
+        not isinstance(specification, ResolvedOutputSpecification) for specification in output_specifications
+    ):
+        raise InformationViewPreparationError("output_specifications must be a nonempty sequence of resolved values")
+    images: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]] = {}
+    try:
+        for specification in sorted(
+            set(output_specifications),
+            key=lambda item: (item.aspect_ratio, item.requested_output_size),
+        ):
+            images[specification] = (_prepare_information_view_for_specification(configuration, specification),)
+    except Exception:
+        for stages in images.values():
+            for image in stages:
+                image.close()
+        raise
+    return MappingProxyType(images)
 
 
 __all__ = ["InformationViewPreparationError", "prepare_information_view"]

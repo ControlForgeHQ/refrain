@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from .geometry import DEFAULT_OUTPUT_SIZE
 from .qr import (
     QRCodeGenerationError,
     QRCodeGeometry,
@@ -18,6 +17,7 @@ from .qr import (
 )
 
 QRCalibrationError = QRCodeGenerationError
+_DEFAULT_CALIBRATION_SIZE = (1920, 1080)
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ def validate_qr_calibration_parameters(parameters: QRCalibrationParameters) -> N
 
 def create_qr_calibration_image(
     parameters: QRCalibrationParameters = QRCalibrationParameters(),
-    output_size: tuple[int, int] = DEFAULT_OUTPUT_SIZE,
+    output_size: tuple[int, int] = _DEFAULT_CALIBRATION_SIZE,
 ) -> QRCalibrationImage:
     """Create the complete QR calibration canvas and its resolved pixel geometry."""
     validate_qr_calibration_parameters(parameters)

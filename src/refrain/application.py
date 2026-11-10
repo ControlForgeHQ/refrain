@@ -28,7 +28,7 @@ from .content import ContentEntry, ContentLibraryError, Quotation, load_content_
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .display.coordinator import DisplayPublicationCoordinator
 from .eligibility import build_eligible_quotation_pool
-from .geometry import PixelBounds, ResolvedOutputSpecification, resolve_legacy_output_specification
+from .geometry import ResolvedOutputSpecification
 from .information_view import InformationViewPreparationError, prepare_information_view
 from .persistence import (
     DailySnapshot,
@@ -49,7 +49,6 @@ from .qr_diagnostic import (
     validate_qr_calibration_parameters,
 )
 from .recovery import recover_prepared_daily_images
-from .renderer import annotate_literary_region
 from .scheduling import (
     SchedulingAction,
     SchedulingEvaluationError,
@@ -117,6 +116,7 @@ def _default_backend_factory(configuration: DisplayBackendConfiguration) -> Disp
         configuration.type,
         image_server_host=configuration.host,
         image_server_port=configuration.port,
+        image_server_output_ids=tuple(output.identifier for output in configuration.outputs),
     )
 
 
@@ -188,34 +188,6 @@ def _build_snapshot(
     return snapshot
 
 
-def _save_diagnostic_png(image: Image.Image, entry_id: str) -> Path:
-    try:
-        output = Path.cwd() / f"refrain-{entry_id}.png"
-    except OSError as error:
-        raise ApplicationError(
-            f"cannot determine the current working directory for diagnostic PNG output: {error}"
-        ) from error
-    created = False
-    try:
-        with output.open("xb") as stream:
-            created = True
-            image.save(stream, format="PNG")
-    except FileExistsError as error:
-        raise ApplicationError(
-            f"diagnostic PNG already exists: {output}; move or remove it before running --show-entry again"
-        ) from error
-    except Exception as error:
-        if created:
-            try:
-                output.unlink()
-            except OSError as cleanup_error:
-                raise ApplicationError(
-                    f"cannot save diagnostic PNG {output}: {error}; cannot remove incomplete output: {cleanup_error}"
-                ) from error
-        raise ApplicationError(f"cannot save diagnostic PNG {output}: {error}") from error
-    return output
-
-
 def run_show_entry(
     config_file: str | Path,
     entry_id: str,
@@ -223,15 +195,16 @@ def run_show_entry(
     debug_layout: bool = False,
     random_source: random.Random | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
-) -> Path:
-    """Render, save, and publish one fully revealed entry without accessing operational state."""
+) -> None:
+    """Render and publish one fully revealed entry without accessing operational state."""
     configuration = _load_configuration(config_file)
     chooser = random_source if random_source is not None else random.Random()
-    images: tuple[Image.Image, ...]
+    output_specifications = configuration.required_output_specifications
+    prepared_images: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]]
     snapshot: DailySnapshot | None = None
     if entry_id == "information":
         try:
-            images = (prepare_information_view(configuration),)
+            prepared_images = prepare_information_view(configuration, output_specifications)
         except InformationViewPreparationError as error:
             raise ApplicationError(f"cannot prepare information view: {error}") from error
     else:
@@ -251,32 +224,22 @@ def run_show_entry(
             raise ApplicationError(f"content entry {entry_id!r} has no usable quotations to present")
         snapshot = _build_snapshot(configuration, entry, entry.quotations[0], date.today())
         stages = resolve_reveal_stages(snapshot)
-        resolved_bounds: PixelBounds | None = None
-
-        def remember_bounds(bounds: PixelBounds) -> None:
-            nonlocal resolved_bounds
-            resolved_bounds = bounds
-
         try:
-            images = prepare_daily_images(
+            prepared_images = prepare_daily_images(
                 snapshot,
                 (stages[-1],),
                 configuration,
+                output_specifications,
                 chooser=chooser,
-                on_resolved_bounds=remember_bounds,
+                debug_layout=debug_layout,
             )
         except Exception as error:
             raise ApplicationError(f"cannot prepare diagnostic presentation for entry {entry_id!r}: {error}") from error
 
-    image = images[-1]
+    images = {specification: stages[-1] for specification, stages in prepared_images.items()}
     coordinator: DisplayPublicationCoordinator | None = None
     transferred = False
-    annotated_image: Image.Image | None = None
     try:
-        if snapshot is not None and debug_layout:
-            annotated_image = _debug_layout_image(image, resolved_bounds, True)
-            image = annotated_image
-        output = _save_diagnostic_png(image, entry_id)
         identity = _DIAGNOSTIC_PRESENTATION_IDENTITY
         try:
             coordinator = DisplayPublicationCoordinator(
@@ -287,7 +250,7 @@ def run_show_entry(
         except Exception as error:
             raise ApplicationError(f"cannot initialize diagnostic display publication: {error}") from error
         try:
-            coordinator.publish(identity, image)
+            coordinator.publish(identity, images)
             transferred = True
             coordinator.wait_for_publication(identity)
         except Exception as error:
@@ -295,30 +258,31 @@ def run_show_entry(
 
         results = coordinator.publication_results(identity)
         failed = not results
-        for backend, (published, error) in results.items():
+        for destination, (published, error) in results.items():
             if published:
-                _LOGGER.info("Diagnostic image published to display backend %s", backend)
+                _LOGGER.info("Diagnostic image published to display destination %s", destination)
             else:
                 failed = True
                 _LOGGER.error(
-                    "Diagnostic image publication failed for display backend %s: %s",
-                    backend,
+                    "Diagnostic image publication failed for destination %s: %s",
+                    destination,
                     error or "no successful acknowledgement",
                 )
         if failed:
             raise ApplicationError(
-                f"diagnostic image was not published by every configured display backend; PNG saved at {output}"
+                "diagnostic image was not published by every configured display destination"
             )
-        _LOGGER.info("Diagnostic PNG saved at %s", output)
-        return output
+        return None
     finally:
         if coordinator is not None:
             coordinator.close()
-        for prepared_image in images:
-            if not transferred or prepared_image is not image:
-                prepared_image.close()
-        if annotated_image is not None and not transferred:
-            annotated_image.close()
+        if not transferred:
+            for image in images.values():
+                image.close()
+        for specification, stages in prepared_images.items():
+            for prepared_image in stages:
+                if prepared_image is not images[specification]:
+                    prepared_image.close()
 
 
 def _save_qr_diagnostic_png(image: Image.Image) -> Path:
@@ -381,23 +345,27 @@ def run_test_qr(
     *,
     backend_factory: BackendFactory = _default_backend_factory,
 ) -> tuple[Path, QRCalibrationGeometry]:
-    """Generate, save, and publish a QR calibration image without accessing daily state."""
+    """Generate, save, and publish QR calibration variants without accessing daily state."""
     try:
         validate_qr_calibration_parameters(parameters)
     except QRCalibrationError as error:
         raise ApplicationError(str(error)) from error
     configuration = _load_configuration(config_file)
     try:
-        calibration = create_qr_calibration_image(parameters, configuration.output_size)
+        calibrations = {
+            specification: create_qr_calibration_image(parameters, specification.requested_output_size)
+            for specification in configuration.required_output_specifications
+        }
     except QRCalibrationError as error:
         raise ApplicationError(f"cannot generate QR calibration image: {error}") from error
 
-    image = calibration.image
+    images = {specification: calibration.image for specification, calibration in calibrations.items()}
     coordinator: DisplayPublicationCoordinator | None = None
     transferred = False
     try:
-        output = _save_qr_diagnostic_png(image)
-        _report_qr_diagnostic(parameters, calibration.geometry, output)
+        first_calibration = next(iter(calibrations.values()))
+        output = _save_qr_diagnostic_png(first_calibration.image)
+        _report_qr_diagnostic(parameters, first_calibration.geometry, output)
         try:
             coordinator = DisplayPublicationCoordinator(
                 configuration.display_backends,
@@ -407,7 +375,7 @@ def run_test_qr(
         except Exception as error:
             raise ApplicationError(f"cannot initialize QR diagnostic display publication: {error}") from error
         try:
-            coordinator.publish(_DIAGNOSTIC_PRESENTATION_IDENTITY, image)
+            coordinator.publish(_DIAGNOSTIC_PRESENTATION_IDENTITY, images)
             transferred = True
             coordinator.wait_for_publication(_DIAGNOSTIC_PRESENTATION_IDENTITY)
         except Exception as error:
@@ -415,26 +383,27 @@ def run_test_qr(
 
         results = coordinator.publication_results(_DIAGNOSTIC_PRESENTATION_IDENTITY)
         failed = not results
-        for backend, (published, error) in results.items():
+        for destination, (published, error) in results.items():
             if published:
-                _LOGGER.info("QR diagnostic image published to display backend %s", backend)
+                _LOGGER.info("QR diagnostic image published to display destination %s", destination)
             else:
                 failed = True
                 _LOGGER.error(
-                    "QR diagnostic image publication failed for display backend %s: %s",
-                    backend,
+                    "QR diagnostic image publication failed for destination %s: %s",
+                    destination,
                     error or "no successful acknowledgement",
                 )
         if failed:
             raise ApplicationError(
-                f"QR diagnostic image was not published by every configured display backend; PNG saved at {output}"
+                f"QR diagnostic image was not published by every configured display destination; PNG saved at {output}"
             )
-        return output, calibration.geometry
+        return output, first_calibration.geometry
     finally:
         if coordinator is not None:
             coordinator.close()
         if not transferred:
-            image.close()
+            for image in images.values():
+                image.close()
 
 
 def _commit_selection(
@@ -506,32 +475,21 @@ def _load_configuration(config_file: str | Path) -> ApplicationConfiguration:
         raise ApplicationError(f"application configuration is invalid: {error}") from error
 
 
-def _debug_layout_image(
-    image: Image.Image,
-    region: PixelBounds | None,
-    enabled: bool,
-) -> Image.Image:
-    if not enabled:
-        return image
-    if region is None:
-        _LOGGER.warning("Cannot outline the literary region because its resolved geometry is unavailable")
-        return image
-    return annotate_literary_region(image, region)
-
-
-def _stage_publication_image(
-    image: Image.Image,
-    region: PixelBounds | None,
-    debug_layout: bool,
-) -> Image.Image:
+def _load_stage_variants(
+    artifacts: PreparedImageArtifactSet,
+    output_specifications: tuple[ResolvedOutputSpecification, ...],
+    stage: int,
+) -> dict[ResolvedOutputSpecification, Image.Image]:
+    """Load one output image for each unique required specification."""
+    images: dict[ResolvedOutputSpecification, Image.Image] = {}
     try:
-        annotated = _debug_layout_image(image, region, debug_layout)
+        for specification in output_specifications:
+            images[specification] = artifacts.load_stage(specification, stage)
     except Exception:
-        image.close()
+        for image in images.values():
+            image.close()
         raise
-    if annotated is not image:
-        image.close()
-    return annotated
+    return images
 
 
 def _recover_images(
@@ -539,6 +497,8 @@ def _recover_images(
     artifact_store: PreparedImageArtifactStore,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
+    *,
+    debug_layout: bool = False,
 ) -> PreparedImageArtifactSet:
     try:
         return recover_prepared_daily_images(
@@ -546,6 +506,8 @@ def _recover_images(
             artifact_store,
             resolve_reveal_stages(state.snapshot),
             configuration,
+            configuration.required_output_specifications,
+            debug_layout=debug_layout,
             chooser=chooser,
         )
     except DailyImagePreparationError as error:
@@ -635,7 +597,10 @@ def run_startup(
     try:
         if configuration.information_view_duration > 0:
             try:
-                information_image = prepare_information_view(configuration)
+                information_images = prepare_information_view(
+                    configuration,
+                    configuration.required_output_specifications,
+                )
             except InformationViewPreparationError as error:
                 _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
             else:
@@ -645,7 +610,7 @@ def run_startup(
                     retry=False,
                     monotonic_clock=monotonic_clock,
                 )
-                coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_image)
+                coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_images)
                 if coordinator.wait_for_any_publication(
                     _INFORMATION_VIEW_IDENTITY,
                     timeout=_INFORMATION_VIEW_PUBLICATION_TIMEOUT,
@@ -682,26 +647,27 @@ def run_startup(
                 artifact_store,
                 configuration,
                 chooser,
+                debug_layout=debug_layout,
             )
-            output_specification = resolve_legacy_output_specification(configuration.output_size)
             try:
-                image = artifacts.load_stage(output_specification, stage)
+                images = _load_stage_variants(
+                    artifacts,
+                    configuration.required_output_specifications,
+                    stage,
+                )
             except ArtifactStoreError as error:
                 raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-            image = _stage_publication_image(
-                image,
-                artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
-                debug_layout,
-            )
             try:
                 final_decision = evaluate_scheduling(read_current_time(), configuration, state)
             except SchedulingEvaluationError as error:
-                image.close()
+                for image in images.values():
+                    image.close()
                 raise ApplicationError(f"scheduling evaluation failed before daily publication: {error}") from error
             if final_decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION) or (
                 final_decision.required_reveal_stage != stage
             ):
-                image.close()
+                for image in images.values():
+                    image.close()
                 continue
             identity = (state.revision, stage)
             if coordinator is None:
@@ -711,14 +677,20 @@ def run_startup(
                     retry=False,
                     monotonic_clock=monotonic_clock,
                 )
-            coordinator.publish(identity, image)
+            coordinator.publish(identity, images)
             if not coordinator.wait_for_publication(identity):
                 raise ApplicationError("all configured display destinations are unavailable")
             if keep_open is not None:
                 for backend_configuration in configuration.display_backends:
                     if (
                         backend_configuration.type in {"window", "image-server"}
-                        and coordinator.acknowledgements[backend_configuration.type] == identity
+                        and any(
+                            coordinator.acknowledgements.get(
+                                f"{backend_configuration.type}:{output.identifier}"
+                            )
+                            == identity
+                            for output in backend_configuration.outputs
+                        )
                     ):
                         keep_open(backend_configuration.type)
                         break
@@ -765,7 +737,7 @@ def run_application(
     last_failure: str | None = None
     retry_delay = 1.0
     information_view_done = configuration.information_view_duration == 0
-    information_view_image: Image.Image | None = None
+    information_view_images: dict[ResolvedOutputSpecification, Image.Image] | None = None
     information_view_requested = False
     information_view_attempt_started: float | None = None
     information_view_started: float | None = None
@@ -822,6 +794,7 @@ def run_application(
                         artifact_store,
                         configuration,
                         chooser,
+                        debug_layout=debug_layout,
                     )
                     artifact_revision = state.revision
                     try:
@@ -866,9 +839,12 @@ def run_application(
                         ):
                             information_view_done = True
                             _LOGGER.warning("Information view was not published within the initial attempt period")
-                    if not information_view_done and information_view_image is None:
+                    if not information_view_done and information_view_images is None:
                         try:
-                            information_view_image = prepare_information_view(configuration)
+                            information_view_images = prepare_information_view(
+                                configuration,
+                                configuration.required_output_specifications,
+                            )
                         except InformationViewPreparationError as error:
                             _LOGGER.warning(
                                 "Cannot prepare information view; proceeding to daily presentation: %s",
@@ -876,9 +852,9 @@ def run_application(
                             )
                             information_view_done = True
                     if not information_view_done and not information_view_requested:
-                        assert information_view_image is not None
-                        coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_view_image)
-                        information_view_image = None
+                        assert information_view_images is not None
+                        coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_view_images)
+                        information_view_images = None
                         information_view_requested = True
                         information_view_attempt_started = monotonic_clock()
                         _LOGGER.info("Requested startup information view")
@@ -909,20 +885,18 @@ def run_application(
                         )
                         continue
                 if coordinator.desired_identity != identity:
-                    output_specification = resolve_legacy_output_specification(configuration.output_size)
                     try:
-                        image = artifacts.load_stage(output_specification, stage)
+                        images = _load_stage_variants(
+                            artifacts,
+                            configuration.required_output_specifications,
+                            stage,
+                        )
                     except ArtifactStoreError as error:
                         artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(
-                        image,
-                        artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
-                        debug_layout,
-                    )
-                    coordinator.publish(identity, image)
+                    coordinator.publish(identity, images)
                     continue
                 if last_failure is not None:
                     _LOGGER.info("Application operation recovered")
@@ -948,8 +922,9 @@ def run_application(
     finally:
         if coordinator is not None:
             coordinator.close()
-        if information_view_image is not None:
-            information_view_image.close()
+        if information_view_images is not None:
+            for image in information_view_images.values():
+                image.close()
         _LOGGER.info("Continuous presentation stopped")
     if coordinator is not None and coordinator.all_unavailable:
         raise ApplicationError("all configured display destinations are unavailable")
@@ -1036,6 +1011,7 @@ def run_demo(
                         artifact_store,
                         configuration,
                         chooser,
+                        debug_layout=debug_layout,
                     )
                     try:
                         artifact_store.cleanup(state.revision)
@@ -1046,20 +1022,18 @@ def run_demo(
                     state = _persist_reveal_progress(store, state, stage)
                 identity = (state.revision, stage)
                 if coordinator.desired_identity != identity:
-                    output_specification = resolve_legacy_output_specification(configuration.output_size)
                     try:
-                        image = artifacts.load_stage(output_specification, stage)
+                        images = _load_stage_variants(
+                            artifacts,
+                            configuration.required_output_specifications,
+                            stage,
+                        )
                     except ArtifactStoreError as error:
                         artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
-                    image = _stage_publication_image(
-                        image,
-                        artifacts.variant_for(output_specification).presentation_canvas_literary_bounds,
-                        debug_layout,
-                    )
-                    coordinator.publish(identity, image)
+                    coordinator.publish(identity, images)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
                     continue
                 acknowledged_at = coordinator.first_successful_publication_time(identity)

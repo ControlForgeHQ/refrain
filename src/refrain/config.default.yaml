@@ -16,9 +16,10 @@ display:
     - type: "image-server"
       host: "127.0.0.1"
       port: 8080
+      outputs:
+        - id: "default"
 
 layout:
-  output_size: [1920, 1080]
   presentation_insets:
     left: 384
     right: 384

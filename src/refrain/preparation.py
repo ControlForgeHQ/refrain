@@ -8,6 +8,7 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from types import MappingProxyType
 
 from PIL import Image, ImageFont, ImageOps
 
@@ -21,10 +22,10 @@ from .config import (
     load_decoration_layer_image,
 )
 from .geometry import (
-    REFERENCE_SIZE,
     PixelBounds,
     PresentationGeometry,
     PresentationGeometryError,
+    ResolvedOutputSpecification,
     resolve_presentation_geometry,
     round_half_up,
 )
@@ -42,6 +43,7 @@ from .renderer import (
     CompositionVisibility,
     LiteraryComposition,
     QuotationRenderError,
+    annotate_literary_region,
     layout_composition,
     render_reveal_stages,
 )
@@ -80,6 +82,7 @@ def _resolve_presentation(
     snapshot: DailySnapshot,
     configuration: ApplicationConfiguration,
     decoration: DecorationResource | None,
+    output_specification: ResolvedOutputSpecification,
 ) -> tuple[LiteraryComposition, PresentationGeometry, int, int, str]:
     composition = LiteraryComposition(
         quotation=snapshot.quotation_text,
@@ -92,14 +95,16 @@ def _resolve_presentation(
         else decoration.presentation_insets
     )
     try:
-        geometry = resolve_presentation_geometry(configuration.output_size, insets)
+        geometry = resolve_presentation_geometry(output_specification, insets)
     except PresentationGeometryError as error:
         raise DailyImagePreparationError(f"cannot resolve literary presentation geometry: {error}") from error
+    design_width = geometry.design_canvas_size[0]
+    presentation_width = geometry.presentation_canvas_size[0]
     return (
         composition,
         geometry,
-        configuration.min_font_size,
-        configuration.max_font_size,
+        max(1, round_half_up(configuration.min_font_size * presentation_width, design_width)),
+        max(1, round_half_up(configuration.max_font_size * presentation_width, design_width)),
         snapshot.presentation_style,
     )
 
@@ -173,11 +178,11 @@ def _resolve_decoration_tint(
 
 
 def _generate_daily_background(
-    image_size: tuple[int, int],
+    design_canvas_size: tuple[int, int],
     identifier: str,
     registry: Mapping[str, BackgroundResource],
 ) -> Image.Image:
-    base = Image.new("RGB", image_size, _BACKGROUND_COLOR)
+    base = Image.new("RGB", design_canvas_size, _BACKGROUND_COLOR)
     if identifier == "none":
         return base
     resource = registry.get(identifier)
@@ -186,7 +191,9 @@ def _generate_daily_background(
         return base
     try:
         with load_background_image(resource) as image:
-            fitted = ImageOps.fit(image, image_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            fitted = ImageOps.fit(
+                image, design_canvas_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
+            )
             try:
                 base.paste(fitted, (0, 0), fitted if fitted.mode == "RGBA" else None)
             finally:
@@ -327,15 +334,9 @@ def _compose_cover(background: Image.Image, source: Image.Image) -> None:
 
 def _mapped_boundaries(size: tuple[int, int], nine_slice) -> tuple[tuple[int, ...], tuple[int, ...]]:
     source_width, source_height = size
-    scale = min(Fraction(REFERENCE_SIZE[0], source_width), Fraction(REFERENCE_SIZE[1], source_height))
-    offset_x = (REFERENCE_SIZE[0] - source_width * scale) / 2
-    offset_y = (REFERENCE_SIZE[1] - source_height * scale) / 2
     source_x = (0, nine_slice.left, source_width - nine_slice.right, source_width)
     source_y = (0, nine_slice.top, source_height - nine_slice.bottom, source_height)
-    return (
-        tuple(_rounded_fraction(offset_x + coordinate * scale) for coordinate in source_x),
-        tuple(_rounded_fraction(offset_y + coordinate * scale) for coordinate in source_y),
-    )
+    return source_x, source_y
 
 
 def _resize_source_region(
@@ -378,7 +379,7 @@ def _compose_nine_slice(
     if left_width + right_width > canvas_width or top_height + bottom_height > canvas_height:
         raise ValueError(
             f"preserved corners ({left_width} + {right_width} by {top_height} + {bottom_height}) "
-            f"do not fit the {canvas_width} x {canvas_height} working canvas"
+            f"do not fit the {canvas_width} x {canvas_height} design canvas"
         )
     destination_center_width = canvas_width - left_width - right_width
     destination_center_height = canvas_height - top_height - bottom_height
@@ -496,12 +497,24 @@ def _compose_nine_slice(
     )
 
 
-def _resample_graphical_composition(image: Image.Image, output_size: tuple[int, int]) -> Image.Image:
-    if image.size == output_size:
+def _scale_design_composition_to_presentation(
+    design_composition: Image.Image,
+    presentation_canvas_size: tuple[int, int],
+) -> Image.Image:
+    if design_composition.size == presentation_canvas_size:
+        return design_composition
+    scaled = design_composition.resize(presentation_canvas_size, Image.Resampling.LANCZOS)
+    design_composition.close()
+    return scaled
+
+
+def _resize_presentation_to_output(image: Image.Image, requested_output_size: tuple[int, int]) -> Image.Image:
+    """Resize the complete presentation canvas once, after all presentation composition."""
+    if image.size == requested_output_size:
         return image
-    resampled = image.resize(output_size, Image.Resampling.LANCZOS)
+    resized = image.resize(requested_output_size, Image.Resampling.LANCZOS)
     image.close()
-    return resampled
+    return resized
 
 
 def _read_font(resource: FontResource, face: str = "regular") -> ResolvedFont:
@@ -656,18 +669,24 @@ def _resolve_background(
     return chooser.choice(configuration.default_backgrounds)
 
 
-def prepare_daily_images(
+def _prepare_daily_images_for_specification(
     snapshot: DailySnapshot,
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
+    output_specification: ResolvedOutputSpecification,
     *,
     chooser: random.Random | None = None,
     strict_decoration: bool = False,
-    on_resolved_bounds: Callable[[PixelBounds], None] | None = None,
+    on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
     force_white_background: bool = False,
     forced_decoration_tint: tuple[int, int, int] | None = None,
+    debug_layout: bool = False,
     qr_disabled_reason: str | None = None,
-    on_diagnostics: Callable[[PreparationDiagnostics], None] | None = None,
+    on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
+    on_presentation_image: Callable[
+        [ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None
+    ]
+    | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -680,18 +699,20 @@ def prepare_daily_images(
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
     if not isinstance(configuration, ApplicationConfiguration):
         raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
+    if not isinstance(output_specification, ResolvedOutputSpecification):
+        raise DailyImagePreparationError("output_specification must be a ResolvedOutputSpecification")
     chooser = chooser if chooser is not None else random.Random()
     decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser)
     composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-        snapshot, configuration, decoration
+        snapshot, configuration, decoration, output_specification
     )
-    image_size = geometry.output_size
+    presentation_canvas_size = geometry.presentation_canvas_size
     qr_placement: QRCodePlacement | None = None
     qr_unavailable_reason: str | None = None
     if configuration.qr_enabled and (decoration is None or decoration.qr_ready):
         try:
             qr_placement = resolve_qr_placement(
-                image_size,
+                output_specification,
                 None if decoration is None else decoration.qr_positioning,
             )
         except QRCodePlacementError as error:
@@ -706,7 +727,7 @@ def prepare_daily_images(
         "none" if force_white_background else _resolve_background(snapshot, decoration, configuration, chooser)
     )
     if on_resolved_bounds is not None:
-        on_resolved_bounds(geometry.output_region)
+        on_resolved_bounds(output_specification, geometry.presentation_literary_bounds)
     text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
     qr_parameters = PRODUCTION_QR_PARAMETERS
     decoration_tint = _resolve_decoration_tint(
@@ -722,19 +743,11 @@ def prepare_daily_images(
 
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser)
     try:
-        layout = layout_composition(
-            composition,
-            fonts["quotation"],
-            geometry.output_region,
-            image_size,
-            min_font_size,
-            max_font_size,
-            style,
-            byline_gap_factor=_BYLINE_GAP_FACTOR,
-            source_font=fonts["source"],
-            attribution_font=fonts["attribution"],
+        background = _generate_daily_background(
+            geometry.design_canvas_size,
+            background_identifier,
+            configuration.backgrounds,
         )
-        background = _generate_daily_background(geometry.working_size, background_identifier, configuration.backgrounds)
         try:
             background = _apply_daily_decoration(
                 background,
@@ -746,7 +759,19 @@ def prepare_daily_images(
                 eligible_layers=decoration_layers,
                 on_nine_slice_guide=collect_nine_slice_guide if on_diagnostics is not None else None,
             )
-            background = _resample_graphical_composition(background, image_size)
+            background = _scale_design_composition_to_presentation(background, presentation_canvas_size)
+            layout = layout_composition(
+                composition,
+                fonts["quotation"],
+                geometry.presentation_literary_bounds,
+                presentation_canvas_size,
+                min_font_size,
+                max_font_size,
+                style,
+                byline_gap_factor=_BYLINE_GAP_FACTOR,
+                source_font=fonts["source"],
+                attribution_font=fonts["attribution"],
+            )
             images = render_reveal_stages(
                 background,
                 fonts["quotation"],
@@ -760,20 +785,32 @@ def prepare_daily_images(
             qr_code = None
             try:
                 if qr_placement is not None:
-                    qr_code = render_qr_code(qr_parameters, image_size, qr_placement)
+                    qr_code = render_qr_code(qr_parameters, presentation_canvas_size, qr_placement)
                     for image in images:
                         composite_qr_code(image, qr_code)
+                if debug_layout:
+                    annotated_images = []
+                    for image in images:
+                        annotated = annotate_literary_region(image, geometry.presentation_literary_bounds)
+                        if annotated is not image:
+                            image.close()
+                        annotated_images.append(annotated)
+                    images = tuple(annotated_images)
+                diagnostics = PreparationDiagnostics(
+                    geometry,
+                    qr_placement,
+                    qr_unavailable_reason,
+                    tuple(decoration_layers),
+                    tuple(nine_slice_guides),
+                )
                 if on_diagnostics is not None:
-                    on_diagnostics(
-                        PreparationDiagnostics(
-                            geometry,
-                            qr_placement,
-                            qr_unavailable_reason,
-                            tuple(decoration_layers),
-                            tuple(nine_slice_guides),
-                        )
-                    )
-                return images
+                    on_diagnostics(output_specification, diagnostics)
+                if on_presentation_image is not None:
+                    for image in images:
+                        on_presentation_image(output_specification, image, diagnostics)
+                return tuple(
+                    _resize_presentation_to_output(image, geometry.requested_output_size) for image in images
+                )
             except Exception:
                 for image in images:
                     image.close()
@@ -787,6 +824,65 @@ def prepare_daily_images(
             background.close()
     except QuotationRenderError as error:
         raise DailyImagePreparationError(f"cannot prepare daily snapshot images: {error}") from error
+
+
+def prepare_daily_images(
+    snapshot: DailySnapshot,
+    stages: Sequence[CompositionVisibility],
+    configuration: ApplicationConfiguration,
+    output_specifications: Sequence[ResolvedOutputSpecification],
+    *,
+    chooser: random.Random | None = None,
+    strict_decoration: bool = False,
+    on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
+    force_white_background: bool = False,
+    forced_decoration_tint: tuple[int, int, int] | None = None,
+    debug_layout: bool = False,
+    qr_disabled_reason: str | None = None,
+    on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
+    on_presentation_image: Callable[
+        [ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None
+    ]
+    | None = None,
+) -> Mapping[ResolvedOutputSpecification, tuple[Image.Image, ...]]:
+    """Prepare complete reveal-stage image variants for all required output specifications."""
+    if not isinstance(output_specifications, Sequence) or isinstance(output_specifications, (str, bytes)):
+        raise DailyImagePreparationError("output_specifications must be a nonempty sequence")
+    if not output_specifications or any(
+        not isinstance(specification, ResolvedOutputSpecification) for specification in output_specifications
+    ):
+        raise DailyImagePreparationError("output_specifications must contain resolved specifications")
+    unique_specifications = tuple(
+        sorted(
+            set(output_specifications),
+            key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
+        )
+    )
+    results: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]] = {}
+    chooser = chooser if chooser is not None else random.Random()
+    try:
+        for output_specification in unique_specifications:
+            results[output_specification] = _prepare_daily_images_for_specification(
+                snapshot,
+                stages,
+                configuration,
+                output_specification,
+                chooser=chooser,
+                strict_decoration=strict_decoration,
+                on_resolved_bounds=on_resolved_bounds,
+                force_white_background=force_white_background,
+                forced_decoration_tint=forced_decoration_tint,
+                debug_layout=debug_layout,
+                qr_disabled_reason=qr_disabled_reason,
+                on_diagnostics=on_diagnostics,
+                on_presentation_image=on_presentation_image,
+            )
+    except Exception:
+        for images in results.values():
+            for image in images:
+                image.close()
+        raise
+    return MappingProxyType(results)
 
 
 __all__ = [

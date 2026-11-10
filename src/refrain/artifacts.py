@@ -90,12 +90,12 @@ def _output_specifications(
         raise ValueError("output_specifications must contain only ResolvedOutputSpecification values")
     if len(set(specifications)) != len(specifications):
         raise ValueError("output_specifications must not contain equivalent duplicates")
-    return tuple(sorted(specifications, key=lambda item: (item.aspect_ratio, *item.requested_size)))
+    return tuple(sorted(specifications, key=lambda item: (item.aspect_ratio, *item.requested_output_size)))
 
 
 def _variant_directory_name(specification: ResolvedOutputSpecification) -> str:
     aspect = specification.aspect_ratio.replace(":", "-")
-    width, height = specification.requested_size
+    width, height = specification.requested_output_size
     return f"variant-{aspect}-{width}x{height}"
 
 
@@ -155,8 +155,7 @@ class PreparedImageArtifactVariant:
     """Validated metadata for one output specification.
 
     ``presentation_canvas_literary_bounds`` uses presentation-canvas coordinates
-    at ``output_specification.native_render_size``; it is not scaled to the
-    requested output-image dimensions. Close returned stages after use.
+    and is not scaled to the requested output-image dimensions. Close returned stages after use.
     """
 
     output_specification: ResolvedOutputSpecification
@@ -168,9 +167,9 @@ class PreparedImageArtifactVariant:
     )
 
     @property
-    def requested_size(self) -> tuple[int, int]:
+    def requested_output_size(self) -> tuple[int, int]:
         """Return the exact persisted output raster dimensions."""
-        return self.output_specification.requested_size
+        return self.output_specification.requested_output_size
 
     def load_stage(self, stage: int) -> Image.Image:
         """Decode one independent image, rechecking integrity since initial validation."""
@@ -186,9 +185,13 @@ class PreparedImageArtifactVariant:
                     raise ValueError("PNG checksum does not match manifest")
                 stream.seek(0)
                 with Image.open(stream) as image:
-                    if image.format != "PNG" or image.size != self.requested_size or image.mode != self.mode:
+                    if (
+                        image.format != "PNG"
+                        or image.size != self.requested_output_size
+                        or image.mode != self.mode
+                    ):
                         raise ValueError(
-                            f"expected PNG size {self.requested_size} mode {self.mode}; "
+                            f"expected PNG size {self.requested_output_size} mode {self.mode}; "
                             f"found {image.format} size {image.size} mode {image.mode}"
                         )
                     if getattr(image, "n_frames", 1) != 1:
@@ -265,9 +268,13 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         variants: Mapping[ResolvedOutputSpecification, Sequence[Image.Image]],
+        *,
+        debug_layout: bool = False,
     ) -> PreparedImageArtifactSet:
         """Publish all explicit variants and stages losslessly; inputs remain caller-owned."""
         expected_stages = _inputs(revision, stages)
+        if type(debug_layout) is not bool:
+            raise ValueError("debug_layout must be a boolean")
         if not isinstance(variants, Mapping) or not variants:
             raise ValueError("variants must be a nonempty mapping of output specifications to image sequences")
         specifications = _output_specifications(tuple(variants))
@@ -278,13 +285,17 @@ class PreparedImageArtifactStore:
                 raise ValueError(f"images for {specification!r} must be a nonempty sequence of complete Pillow images")
             if len(images) != len(expected_stages):
                 raise ValueError(f"images for {specification!r} must match the expected reveal-stage sequence")
-            requested_size = specification.requested_size
+            requested_output_size = specification.requested_output_size
             mode = images[0].mode if isinstance(images[0], Image.Image) else None
             for index, image in enumerate(images):
-                if not isinstance(image, Image.Image) or image.size != requested_size or image.mode not in _MODES:
+                if (
+                    not isinstance(image, Image.Image)
+                    or image.size != requested_output_size
+                    or image.mode not in _MODES
+                ):
                     raise ValueError(
                         f"stage {index} for {specification!r} must be a Pillow image of size "
-                        f"{requested_size} in a supported mode"
+                        f"{requested_output_size} in a supported mode"
                     )
                 if image.mode != mode:
                     raise ValueError(f"all stages for {specification!r} must use the same image mode")
@@ -319,7 +330,7 @@ class PreparedImageArtifactStore:
                 variant_metadata.append(
                     {
                         "aspect_ratio": specification.aspect_ratio,
-                        "requested_size": list(specification.requested_size),
+                        "requested_output_size": list(specification.requested_output_size),
                         "mode": images[0].mode,
                         "stages": [
                             {"visibility": visibility, "sha256": digest}
@@ -336,6 +347,7 @@ class PreparedImageArtifactStore:
             metadata = {
                 "revision": revision,
                 "image_directory": payload.name,
+                "debug_layout": debug_layout,
                 "variants": variant_metadata,
             }
             document = {"artifacts": metadata, "sha256": hashlib.sha256(_canonical_json(metadata)).hexdigest()}
@@ -371,9 +383,13 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         output_specifications: Sequence[ResolvedOutputSpecification],
+        *,
+        debug_layout: bool = False,
     ) -> PreparedImageArtifactSet | None:
         """Validate a whole expected set sequentially, retaining no decoded images."""
         expected_stages = _inputs(revision, stages)
+        if type(debug_layout) is not bool:
+            raise ValueError("debug_layout must be a boolean")
         expected_specifications = _output_specifications(output_specifications)
         stage_count = len(expected_stages)
         directory = self.root / f"revision-{revision}"
@@ -393,13 +409,15 @@ class PreparedImageArtifactStore:
             if not isinstance(document, dict) or set(document) != {"artifacts", "sha256"}:
                 raise ValueError("manifest must contain artifacts and sha256")
             metadata = document["artifacts"]
-            fields = {"revision", "image_directory", "variants"}
+            fields = {"revision", "image_directory", "debug_layout", "variants"}
             if not isinstance(metadata, dict) or set(metadata) != fields:
                 raise ValueError("manifest artifact fields are missing or unsupported")
             if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
                 raise ValueError("manifest checksum does not match")
             if type(metadata["revision"]) is not int or metadata["revision"] != revision:
                 raise ValueError("manifest revision does not match expected committed revision")
+            if type(metadata["debug_layout"]) is not bool or metadata["debug_layout"] != debug_layout:
+                raise ValueError("manifest debug-layout setting does not match the requested prepared images")
             name = metadata["image_directory"]
             if not isinstance(name, str) or not _PAYLOAD.fullmatch(name):
                 raise ValueError("invalid manifest image_directory")
@@ -416,16 +434,18 @@ class PreparedImageArtifactStore:
             for variant_index, (variant, expected_specification) in enumerate(zip(variants, expected_specifications)):
                 if (
                     not isinstance(variant, dict)
-                    or set(variant) != {"aspect_ratio", "requested_size", "mode", "stages"}
+                    or set(variant) != {"aspect_ratio", "requested_output_size", "mode", "stages"}
                     or not isinstance(variant["aspect_ratio"], str)
-                    or not isinstance(variant["requested_size"], list)
-                    or len(variant["requested_size"]) != 2
-                    or any(type(value) is not int or value <= 0 for value in variant["requested_size"])
+                    or not isinstance(variant["requested_output_size"], list)
+                    or len(variant["requested_output_size"]) != 2
+                    or any(type(value) is not int or value <= 0 for value in variant["requested_output_size"])
                     or not isinstance(variant["mode"], str)
                     or variant["mode"] not in _MODES
                 ):
                     raise ValueError(f"manifest variant {variant_index} has malformed output metadata")
-                specification = ResolvedOutputSpecification(variant["aspect_ratio"], tuple(variant["requested_size"]))
+                specification = ResolvedOutputSpecification(
+                    variant["aspect_ratio"], tuple(variant["requested_output_size"])
+                )
                 if specification != expected_specification:
                     raise ValueError(f"manifest variant {variant_index} does not match expected output specification")
                 variant_stages = variant["stages"]
