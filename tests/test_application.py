@@ -1790,7 +1790,12 @@ def test_continuous_restart_is_conservative_and_reuses_committed_snapshot(worksp
     for path in workspace.content.iterdir():
         path.unlink()
     monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
-    stages, initialized, display = run_continuously(workspace, RuntimeClock(at(10, 19)), monkeypatch)
+    stages, initialized, display = run_continuously(
+        workspace,
+        RuntimeClock(at(10, 19)),
+        monkeypatch,
+        await_publication_before_scheduling=True,
+    )
     state = workspace.load()
     assert stages == [(1, 2)]
     assert state.snapshot == first.snapshot
@@ -1983,15 +1988,29 @@ def test_continuous_initialization_retry(workspace, monkeypatch) -> None:
     ordinary(workspace)
     display = FakeDisplay()
     attempts = []
+    initialization_attempted = Event()
 
     def factory(configuration):
         attempts.append(configuration.type)
+        initialization_attempted.set()
         if len(attempts) == 1:
             raise DisplayBackendInitializationError("temporarily unavailable")
         return display
 
-    clock = RuntimeClock(at(10, 7), retries=[lambda: None])
-    stages, _, _ = run_continuously(workspace, clock, monkeypatch, backend_factory=factory)
+    clock = RuntimeClock(at(10, 7))
+
+    def shutdown_after_initialization_attempt(_deadline, shutdown, **_kwargs):
+        assert initialization_attempted.wait(1)
+        shutdown.set()
+        return True
+
+    stages, _, _ = run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        backend_factory=factory,
+        scheduling_wait=shutdown_after_initialization_attempt,
+    )
     assert stages == [(1, 0)] and len(attempts) == 1 and display.closed == 0
     assert workspace.load().revision == 1
 
@@ -2170,9 +2189,9 @@ def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(
     original = PreparedImageArtifactStore.store
     publications = []
 
-    def publish(self, revision, snapshot, images):
+    def publish(self, revision, stages, images, **kwargs):
         publications.append(revision)
-        original(self, revision, snapshot, images)
+        original(self, revision, stages, images, **kwargs)
         raise ArtifactWriteError("directory sync unconfirmed", published=True)
 
     monkeypatch.setattr(PreparedImageArtifactStore, "store", publish)
@@ -2209,7 +2228,7 @@ def test_continuous_real_scheduling_wait_is_interrupted_by_shutdown(workspace, m
     ordinary(workspace)
     clock = RuntimeClock(at(10, 7))
     clock.scheduling_wait = application.wait_for_scheduling_event
-    _, _, display = run_continuously(workspace, clock, monkeypatch)
+    _, _, display = run_continuously(workspace, clock, monkeypatch, await_publication_before_scheduling=True)
     assert clock.is_set() and display.closed == 1
     assert clock.retry_delays == [300]
 

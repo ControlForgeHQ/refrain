@@ -551,7 +551,14 @@ def _manifest_payload(directory: Path, revision: int) -> str | None:
         if not isinstance(document, dict) or set(document) != {"artifacts", "sha256"}:
             return None
         metadata = document["artifacts"]
-        if not isinstance(metadata, dict) or set(metadata) != {"revision", "image_directory", "variants"}:
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "revision",
+            "image_directory",
+            "debug_layout",
+            "variants",
+        }:
+            return None
+        if type(metadata["debug_layout"]) is not bool:
             return None
         if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
             return None
