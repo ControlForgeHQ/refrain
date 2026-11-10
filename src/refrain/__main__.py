@@ -143,14 +143,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--test-output",
         metavar="PATH",
-        help="save a full-working-canvas diagnostic PNG instead of opening the preview (requires one decoration ID)",
+        help="save a full-design-canvas diagnostic PNG instead of opening the preview (requires one decoration ID)",
     )
     parser.add_argument(
         "--test-variants",
         metavar="DIRECTORY",
         help="export all supported diagnostic variants under a new decoration-named subdirectory",
     )
-    parser.add_argument("--test-aspect", choices=("4:3", "16:9", "16:10"), help="decoration-preview aspect ratio")
+    parser.add_argument(
+        "--test-aspect",
+        choices=("4:3", "5:3", "16:9", "16:10"),
+        help="decoration-preview aspect ratio",
+    )
+    parser.add_argument(
+        "--test-resolution",
+        nargs=2,
+        type=int,
+        metavar=("WIDTH", "HEIGHT"),
+        help="requested output dimensions for headless --test-output export",
+    )
     parser.add_argument(
         "--test-quotation",
         choices=("short", "medium", "long"),
@@ -196,6 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         option
         for option, value in (
             ("--test-aspect", arguments.test_aspect),
+            ("--test-resolution", arguments.test_resolution),
             ("--test-quotation", arguments.test_quotation),
             ("--no-qr", arguments.no_qr),
             ("--no-background", arguments.no_background),
@@ -212,6 +224,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.test_output is not None and arguments.test_decoration is None:
         parser.error("--test-output is only available with --test-decoration")
+    if arguments.test_output is not None and arguments.test_aspect is None:
+        parser.error("--test-output requires an explicit --test-aspect")
+    if arguments.test_resolution is not None and arguments.test_output is None:
+        parser.error("--test-resolution is only available with --test-output")
     if arguments.test_output is not None and arguments.test_decoration == "all":
         parser.error("--test-output requires exactly one decoration ID; 'all' cannot be exported")
     if arguments.test_output is not None and arguments.test_variants is not None:
@@ -403,8 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 keep_open=_hold_open,
             )
         elif arguments.show_entry is not None:
-            output = run_show_entry(config_path, arguments.show_entry, debug_layout=arguments.debug_layout)
-            print(f"Diagnostic image saved to {output}")
+            run_show_entry(config_path, arguments.show_entry, debug_layout=arguments.debug_layout)
             return 0
         elif arguments.test_qr:
             output, _ = run_test_qr(config_path, qr_parameters)
@@ -414,7 +429,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_decoration_diagnostic(
                 config_path,
                 selection=arguments.test_decoration,
-                aspect_ratio=arguments.test_aspect or "configured",
+                aspect_ratio=arguments.test_aspect,
+                requested_output_size=(None if arguments.test_resolution is None else tuple(arguments.test_resolution)),
                 quotation=arguments.test_quotation or "short",
                 qr_enabled=False if arguments.no_qr else None,
                 background_enabled=not arguments.no_background,

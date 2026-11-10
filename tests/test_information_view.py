@@ -10,7 +10,12 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 import refrain.information_view as information_view
-from refrain import load_application_config
+from refrain import ResolvedOutputSpecification, load_application_config
+
+
+def prepare_default_information_image(configuration):
+    specification = configuration.required_output_specifications[0]
+    return information_view.prepare_information_view(configuration, (specification,))[specification][0]
 
 
 def test_prepares_complete_application_owned_image_without_user_content(tmp_path: Path, monkeypatch) -> None:
@@ -45,10 +50,11 @@ def test_prepares_complete_application_owned_image_without_user_content(tmp_path
     monkeypatch.setattr(information_view, "_draw_fitted_text", capture_fitted_text)
     monkeypatch.setattr(ImageDraw.ImageDraw, "text", capture_direct_text)
 
-    image = information_view.prepare_information_view(configuration)
+    specification = ResolvedOutputSpecification("16:9", (1920, 1080))
+    image = information_view.prepare_information_view(configuration, (specification,))[specification][0]
     try:
         assert image.mode == "RGB"
-        assert image.size == configuration.output_size
+        assert image.size == specification.requested_output_size
         assert image.getpixel((0, 0)) == (250, 249, 245)
 
         with Image.new("RGB", image.size, image.getpixel((0, 0))) as blank:
@@ -118,10 +124,10 @@ def test_missing_logo_does_not_prevent_information_view_rendering(
         read_logo_with_missing_resource,
     )
 
-    image = information_view.prepare_information_view(configuration)
+    image = prepare_default_information_image(configuration)
     try:
         assert image.mode == "RGB"
-        assert image.size == configuration.output_size
+        assert image.size == configuration.required_output_specifications[0].requested_output_size
     finally:
         image.close()
 
@@ -158,10 +164,11 @@ def test_omits_unavailable_optional_runtime_details(tmp_path: Path, monkeypatch)
         capture_fitted_text,
     )
 
-    image = information_view.prepare_information_view(configuration)
+    specification = ResolvedOutputSpecification("16:9", (1920, 1080))
+    image = information_view.prepare_information_view(configuration, (specification,))[specification][0]
     try:
         assert image.mode == "RGB"
-        assert image.size == configuration.output_size
+        assert image.size == specification.requested_output_size
 
         assert "Version 0.1.0" in fitted_text
         assert not any("build" in text for text in fitted_text)
@@ -271,12 +278,13 @@ def test_preview_example_writes_complete_png_without_application_state(tmp_path:
         assert image.size == (1920, 1080)
 
 
-def test_information_view_uses_an_explicit_configured_output_size(tmp_path: Path) -> None:
+def test_information_view_prepares_the_requested_destination_variant(tmp_path: Path) -> None:
     configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
-    configuration = replace(configuration, output_size=(1600, 1200))
+    specification = ResolvedOutputSpecification("4:3", (1600, 1200))
 
-    image = information_view.prepare_information_view(configuration)
+    images = information_view.prepare_information_view(configuration, (specification,))
+    image = images[specification][0]
     try:
-        assert image.size == configuration.output_size
+        assert image.size == specification.requested_output_size
     finally:
         image.close()

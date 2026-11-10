@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import qrcode
 
+from refrain.geometry import SUPPORTED_PRESENTATION_ASPECTS, ResolvedOutputSpecification
 from refrain.qr import (
     PRODUCTION_QR_PARAMETERS,
     QR_ALLOCATION_SIZE,
@@ -16,6 +17,14 @@ from refrain.qr import (
     resolve_qr_placement,
 )
 from refrain.qr_diagnostic import QRCalibrationParameters, create_qr_calibration_image
+
+
+def _output_specification(size: tuple[int, int]) -> ResolvedOutputSpecification:
+    width, height = size
+    for aspect_ratio, aspect in SUPPORTED_PRESENTATION_ASPECTS.items():
+        if width * aspect.height == height * aspect.width:
+            return ResolvedOutputSpecification(aspect_ratio, size)
+    raise AssertionError(f"test output size {size} does not match a supported presentation aspect")
 
 
 def test_production_qr_defaults_have_exact_geometry_and_pixel_modules() -> None:
@@ -101,8 +110,8 @@ def test_explicit_url_and_absent_url_fallback_match_standalone_qr() -> None:
         output_size=(1600, 1200),
     )
     try:
-        assert default_diagnostic.geometry.image_size == (1920, 1080)
-        assert diagnostic.geometry.image_size == (1600, 1200)
+        assert default_diagnostic.geometry.output_image_size == (1920, 1080)
+        assert diagnostic.geometry.output_image_size == (1600, 1200)
         assert explicit.geometry.version == fallback.geometry.version == 4
         with diagnostic.image.crop(
             (
@@ -134,32 +143,33 @@ def test_qr_geometry_and_capacity_failures_are_actionable() -> None:
 
 
 @pytest.mark.parametrize(
-    ("output_size", "working_size", "allocation_bounds", "module_size"),
+    ("requested_output_size", "presentation_allocation_bounds", "module_size"),
     [
-        ((1600, 1200), (3200, 2400), (1467, 1067, 1590, 1190), 3),
-        ((1920, 1080), (3840, 2160), (1787, 947, 1910, 1070), 3),
-        ((800, 600), (3200, 2400), (734, 534, 795, 595), 1),
-        ((3840, 2160), (3840, 2160), (3574, 1894, 3820, 2140), 6),
-        ((3840, 2400), (3840, 2400), (3574, 2134, 3820, 2380), 6),
+        ((1600, 1200), (1467, 1067, 1590, 1190), 3),
+        ((1920, 1080), (1787, 947, 1910, 1070), 3),
+        ((800, 600), (734, 534, 795, 595), 1),
+        ((3840, 2160), (3574, 1894, 3820, 2140), 6),
+        ((3840, 2400), (3574, 2134, 3820, 2380), 6),
     ],
 )
-def test_fixed_working_allocation_maps_to_output_and_selects_largest_module(
-    output_size: tuple[int, int],
-    working_size: tuple[int, int],
-    allocation_bounds: tuple[int, int, int, int],
+def test_fixed_design_allocation_maps_to_presentation_and_selects_largest_module(
+    requested_output_size: tuple[int, int],
+    presentation_allocation_bounds: tuple[int, int, int, int],
     module_size: int,
 ) -> None:
-    placement = resolve_qr_placement(output_size)
+    specification = _output_specification(requested_output_size)
+    design_canvas_size = SUPPORTED_PRESENTATION_ASPECTS[specification.aspect_ratio].design_canvas_size
+    placement = resolve_qr_placement(specification)
 
     assert QR_ALLOCATION_SIZE == 246
-    assert (placement.working_bounds[2] - placement.working_bounds[0]) == 246
-    assert (placement.working_bounds[3] - placement.working_bounds[1]) == 246
-    assert placement.image_size == output_size
-    assert placement.allocation_bounds == allocation_bounds
+    assert (placement.design_bounds[2] - placement.design_bounds[0]) == 246
+    assert (placement.design_bounds[3] - placement.design_bounds[1]) == 246
+    assert placement.presentation_canvas_size == requested_output_size
+    assert placement.presentation_allocation_bounds == presentation_allocation_bounds
     assert placement.module_size == module_size
     assert placement.footprint_size == (module_size * 41, module_size * 41)
-    assert placement.working_bounds[2] <= working_size[0]
-    assert placement.working_bounds[3] <= working_size[1]
+    assert placement.design_bounds[2] <= design_canvas_size[0]
+    assert placement.design_bounds[3] <= design_canvas_size[1]
 
 
 @pytest.mark.parametrize(
@@ -179,27 +189,28 @@ def test_fixed_working_allocation_maps_to_output_and_selects_largest_module(
 def test_qr_positioning_methods_resolve_each_axis_independently(
     positioning: dict[str, object], expected: tuple[int, int, int, int]
 ) -> None:
-    assert resolve_qr_placement((1600, 1200), positioning).working_bounds == expected
+    assert resolve_qr_placement(_output_specification((1600, 1200)), positioning).design_bounds == expected
 
 
 @pytest.mark.parametrize(
-    ("output_size", "horizontal_bounds", "vertical_bounds"),
+    ("requested_output_size", "horizontal_bounds", "vertical_bounds"),
     [
         ((1600, 1200), (1477, 20, 1723, 266), (20, 1077, 266, 1323)),
         ((1920, 1080), (1797, 20, 2043, 266), (20, 957, 266, 1203)),
         ((3840, 2400), (1797, 20, 2043, 266), (20, 1077, 266, 1323)),
     ],
 )
-def test_centering_uses_the_ratio_specific_working_canvas(
-    output_size: tuple[int, int],
+def test_centering_uses_the_ratio_specific_design_canvas(
+    requested_output_size: tuple[int, int],
     horizontal_bounds: tuple[int, int, int, int],
     vertical_bounds: tuple[int, int, int, int],
 ) -> None:
-    horizontal = resolve_qr_placement(output_size, {"qr_centered": "horizontal", "qr_from_top": 20})
-    vertical = resolve_qr_placement(output_size, {"qr_from_left": 20, "qr_centered": "vertical"})
+    specification = _output_specification(requested_output_size)
+    horizontal = resolve_qr_placement(specification, {"qr_centered": "horizontal", "qr_from_top": 20})
+    vertical = resolve_qr_placement(specification, {"qr_from_left": 20, "qr_centered": "vertical"})
 
-    assert horizontal.working_bounds == horizontal_bounds
-    assert vertical.working_bounds == vertical_bounds
+    assert horizontal.design_bounds == horizontal_bounds
+    assert vertical.design_bounds == vertical_bounds
 
 
 @pytest.mark.parametrize(
@@ -223,13 +234,15 @@ def test_centering_uses_the_ratio_specific_working_canvas(
 )
 def test_invalid_or_conflicting_qr_positioning_is_rejected(positioning: dict[str, object]) -> None:
     with pytest.raises(QRCodePlacementError):
-        resolve_qr_placement((1600, 1200), positioning)
+        resolve_qr_placement(_output_specification((1600, 1200)), positioning)
 
 
 def test_small_valid_allocation_centers_footprint_with_half_up_rounding() -> None:
-    placement = resolve_qr_placement((548, 411), {"qr_from_left": 1, "qr_from_top": 3})
+    placement = resolve_qr_placement(
+        ResolvedOutputSpecification("4:3", (548, 411)), {"qr_from_left": 1, "qr_from_top": 3}
+    )
 
-    assert placement.allocation_bounds == (0, 1, 42, 43)
+    assert placement.presentation_allocation_bounds == (0, 1, 42, 43)
     assert placement.allocation_size == (42, 42)
     assert placement.module_size == 1
     assert placement.bounds == (1, 2, 41, 42)
@@ -237,11 +250,11 @@ def test_small_valid_allocation_centers_footprint_with_half_up_rounding() -> Non
 
 def test_insufficient_output_resolution_suppresses_complete_symbol() -> None:
     with pytest.raises(QRCodePlacementError, match="complete 41-module"):
-        resolve_qr_placement((80, 60))
+        resolve_qr_placement(ResolvedOutputSpecification("4:3", (80, 60)))
 
 
 def test_production_raster_uses_resolved_integer_fit_and_allocation() -> None:
-    placement = resolve_qr_placement((1600, 1200))
+    placement = resolve_qr_placement(_output_specification((1600, 1200)))
     result = render_qr_code(PRODUCTION_QR_PARAMETERS, (1600, 1200), placement)
     try:
         assert result.geometry.version == 4
@@ -249,7 +262,7 @@ def test_production_raster_uses_resolved_integer_fit_and_allocation() -> None:
         assert result.geometry.module_size == 3
         assert result.geometry.footprint_size == (123, 123)
         assert result.geometry.bounds == (1467, 1067, 1589, 1189)
-        assert result.geometry.allocation_bounds == (1467, 1067, 1590, 1190)
+        assert result.geometry.presentation_allocation_bounds == (1467, 1067, 1590, 1190)
         assert result.image.mode == "RGB"
         assert set(result.image.get_flattened_data()) <= {(0, 0, 0), (255, 255, 255)}
     finally:
@@ -257,7 +270,7 @@ def test_production_raster_uses_resolved_integer_fit_and_allocation() -> None:
 
 
 def test_production_raster_encodes_the_fixed_repository_payload() -> None:
-    placement = resolve_qr_placement((1920, 1080))
+    placement = resolve_qr_placement(_output_specification((1920, 1080)))
     result = render_qr_code(PRODUCTION_QR_PARAMETERS, (1920, 1080), placement)
     expected = qrcode.QRCode(version=4, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=0)
     expected.add_data(REPOSITORY_URL.encode("utf-8"), optimize=0)

@@ -49,6 +49,7 @@ def create_display_backend(
     *,
     image_server_host: str = "127.0.0.1",
     image_server_port: int = 8080,
+    image_server_output_ids: tuple[str, ...] = ("default",),
 ) -> DisplayBackend:
     """Construct an explicitly selected built-in display backend."""
     if backend == "window":
@@ -62,7 +63,11 @@ def create_display_backend(
     if backend == "image-server":
         from .image_server import ImageServerDisplayBackend
 
-        return ImageServerDisplayBackend(host=image_server_host, port=image_server_port)
+        return ImageServerDisplayBackend(
+            host=image_server_host,
+            port=image_server_port,
+            output_ids=image_server_output_ids,
+        )
     raise DisplayBackendError(
         f"unsupported display backend {backend!r}; choose 'window', 'waveshare-13in3-e', or 'image-server'"
     )

@@ -653,7 +653,8 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.content_directory == tmp_path / "content"
     assert config.reveal.source == time(12)
     assert config.reveal.attribution == time(18)
-    assert config.output_size == (1920, 1080)
+    assert config.required_output_specifications[0].aspect_ratio == "16:9"
+    assert config.required_output_specifications[0].requested_output_size == (1920, 1080)
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.default_fonts == ("lora",)
     assert config.min_font_size == 28
@@ -667,62 +668,60 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.fonts["orbitron"].path.name == "Orbitron-Regular.ttf"
 
 
-@pytest.mark.parametrize(
-    ("output_size", "expected"),
-    [
-        ([1600, 1200], (1600, 1200)),
-        ([1920, 1080], (1920, 1080)),
-        ([3840, 2400], (3840, 2400)),
-        ([1280, 960], (1280, 960)),
-        ([1600, 900], (1600, 900)),
-        ([808, 505], (808, 505)),
-    ],
-)
-def test_output_size_accepts_supported_exact_aspect_ratios(
-    tmp_path: Path, output_size: list[int], expected: tuple[int, int]
-) -> None:
+def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
+    config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
+
+    output = config.display_backends[0].outputs[0]
+    assert output.identifier == "window"
+    assert output.output_specification.aspect_ratio == "16:9"
+    assert output.output_specification.requested_output_size == (1920, 1080)
+
+
+def test_window_destination_accepts_explicit_output_specification(tmp_path: Path) -> None:
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
-                layout={
-                    "output_size": output_size,
-                    "fonts": {"default": ["lora"]},
-                    "text": {"min_font_size": 1, "max_font_size": 2},
-                }
+                display={"backends": [{"type": "window", "aspect_ratio": "4:3", "resolution": [1600, 1200]}]}
             ),
         )
     )
 
-    assert config.output_size == expected
+    output = config.display_backends[0].outputs[0]
+    assert output.output_specification.aspect_ratio == "4:3"
+    assert output.output_specification.requested_output_size == (1600, 1200)
 
 
 @pytest.mark.parametrize(
-    "output_size",
-    [
-        [0, 1200],
-        [-1, 1200],
-        [1920, 0],
-        [1920, -1],
-        [1920.0, 1080],
-        [True, 1080],
-        [1920],
-        [1920, 1080, 1],
-        "1920x1080",
-        [1000, 1000],
-        [1920, 1100],
-    ],
+    "fields",
+    [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}],
 )
-def test_invalid_output_sizes_are_rejected(tmp_path: Path, output_size: object) -> None:
-    data = configuration_data(
-        layout={
-            "output_size": output_size,
-            "fonts": {"default": ["lora"]},
-            "text": {"min_font_size": 1, "max_font_size": 2},
-        }
+def test_window_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
+    data = configuration_data(display={"backends": [{"type": "window", **fields}]})
+
+    fields_present = diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+    assert "display.backends[0]" in fields_present
+
+
+def test_waveshare_destination_is_fixed_to_4_3_1600_by_1200(tmp_path: Path) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(display={"backends": [{"type": "waveshare-13in3-e"}]}),
+        )
     )
 
-    assert "layout.output_size" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+    specification = config.display_backends[0].outputs[0].output_specification
+    assert (specification.aspect_ratio, specification.requested_output_size) == ("4:3", (1600, 1200))
+
+
+@pytest.mark.parametrize("override", [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}])
+def test_waveshare_rejects_output_overrides(tmp_path: Path, override: dict[str, object]) -> None:
+    data = configuration_data(display={"backends": [{"type": "waveshare-13in3-e", **override}]})
+
+    assert f"display.backends[0].{next(iter(override))}" in diagnostic_fields(
+        write_config(tmp_path / "config.yaml", data)
+    )
 
 
 def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> None:
@@ -774,7 +773,10 @@ def test_representative_configuration_example_loads() -> None:
         "simple-border",
         "top-bottom-borders",
     )
-    assert config.output_size == (1920, 1080)
+    assert [(spec.aspect_ratio, spec.requested_output_size) for spec in config.required_output_specifications] == [
+        ("16:10", (3840, 2400)),
+        ("16:9", (1920, 1080)),
+    ]
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.information_view_duration == 5
 
@@ -833,7 +835,7 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
         default_config = load_application_config(
             write_config(
                 tmp_path / "default.yaml",
-                configuration_data(display={"backends": [{"type": "image-server"}]}),
+                configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": "default"}]}]}),
             )
         )
     configured = load_application_config(
@@ -841,7 +843,14 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
             tmp_path / "configured.yaml",
             configuration_data(
                 display={
-                    "backends": [{"type": "image-server", "host": "0.0.0.0", "port": 8123}],
+                    "backends": [
+                        {
+                            "type": "image-server",
+                            "host": "0.0.0.0",
+                            "port": 8123,
+                            "outputs": [{"id": "default"}],
+                        }
+                    ],
                 }
             ),
         )
@@ -851,8 +860,95 @@ def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Pat
     assert "display.backends[0].port" in caplog.text
     assert default_config.display_backends[0].host == "127.0.0.1"
     assert default_config.display_backends[0].port == 8080
+    default_output = default_config.display_backends[0].outputs[0].output_specification
+    assert (default_output.aspect_ratio, default_output.requested_output_size) == ("16:10", (3840, 2400))
     assert configured.display_backends[0].host == "0.0.0.0"
     assert configured.display_backends[0].port == 8123
+
+
+@pytest.mark.parametrize("outputs", [None, [], "default"])
+def test_image_server_requires_nonempty_outputs(tmp_path: Path, outputs: object) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(display={"backends": [{"type": "image-server", "outputs": outputs}]}),
+    )
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(item.field == "display.backends[0].outputs" for item in error.value.diagnostics)
+
+
+@pytest.mark.parametrize("output_id", ["", " ", None, 1])
+def test_image_server_output_ids_must_be_nonempty_strings(tmp_path: Path, output_id: object) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": output_id}]}]}),
+    )
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(item.field == "display.backends[0].outputs[0].id" for item in error.value.diagnostics)
+
+
+def test_image_server_rejects_duplicate_output_ids(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(
+            display={"backends": [{"type": "image-server", "outputs": [{"id": "room"}, {"id": "room"}]}]}
+        ),
+    )
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(item.field == "display.backends[0].outputs[1].id" for item in error.value.diagnostics)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}],
+)
+def test_image_server_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": "default", **fields}]}]}),
+    )
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(item.field == "display.backends[0].outputs[0]" for item in error.value.diagnostics)
+
+
+def test_image_server_outputs_resolve_independently_and_share_duplicate_specifications(tmp_path: Path) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                display={
+                    "backends": [
+                        {"type": "window"},
+                        {
+                            "type": "image-server",
+                            "outputs": [
+                                {"id": "default"},
+                                {"id": "wide", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
+                                {"id": "portrait-ish", "aspect_ratio": "4:3", "resolution": [1600, 1200]},
+                            ],
+                        },
+                    ]
+                }
+            ),
+        )
+    )
+
+    assert {
+        (specification.aspect_ratio, specification.requested_output_size)
+        for specification in config.required_output_specifications
+    } == {("16:9", (1920, 1080)), ("16:10", (3840, 2400)), ("4:3", (1600, 1200))}
+    assert len(config.required_output_specifications) == 3
 
 
 @pytest.mark.parametrize(
@@ -878,7 +974,7 @@ def test_invalid_image_server_settings_are_recoverable(
                 display={
                     "backends": [
                         {"type": "window"},
-                        {"type": "image-server", **image_server},
+                        {"type": "image-server", "outputs": [{"id": "default"}], **image_server},
                     ]
                 }
             ),
@@ -1155,7 +1251,9 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.output_size == (1920, 1080)
+    assert [(spec.aspect_ratio, spec.requested_output_size) for spec in config.required_output_specifications] == [
+        ("16:9", (1920, 1080))
+    ]
     assert "layout.quotation_region" in caplog.text
     assert "ignored" in caplog.text
 

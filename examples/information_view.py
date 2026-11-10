@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from refrain.config import load_application_config
+from refrain.geometry import ResolvedOutputSpecification
 from refrain.information_view import prepare_information_view
 
 
@@ -17,7 +18,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     configuration = load_application_config(arguments.config)
-    image = prepare_information_view(configuration)
+    specification = ResolvedOutputSpecification("16:9", (1920, 1080))
+    image = prepare_information_view(configuration, (specification,))[specification][0]
     try:
         image.save(arguments.output, format="PNG")
     finally:

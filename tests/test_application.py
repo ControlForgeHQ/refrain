@@ -29,6 +29,7 @@ from refrain import (
     NoEligibleQuotationError,
     PersistentStateStore,
     PreparedImageArtifactStore,
+    ResolvedOutputSpecification,
     StateCommitError,
     StateRecoveryError,
     run_application,
@@ -98,10 +99,14 @@ class FakeDisplay:
         self.closed = 0
 
     def update(self, image: Image.Image) -> None:
+        assert isinstance(image, Image.Image)
         if self.fail_update:
             raise DisplayBackendUpdateError("update failed")
         self.sizes.append(image.size)
         self.images.append(image.copy())
+
+    def update_output(self, _output_id: str, image: Image.Image) -> None:
+        self.update(image)
 
     def close(self) -> None:
         self.closed += 1
@@ -470,9 +475,9 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert dict(snapshot.reveal_schedule) == {"quotation": "06:00", "source": "12:00", "attribution": "18:00"}
     assert state.repetition_history == {snapshot.quotation_identity}
     assert len(workspace.history_records()) == 1
-    assert display.sizes == [(1920, 1080)] and display.closed == 1
-    assert display.images[0].getpixel((1787, 947)) == (255, 255, 255)
-    assert display.images[0].getpixel((1799, 959)) == (0, 0, 0)
+    assert display.sizes == [(1600, 1200)] and display.closed == 1
+    assert display.images[0].getpixel((1467, 1067)) == (255, 255, 255)
+    assert display.images[0].getpixel((1479, 1079)) == (0, 0, 0)
     assert len(png_files(workspace.artifacts)) == 3
 
 
@@ -485,7 +490,7 @@ def test_daily_snapshot_does_not_persist_qr_rendering_parameters(workspace: Work
     assert "quiet_zone" not in serialized
 
 
-def test_debug_layout_does_not_guess_geometry_for_cached_images(workspace: Workspace, caplog) -> None:
+def test_debug_layout_uses_presentation_bounds_for_cached_images(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
     _, baseline_display = workspace.run(at(10, 7))
     cached = {path: path.read_bytes() for path in png_files(workspace.artifacts)}
@@ -493,19 +498,19 @@ def test_debug_layout_does_not_guess_geometry_for_cached_images(workspace: Works
 
     _, debug_display = workspace.run(at(10, 7), debug_layout=True)
 
-    assert baseline_display.images[0].getpixel((160, 300)) == (255, 255, 255)
-    assert debug_display.images[0].tobytes() == baseline_display.images[0].tobytes()
-    assert "resolved geometry is unavailable" in caplog.text
-    assert {path: path.read_bytes() for path in png_files(workspace.artifacts)} == cached
+    assert baseline_display.images[0].getpixel((192, 162)) == (255, 255, 255)
+    assert debug_display.images[0].getpixel((192, 162)) == (127, 127, 127)
+    updated_paths = set(png_files(workspace.artifacts))
+    assert set(cached).issubset(updated_paths)
+    assert len(updated_paths - set(cached)) == len(cached)
+    assert "resolved geometry is unavailable" not in caplog.text
     assert workspace.load() == committed
     for display in (baseline_display, debug_display):
         for image in display.images:
             image.close()
 
 
-def test_debug_layout_does_not_guess_region_for_cached_artifact_after_resource_changes(
-    workspace: Workspace, caplog
-) -> None:
+def test_debug_layout_uses_current_presentation_bounds_after_resource_changes(workspace: Workspace, caplog) -> None:
     package = workspace.root / "assets" / "decorations" / "custom"
     package.mkdir(parents=True)
     Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)).save(package / "overlay.png")
@@ -534,16 +539,18 @@ def test_debug_layout_does_not_guess_region_for_cached_artifact_after_resource_c
     _, debug_display = workspace.run(at(10, 7), debug_layout=True)
 
     assert committed.snapshot.decoration == "custom"
-    assert debug_display.images[0].tobytes() == baseline_display.images[0].tobytes()
-    assert {path: path.read_bytes() for path in png_files(workspace.artifacts)} == cached
-    assert "resolved geometry is unavailable" in caplog.text
+    assert debug_display.images[0].getpixel((768, 540)) == (127, 127, 127)
+    updated_paths = set(png_files(workspace.artifacts))
+    assert set(cached).issubset(updated_paths)
+    assert len(updated_paths - set(cached)) == len(cached)
+    assert "resolved geometry is unavailable" not in caplog.text
     assert workspace.load() == committed
     for display in (baseline_display, debug_display):
         for image in display.images:
             image.close()
 
 
-def test_debug_layout_uses_prepared_automatic_decoration_region_and_skips_unknown_cached_region(
+def test_debug_layout_reuses_prepared_automatic_decoration_region_for_cached_artifact(
     workspace: Workspace, caplog
 ) -> None:
     package = workspace.root / "assets" / "decorations" / "custom"
@@ -566,7 +573,7 @@ def test_debug_layout_uses_prepared_automatic_decoration_region_and_skips_unknow
     first, first_display = workspace.run(at(10, 7), debug_layout=True)
     assert first.state.snapshot.decoration is None
     with Image.open(png_files(workspace.artifacts)[0]) as prepared:
-        assert first_display.images[0].getpixel((384, 324)) != prepared.getpixel((384, 324))
+        assert first_display.images[0].getpixel((384, 324)) == prepared.getpixel((384, 324))
         assert first_display.images[0].getpixel((160, 180)) == prepared.getpixel((160, 180))
 
     workspace.config.write_text(
@@ -583,7 +590,7 @@ def test_debug_layout_uses_prepared_automatic_decoration_region_and_skips_unknow
     with Image.open(png_files(workspace.artifacts)[0]) as prepared:
         assert second_display.images[0].tobytes() == prepared.tobytes()
     assert second.state == first.state
-    assert "resolved geometry is unavailable" in caplog.text
+    assert "resolved geometry is unavailable" not in caplog.text
 
     for display in (first_display, second_display):
         for image in display.images:
@@ -596,17 +603,17 @@ def test_one_shot_debug_layout_only_outlines_the_daily_presentation(workspace: W
     prepared_information = []
     prepare_information = application.prepare_information_view
 
-    def capture_information(configuration):
-        image = prepare_information(configuration)
-        prepared_information.append(image.copy())
-        return image
+    def capture_information(configuration, output_specifications):
+        images = prepare_information(configuration, output_specifications)
+        prepared_information.append(images[output_specifications[0]][0].copy())
+        return images
 
     monkeypatch.setattr(application, "prepare_information_view", capture_information)
 
     result, display = workspace.run(at(10, 7), debug_layout=True)
 
     assert result.state.revision == 1
-    assert display.sizes == [(1920, 1080), (1920, 1080)]
+    assert display.sizes == [(1600, 1200), (1600, 1200)]
     assert display.images[0].tobytes() != display.images[1].tobytes()
     assert display.images[0].tobytes() == prepared_information[0].tobytes()
     assert display.images[1].getpixel((192, 162)) == (127, 127, 127)
@@ -636,7 +643,7 @@ def test_one_shot_startup_advances_reveal_due_during_information_interval(worksp
     state = workspace.load()
     assert result.presented_stage == 1
     assert state.highest_reveal_stage == 1
-    assert [image.size for image in display.images] == [(1920, 1080), (1920, 1080)]
+    assert [image.size for image in display.images] == [(1600, 1200), (1600, 1200)]
     assert display.images[0].tobytes() != display.images[1].tobytes()
     assert state.revision == 1 and len(workspace.history_records()) == 1
 
@@ -683,12 +690,12 @@ def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Works
     assert "reveal.quotation" in caplog.text
 
 
-def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspace: Workspace) -> None:
+def test_startup_publishes_matching_prepared_variants_to_configured_backends(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
             '    - type: "waveshare-13in3-e"',
-            '    - type: "window"\n    - type: "image-server"',
+            '    - type: "window"\n    - type: "image-server"\n      outputs:\n        - id: "default"',
         ),
         encoding="utf-8",
     )
@@ -708,9 +715,10 @@ def test_startup_publishes_one_prepared_image_to_all_configured_backends(workspa
     )
 
     assert result.state.revision == 1
-    assert all(display.sizes == [(1920, 1080)] and display.closed == 1 for display in displays.values())
-    assert displays["window"].images[0].tobytes() == displays["image-server"].images[0].tobytes()
+    assert displays["window"].sizes == [(1920, 1080)] and displays["window"].closed == 1
+    assert displays["image-server"].sizes == [(3840, 2400)] and displays["image-server"].closed == 1
     assert displays["window"].images[0].getpixel((192, 162)) == (127, 127, 127)
+    assert displays["image-server"].images[0].getpixel((384, 324)) == (127, 127, 127)
     for display in displays.values():
         for image in display.images:
             image.close()
@@ -729,7 +737,7 @@ def test_history_write_failure_does_not_interrupt_startup_presentation(
     result, display = workspace.run(at(10, 7))
 
     assert result.state.revision == 1
-    assert display.sizes == [(1920, 1080)]
+    assert display.sizes == [(1600, 1200)]
     assert len(png_files(workspace.artifacts)) == 3
     assert "was not recorded in global history" in caplog.text
 
@@ -968,7 +976,7 @@ def test_missing_or_corrupt_artifacts_are_recovered(workspace: Workspace, damage
         png_files(workspace.artifacts)[0].write_bytes(b"not a png")
     _, display = workspace.run(at(10, 9))
     assert workspace.load() == first
-    assert display.sizes == [(1920, 1080)]
+    assert display.sizes == [(1600, 1200)]
     assert len(png_files(workspace.artifacts)) >= 3
 
 
@@ -1047,6 +1055,95 @@ def test_default_timestamp_is_used_when_omitted(workspace: Workspace) -> None:
     display = FakeDisplay()
     run_startup(workspace.config, workspace.state, workspace.artifacts, backend_factory=lambda c: display)
     assert workspace.load().revision == 1
+
+
+def test_startup_reconciles_changed_and_added_image_server_outputs_without_reselection(
+    workspace: Workspace,
+) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(
+        _CONFIG.replace(
+            '- type: "waveshare-13in3-e"',
+            "- type: image-server\n"
+            "      outputs:\n"
+            "        - id: default\n"
+            '          aspect_ratio: "16:10"\n'
+            "          resolution: [800, 500]",
+        ),
+        encoding="utf-8",
+    )
+
+    class OutputRecordingBackend:
+        def __init__(self) -> None:
+            self.images: dict[str, Image.Image] = {}
+
+        def update_output(self, output_id: str, image: Image.Image) -> None:
+            assert isinstance(image, Image.Image)
+            self.images[output_id] = image.copy()
+
+        def update(self, image: Image.Image) -> None:
+            raise AssertionError("image-server destinations require named output updates")
+
+        def close(self) -> None:
+            pass
+
+    first_backend = OutputRecordingBackend()
+    first_result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 19),
+        backend_factory=lambda _configuration: first_backend,
+    )
+    committed = workspace.load()
+    assert first_result.state == committed
+    assert set(first_backend.images) == {"default"}
+    for image in first_backend.images.values():
+        image.close()
+
+    workspace.config.write_text(
+        _CONFIG.replace(
+            '- type: "waveshare-13in3-e"',
+            "- type: image-server\n      outputs:\n"
+            '        - id: default\n          aspect_ratio: "16:9"\n          resolution: [800, 450]\n'
+            '        - id: kitchen\n          aspect_ratio: "4:3"\n          resolution: [640, 480]\n'
+            '        - id: hallway\n          aspect_ratio: "16:10"\n          resolution: [800, 500]',
+        ),
+        encoding="utf-8",
+    )
+    current_backend = OutputRecordingBackend()
+    second_result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 19),
+        backend_factory=lambda _configuration: current_backend,
+    )
+    state = workspace.load()
+    configuration = application.load_application_config(workspace.config)
+    expected_specifications = {
+        "default": ResolvedOutputSpecification("16:9", (800, 450)),
+        "kitchen": ResolvedOutputSpecification("4:3", (640, 480)),
+        "hallway": ResolvedOutputSpecification("16:10", (800, 500)),
+    }
+
+    assert second_result.state == committed == state
+    assert state.revision == committed.revision
+    assert state.highest_reveal_stage == committed.highest_reveal_stage
+    assert set(current_backend.images) == set(expected_specifications)
+    artifacts = PreparedImageArtifactStore(workspace.artifacts).load(
+        state.revision,
+        application.resolve_reveal_stages(state.snapshot),
+        configuration.required_output_specifications,
+    )
+    assert artifacts is not None
+    assert set(artifacts.output_specifications) == set(expected_specifications.values())
+    for output_id, specification in expected_specifications.items():
+        image = current_backend.images[output_id]
+        assert image.size == specification.requested_output_size
+        with artifacts.load_stage(specification, state.highest_reveal_stage) as prepared:
+            assert image.tobytes() == prepared.tobytes()
+        image.close()
 
 
 def test_display_initialization_failure_preserves_state(workspace: Workspace) -> None:
@@ -1310,10 +1407,11 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
             self.all_unavailable = False
             instances.append(self)
 
-        def publish(self, identity, image):
+        def publish(self, identity, images):
             self.requested.append(identity)
             self.desired_identity = identity
-            image.close()
+            for image in images.values():
+                image.close()
             if acknowledge_information_view and identity == application._INFORMATION_VIEW_IDENTITY:
                 self.acknowledged.add(identity)
 
@@ -1420,7 +1518,7 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
         .replace("duration: 0", "duration: 2")
         .replace(
             '    - type: "waveshare-13in3-e"',
-            '    - type: "window"\n    - type: "image-server"',
+            '    - type: "window"\n    - type: "image-server"\n      outputs:\n        - id: "default"',
         ),
         encoding="utf-8",
     )
@@ -1482,8 +1580,8 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
         release_slow.set()
 
     assert len(fast.images) == len(slow.images) == 2
-    assert fast.images[0].tobytes() == slow.images[0].tobytes()
-    assert fast.images[1].tobytes() == slow.images[1].tobytes()
+    assert [image.size for image in fast.images] == [(1920, 1080), (1920, 1080)]
+    assert [image.size for image in slow.images] == [(3840, 2400), (3840, 2400)]
     assert fast.images[0].tobytes() != fast.images[1].tobytes()
     assert workspace.load().revision == 2
     assert workspace.load().highest_reveal_stage == 2
@@ -1499,7 +1597,9 @@ def test_information_view_preparation_failure_falls_back_to_daily_presentation(
     monkeypatch.setattr(
         application,
         "prepare_information_view",
-        lambda _configuration: (_ for _ in ()).throw(InformationViewPreparationError("render failed")),
+        lambda _configuration, _output_specifications: (_ for _ in ()).throw(
+            InformationViewPreparationError("render failed")
+        ),
     )
     clock = RuntimeClock(at(10, 7))
     display = FakeDisplay()
@@ -1508,16 +1608,77 @@ def test_information_view_preparation_failure_falls_back_to_daily_presentation(
         deadline = monotonic() + 2
         while not display.sizes and monotonic() < deadline:
             sleep(0.01)
-        assert display.sizes == [(1920, 1080)]
+        assert display.sizes == [(1600, 1200)]
         clock.set()
         return True
 
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, display, scheduling_wait=wait_for_daily_image)
 
     assert stages == [(1, 0)]
-    assert display.sizes == [(1920, 1080)]
+    assert display.sizes == [(1600, 1200)]
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
+
+
+def test_information_view_publication_uses_and_releases_pillow_images(workspace: Workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
+    prepared_images = []
+    prepare = application.prepare_information_view
+
+    def capture(configuration, output_specifications):
+        variants = prepare(configuration, output_specifications)
+        prepared_images.extend(images[-1] for images in variants.values())
+        return variants
+
+    class TypeCheckingDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            assert isinstance(image, Image.Image)
+            super().update(image)
+
+    monkeypatch.setattr(application, "prepare_information_view", capture)
+    display = TypeCheckingDisplay()
+    run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        now=at(10, 7),
+        backend_factory=lambda _configuration: display,
+        wait=lambda _duration: None,
+    )
+
+    assert len(display.images) == 2
+    assert len(prepared_images) == 1
+    with pytest.raises(ValueError, match="closed"):
+        prepared_images[0].getpixel((0, 0))
+    for image in display.images:
+        image.close()
+
+
+def test_information_view_images_close_if_publication_never_takes_ownership(workspace: Workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
+    generated = []
+
+    def prepare(_configuration, output_specifications):
+        images = {}
+        for specification in output_specifications:
+            image = Image.new("RGB", specification.requested_output_size, "white")
+            generated.append(image)
+            images[specification] = (image,)
+        return images
+
+    def fail_coordinator(*_args, **_kwargs):
+        raise RuntimeError("coordinator initialization failed")
+
+    monkeypatch.setattr(application, "prepare_information_view", prepare)
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", fail_coordinator)
+    with pytest.raises(RuntimeError, match="coordinator initialization failed"):
+        run_startup(workspace.config, workspace.state, workspace.artifacts, now=at(10, 7))
+
+    assert len(generated) == 1
+    with pytest.raises(ValueError, match="closed"):
+        generated[0].getpixel((0, 0))
 
 
 def test_shutdown_during_information_publication_releases_backend_safely(workspace: Workspace) -> None:
@@ -1600,7 +1761,8 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
             '    - type: "waveshare-13in3-e"',
-            f'    - type: "window"\n    - type: "image-server"\n' f'      host: "127.0.0.1"\n      port: {port}',
+            f'    - type: "window"\n    - type: "image-server"\n'
+            f'      host: "127.0.0.1"\n      port: {port}\n      outputs:\n        - id: "default"',
         ),
         encoding="utf-8",
     )
@@ -1633,9 +1795,11 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
         deadline = monotonic() + 4
         while monotonic() < deadline:
             try:
-                with urlopen(f"http://127.0.0.1:{port}/display/current", timeout=0.25) as response:
-                    if response.status == 200 and response.read() == expected:
-                        return
+                with urlopen(f"http://127.0.0.1:{port}/display/default/current", timeout=0.25) as response:
+                    if response.status == 200:
+                        with Image.open(BytesIO(response.read())) as published, Image.open(BytesIO(expected)) as image:
+                            if published.size == image.size and published.tobytes() == image.tobytes():
+                                return
             except OSError:
                 pass
             sleep(0.02)
@@ -1648,7 +1812,11 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
         wait_count += 1
         assert slow_started.wait(2)
         stage = wait_count - 1
-        expected = next(workspace.artifacts.rglob(f"stage-{stage}.png")).read_bytes()
+        expected = next(
+            path.read_bytes()
+            for path in workspace.artifacts.rglob(f"stage-{stage}.png")
+            if "variant-16-10-3840x2400" in path.parts
+        )
         read_until(expected)
         if wait_count == 1:
             clock.move(at(10, 12))
@@ -1714,14 +1882,22 @@ def test_window_and_image_server_publish_independently() -> None:
     expected = Image.new("RGB", (16, 12), (31, 47, 59))
     identity = (1, 0)
     try:
-        coordinator.publish(identity, expected.copy())
+        window_specification = ResolvedOutputSpecification("16:9", (1920, 1080))
+        server_specification = ResolvedOutputSpecification("16:10", (3840, 2400))
+        coordinator.publish(
+            identity,
+            {
+                window_specification: Image.new("RGB", window_specification.requested_output_size, (31, 47, 59)),
+                server_specification: Image.new("RGB", server_specification.requested_output_size, (31, 47, 59)),
+            },
+        )
         assert update_started.wait(2)
         deadline = monotonic() + 4
         while monotonic() < deadline:
-            if coordinator.acknowledgements["image-server"] == identity:
-                with urlopen(f"http://127.0.0.1:{port}/display/current", timeout=1) as response:
+            if coordinator.acknowledgements["image-server:default"] == identity:
+                with urlopen(f"http://127.0.0.1:{port}/display/default/current", timeout=1) as response:
                     published = Image.open(BytesIO(response.read()))
-                    assert published.size == expected.size
+                    assert published.size == server_specification.requested_output_size
                     assert published.getpixel((0, 0)) == expected.getpixel((0, 0))
                 break
             sleep(0.02)
@@ -1774,7 +1950,12 @@ def test_continuous_restart_is_conservative_and_reuses_committed_snapshot(worksp
     for path in workspace.content.iterdir():
         path.unlink()
     monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
-    stages, initialized, display = run_continuously(workspace, RuntimeClock(at(10, 19)), monkeypatch)
+    stages, initialized, display = run_continuously(
+        workspace,
+        RuntimeClock(at(10, 19)),
+        monkeypatch,
+        await_publication_before_scheduling=True,
+    )
     state = workspace.load()
     assert stages == [(1, 2)]
     assert state.snapshot == first.snapshot
@@ -1911,12 +2092,27 @@ def test_continuous_recovers_artifacts_damaged_between_reveals(workspace, monkey
 
 def test_continuous_display_retry_without_event_or_reselection(workspace, monkeypatch) -> None:
     ordinary(workspace)
-    display = FakeDisplay(fail_update=True)
-    clock = RuntimeClock(at(10, 7), retries=[lambda: setattr(display, "fail_update", False)])
-    stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
+
+    class RetryOnceDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            if self.fail_update:
+                self.fail_update = False
+                raise DisplayBackendUpdateError("update failed")
+            super().update(image)
+
+    display = RetryOnceDisplay(fail_update=True)
+    clock = RuntimeClock(at(10, 7))
+    stages, initialized, _ = run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        display,
+        await_publication_before_scheduling=True,
+    )
     assert stages == [(1, 0)] and clock.retry_delays == []
     assert workspace.load().revision == len(workspace.history_records()) == 1
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
+    assert display.sizes == [(1600, 1200)]
 
 
 def test_continuous_failed_display_skips_to_newer_desired_selection(workspace, monkeypatch) -> None:
@@ -1952,15 +2148,29 @@ def test_continuous_initialization_retry(workspace, monkeypatch) -> None:
     ordinary(workspace)
     display = FakeDisplay()
     attempts = []
+    initialization_attempted = Event()
 
     def factory(configuration):
         attempts.append(configuration.type)
+        initialization_attempted.set()
         if len(attempts) == 1:
             raise DisplayBackendInitializationError("temporarily unavailable")
         return display
 
-    clock = RuntimeClock(at(10, 7), retries=[lambda: None])
-    stages, _, _ = run_continuously(workspace, clock, monkeypatch, backend_factory=factory)
+    clock = RuntimeClock(at(10, 7))
+
+    def shutdown_after_initialization_attempt(_deadline, shutdown, **_kwargs):
+        assert initialization_attempted.wait(1)
+        shutdown.set()
+        return True
+
+    stages, _, _ = run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        backend_factory=factory,
+        scheduling_wait=shutdown_after_initialization_attempt,
+    )
     assert stages == [(1, 0)] and len(attempts) == 1 and display.closed == 0
     assert workspace.load().revision == 1
 
@@ -2029,7 +2239,7 @@ def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, 
         )
     assert stages == [(1, 0)] and display.closed == 1
     assert clock.retry_delays == []
-    assert caplog.text.count("Display backend waveshare-13in3-e update failed") == 1
+    assert caplog.text.count("Display destination waveshare-13in3-e:waveshare-13in3-e update failed") == 1
     assert workspace.load().revision == 1 and png_files(workspace.artifacts)
 
 
@@ -2139,9 +2349,9 @@ def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(
     original = PreparedImageArtifactStore.store
     publications = []
 
-    def publish(self, revision, snapshot, images):
+    def publish(self, revision, stages, images, **kwargs):
         publications.append(revision)
-        original(self, revision, snapshot, images)
+        original(self, revision, stages, images, **kwargs)
         raise ArtifactWriteError("directory sync unconfirmed", published=True)
 
     monkeypatch.setattr(PreparedImageArtifactStore, "store", publish)
@@ -2178,7 +2388,7 @@ def test_continuous_real_scheduling_wait_is_interrupted_by_shutdown(workspace, m
     ordinary(workspace)
     clock = RuntimeClock(at(10, 7))
     clock.scheduling_wait = application.wait_for_scheduling_event
-    _, _, display = run_continuously(workspace, clock, monkeypatch)
+    _, _, display = run_continuously(workspace, clock, monkeypatch, await_publication_before_scheduling=True)
     assert clock.is_set() and display.closed == 1
     assert clock.retry_delays == [300]
 

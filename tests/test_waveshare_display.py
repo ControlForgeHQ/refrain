@@ -73,7 +73,7 @@ def install_simulated_driver(monkeypatch: pytest.MonkeyPatch, driver: SimulatedD
     monkeypatch.setattr(waveshare_module, "import_module", lambda *_args, **_kwargs: module)
 
 
-def test_factory_constructs_waveshare_backend_and_updates_both_orientations(
+def test_factory_constructs_waveshare_backend_and_updates_fixed_output_dimensions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     driver = SimulatedDriver()
@@ -81,7 +81,7 @@ def test_factory_constructs_waveshare_backend_and_updates_both_orientations(
 
     backend = create_display_backend("waveshare-13in3-e")
     assert isinstance(backend, DisplayBackend)
-    images = [Image.new("RGB", (1200, 1600), "red"), Image.new("RGB", (1600, 1200), "blue")]
+    images = [Image.new("RGB", (1600, 1200), "red"), Image.new("RGB", (1600, 1200), "blue")]
     original_pixels = [image.tobytes() for image in images]
 
     for image in images:
@@ -111,29 +111,24 @@ def test_invalid_images_are_rejected_before_hardware_operations(monkeypatch: pyt
     with pytest.raises(DisplayBackendUpdateError, match="Pillow Image.Image"):
         backend.update(object())  # type: ignore[arg-type]
     with pytest.raises(DisplayBackendUpdateError, match="mode must be RGB.*transparency"):
-        backend.update(Image.new("RGBA", (1200, 1600), (1, 2, 3, 255)))
+        backend.update(Image.new("RGBA", (1600, 1200), (1, 2, 3, 255)))
 
     assert driver.calls == []
 
 
-def test_non_native_landscape_image_is_stretched_directly_to_panel_size(
+def test_non_native_dimensions_are_rejected_before_hardware_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     driver = SimulatedDriver()
     install_simulated_driver(monkeypatch, driver)
     backend = create_display_backend("waveshare-13in3-e")
     image = Image.new("RGB", (1920, 1080), "red")
-    image.putpixel((1919, 1079), (0, 0, 255))
-    expected = image.resize((1600, 1200), Image.Resampling.LANCZOS)
-    original = image.tobytes()
 
-    backend.update(image)
+    with pytest.raises(DisplayBackendUpdateError, match="dimensions must be 1600 x 1200"):
+        backend.update(image)
 
-    expected.putpixel((0, 0), (0, 0, 0))
-    assert driver.images[0].size == (1600, 1200)
-    assert driver.image_bytes[0] == expected.tobytes()
-    assert image.tobytes() == original
-    expected.close()
+    assert driver.calls == []
+    assert driver.images == []
     image.close()
     backend.close()
 
@@ -160,7 +155,7 @@ def test_invalid_converted_buffers_are_rejected_before_hardware(monkeypatch: pyt
     backend = create_display_backend("waveshare-13in3-e")
 
     with pytest.raises(DisplayBackendUpdateError, match="packed elements|invalid image buffer"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
 
     assert driver.calls == ["getbuffer"]
 
@@ -193,10 +188,10 @@ def test_poisoned_initialization_releases_resources_and_prevents_reuse(
     backend = waveshare_module.WaveshareDisplayBackend()
 
     with pytest.raises(DisplayBackendInitializationError, match="Linux SPI/GPIO initialization failed") as failure:
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
     assert not failure.value.recoverable
     with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure") as failure:
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
     assert not failure.value.recoverable
 
     assert driver.calls == ["getbuffer", "Init", "module_exit"]
@@ -232,10 +227,10 @@ def test_poisoned_communication_releases_resources_without_controller_io(
     backend = waveshare_module.WaveshareDisplayBackend()
 
     with pytest.raises(DisplayBackendUpdateError, match="SPI transfer failed") as failure:
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
     assert not failure.value.recoverable
     with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
     backend.close()
 
     assert driver.calls == ["getbuffer", "Init", "display", "module_exit", "module_exit"]
@@ -261,7 +256,7 @@ def test_driver_exceptions_are_translated_and_sleep_is_attempted(
     backend = create_display_backend("waveshare-13in3-e")
 
     with pytest.raises(error_type, match="simulated failure"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
 
     assert driver.calls == expected_calls
 
@@ -286,7 +281,7 @@ def test_false_driver_results_are_not_reported_as_success(
     backend = create_display_backend("waveshare-13in3-e")
 
     with pytest.raises(error_type, match="reported failure"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
 
     assert driver.calls == expected_calls
 
@@ -304,12 +299,12 @@ def test_cleanup_failure_does_not_mask_update_failure(
     backend = create_display_backend("waveshare-13in3-e")
 
     with pytest.raises(DisplayBackendUpdateError, match="presentation failed"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
     backend.close()
     backend.close()
     assert driver.calls == ["getbuffer", "Init", "display", "sleep"]
     with pytest.raises(DisplayBackendUpdateError, match="closed Waveshare display"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
 
 
 def test_cleanup_failure_prevents_reinitialization(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -318,10 +313,10 @@ def test_cleanup_failure_prevents_reinitialization(monkeypatch: pytest.MonkeyPat
     backend = create_display_backend("waveshare-13in3-e")
 
     with pytest.raises(DisplayBackendUpdateError, match="sleep failed") as failure:
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
     assert not failure.value.recoverable
     with pytest.raises(DisplayBackendUpdateError, match="unrecoverable hardware failure"):
-        backend.update(Image.new("RGB", (1200, 1600)))
+        backend.update(Image.new("RGB", (1600, 1200)))
 
     assert driver.calls == ["getbuffer", "Init", "display", "sleep"]
 
@@ -348,7 +343,7 @@ def test_instances_serialize_process_global_hardware_operations(monkeypatch: pyt
 
     def update(backend: Any) -> None:
         try:
-            backend.update(Image.new("RGB", (1200, 1600)))
+            backend.update(Image.new("RGB", (1600, 1200)))
         except BaseException as error:
             errors.append(error)
 

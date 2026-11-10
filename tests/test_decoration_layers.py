@@ -42,34 +42,66 @@ def _nine_region_image() -> Image.Image:
     return image
 
 
-def test_source_boundaries_map_to_reference_coordinates_with_shared_rounding() -> None:
+def test_source_boundaries_remain_source_pixel_distances_with_shared_boundaries() -> None:
     parameters = NineSliceParameters(24, 24, 18, 18)
 
     assert preparation._mapped_boundaries((384, 240), parameters) == (
-        (0, 240, 3600, 3840),
-        (0, 180, 2220, 2400),
+        (0, 24, 360, 384),
+        (0, 18, 222, 240),
     )
 
     odd_parameters = NineSliceParameters(1, 1, 1, 1)
     first = preparation._mapped_boundaries((7, 3), odd_parameters)
-    assert first == ((0, 549, 3291, 3840), (377, 926, 1474, 2023))
+    assert first == ((0, 1, 6, 7), (0, 1, 2, 3))
     assert preparation._mapped_boundaries((7, 3), odd_parameters) == first
 
 
+def test_nine_slice_20_pixel_edges_stay_20_pixels_on_3840_by_2400_design_canvas() -> None:
+    source = Image.new("RGBA", (1920, 1200), "green")
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((0, 0, 19, 1199), fill="red")
+    draw.rectangle((1900, 0, 1919, 1199), fill="red")
+    draw.rectangle((0, 0, 1919, 19), fill="red")
+    draw.rectangle((0, 1180, 1919, 1199), fill="red")
+    background = Image.new("RGB", (3840, 2400), "white")
+    layer = DecorationLayerResource(
+        Path("/unused.png"),
+        "nine-slice",
+        NineSliceParameters(20, 20, 20, 20),
+        tintable=False,
+    )
+    try:
+        preparation._compose_nine_slice(background, source, layer)
+
+        assert background.getpixel((19, 1200)) == (255, 0, 0)
+        assert background.getpixel((20, 1200)) == (0, 128, 0)
+        assert background.getpixel((3819, 1200)) == (0, 128, 0)
+        assert background.getpixel((3820, 1200)) == (255, 0, 0)
+        assert background.getpixel((1920, 19)) == (255, 0, 0)
+        assert background.getpixel((1920, 20)) == (0, 128, 0)
+        assert background.getpixel((1920, 2379)) == (0, 128, 0)
+        assert background.getpixel((1920, 2380)) == (255, 0, 0)
+    finally:
+        source.close()
+        background.close()
+
+
 @pytest.mark.parametrize("canvas", [(3200, 2400), (3840, 2160), (3840, 2400)])
-def test_nine_slice_preserves_240_by_180_corners_across_working_canvases(canvas: tuple[int, int]) -> None:
+def test_nine_slice_preserves_source_pixel_corner_thickness_across_design_canvases(
+    canvas: tuple[int, int],
+) -> None:
     source = _nine_region_image()
     background = Image.new("RGB", canvas, (90, 90, 90))
     try:
         preparation._compose_nine_slice(background, source, _nine_slice_layer())
 
         assert background.getpixel((0, 0)) == (255, 0, 0)
-        assert background.getpixel((239, 179)) == (255, 0, 0)
-        assert background.getpixel((240, 0)) == (0, 128, 0)
-        assert background.getpixel((canvas[0] - 240, 0)) == (0, 0, 255)
-        assert background.getpixel((0, 180)) == (255, 255, 0)
+        assert background.getpixel((23, 17)) == (255, 0, 0)
+        assert background.getpixel((24, 0)) == (0, 128, 0)
+        assert background.getpixel((canvas[0] - 24, 0)) == (0, 0, 255)
+        assert background.getpixel((0, 18)) == (255, 255, 0)
         assert background.getpixel((canvas[0] // 2, canvas[1] // 2)) == (255, 0, 255)
-        assert background.getpixel((0, canvas[1] - 180)) == (255, 165, 0)
+        assert background.getpixel((0, canvas[1] - 18)) == (255, 165, 0)
         assert background.getpixel((canvas[0] - 1, canvas[1] - 1)) == (0, 0, 0)
         assert background.getpixel((canvas[0] // 2, canvas[1] - 1)) == (255, 255, 255)
     finally:
@@ -78,10 +110,23 @@ def test_nine_slice_preserves_240_by_180_corners_across_working_canvases(canvas:
 
 
 def test_nine_slice_crop_trims_each_edge_segment_symmetrically() -> None:
-    source = _nine_region_image()
+    source = Image.new("RGBA", (4000, 2500))
     draw = ImageDraw.Draw(source)
+    colors = (
+        ("red", "green", "blue"),
+        ("yellow", "magenta", "cyan"),
+        ("orange", "white", "black"),
+    )
+    x_bounds = (0, 24, 3976, 4000)
+    y_bounds = (0, 18, 2482, 2500)
+    for row, y0 in enumerate(y_bounds[:-1]):
+        for column, x0 in enumerate(x_bounds[:-1]):
+            draw.rectangle(
+                (x0, y0, x_bounds[column + 1] - 1, y_bounds[row + 1] - 1),
+                fill=colors[row][column],
+            )
     draw.rectangle((24, 0, 43, 17), fill="blue")
-    draw.rectangle((340, 0, 359, 17), fill="orange")
+    draw.rectangle((3956, 0, 3975, 17), fill="orange")
     background = Image.new("RGB", (3200, 2400), (90, 90, 90))
     try:
         preparation._compose_nine_slice(
@@ -90,10 +135,10 @@ def test_nine_slice_crop_trims_each_edge_segment_symmetrically() -> None:
             _nine_slice_layer(horizontal="crop", vertical="crop"),
         )
 
-        assert background.getpixel((240, 10)) == (0, 128, 0)
-        assert background.getpixel((2959, 10)) == (0, 128, 0)
-        assert background.getpixel((10, 180)) == (255, 255, 0)
-        assert background.getpixel((10, 2219)) == (255, 255, 0)
+        assert background.getpixel((24, 10)) == (0, 128, 0)
+        assert background.getpixel((3175, 10)) == (0, 128, 0)
+        assert background.getpixel((10, 18)) == (255, 255, 0)
+        assert background.getpixel((10, 2381)) == (255, 255, 0)
         assert all(background.getpixel((x, 1200)) != (90, 90, 90) for x in range(3200))
     finally:
         source.close()
@@ -102,7 +147,7 @@ def test_nine_slice_crop_trims_each_edge_segment_symmetrically() -> None:
 
 def test_nine_slice_rejects_corner_and_crop_destinations_that_cannot_fit() -> None:
     source = _nine_region_image()
-    background = Image.new("RGB", (3200, 2400), "white")
+    background = Image.new("RGB", (300, 2400), "white")
     too_wide = DecorationLayerResource(
         Path("/unused.png"),
         "nine-slice",

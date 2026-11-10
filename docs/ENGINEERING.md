@@ -932,7 +932,7 @@ Avoid unnecessary image duplication. Backend workers must receive images whose l
 
 Coordinate artifact cleanup with outstanding image readers and backend operations. Do not remove prepared images while an active or pending update still requires them.
 
-Do not persist backend-specific presentation acknowledgements. Startup recovery may republish the currently required image to every available backend.
+Do not persist backend-specific presentation acknowledgements. On every startup, recovery must reconcile the currently configured destinations and output specifications, then publish the currently required reveal stage to every available configured destination.
 
 Keep worker state and synchronization limited to what is necessary for independent publication, shutdown, and recovery.
 

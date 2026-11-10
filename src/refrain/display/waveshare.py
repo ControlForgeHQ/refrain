@@ -65,6 +65,10 @@ class WaveshareDisplayBackend:
             raise DisplayBackendUpdateError(
                 f"image mode must be RGB; got {image.mode!r}. Alpha and palette transparency are unsupported"
             )
+        if image.size != self._NATIVE_SIZE:
+            raise DisplayBackendUpdateError(
+                f"image dimensions must be 1600 x 1200 for the Waveshare display; got {image.size!r}"
+            )
 
         with self._lock:
             if self._closed:
@@ -74,13 +78,10 @@ class WaveshareDisplayBackend:
                     "cannot update a Waveshare display after an unrecoverable hardware failure", recoverable=False
                 )
             try:
-                if image.size == self._NATIVE_SIZE:
-                    driver_image = image.copy()
-                else:
-                    driver_image = image.resize(self._NATIVE_SIZE, Image.Resampling.LANCZOS)
+                driver_image = image.copy()
             except Exception as error:
                 raise DisplayBackendUpdateError(
-                    f"could not adapt the image to the 1600 x 1200 Waveshare display: {error}"
+                    f"could not copy the 1600 x 1200 Waveshare output image: {error}"
                 ) from error
 
             try:

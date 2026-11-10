@@ -38,9 +38,9 @@ from .geometry import (
     PixelBounds,
     PresentationGeometryError,
     PresentationInsets,
+    ResolvedOutputSpecification,
     resolve_presentation_geometry,
     round_half_up,
-    working_canvas_for_output,
 )
 from .preparation import PreparationDiagnostics, prepare_daily_images
 from .qr import QRCodePlacementError, resolve_qr_placement
@@ -63,7 +63,12 @@ _QUOTATIONS = (
     ),
 )
 _QUOTATION_NAMES = ("short", "medium", "long")
-_ASPECTS = {"4:3": (4, 3), "16:9": (16, 9), "16:10": (16, 10)}
+_ASPECTS = {
+    "4:3": (3200, 2400),
+    "5:3": (3840, 2304),
+    "16:9": (3840, 2160),
+    "16:10": (3840, 2400),
+}
 _QR_COLOR = "#FF00FF"
 
 
@@ -120,7 +125,8 @@ class DiagnosticState:
     decoration_ids: tuple[str, ...]
     decoration_index: int = 0
     quotation_index: int = 0
-    aspect_ratio: str = "configured"
+    aspect_ratio: str = "16:10"
+    requested_output_size: tuple[int, int] | None = None
     qr_enabled: bool = True
     background_enabled: bool = True
     tinting_enabled: bool = True
@@ -206,10 +212,14 @@ def _validated_decoration(configuration, identifier, manifest, initial_warnings=
     return resource
 
 
-def _with_aspect(configuration, aspect_ratio: str):
-    aspect_basis = configuration.output_size if aspect_ratio == "configured" else _ASPECTS[aspect_ratio]
-    working_size, _ = working_canvas_for_output(aspect_basis)
-    return replace(configuration, output_size=working_size)
+def _output_specification(
+    aspect_ratio: str,
+    requested_output_size: tuple[int, int] | None = None,
+) -> ResolvedOutputSpecification:
+    if aspect_ratio not in _ASPECTS:
+        raise ApplicationError("aspect ratio must be 4:3, 5:3, 16:9, or 16:10")
+    size = _ASPECTS[aspect_ratio] if requested_output_size is None else requested_output_size
+    return ResolvedOutputSpecification(aspect_ratio, size)
 
 
 def _decoration_geometry(configuration, decoration, overrides: GeometryOverrides | None = None):
@@ -375,10 +385,10 @@ def _reset_geometry_overrides(state: DiagnosticState, decoration_id: str) -> Dia
     )
 
 
-def _geometry_manifest_values(configuration, decoration, overrides: GeometryOverrides | None, output_size):
+def _geometry_manifest_values(configuration, decoration, overrides: GeometryOverrides | None, output_specification):
     insets, qr_metadata, horizontal, vertical, _, _ = _decoration_geometry(configuration, decoration, overrides)
-    resolve_presentation_geometry(output_size, insets)
-    placement = resolve_qr_placement(output_size, qr_metadata)
+    resolve_presentation_geometry(output_specification, insets)
+    placement = resolve_qr_placement(output_specification, qr_metadata)
     lines = ["presentation_insets:"]
     lines.extend(f"  {name}: {getattr(insets, name)}" for name in ("left", "right", "top", "bottom"))
     if horizontal.method == "center":
@@ -465,12 +475,6 @@ def preview_window_layout(
     return preview, (window_width, window_height, left, top)
 
 
-def _configured_aspect_name(output_size: tuple[int, int]) -> str:
-    divisor = math.gcd(*output_size)
-    ratio = (output_size[0] // divisor, output_size[1] // divisor)
-    return next(name for name, dimensions in _ASPECTS.items() if dimensions == ratio)
-
-
 def transition_state(state: DiagnosticState, action: str) -> DiagnosticState:
     """Apply one named navigation or toggle action to diagnostic state."""
     if action == "next-decoration" and state.decoration_ids:
@@ -483,7 +487,7 @@ def transition_state(state: DiagnosticState, action: str) -> DiagnosticState:
         return replace(state, quotation_index=(state.quotation_index - 1) % len(_QUOTATIONS))
     if action == "next-aspect":
         ratios = tuple(_ASPECTS)
-        current = state.aspect_ratio if state.aspect_ratio in _ASPECTS else "16:9"
+        current = state.aspect_ratio if state.aspect_ratio in _ASPECTS else "16:10"
         return replace(state, aspect_ratio=ratios[(ratios.index(current) + 1) % len(ratios)])
     if action == "toggle-qr":
         return replace(state, qr_enabled=not state.qr_enabled)
@@ -562,7 +566,7 @@ def _state_action(key: str) -> str | None:
 def _overlay_diagnostics(image: Image.Image, state: DiagnosticState, details: PreparationDiagnostics) -> Image.Image:
     if not state.debug_layout:
         return image
-    literary = annotate_literary_region(image, details.geometry.output_region)
+    literary = annotate_literary_region(image, details.geometry.presentation_literary_bounds)
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
@@ -571,19 +575,19 @@ def _overlay_diagnostics(image: Image.Image, state: DiagnosticState, details: Pr
         draw.rectangle((left, top, right - 1, bottom - 1), outline=color, width=width)
 
     if details.qr_placement is not None:
-        outlined(details.qr_placement.allocation_bounds, "#000000", 8)
-        outlined(details.qr_placement.allocation_bounds, _QR_COLOR, 4)
+        outlined(details.qr_placement.presentation_allocation_bounds, "#000000", 8)
+        outlined(details.qr_placement.presentation_allocation_bounds, _QR_COLOR, 4)
 
     groups = _guide_groups(details)
     for color_index, (x_bounds, y_bounds) in enumerate(groups):
         color = _guide_color(color_index, len(groups))
         for x in x_bounds[1:-1]:
-            output_x = round_half_up(x * image.width, details.geometry.working_size[0])
+            output_x = round_half_up(x * image.width, details.geometry.design_canvas_size[0])
             if 0 <= output_x < image.width:
                 draw.line((output_x, 0, output_x, image.height - 1), fill="#000000", width=4)
                 draw.line((output_x, 0, output_x, image.height - 1), fill=color, width=2)
         for y in y_bounds[1:-1]:
-            output_y = round_half_up(y * image.height, details.geometry.working_size[1])
+            output_y = round_half_up(y * image.height, details.geometry.design_canvas_size[1])
             if 0 <= output_y < image.height:
                 draw.line((0, output_y, image.width - 1, output_y), fill="#000000", width=4)
                 draw.line((0, output_y, image.width - 1, output_y), fill=color, width=2)
@@ -625,7 +629,8 @@ def _render(
     debug_layout,
     initial_warnings=(),
     *,
-    aspect_ratio="configured",
+    aspect_ratio="16:10",
+    requested_output_size: tuple[int, int] | None = None,
     qr_enabled: bool | None = None,
     background_enabled=True,
     tinting_enabled=True,
@@ -648,9 +653,10 @@ def _render(
         else "QR generation is disabled by the diagnostic setting"
     )
     configuration = replace(
-        _with_aspect(replace(configuration, decorations=registry), aspect_ratio),
+        replace(configuration, decorations=registry),
         qr_enabled=configuration.qr_enabled and requested_qr,
     )
+    output_specification = _output_specification(aspect_ratio, requested_output_size)
     text, source, attribution = _QUOTATIONS[variant]
     quotation = Quotation(text, normalize_quotation(text))
     entry = ContentEntry(
@@ -663,27 +669,47 @@ def _render(
     snapshot = _build_snapshot(configuration, entry, quotation, date(2000, 1, 1))
     stages = resolve_reveal_stages(snapshot)
     resolved: list[PreparationDiagnostics] = []
-    images = prepare_daily_images(
+
+    def remember_diagnostics(
+        specification: ResolvedOutputSpecification,
+        diagnostics: PreparationDiagnostics,
+    ) -> None:
+        if specification == output_specification:
+            resolved.append(diagnostics)
+
+    def draw_diagnostics(
+        specification: ResolvedOutputSpecification,
+        image: Image.Image,
+        diagnostics: PreparationDiagnostics,
+    ) -> None:
+        if specification != output_specification:
+            return
+        annotated = _overlay_diagnostics(image, DiagnosticState((identifier,), debug_layout=debug_layout), diagnostics)
+        if annotated is not image:
+            image.paste(annotated)
+            annotated.close()
+
+    prepared = prepare_daily_images(
         snapshot,
         (stages[-1],),
         configuration,
+        (output_specification,),
         chooser=_StableChoices(identifier),
         strict_decoration=True,
         force_white_background=not background_enabled,
         forced_decoration_tint=None if tinting_enabled else (0, 0, 0),
         qr_disabled_reason=qr_disabled_reason,
-        on_diagnostics=resolved.append,
+        on_diagnostics=remember_diagnostics,
+        on_presentation_image=draw_diagnostics,
     )
+    images = prepared[output_specification]
     image = images[0]
     if diagnostics_out is not None:
         diagnostics_out.extend(resolved)
     if not resolved:
         image.close()
         raise ApplicationError("rendering did not provide resolved diagnostic geometry")
-    annotated = _overlay_diagnostics(image, DiagnosticState((identifier,), debug_layout=debug_layout), resolved[0])
-    if annotated is not image:
-        image.close()
-    return annotated, snapshot
+    return image, snapshot
 
 
 def _configuration_decoration_ids(configuration) -> tuple[str, ...]:
@@ -699,12 +725,7 @@ def _diagnostic_status(
 ) -> str:
     decoration = state.decoration or "(none)"
     position = f"{state.decoration_index + 1} of {len(state.decoration_ids)}" if state.decoration_ids else "0 of 0"
-    divisor = math.gcd(*image_size)
-    ratio = (
-        state.aspect_ratio
-        if state.aspect_ratio != "configured"
-        else f"{image_size[0] // divisor}:{image_size[1] // divisor}"
-    )
+    ratio = state.aspect_ratio
     qr_effective = details is not None and details.qr_placement is not None
     qr = f"requested={'on' if state.qr_enabled else 'off'}, effective={'on' if qr_effective else 'off'}"
     reason = "" if qr_effective else f", reason={details.qr_unavailable_reason if details else 'not rendered'}"
@@ -737,11 +758,12 @@ def _diagnostic_status(
         f"Decoration: {decoration} ({position}); manifest: {manifest_path}\n"
         f"Quotation: {_QUOTATION_NAMES[state.quotation_index]}; aspect: {ratio}; "
         f"rendered: {image_size[0]} x {image_size[1]}; preview: {displayed[0]} x {displayed[1]}\n"
-        f"Literary bounds: {details.geometry.output_region if details else 'unavailable'}; "
-        f"QR: {qr}{reason}; bounds: {details.qr_placement.allocation_bounds if qr_effective else 'unavailable'}; "
+        f"Literary bounds: {details.geometry.presentation_literary_bounds if details else 'unavailable'}; "
+        f"QR: {qr}{reason}; bounds: "
+        f"{details.qr_placement.presentation_allocation_bounds if qr_effective else 'unavailable'}; "
         f"background: {'on' if state.background_enabled else 'white'}; "
         f"tinting: {'on' if state.tinting_enabled else 'black'}; debug: {'on' if state.debug_layout else 'off'}\n"
-        f"Presentation insets (working px): {inset_values}; "
+        f"Presentation insets (design px): {inset_values}; "
         f"QR horizontal={qr_horizontal.method} "
         f"{qr_horizontal.offset if qr_horizontal.method != 'center' else ''} ({horizontal_source}), "
         f"vertical={qr_vertical.method} {qr_vertical.offset if qr_vertical.method != 'center' else ''} "
@@ -789,6 +811,7 @@ def _render_request(
         state.quotation_index,
         state.debug_layout,
         aspect_ratio=state.aspect_ratio,
+        requested_output_size=state.requested_output_size,
         qr_enabled=state.qr_enabled,
         background_enabled=state.background_enabled,
         tinting_enabled=state.tinting_enabled,
@@ -830,7 +853,7 @@ def _save_png_atomically(image: Image.Image, target: Path) -> None:
 
 
 def export_decoration_png(config_file: str | Path, state: DiagnosticState, output_path: str | Path) -> Path:
-    """Render one deterministic full-working-canvas presentation without opening a display."""
+    """Render one deterministic full-design-canvas presentation without opening a display."""
     target = _absolute_output_path(output_path)
     if target.is_dir():
         suggested = str(Path(output_path).expanduser() / "preview.png")
@@ -987,8 +1010,12 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     root.title("Refrain Decoration Preview")
     root.configure(padx=8, pady=8)
     screen_size = (root.winfo_screenwidth(), root.winfo_screenheight())
-    output_configuration = _with_aspect(configuration, state.aspect_ratio)
-    initial_preview, initial_geometry = preview_window_layout(output_configuration.output_size, screen_size, (720, 30))
+    output_specification = _output_specification(state.aspect_ratio)
+    initial_preview, initial_geometry = preview_window_layout(
+        output_specification.requested_output_size,
+        screen_size,
+        (720, 30),
+    )
     root.geometry(f"{initial_geometry[0]}x{initial_geometry[1]}+{initial_geometry[2]}+{initial_geometry[3]}")
     image_label = tk.Label(root, borderwidth=0)
     image_label.pack()
@@ -1003,7 +1030,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     qr_vertical_offset = tk.StringVar()
     presentation_row = tk.Frame(geometry_panel)
     presentation_row.pack(fill="x")
-    tk.Label(presentation_row, text="Presentation (working px):").pack(side="left", padx=(0, 4))
+    tk.Label(presentation_row, text="Presentation insets (design px):").pack(side="left", padx=(0, 4))
     presentation_entries = {}
     for name in ("left", "right", "top", "bottom"):
         tk.Label(presentation_row, text=f"{name.title()}").pack(side="left", padx=(3, 1))
@@ -1055,7 +1082,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     reset_button.pack(side="left", padx=2)
     copy_button = tk.Button(geometry_actions, text="Copy values", command=lambda: copy_geometry())
     copy_button.pack(side="left", padx=2)
-    geometry_status = tk.Label(geometry_actions, text="Coordinates are working-canvas pixels.", anchor="w")
+    geometry_status = tk.Label(geometry_actions, text="Coordinates are design-canvas pixels.", anchor="w")
     geometry_status.pack(side="left", padx=6)
     status_var = tk.StringVar(value=message or "Rendering preview…")
     status_label = tk.Label(root, textvariable=status_var, justify="left", anchor="w")
@@ -1098,7 +1125,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         previous_error = geometry_error[0]
         geometry_error[0] = error
         geometry_status.configure(
-            text=f"Geometry validation: {error}" if error else "Coordinates are working-canvas pixels."
+            text=f"Geometry validation: {error}" if error else "Coordinates are design-canvas pixels."
         )
         if error:
             status_var.set(f"Geometry validation error: {error}\n{last_rendered_status[0]}")
@@ -1152,8 +1179,8 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         if vertical.method != "center":
             copy_is_current = copy_is_current and qr_vertical_offset.get().strip() == str(vertical.offset)
         try:
-            output = _with_aspect(configuration_box[0], state_box[0].aspect_ratio).output_size
-            _geometry_manifest_values(configuration_box[0], resource, overrides, output)
+            output_specification = _output_specification(state_box[0].aspect_ratio)
+            _geometry_manifest_values(configuration_box[0], resource, overrides, output_specification)
         except (PresentationGeometryError, QRCodePlacementError, ValueError):
             copy_button.configure(state="disabled")
         else:
@@ -1181,8 +1208,8 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             resolved_insets, _, _, _, _, _ = _decoration_geometry(
                 configuration_box[0], resource, dict(candidate.geometry_overrides).get(identifier)
             )
-            output = _with_aspect(configuration_box[0], candidate.aspect_ratio).output_size
-            resolve_presentation_geometry(output, resolved_insets)
+            output_specification = _output_specification(candidate.aspect_ratio)
+            resolve_presentation_geometry(output_specification, resolved_insets)
         except (ValueError, PresentationGeometryError) as error:
             set_geometry_error(str(error))
             return "break"
@@ -1270,8 +1297,13 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
             return
         identifier, resource, overrides = selected
         try:
-            output = _with_aspect(configuration_box[0], state_box[0].aspect_ratio).output_size
-            fragment, _ = _geometry_manifest_values(configuration_box[0], resource, overrides, output)
+            output_specification = _output_specification(state_box[0].aspect_ratio)
+            fragment, _ = _geometry_manifest_values(
+                configuration_box[0],
+                resource,
+                overrides,
+                output_specification,
+            )
             root.clipboard_clear()
             root.clipboard_append(fragment)
         except Exception as error:
@@ -1580,39 +1612,49 @@ def _run_terminal_test_adapter(
                     "SPACE/Right Next | Left Previous | Up/Down Quotation | R/F5 Reload | X Exit",
                     flush=True,
                 )
+                images = {}
+                transferred = False
                 try:
                     current_configuration = _load_configuration(config_file)
-                    image, snapshot = _render(
-                        current_configuration,
-                        identifier,
-                        manifests[identifier],
-                        variant,
-                        debug_layout,
-                        initial_warnings,
-                    )
+                    for specification in current_configuration.required_output_specifications:
+                        image, _snapshot = _render(
+                            current_configuration,
+                            identifier,
+                            manifests[identifier],
+                            variant,
+                            debug_layout,
+                            initial_warnings,
+                            aspect_ratio=specification.aspect_ratio,
+                            requested_output_size=specification.requested_output_size,
+                        )
+                        images[specification] = image
                     decoration = current_configuration.decorations.get(identifier)
                     insets = (
                         current_configuration.presentation_insets
                         if decoration is None or decoration.presentation_insets is None
                         else decoration.presentation_insets
                     )
-                    diagnostic_configuration = _with_aspect(current_configuration, "configured")
-                    geometry = resolve_presentation_geometry(diagnostic_configuration.output_size, insets)
+                    output_specification = _output_specification(state.aspect_ratio)
+                    geometry = resolve_presentation_geometry(output_specification, insets)
                     print(
-                        f"Rendered dimensions: {image.width} x {image.height}; "
-                        f"Literary output bounds: {geometry.output_region} "
-                        f"(working canvas {geometry.working_size[0]} x {geometry.working_size[1]})",
+                        f"Rendered {len(images)} destination variants; "
+                        f"Literary presentation bounds: {geometry.presentation_literary_bounds} "
+                        f"(design canvas {geometry.design_canvas_size[0]} x "
+                        f"{geometry.design_canvas_size[1]})",
                         flush=True,
                     )
                     serial += 1
                     identity = (0, serial)
-                    coordinator.publish(identity, image)
+                    coordinator.publish(identity, images)
+                    transferred = True
                     coordinator.wait_for_publication(identity)
                     for backend, (published, error) in coordinator.publication_results(identity).items():
                         if not published:
                             print(f"Display publication failed for {backend}: {error}", file=sys.stderr, flush=True)
-                    image.close()
                 except Exception as error:
+                    if not transferred:
+                        for image in images.values():
+                            image.close()
                     print(
                         f"Cannot present decoration {identifier!r}: {error}; correct the files and press R",
                         file=sys.stderr,
@@ -1653,13 +1695,14 @@ def run_decoration_diagnostic(
     config_file: str | Path,
     *,
     selection: str = "all",
-    aspect_ratio: str = "configured",
+    aspect_ratio: str | None = None,
     quotation: str = "short",
     qr_enabled: bool | None = None,
     background_enabled: bool = True,
     tinting_enabled: bool = True,
     debug_layout: bool = False,
     output_path: str | Path | None = None,
+    requested_output_size: tuple[int, int] | None = None,
     variants_directory: str | Path | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
     input_factory=None,
@@ -1679,8 +1722,12 @@ def run_decoration_diagnostic(
     else:
         selections = ", ".join(("all", *available))
         raise ApplicationError(f"unknown decoration {selection!r}; available selections: {selections}")
-    if aspect_ratio != "configured" and aspect_ratio not in _ASPECTS:
-        raise ApplicationError("aspect ratio must be 4:3, 16:9, or 16:10")
+    if aspect_ratio is None:
+        if output_path is not None:
+            raise ApplicationError("--test-output requires an explicit presentation aspect")
+        aspect_ratio = "16:10"
+    if aspect_ratio not in _ASPECTS:
+        raise ApplicationError("aspect ratio must be 4:3, 5:3, 16:9, or 16:10")
     if quotation not in _QUOTATION_NAMES:
         raise ApplicationError("quotation length must be short, medium, or long")
     if output_path is not None and selection == "all":
@@ -1697,14 +1744,13 @@ def run_decoration_diagnostic(
         decoration_index = 0
     else:
         decoration_index = available.index(selection)
-    selected_aspect = (
-        aspect_ratio if aspect_ratio != "configured" else _configured_aspect_name(configuration.output_size)
-    )
+    selected_aspect = aspect_ratio
     state = DiagnosticState(
         identifiers,
         decoration_index=decoration_index,
         quotation_index=_QUOTATION_NAMES.index(quotation),
         aspect_ratio=selected_aspect,
+        requested_output_size=requested_output_size,
         qr_enabled=configuration.qr_enabled if qr_enabled is None else qr_enabled,
         background_enabled=background_enabled,
         tinting_enabled=tinting_enabled,

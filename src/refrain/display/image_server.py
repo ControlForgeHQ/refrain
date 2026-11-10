@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
 from threading import Lock, Thread, Timer
 from typing import ClassVar
+from urllib.parse import unquote, urlsplit
 
 from PIL import Image
 
@@ -20,7 +21,6 @@ from . import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_CURRENT_IMAGE_PATH = "/display/current"
 _REQUEST_LIFETIME = 10
 
 
@@ -79,13 +79,29 @@ class _ImageRequestHandler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self) -> None:
-        if self.path != _CURRENT_IMAGE_PATH:
+        path = urlsplit(self.path).path
+        prefix = "/display/"
+        suffix = "/current"
+        if not path.startswith(prefix) or not path.endswith(suffix):
             self._send_status(404, b"Not found\n")
             return
 
-        representation = self.backend._get_representation()
+        encoded_id = path[len(prefix) : -len(suffix)]
+        if not encoded_id or "/" in encoded_id:
+            self._send_status(404, b"Not found\n")
+            return
+        output_id = unquote(encoded_id)
+        representation = self.backend._get_representation(output_id)
         if representation is None:
-            self._send_status(503, b"Image not available\n")
+            status, body = (
+                (404, b"Not found\n")
+                if output_id not in self.backend.output_ids
+                else (
+                    503,
+                    b"Image not available\n",
+                )
+            )
+            self._send_status(status, body)
             return
 
         image_bytes, entity_tag = representation
@@ -149,18 +165,31 @@ class _ImageRequestHandler(BaseHTTPRequestHandler):
 
 
 class ImageServerDisplayBackend:
-    """Make complete Pillow images available at a read-only HTTP endpoint."""
+    """Make complete Pillow images available at named read-only HTTP endpoints."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8080,
+        output_ids: tuple[str, ...] = ("default",),
+    ) -> None:
         if not isinstance(host, str) or not host:
             raise DisplayBackendInitializationError("image-server host must be a nonempty address or hostname")
         if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
             raise DisplayBackendInitializationError("image-server port must be an integer between 1 and 65535")
+        if (
+            not isinstance(output_ids, tuple)
+            or not output_ids
+            or any(not isinstance(output_id, str) or not output_id.strip() for output_id in output_ids)
+            or len(set(output_ids)) != len(output_ids)
+        ):
+            raise DisplayBackendInitializationError("image-server output IDs must be unique nonempty strings")
 
         self._state_lock = Lock()
         self._close_lock = Lock()
         self._closed = False
-        self._representation: tuple[bytes, str] | None = None
+        self.output_ids = frozenset(output_ids)
+        self._representations: dict[str, tuple[bytes, str] | None] = {output_id: None for output_id in output_ids}
 
         request_handler = type(
             "_BoundImageRequestHandler",
@@ -214,7 +243,15 @@ class ImageServerDisplayBackend:
             raise DisplayBackendInitializationError(f"could not start the image-server thread: {error}") from error
 
     def update(self, image: Image.Image) -> None:
-        """Encode and publish a complete image without modifying caller-owned data."""
+        """Publish the image when this service has exactly one named output."""
+        if len(self.output_ids) != 1:
+            raise DisplayBackendUpdateError("an output ID is required for a multi-output image-server")
+        self.update_output(next(iter(self.output_ids)), image)
+
+    def update_output(self, output_id: str, image: Image.Image) -> None:
+        """Encode and publish one named output without modifying caller-owned data."""
+        if output_id not in self.output_ids:
+            raise DisplayBackendUpdateError(f"unknown image-server output {output_id!r}", recoverable=False)
         if not isinstance(image, Image.Image):
             raise DisplayBackendUpdateError("image must be a Pillow Image.Image instance")
         with self._state_lock:
@@ -236,11 +273,11 @@ class ImageServerDisplayBackend:
         with self._state_lock:
             if self._closed:
                 raise DisplayBackendUpdateError("cannot update a closed image-server display", recoverable=False)
-            self._representation = image_bytes, entity_tag
+            self._representations[output_id] = image_bytes, entity_tag
 
-    def _get_representation(self) -> tuple[bytes, str] | None:
+    def _get_representation(self, output_id: str) -> tuple[bytes, str] | None:
         with self._state_lock:
-            return self._representation
+            return self._representations.get(output_id)
 
     def close(self) -> None:
         """Stop the HTTP service and release its listening resources."""

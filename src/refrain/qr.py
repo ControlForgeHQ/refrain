@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 from qrcode.constants import ERROR_CORRECT_H, ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q
 from qrcode.exceptions import DataOverflowError
 
-from .geometry import round_half_up, validate_output_size, working_canvas_for_output
+from .geometry import ResolvedOutputSpecification, design_canvas_for_aspect, round_half_up
 
 REPOSITORY_URL = "https://github.com/ControlForgeHQ/refrain"
 QR_ALLOCATION_SIZE = 246
@@ -53,22 +53,22 @@ class QRCodeGeometry:
     right_offset: int | None
     bottom_offset: int | None
     bounds: tuple[int, int, int, int]
-    image_size: tuple[int, int]
-    allocation_bounds: tuple[int, int, int, int] | None = None
-    working_bounds: tuple[int, int, int, int] | None = None
+    output_image_size: tuple[int, int]
+    presentation_allocation_bounds: tuple[int, int, int, int] | None = None
+    design_bounds: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)
 class QRCodePlacement:
     """Resolved production QR allocation and integer-pixel footprint."""
 
-    working_bounds: tuple[int, int, int, int]
-    allocation_bounds: tuple[int, int, int, int]
+    design_bounds: tuple[int, int, int, int]
+    presentation_allocation_bounds: tuple[int, int, int, int]
     allocation_size: tuple[int, int]
     module_size: int
     footprint_size: tuple[int, int]
     bounds: tuple[int, int, int, int]
-    image_size: tuple[int, int]
+    presentation_canvas_size: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -89,17 +89,15 @@ PRODUCTION_QR_PARAMETERS = QRCodeParameters(
 
 
 def resolve_qr_placement(
-    output_size: tuple[int, int],
+    output_specification: ResolvedOutputSpecification,
     positioning: Mapping[str, object] | None = None,
 ) -> QRCodePlacement:
-    """Resolve the fixed working-canvas allocation and its fitting QR footprint."""
+    """Resolve the fixed design-space QR allocation and its presentation-canvas footprint."""
     metadata = {} if positioning is None else positioning
     if not isinstance(metadata, Mapping):
         raise QRCodePlacementError("QR positioning metadata must be a mapping")
-    try:
-        output_size = validate_output_size(output_size)
-    except ValueError as error:
-        raise QRCodePlacementError(f"cannot resolve QR placement for the configured output size: {error}") from error
+    if not isinstance(output_specification, ResolvedOutputSpecification):
+        raise QRCodePlacementError("output specification must be resolved before QR placement")
 
     allowed = {
         "qr_from_left",
@@ -112,14 +110,14 @@ def resolve_qr_placement(
         raise QRCodePlacementError("QR positioning metadata contains an unsupported field")
     for key in allowed - {"qr_centered"}:
         if key in metadata and (type(metadata[key]) is not int or metadata[key] < 0):
-            raise QRCodePlacementError(f"{key} must be a nonnegative integer working-canvas pixel offset")
+            raise QRCodePlacementError(f"{key} must be a nonnegative integer design-canvas pixel offset")
 
     centered = metadata.get("qr_centered")
     if "qr_centered" in metadata and (not isinstance(centered, str) or centered not in {"horizontal", "vertical"}):
         raise QRCodePlacementError("qr_centered must be the scalar string 'horizontal' or 'vertical'")
 
-    working_size, _ = working_canvas_for_output(output_size)
-    working_width, working_height = working_size
+    design_canvas_size, _ = design_canvas_for_aspect(output_specification.aspect_ratio)
+    design_width, design_height = design_canvas_size
     horizontal = [key for key in ("qr_from_left", "qr_from_right") if key in metadata]
     if centered == "horizontal":
         horizontal.append("qr_centered")
@@ -140,58 +138,59 @@ def resolve_qr_placement(
     if horizontal[0] == "qr_from_left":
         left = metadata["qr_from_left"]
     elif horizontal[0] == "qr_from_right":
-        left = working_width - QR_ALLOCATION_SIZE - metadata.get("qr_from_right", 20)
+        left = design_width - QR_ALLOCATION_SIZE - metadata.get("qr_from_right", 20)
     else:
-        left = round_half_up(working_width - QR_ALLOCATION_SIZE, 2)
+        left = round_half_up(design_width - QR_ALLOCATION_SIZE, 2)
 
     if vertical[0] == "qr_from_top":
         top = metadata["qr_from_top"]
     elif vertical[0] == "qr_from_bottom":
-        top = working_height - QR_ALLOCATION_SIZE - metadata.get("qr_from_bottom", 20)
+        top = design_height - QR_ALLOCATION_SIZE - metadata.get("qr_from_bottom", 20)
     else:
-        top = round_half_up(working_height - QR_ALLOCATION_SIZE, 2)
+        top = round_half_up(design_height - QR_ALLOCATION_SIZE, 2)
 
-    working_bounds = (left, top, left + QR_ALLOCATION_SIZE, top + QR_ALLOCATION_SIZE)
+    design_bounds = (left, top, left + QR_ALLOCATION_SIZE, top + QR_ALLOCATION_SIZE)
     if (
-        working_bounds[0] < 0
-        or working_bounds[1] < 0
-        or working_bounds[2] > working_width
-        or working_bounds[3] > working_height
+        design_bounds[0] < 0
+        or design_bounds[1] < 0
+        or design_bounds[2] > design_width
+        or design_bounds[3] > design_height
     ):
         raise QRCodePlacementError(
-            f"the 246 x 246 QR allocation at working-canvas bounds {working_bounds} extends outside "
-            f"the {working_width} x {working_height} working canvas; reduce the configured offset"
+            f"the 246 x 246 QR allocation at design-canvas bounds {design_bounds} extends outside "
+            f"the {design_width} x {design_height} design canvas; reduce the configured offset"
         )
 
-    output_width, output_height = output_size
-    allocation_bounds = (
-        round_half_up(working_bounds[0] * output_width, working_width),
-        round_half_up(working_bounds[1] * output_height, working_height),
-        round_half_up(working_bounds[2] * output_width, working_width),
-        round_half_up(working_bounds[3] * output_height, working_height),
+    presentation_canvas_size = output_specification.presentation_canvas_size
+    presentation_width, presentation_height = presentation_canvas_size
+    presentation_allocation_bounds = (
+        round_half_up(design_bounds[0] * presentation_width, design_width),
+        round_half_up(design_bounds[1] * presentation_height, design_height),
+        round_half_up(design_bounds[2] * presentation_width, design_width),
+        round_half_up(design_bounds[3] * presentation_height, design_height),
     )
-    allocation_width = allocation_bounds[2] - allocation_bounds[0]
-    allocation_height = allocation_bounds[3] - allocation_bounds[1]
+    allocation_width = presentation_allocation_bounds[2] - presentation_allocation_bounds[0]
+    allocation_height = presentation_allocation_bounds[3] - presentation_allocation_bounds[1]
     module_size = min(allocation_width, allocation_height) // QR_FOOTPRINT_MODULES
     if module_size < 1:
         raise QRCodePlacementError(
-            f"the 246 x 246 working-canvas QR allocation maps to only {allocation_width} x "
-            f"{allocation_height} output pixels, which cannot fit the complete 41-module QR footprint "
-            "at one pixel per module; use a larger output resolution"
+            f"the 246 x 246 design-canvas QR allocation maps to only {allocation_width} x "
+            f"{allocation_height} presentation-canvas pixels, which cannot fit the complete 41-module "
+            "QR footprint at one pixel per module; use a larger output resolution"
         )
 
     footprint_side = QR_FOOTPRINT_MODULES * module_size
-    left = allocation_bounds[0] + round_half_up(allocation_width - footprint_side, 2)
-    top = allocation_bounds[1] + round_half_up(allocation_height - footprint_side, 2)
+    left = presentation_allocation_bounds[0] + round_half_up(allocation_width - footprint_side, 2)
+    top = presentation_allocation_bounds[1] + round_half_up(allocation_height - footprint_side, 2)
     bounds = (left, top, left + footprint_side - 1, top + footprint_side - 1)
     return QRCodePlacement(
-        working_bounds=working_bounds,
-        allocation_bounds=allocation_bounds,
+        design_bounds=design_bounds,
+        presentation_allocation_bounds=presentation_allocation_bounds,
         allocation_size=(allocation_width, allocation_height),
         module_size=module_size,
         footprint_size=(footprint_side, footprint_side),
         bounds=bounds,
-        image_size=output_size,
+        presentation_canvas_size=presentation_canvas_size,
     )
 
 
@@ -307,7 +306,7 @@ def render_qr_code(
     symbol_modules = code.modules_count
     module_size = parameters.module_size
     if placement is not None:
-        if not isinstance(placement, QRCodePlacement) or placement.image_size != image_size:
+        if not isinstance(placement, QRCodePlacement) or placement.presentation_canvas_size != image_size:
             raise QRCodeGenerationError("QR placement does not match the destination image dimensions")
         module_size = placement.module_size
     quiet_zone_pixels = parameters.quiet_zone * module_size
@@ -326,15 +325,15 @@ def render_qr_code(
         top = height - parameters.bottom_offset - footprint_side
         bounds = (left, top, left + footprint_side - 1, top + footprint_side - 1)
         allocation_bounds = None
-        working_bounds = None
+        design_bounds = None
         right_offset: int | None = parameters.right_offset
         bottom_offset: int | None = parameters.bottom_offset
     else:
         if footprint_size != placement.footprint_size:
             raise QRCodeGenerationError("QR parameters do not match the resolved placement footprint")
         bounds = placement.bounds
-        allocation_bounds = placement.allocation_bounds
-        working_bounds = placement.working_bounds
+        allocation_bounds = placement.presentation_allocation_bounds
+        design_bounds = placement.design_bounds
         left, top, right, bottom = bounds
         allocation_left, allocation_top, allocation_right, allocation_bottom = allocation_bounds
         if left < allocation_left or top < allocation_top or right >= allocation_right or bottom >= allocation_bottom:
@@ -351,9 +350,9 @@ def render_qr_code(
         right_offset=right_offset,
         bottom_offset=bottom_offset,
         bounds=bounds,
-        image_size=image_size,
-        allocation_bounds=allocation_bounds,
-        working_bounds=working_bounds,
+        output_image_size=image_size,
+        presentation_allocation_bounds=allocation_bounds,
+        design_bounds=design_bounds,
     )
 
     image = Image.new("RGB", footprint_size, (255, 255, 255))
@@ -379,7 +378,7 @@ def composite_qr_code(destination: Image.Image, qr_code: QRCodeImage) -> None:
     """Composite the opaque QR footprint over the destination without resampling."""
     if not isinstance(destination, Image.Image) or destination.mode != "RGB":
         raise QRCodeGenerationError("QR destination must be an RGB Pillow image")
-    if not isinstance(qr_code, QRCodeImage) or destination.size != qr_code.geometry.image_size:
+    if not isinstance(qr_code, QRCodeImage) or destination.size != qr_code.geometry.output_image_size:
         raise QRCodeGenerationError("QR geometry does not match the destination image dimensions")
     if qr_code.image.mode != "RGB" or qr_code.image.size != qr_code.geometry.footprint_size:
         raise QRCodeGenerationError("QR footprint image does not match its resolved geometry")
