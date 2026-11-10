@@ -73,9 +73,8 @@ The first release should be useful in normal household operation without dependi
 
 ### Visual presentation
 
-- Configure one presentation output resolution per application instance.
-- Support configurable output resolutions at 4:3, 16:9, and 16:10 aspect ratios, using the fixed 3840 × 2400 reference envelope to derive each high-resolution working canvas; the reference envelope does not limit final output dimensions.
-- Compose raster artwork at high resolution, then render literary text and QR output at final output resolution.
+- Configure output resolution using the current Version 0.1 global single-output interface; per-destination output configuration remains deferred.
+- Support configurable output at 4:3, 5:3, 16:9, and 16:10 presentation aspects. Rendering mechanics and image-space behavior are defined in `docs/ARCHITECTURE.md`.
 - Provide one attractive, typography-first default layout.
 - Separate view-specific background composition from shared quotation rendering.
 - Support meaningful typography and spacing configuration.
@@ -92,9 +91,8 @@ The first release should be useful in normal household operation without dependi
 - Allow decoration-wide and per-layer tinting with shared-palette colours while preserving authored alpha.
 - Allow backgrounds and decorations to be independently disabled, both through default pools and content-entry preferences.
 - Load self-contained manifest-based font bundles, resolve role-specific faces within the single selected bundle, and compose source images with aspect-preserving background cover and decoration contain scaling.
-- Support QR-enabled and QR-free literary presentations, including artwork conditional on QR presence.
+- Support QR-enabled and QR-free literary presentations, including artwork conditional on QR availability.
 - Direct enabled Version 0.1 literary QR codes to the Refrain repository.
-- Generate enabled QR codes at final resolution with resolution-aware integer-pixel modules and a complete quiet zone, with allocation geometry established for the rendering pipeline and bundled decoration layouts.
 - Keep presentation-resource choices and derived rendering geometry out of durable daily selection state.
 - Handle content that cannot fit the effective layout without silent truncation.
 - Provide an information view containing a curated release quotation, project identity, and useful build and runtime information.
@@ -107,8 +105,7 @@ The first release should be useful in normal household operation without dependi
 - Operate on Raspberry Pi OS Lite, initially targeting Raspberry Pi 3 B+.
 - Support simultaneous presentation through multiple configured display backends.
 - Allow each supported backend type to be configured at most once.
-- Distribute the same prepared presentation image to every configured backend.
-- Allow each backend to adapt that shared image to its physical destination without constraining core rendering capabilities or global output geometry.
+- Publish prepared output images to configured backends according to the output-configuration capabilities available in Version 0.1.
 - Update display backends independently so that slow or unavailable destinations do not delay other destinations.
 - Isolate backend failures and provide bounded recovery without interrupting otherwise functional destinations.
 - Perform complete physical display updates at the configured reveal stages and display-day boundary.
@@ -125,8 +122,8 @@ The first release should be useful in normal household operation without dependi
 - Validate clock-adjustment behavior, including forward jumps, backward adjustments, and missed display-day boundaries.
 - Provide inspectable rendered-image output for development and troubleshooting.
 - Provide interactive, state-isolated visual inspection of discovered decorations with short and long literary compositions.
-- Validate resolution-aware geometry, artwork transformations, and visual diagnostics without display hardware.
-- Validate QR encoding, exact final-resolution raster geometry, placement, reveal-stage consistency, and prepared-image recovery without display hardware.
+- Validate presentation geometry, artwork transformations, and visual diagnostics without display hardware.
+- Validate QR encoding, placement, reveal-stage consistency, and prepared-image recovery without display hardware.
 - Validate bundled and user-supplied background and decoration resources, selection precedence, and recovery behaviour.
 - Verify that independently configured presentation insets preserve complete literary content without clipping.
 - Validate physical display behaviour on the Waveshare e-paper hardware and representative non-e-paper output.
@@ -144,7 +141,7 @@ Version 0.1 does not include:
 - external playback actions;
 - remote administration;
 - content synchronization between devices;
-- independent presentation layouts, resolutions, or reveal schedules for individual display backends;
+- independent per-backend output configuration, presentation layouts, or reveal schedules (the output-configuration interface is deferred; see `docs/ARCHITECTURE.md`);
 - multiple general-purpose presentation themes;
 - arbitrary decoration placement, drawing scripts, or layout templates;
 - automatic text/background contrast calculation;

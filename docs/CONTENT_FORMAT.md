@@ -264,7 +264,7 @@ The former singular `display.backend` field is not supported. No compatibility a
 
 Backend selection is independent of content selection, reveal scheduling, and image preparation.
 
-All configured backends consume the same complete prepared images. Backend selection does not change the configured output dimensions or the committed daily selection and reveal schedule. Independent output resolutions for individual backends are not supported.
+The current Version 0.1 public configuration exposes one global output resolution, so configured backends use that single output variant. This is a transitional configuration-interface limitation, not an architectural restriction: the runtime architecture resolves output specifications per destination and prepares variants for each distinct specification. The public schema does not yet expose independent per-backend aspect or resolution fields. Backends publish their matching output image and must not geometrically resize, crop, pad, or otherwise adapt it unless an explicit backend contract permits that operation; contractually defined pixel-format or orientation conversion remains possible. Backend selection does not change the committed daily selection or reveal schedule.
 
 Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
 
@@ -435,9 +435,9 @@ Version 0.1 provides one configurable, typography-first presentation layout with
 
 The complete literary composition consists of the primary quotation and its optional source and attribution.
 
-The layout configuration defines:
+The Version 0.1 public layout configuration defines:
 
-- one output resolution per application instance;
+- one transitional global output resolution for the application instance;
 - default independent literary presentation insets;
 - discovered fonts and their default selection pool;
 - discovered backgrounds and their default selection pool;
@@ -454,11 +454,11 @@ A fixed quotation font size is not required.
 
 ### Output resolution and presentation insets
 
-The optional `layout.output_size` is the requested output resolution: a two-item sequence of positive integer pixel dimensions in width, height order. It defaults to `[1920, 1080]`.
+The optional `layout.output_size` is the requested output resolution: a two-item sequence of positive integer pixel dimensions in width, height order. It defaults to `[1920, 1080]`. This is the current global single-output configuration interface; the public schema does not yet provide per-backend output specifications or independent per-backend aspect/resolution fields.
 
-The declared presentation aspect ratio for an output specification must be one of the supported landscape ratios: 4:3, 5:3, 16:9, or 16:10. Requested dimensions are positive integers and need not exactly match the declared aspect ratio. The 3840 × 2400 reference envelope does not limit requested output dimensions. For example, `[1920, 1080]` is an exact 16:9 resolution, while `[1600, 1190]` may be requested for a declared 4:3 presentation aspect.
+The architecture models each destination's output specification as a declared presentation aspect ratio and requested resolution. The declared aspect must be one of the supported landscape ratios: 4:3, 5:3, 16:9, or 16:10. The current public configuration has not exposed the future per-destination fields that will explicitly supply or inherit that aspect. Normal configuration is limited to cases where the declared aspect is already unambiguous under the existing public contract, such as dimensions that exactly match a supported aspect. Do not infer a declared aspect from arbitrary mismatched requested dimensions. In particular, `[1600, 1190]` is an architectural renderer example only when paired with a declared 4:3 aspect; `layout.output_size` alone does not currently express that pair. The 3840 × 2400 reference envelope does not limit requested output dimensions.
 
-Boolean values, non-integer dimensions, zero or negative values, and unsupported declared aspect ratios are invalid and produce an actionable configuration error. An omitted size uses the documented default. The presentation canvas and final whole-image resize are defined in [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry). The backend adapts the output image to its destination; display hardware does not constrain the requested output size or cause core rendering to select another resolution.
+Boolean values, non-integer dimensions, zero or negative values, and unsupported declared aspect ratios are invalid and produce an actionable configuration error. An omitted size uses the documented default, provided its declared aspect is unambiguous. The future backend/output-configuration work will define how destinations explicitly supply or inherit their declared aspect; it is deferred and introduces no fields to this schema. The architecture already models destinations by output specification, so exposing that interface later does not require redesigning rendering or persistence. Current public configuration limitations do not redefine that architecture. The presentation canvas and final whole-image resize are defined in [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry).
 
 The optional `layout.presentation_insets` mapping defines the default literary rectangle as four independent design-canvas pixel measurements. If omitted, it defaults to `left: 384`, `right: 384`, `top: 324`, and `bottom: 324`:
 
@@ -841,7 +841,7 @@ Content-level fields in this document express presentation preferences. Their re
 
 All images generated together use one consistent resolution of those preferences and the available configuration and assets. A valid cached image set is reused even when those inputs change. If a new set must be generated, current inputs may result in different visual choices.
 
-The presentation-level QR policy defaults to enabled. Effective QR enablement is the logical AND of that setting and the selected decoration's `qr_ready` value, which defaults to `true`. Layer `condition` values select artwork after this decision is resolved; they do not enable or disable QR generation.
+The presentation-level QR policy defaults to enabled. Effective QR availability is resolved for each output specification using that policy, the selected decoration's `qr_ready` value, valid in-bounds design-space placement, and sufficient presentation-canvas pixels for at least one pixel per QR module. Resolve this complete decision before selecting conditional decoration layers. QR rasterization and composition occur later on the presentation canvas after literary rendering; layer `condition` values select artwork but do not enable or disable QR generation.
 
 The handling of missing resources during regeneration is defined in `docs/ARCHITECTURE.md`.
 
@@ -897,7 +897,7 @@ Decorations may define presentation insets, but content entries reference decora
 
 Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
-Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared output image; independent per-backend resolutions are not supported. A backend may perform only explicitly permitted destination operations, such as hardware pixel-format or orientation conversion, and must not resize the presentation. A backend's destination dimensions or capabilities do not constrain core rendering.
+Version 0.1 currently configures output resolution globally through `layout.output_size`; independent per-backend aspect and resolution fields are not yet in the public schema. Accordingly, current backends consume the same output variant. The architecture already supports resolving and preparing output variants per destination, so this transitional interface is not a permanent rendering restriction. A backend may perform only operations explicitly permitted by its contract, such as pixel-format or orientation conversion; it must not geometrically resize, crop, pad, or otherwise adapt the output image without such authorization.
 
 The renderer derives the aspect-specific design canvas by cropping the fixed reference envelope. It applies configured design-canvas insets there and scales the resulting geometry to the presentation canvas, as defined in `ARCHITECTURE.md`.
 
@@ -1659,7 +1659,7 @@ The initial formats do not define:
 - resource repetition histories or weighted resource selection;
 - automatic contrast adjustment or foreground recolouring;
 - arbitrary graphical transformations or decoration placement instructions;
-- independent per-backend output resolutions or multi-resolution asset variants;
+- public per-backend output specifications (the current global output setting is transitional; see [Output resolution and presentation insets](#output-resolution-and-presentation-insets));
 - per-entry QR settings;
 - general-purpose themes or style scripting;
 - content-triggered external actions;

@@ -1007,7 +1007,7 @@ OUTPUT IMAGE
     no further presentation operations
 ```
 
-Resolve each output specification's design canvas and presentation canvas. Compose the paper-white base, selected background, and active decoration PNG layers on the design canvas, processing layers in manifest order. Scale the completed graphical image to the presentation canvas and map presentation measurements there. Perform literary-region geometry resolution, configured font-bound scaling, text fitting and wrapping, quotation/source/attribution rendering, QR viability evaluation, QR rasterization and composition, and diagnostic/debug overlays on the presentation canvas. If the requested dimensions differ from it, resize the completed presentation canvas once as a whole; otherwise use it unchanged as the output image. Persist complete output images for every required reveal stage and output specification, then publish each destination's matching image through the existing backend architecture.
+For each output specification, resolve design-space QR placement, map its allocation to the presentation canvas, and determine effective QR availability before selecting conditional decoration layers. This decision accounts for the presentation-level QR policy, selected decoration's `qr_ready` value, valid in-bounds placement, and sufficient presentation-canvas pixels for a complete symbol with at least one pixel per module. Then compose the paper-white base, selected background, and conditionally active decoration PNG layers on the design canvas, processing layers in manifest order. Scale the completed graphical composition to the presentation canvas and map presentation measurements there. Resolve literary geometry and font bounds, fit and render the literary fields, then rasterize and composite QR when effectively available; draw diagnostic/debug overlays on the presentation canvas. If requested dimensions differ, resize the completed presentation canvas once as a whole; otherwise use it unchanged as the output image. Persist complete output images for every required reveal stage and output specification, then publish each destination's matching image through the existing backend architecture.
 
 Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. Each output specification's geometry and graphical composition remain stable across its reveal stages. Other views, including the information view, retain their separate composition and QR behavior while observing the same output-specification model.
 
@@ -1034,7 +1034,27 @@ Select uniformly among distinct usable identifiers at the first applicable level
 
 #### QR generation and conditional artwork
 
-The presentation-level QR policy defaults to enabled and may be disabled. Resolve the QR allocation and placement in design-canvas coordinates, then map its four edges independently to presentation-canvas coordinates using deterministic nearest-integer, half-up rounding. Effective QR viability is resolved on the presentation canvas for each output specification before selecting conditional decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, and valid placement maps to a rectangle large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the design canvas, or insufficient presentation-canvas pixels produce an actionable warning and suppress QR for that output specification without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order.
+The presentation-level QR policy defaults to enabled and may be disabled. Resolve the QR allocation and placement in design-canvas coordinates, then map its four edges independently to presentation-canvas coordinates using deterministic nearest-integer, half-up rounding. This is a deliberate two-phase dependency:
+
+```text
+resolve design-space placement
+        ↓
+map allocation to presentation canvas
+        ↓
+evaluate effective QR availability
+        ↓
+select qr/no-qr conditional decoration layers
+        ↓
+compose graphical design on design canvas
+        ↓
+scale complete graphical composition to presentation canvas
+        ↓
+render literary content
+        ↓
+rasterize and composite QR
+```
+
+Effective QR availability is resolved on the presentation canvas for each output specification before selecting conditional decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, placement metadata is valid and the complete allocation remains within the design canvas, and the mapped allocation is large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the design canvas, or insufficient presentation-canvas pixels produce an actionable warning and suppress QR for that output specification without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order. This availability decision selects artwork but does not rasterize or composite QR pixels; that occurs later on the presentation canvas after literary rendering.
 
 For Version 0.1, an available literary QR code encodes `https://github.com/ControlForgeHQ/refrain`, independently of the selected quotation, entry, display date, or reveal stage. Resolve the destination separately from encoding, rasterization, and placement so a future companion experience can change destination resolution without redesigning those operations. Do not add a configurable destination or depend on the deferred companion experience.
 
@@ -1643,7 +1663,7 @@ Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/E
 
 The optional `--show-entry ENTRY_ID` mode presents one targeted composition without entering normal selection, commitment, scheduling, or recovery. For ordinary IDs, it loads the validated content library, matches the entry ID exactly, and uses that entry's first quotation, independently of date eligibility, priority, repetition history, or random quotation selection. It resolves presentation resources using the same rules as normal image preparation and prepares the final canonical reveal stage for each required output specification, with every supplied field visible.
 
-The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares the required output variants through the shared preparation pipeline. Before initializing display backends, it saves a prepared diagnostic variant as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. The output is independent of the configuration file location and is not production state.
+The diagnostic mode does not read or modify operational state, global history, or prepared-artifact storage. It constructs presentation data in memory and prepares the required output variants through the shared preparation pipeline. Before initializing display backends, it saves one prepared diagnostic variant as `refrain-<entry_id>.png` in the current working directory using exclusive creation. Existing files are never overwritten. When multiple output specifications are required, choose the variant with the lowest declared aspect ratio by numeric value, then the lowest requested width, then the lowest requested height; this canonical ordering is independent of backend declaration order and does not make that specification authoritative for any destination. Under the current single-output configuration, the only variant is saved. The output is independent of the configuration file location and is not production state.
 
 The reserved target `information` is recognized before content-library loading. It uses `prepare_information_view()` directly, without constructing a daily selection record, evaluating a reveal schedule, waiting for the configured information-view duration, or transitioning to a daily quotation. A content entry with that ID remains valid for ordinary selection but cannot override this diagnostic target.
 
@@ -1653,7 +1673,7 @@ After saving the PNG, the mode publishes each backend's matching variant through
 
 The optional `--test-qr` mode generates an RGB calibration variant for each required output specification, without loading the content library or entering selection, scheduling, persistence, history, information-view, debug-layout, or prepared-artifact workflows. QR generation and pixel-aligned composition are hardware-independent; calibration parameters are supplied only through the command line.
 
-The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. A calibration variant is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output; each configured backend receives its matching variant through the existing coordinator. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
+The complete symbol and quiet-zone footprint is placed at the requested integer-pixel right and bottom offsets without rescaling or cropping. One calibration variant is atomically saved as `refrain-qr-test.png` in the current working directory, replacing only that diagnostic output. When multiple output specifications are required, use the same canonical ordering defined for `refrain-<entry_id>.png`; each configured backend still receives its matching variant through the existing coordinator. Under the current single-output configuration, the only variant is saved. Publication failures are reported without changing daily state or removing the saved diagnostic. Successful generation or publication does not establish physical scanning reliability.
 
 ### Interactive decoration preview
 
