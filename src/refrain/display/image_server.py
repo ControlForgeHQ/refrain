@@ -93,9 +93,13 @@ class _ImageRequestHandler(BaseHTTPRequestHandler):
         output_id = unquote(encoded_id)
         representation = self.backend._get_representation(output_id)
         if representation is None:
-            status, body = (404, b"Not found\n") if output_id not in self.backend.output_ids else (
-                503,
-                b"Image not available\n",
+            status, body = (
+                (404, b"Not found\n")
+                if output_id not in self.backend.output_ids
+                else (
+                    503,
+                    b"Image not available\n",
+                )
             )
             self._send_status(status, body)
             return

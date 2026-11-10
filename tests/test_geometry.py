@@ -6,9 +6,9 @@ from refrain.geometry import (
     PresentationGeometryError,
     PresentationInsets,
     ResolvedOutputSpecification,
+    design_canvas_for_aspect,
     resolve_presentation_geometry,
     round_half_up,
-    design_canvas_for_aspect,
 )
 
 
@@ -22,7 +22,7 @@ from refrain.geometry import (
     ],
 )
 def test_design_canvas_sizes_are_aspect_specific(aspect_ratio, expected_design_size) -> None:
-    specification = ResolvedOutputSpecification(aspect_ratio, expected_design_size)
+    assert ResolvedOutputSpecification(aspect_ratio, expected_design_size).aspect_ratio == aspect_ratio
 
     assert design_canvas_for_aspect(aspect_ratio)[0] == expected_design_size
 

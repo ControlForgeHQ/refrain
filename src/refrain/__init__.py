@@ -62,9 +62,9 @@ from .geometry import (
     PresentationGeometryError,
     PresentationInsets,
     ResolvedOutputSpecification,
+    design_canvas_for_aspect,
     resolve_presentation_geometry,
     scale_design_geometry_to_presentation,
-    design_canvas_for_aspect,
 )
 from .persistence import (
     DailySnapshot,

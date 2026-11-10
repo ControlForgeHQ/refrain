@@ -117,11 +117,7 @@ class DisplayPublicationCoordinator:
             if self._desired is not None and self._desired.identity == identity:
                 self._close_images(images)
                 return
-            required = {
-                state.destination.output_specification
-                for state in self._states.values()
-                if not state.terminal
-            }
+            required = {state.destination.output_specification for state in self._states.values() if not state.terminal}
             if required - images.keys():
                 self._close_images(images)
                 raise ValueError(f"publication is missing output variants: {required - images.keys()}")
@@ -282,9 +278,7 @@ class DisplayPublicationCoordinator:
         with self._backend_locks[backend_type]:
             worker = current_thread()
             if any(
-                thread is not worker
-                and thread.is_alive()
-                and state.backend_configuration.type == backend_type
+                thread is not worker and thread.is_alive() and state.backend_configuration.type == backend_type
                 for state, thread in zip(self._states.values(), self._threads, strict=True)
             ):
                 return

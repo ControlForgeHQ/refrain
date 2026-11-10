@@ -78,6 +78,48 @@ class PreparationDiagnostics:
     nine_slice_guides: tuple[NineSliceGuide, ...]
 
 
+@dataclass(frozen=True)
+class _PresentationChoices:
+    decoration_identifier: str
+    decoration: DecorationResource | None
+    background_identifier: str
+    text_color: tuple[int, int, int]
+    decoration_tint: tuple[int, int, int] | None
+    fonts: Mapping[str, ResolvedFont]
+
+
+def _resolve_presentation_choices(
+    snapshot: DailySnapshot,
+    configuration: ApplicationConfiguration,
+    chooser: random.Random,
+    *,
+    force_white_background: bool,
+    forced_decoration_tint: tuple[int, int, int] | None,
+) -> _PresentationChoices:
+    decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser)
+    background_identifier = (
+        "none" if force_white_background else _resolve_background(snapshot, decoration, configuration, chooser)
+    )
+    text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
+    decoration_tint = _resolve_decoration_tint(
+        configuration,
+        snapshot,
+        decoration,
+        chooser,
+        () if decoration is None else decoration.layers,
+        forced_decoration_tint,
+    )
+    fonts = _resolve_fonts(snapshot, configuration, decoration, chooser)
+    return _PresentationChoices(
+        decoration_identifier,
+        decoration,
+        background_identifier,
+        text_color,
+        decoration_tint,
+        MappingProxyType(fonts),
+    )
+
+
 def _resolve_presentation(
     snapshot: DailySnapshot,
     configuration: ApplicationConfiguration,
@@ -191,9 +233,7 @@ def _generate_daily_background(
         return base
     try:
         with load_background_image(resource) as image:
-            fitted = ImageOps.fit(
-                image, design_canvas_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
-            )
+            fitted = ImageOps.fit(image, design_canvas_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
             try:
                 base.paste(fitted, (0, 0), fitted if fitted.mode == "RGBA" else None)
             finally:
@@ -674,19 +714,16 @@ def _prepare_daily_images_for_specification(
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
     output_specification: ResolvedOutputSpecification,
+    choices: _PresentationChoices,
     *,
-    chooser: random.Random | None = None,
     strict_decoration: bool = False,
     on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
-    force_white_background: bool = False,
-    forced_decoration_tint: tuple[int, int, int] | None = None,
     debug_layout: bool = False,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
-    on_presentation_image: Callable[
-        [ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None
-    ]
-    | None = None,
+    on_presentation_image: (
+        Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
+    ) = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -701,8 +738,8 @@ def _prepare_daily_images_for_specification(
         raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
     if not isinstance(output_specification, ResolvedOutputSpecification):
         raise DailyImagePreparationError("output_specification must be a ResolvedOutputSpecification")
-    chooser = chooser if chooser is not None else random.Random()
-    decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser)
+    decoration_identifier = choices.decoration_identifier
+    decoration = choices.decoration
     composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
         snapshot, configuration, decoration, output_specification
     )
@@ -723,16 +760,11 @@ def _prepare_daily_images_for_specification(
     else:
         qr_unavailable_reason = f"decoration {decoration.identifier!r} is not marked qr_ready"
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
-    background_identifier = (
-        "none" if force_white_background else _resolve_background(snapshot, decoration, configuration, chooser)
-    )
     if on_resolved_bounds is not None:
         on_resolved_bounds(output_specification, geometry.presentation_literary_bounds)
-    text_color = _resolve_text_color(configuration, snapshot, decoration, chooser)
+    text_color = choices.text_color
     qr_parameters = PRODUCTION_QR_PARAMETERS
-    decoration_tint = _resolve_decoration_tint(
-        configuration, snapshot, decoration, chooser, decoration_layers, forced_decoration_tint
-    )
+    decoration_tint = choices.decoration_tint
     nine_slice_guides: list[NineSliceGuide] = []
 
     def collect_nine_slice_guide(
@@ -741,11 +773,11 @@ def _prepare_daily_images_for_specification(
         layer_index = next(index for index, candidate in enumerate(decoration.layers, start=1) if candidate is layer)
         nine_slice_guides.append(NineSliceGuide(layer, layer_index, x_bounds, y_bounds))
 
-    fonts = _resolve_fonts(snapshot, configuration, decoration, chooser)
+    fonts = choices.fonts
     try:
         background = _generate_daily_background(
             geometry.design_canvas_size,
-            background_identifier,
+            choices.background_identifier,
             configuration.backgrounds,
         )
         try:
@@ -808,9 +840,7 @@ def _prepare_daily_images_for_specification(
                 if on_presentation_image is not None:
                     for image in images:
                         on_presentation_image(output_specification, image, diagnostics)
-                return tuple(
-                    _resize_presentation_to_output(image, geometry.requested_output_size) for image in images
-                )
+                return tuple(_resize_presentation_to_output(image, geometry.requested_output_size) for image in images)
             except Exception:
                 for image in images:
                     image.close()
@@ -840,12 +870,17 @@ def prepare_daily_images(
     debug_layout: bool = False,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
-    on_presentation_image: Callable[
-        [ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None
-    ]
-    | None = None,
+    on_presentation_image: (
+        Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
+    ) = None,
 ) -> Mapping[ResolvedOutputSpecification, tuple[Image.Image, ...]]:
     """Prepare complete reveal-stage image variants for all required output specifications."""
+    if not isinstance(snapshot, DailySnapshot):
+        raise DailyImagePreparationError("snapshot must be a DailySnapshot")
+    if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
+        raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
+    if not isinstance(configuration, ApplicationConfiguration):
+        raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
     if not isinstance(output_specifications, Sequence) or isinstance(output_specifications, (str, bytes)):
         raise DailyImagePreparationError("output_specifications must be a nonempty sequence")
     if not output_specifications or any(
@@ -860,6 +895,13 @@ def prepare_daily_images(
     )
     results: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]] = {}
     chooser = chooser if chooser is not None else random.Random()
+    choices = _resolve_presentation_choices(
+        snapshot,
+        configuration,
+        chooser,
+        force_white_background=force_white_background,
+        forced_decoration_tint=forced_decoration_tint,
+    )
     try:
         for output_specification in unique_specifications:
             results[output_specification] = _prepare_daily_images_for_specification(
@@ -867,11 +909,9 @@ def prepare_daily_images(
                 stages,
                 configuration,
                 output_specification,
-                chooser=chooser,
+                choices,
                 strict_decoration=strict_decoration,
                 on_resolved_bounds=on_resolved_bounds,
-                force_white_background=force_white_background,
-                forced_decoration_tint=forced_decoration_tint,
                 debug_layout=debug_layout,
                 qr_disabled_reason=qr_disabled_reason,
                 on_diagnostics=on_diagnostics,

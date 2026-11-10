@@ -185,11 +185,7 @@ class PreparedImageArtifactVariant:
                     raise ValueError("PNG checksum does not match manifest")
                 stream.seek(0)
                 with Image.open(stream) as image:
-                    if (
-                        image.format != "PNG"
-                        or image.size != self.requested_output_size
-                        or image.mode != self.mode
-                    ):
+                    if image.format != "PNG" or image.size != self.requested_output_size or image.mode != self.mode:
                         raise ValueError(
                             f"expected PNG size {self.requested_output_size} mode {self.mode}; "
                             f"found {image.format} size {image.size} mode {image.mode}"

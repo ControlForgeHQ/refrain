@@ -10,8 +10,7 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 import refrain.information_view as information_view
-from refrain import load_application_config
-from refrain import ResolvedOutputSpecification
+from refrain import ResolvedOutputSpecification, load_application_config
 
 
 def prepare_default_information_image(configuration):

@@ -775,7 +775,7 @@ def test_representative_configuration_example_loads() -> None:
     )
     assert [(spec.aspect_ratio, spec.requested_output_size) for spec in config.required_output_specifications] == [
         ("16:10", (3840, 2400)),
-        ("16:9", (1920, 1080))
+        ("16:9", (1920, 1080)),
     ]
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.information_view_duration == 5
@@ -883,9 +883,7 @@ def test_image_server_requires_nonempty_outputs(tmp_path: Path, outputs: object)
 def test_image_server_output_ids_must_be_nonempty_strings(tmp_path: Path, output_id: object) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(
-            display={"backends": [{"type": "image-server", "outputs": [{"id": output_id}]}]}
-        ),
+        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": output_id}]}]}),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
@@ -898,11 +896,7 @@ def test_image_server_rejects_duplicate_output_ids(tmp_path: Path) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
         configuration_data(
-            display={
-                "backends": [
-                    {"type": "image-server", "outputs": [{"id": "room"}, {"id": "room"}]}
-                ]
-            }
+            display={"backends": [{"type": "image-server", "outputs": [{"id": "room"}, {"id": "room"}]}]}
         ),
     )
 
@@ -919,22 +913,13 @@ def test_image_server_rejects_duplicate_output_ids(tmp_path: Path) -> None:
 def test_image_server_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(
-            display={
-                "backends": [
-                    {"type": "image-server", "outputs": [{"id": "default", **fields}]}
-                ]
-            }
-        ),
+        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": "default", **fields}]}]}),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    assert any(
-        item.field == "display.backends[0].outputs[0]"
-        for item in error.value.diagnostics
-    )
+    assert any(item.field == "display.backends[0].outputs[0]" for item in error.value.diagnostics)
 
 
 def test_image_server_outputs_resolve_independently_and_share_duplicate_specifications(tmp_path: Path) -> None:

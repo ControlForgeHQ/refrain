@@ -1578,9 +1578,7 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
             initial_render_started.set()
             assert release_initial_render.wait(5)
         specification = diagnostic._output_specification(state.aspect_ratio, state.requested_output_size)
-        geometry = diagnostic.resolve_presentation_geometry(
-            specification, configuration.presentation_insets
-        )
+        geometry = diagnostic.resolve_presentation_geometry(specification, configuration.presentation_insets)
         return diagnostic._RenderedPreview(
             Image.new("RGB", specification.requested_output_size, "white"),
             None,

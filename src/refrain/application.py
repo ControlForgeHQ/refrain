@@ -269,9 +269,7 @@ def run_show_entry(
                     error or "no successful acknowledgement",
                 )
         if failed:
-            raise ApplicationError(
-                "diagnostic image was not published by every configured display destination"
-            )
+            raise ApplicationError("diagnostic image was not published by every configured display destination")
         return None
     finally:
         if coordinator is not None:
@@ -597,10 +595,12 @@ def run_startup(
     try:
         if configuration.information_view_duration > 0:
             try:
-                information_images = prepare_information_view(
-                    configuration,
-                    configuration.required_output_specifications,
+                prepared_information = prepare_information_view(
+                    configuration, configuration.required_output_specifications
                 )
+                information_images = {
+                    specification: images[-1] for specification, images in prepared_information.items()
+                }
             except InformationViewPreparationError as error:
                 _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
             else:
@@ -682,15 +682,10 @@ def run_startup(
                 raise ApplicationError("all configured display destinations are unavailable")
             if keep_open is not None:
                 for backend_configuration in configuration.display_backends:
-                    if (
-                        backend_configuration.type in {"window", "image-server"}
-                        and any(
-                            coordinator.acknowledgements.get(
-                                f"{backend_configuration.type}:{output.identifier}"
-                            )
-                            == identity
-                            for output in backend_configuration.outputs
-                        )
+                    if backend_configuration.type in {"window", "image-server"} and any(
+                        coordinator.acknowledgements.get(f"{backend_configuration.type}:{output.identifier}")
+                        == identity
+                        for output in backend_configuration.outputs
                     ):
                         keep_open(backend_configuration.type)
                         break
@@ -841,10 +836,13 @@ def run_application(
                             _LOGGER.warning("Information view was not published within the initial attempt period")
                     if not information_view_done and information_view_images is None:
                         try:
-                            information_view_images = prepare_information_view(
+                            prepared_information = prepare_information_view(
                                 configuration,
                                 configuration.required_output_specifications,
                             )
+                            information_view_images = {
+                                specification: images[-1] for specification, images in prepared_information.items()
+                            }
                         except InformationViewPreparationError as error:
                             _LOGGER.warning(
                                 "Cannot prepare information view; proceeding to daily presentation: %s",

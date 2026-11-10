@@ -263,6 +263,144 @@ def test_prepared_reveal_images_use_destination_output_resolution(
             image.close()
 
 
+def test_presentation_choices_are_shared_across_output_specifications(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    background_a = tmp_path / "background-a.png"
+    background_b = tmp_path / "background-b.png"
+    layer_qr = tmp_path / "layer-qr.png"
+    layer_no_qr = tmp_path / "layer-no-qr.png"
+    for path, color in (
+        (background_a, (220, 220, 220)),
+        (background_b, (230, 230, 230)),
+        (layer_qr, (0, 0, 0)),
+        (layer_no_qr, (0, 0, 0)),
+    ):
+        with Image.new("RGB", (8, 8), color) as image:
+            image.save(path)
+
+    def decoration(identifier: str) -> DecorationResource:
+        return DecorationResource(
+            identifier,
+            (
+                DecorationLayerResource(layer_qr, "contain", condition="qr"),
+                DecorationLayerResource(layer_no_qr, "contain", condition="no-qr"),
+            ),
+            False,
+        )
+
+    fonts = {
+        "lora": _FONT_REGISTRY["lora"],
+        "lora-alt": FontResource("lora-alt", _LORA, bundled=True),
+    }
+    backgrounds = {
+        "paper-a": BackgroundResource("paper-a", background_a, False),
+        "paper-b": BackgroundResource("paper-b", background_b, False),
+    }
+    decorations = {"frame-a": decoration("frame-a"), "frame-b": decoration("frame-b")}
+    configuration = _configuration(
+        fonts,
+        backgrounds,
+        decorations,
+        default_fonts=("lora", "lora-alt"),
+        default_backgrounds=("paper-a", "paper-b"),
+        default_decorations=("frame-a", "frame-b"),
+    )
+    configuration = replace(
+        configuration,
+        default_text_colors=("black", "burnt-orange"),
+        default_decoration_colors=("black", "blue"),
+    )
+
+    class AlternatingChooser:
+        def __init__(self) -> None:
+            self.counts: dict[tuple[str, ...], int] = {}
+
+        def choice(self, values):
+            pool = tuple(values)
+            index = self.counts.get(pool, 0)
+            self.counts[pool] = index + 1
+            return pool[index % len(pool)]
+
+    chooser = AlternatingChooser()
+    specifications = (
+        ResolvedOutputSpecification("4:3", (80, 60)),
+        ResolvedOutputSpecification("16:10", (3840, 2400)),
+    )
+    snapshot = replace(
+        make_snapshot("missing-font", source=None, attribution=None),
+        quotation_text="A",
+        quotation_identity="A",
+    )
+    resolved_fonts: list[str] = []
+    resolved_backgrounds: list[str] = []
+    resolved_decorations: list[str] = []
+    resolved_tints: list[tuple[int, int, int] | None] = []
+    resolved_text_colors: list[tuple[int, int, int]] = []
+    diagnostics = {}
+
+    original_layout = preparation.layout_composition
+    original_background = preparation._generate_daily_background
+    original_decoration = preparation._apply_daily_decoration
+    original_render = preparation.render_reveal_stages
+
+    def capture_layout(composition, font, *args, **kwargs):
+        resolved_fonts.append(font.identifier)
+        return original_layout(composition, font, *args, **kwargs)
+
+    def capture_background(size, identifier, registry):
+        resolved_backgrounds.append(identifier)
+        return original_background(size, identifier, registry)
+
+    def capture_decoration(background, identifier, registry, tint_rgb=None, **kwargs):
+        resolved_decorations.append(identifier)
+        resolved_tints.append(tint_rgb)
+        return original_decoration(background, identifier, registry, tint_rgb, **kwargs)
+
+    def capture_render(*args, **kwargs):
+        resolved_text_colors.append(kwargs["text_color"])
+        return original_render(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "layout_composition", capture_layout)
+    monkeypatch.setattr(preparation, "_generate_daily_background", capture_background)
+    monkeypatch.setattr(preparation, "_apply_daily_decoration", capture_decoration)
+    monkeypatch.setattr(preparation, "render_reveal_stages", capture_render)
+
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        (CompositionVisibility(),),
+        configuration,
+        specifications,
+        chooser=chooser,
+        on_diagnostics=diagnostics.__setitem__,
+    )
+    try:
+        assert len(variants) == 2
+        assert len(resolved_fonts) == len(specifications)
+        assert len(resolved_backgrounds) == len(specifications)
+        assert len(resolved_decorations) == len(specifications)
+        assert len(resolved_tints) == len(specifications)
+        assert len(resolved_text_colors) == len(specifications)
+        assert len(set(resolved_fonts)) == 1
+        assert len(set(resolved_backgrounds)) == 1
+        assert len(set(resolved_decorations)) == 1
+        assert len(set(resolved_tints)) == 1
+        assert len(set(resolved_text_colors)) == 1
+        assert set(chooser.counts.values()) == {1}
+        assert diagnostics[ResolvedOutputSpecification("4:3", (80, 60))].qr_placement is None
+        assert diagnostics[ResolvedOutputSpecification("16:10", (3840, 2400))].qr_placement is not None
+        assert {
+            layer.condition for layer in diagnostics[ResolvedOutputSpecification("4:3", (80, 60))].active_layers
+        } == {"no-qr"}
+        assert {
+            layer.condition for layer in diagnostics[ResolvedOutputSpecification("16:10", (3840, 2400))].active_layers
+        } == {"qr"}
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
+
+
 @pytest.mark.parametrize(
     ("specification", "design_canvas_size"),
     [

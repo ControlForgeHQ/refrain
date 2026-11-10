@@ -143,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--test-output",
         metavar="PATH",
-        help="save a full-working-canvas diagnostic PNG instead of opening the preview (requires one decoration ID)",
+        help="save a full-design-canvas diagnostic PNG instead of opening the preview (requires one decoration ID)",
     )
     parser.add_argument(
         "--test-variants",
@@ -430,9 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_path,
                 selection=arguments.test_decoration,
                 aspect_ratio=arguments.test_aspect,
-                requested_output_size=(
-                    None if arguments.test_resolution is None else tuple(arguments.test_resolution)
-                ),
+                requested_output_size=(None if arguments.test_resolution is None else tuple(arguments.test_resolution)),
                 quotation=arguments.test_quotation or "short",
                 qr_enabled=False if arguments.no_qr else None,
                 background_enabled=not arguments.no_background,

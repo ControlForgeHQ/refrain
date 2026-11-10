@@ -41,7 +41,6 @@ from .geometry import (
     ResolvedOutputSpecification,
     resolve_presentation_geometry,
     round_half_up,
-    design_canvas_for_aspect,
 )
 from .preparation import PreparationDiagnostics, prepare_daily_images
 from .qr import QRCodePlacementError, resolve_qr_placement
@@ -670,6 +669,7 @@ def _render(
     snapshot = _build_snapshot(configuration, entry, quotation, date(2000, 1, 1))
     stages = resolve_reveal_stages(snapshot)
     resolved: list[PreparationDiagnostics] = []
+
     def remember_diagnostics(
         specification: ResolvedOutputSpecification,
         diagnostics: PreparationDiagnostics,
@@ -725,7 +725,6 @@ def _diagnostic_status(
 ) -> str:
     decoration = state.decoration or "(none)"
     position = f"{state.decoration_index + 1} of {len(state.decoration_ids)}" if state.decoration_ids else "0 of 0"
-    divisor = math.gcd(*image_size)
     ratio = state.aspect_ratio
     qr_effective = details is not None and details.qr_placement is not None
     qr = f"requested={'on' if state.qr_enabled else 'off'}, effective={'on' if qr_effective else 'off'}"
@@ -854,7 +853,7 @@ def _save_png_atomically(image: Image.Image, target: Path) -> None:
 
 
 def export_decoration_png(config_file: str | Path, state: DiagnosticState, output_path: str | Path) -> Path:
-    """Render one deterministic full-working-canvas presentation without opening a display."""
+    """Render one deterministic full-design-canvas presentation without opening a display."""
     target = _absolute_output_path(output_path)
     if target.is_dir():
         suggested = str(Path(output_path).expanduser() / "preview.png")
@@ -1083,7 +1082,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
     reset_button.pack(side="left", padx=2)
     copy_button = tk.Button(geometry_actions, text="Copy values", command=lambda: copy_geometry())
     copy_button.pack(side="left", padx=2)
-    geometry_status = tk.Label(geometry_actions, text="Coordinates are working-canvas pixels.", anchor="w")
+    geometry_status = tk.Label(geometry_actions, text="Coordinates are design-canvas pixels.", anchor="w")
     geometry_status.pack(side="left", padx=6)
     status_var = tk.StringVar(value=message or "Rendering preview…")
     status_label = tk.Label(root, textvariable=status_var, justify="left", anchor="w")
@@ -1126,7 +1125,7 @@ def _run_tk_preview(config_file: str | Path, state: DiagnosticState) -> None:
         previous_error = geometry_error[0]
         geometry_error[0] = error
         geometry_status.configure(
-            text=f"Geometry validation: {error}" if error else "Coordinates are working-canvas pixels."
+            text=f"Geometry validation: {error}" if error else "Coordinates are design-canvas pixels."
         )
         if error:
             status_var.set(f"Geometry validation error: {error}\n{last_rendered_status[0]}")

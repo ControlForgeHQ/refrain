@@ -20,13 +20,13 @@ from ._yaml import load_yaml, yaml_error_location
 from .assets import parse_font_faces, valid_identifier
 from .geometry import (
     DEFAULT_PRESENTATION_INSETS,
+    SUPPORTED_PRESENTATION_ASPECTS,
     PresentationGeometryError,
     PresentationInsets,
     ResolvedOutputSpecification,
-    SUPPORTED_PRESENTATION_ASPECTS,
+    design_canvas_for_aspect,
     validate_presentation_insets,
     validate_requested_size,
-    design_canvas_for_aspect,
 )
 
 _TOP_LEVEL_FIELDS = {"general", "content", "reveal", "display", "layout", "presentation", "information_view", "palette"}
@@ -284,7 +284,7 @@ def _parse_presentation_insets(
         if type(edge_value) is not int or edge_value < 0:
             report(
                 f"{field}.{edge}",
-                "is required and must be a nonnegative integer working-canvas pixel value",
+                "is required and must be a nonnegative integer design-canvas pixel value",
                 severity,
             )
         else:

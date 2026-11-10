@@ -34,7 +34,11 @@ from refrain import (
     SchedulingContext,
     SelectionProposal,
     normalize_quotation,
+)
+from refrain import (
     prepare_daily_images as _prepare_daily_image_variants,
+)
+from refrain import (
     recover_prepared_daily_images as _recover_daily_images,
 )
 from refrain.config import BackgroundResource
@@ -198,7 +202,9 @@ def test_presentation_canvas_bounds_are_preserved_on_the_raster_variant(
 
     variant = result.variant_for(_OUTPUT_SPECIFICATION)
     assert variant.presentation_canvas_literary_bounds == resolved_bounds[0]
-    assert _OUTPUT_SPECIFICATION.requested_output_size == _CONFIGURATION.required_output_specifications[0].requested_output_size
+    assert _OUTPUT_SPECIFICATION.requested_output_size == (
+        _CONFIGURATION.required_output_specifications[0].requested_output_size
+    )
 
 
 def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
@@ -457,8 +463,7 @@ def test_storage_failure_is_preserved_and_closes_generated_images(
     state, state_path = committed_state
     before = state_path.read_bytes()
     images = tuple(
-        Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color)
-        for color in ("white", "gray", "black")
+        Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color) for color in ("white", "gray", "black")
     )
     error = ArtifactWriteError("injected storage failure", published=published)
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: {_OUTPUT_SPECIFICATION: images})
@@ -480,8 +485,7 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
     state, state_path = committed_state
     before = state_path.read_bytes()
     images = tuple(
-        Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color)
-        for color in ("white", "gray", "black")
+        Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color) for color in ("white", "gray", "black")
     )
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: {_OUTPUT_SPECIFICATION: images})
 
@@ -520,9 +524,7 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
     def prepare(snapshot, stages, configuration, output_specifications, **_kwargs):
         prepared.append(tuple(stages))
         return {
-            specification: tuple(
-                Image.new("RGB", specification.requested_output_size, "white") for _ in stages
-            )
+            specification: tuple(Image.new("RGB", specification.requested_output_size, "white") for _ in stages)
             for specification in output_specifications
         }
 

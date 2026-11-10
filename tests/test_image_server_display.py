@@ -134,12 +134,14 @@ def test_named_outputs_keep_independent_images_and_entity_tags() -> None:
         with Image.open(io.BytesIO(hallway_response[2])) as served:
             assert served.size == (3, 3)
             assert served.getpixel((0, 0)) == (0, 0, 255)
-        assert request(port, path="/display/kitchen/current", headers={"If-None-Match": kitchen_response[1]["ETag"]})[
-            0
-        ] == 304
-        assert request(port, path="/display/hallway/current", headers={"If-None-Match": kitchen_response[1]["ETag"]})[
-            0
-        ] == 200
+        assert (
+            request(port, path="/display/kitchen/current", headers={"If-None-Match": kitchen_response[1]["ETag"]})[0]
+            == 304
+        )
+        assert (
+            request(port, path="/display/hallway/current", headers={"If-None-Match": kitchen_response[1]["ETag"]})[0]
+            == 200
+        )
         assert request(port, path="/display/unknown/current")[0] == 404
     finally:
         kitchen.close()

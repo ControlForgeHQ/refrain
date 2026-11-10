@@ -10,11 +10,11 @@ from PIL import Image
 import refrain.__main__ as cli
 import refrain.application as application
 from refrain import ApplicationError
-from refrain.geometry import ResolvedOutputSpecification
 from refrain.display import DisplayBackendInitializationError
 from refrain.geometry import (
     DEFAULT_PRESENTATION_INSETS,
     PresentationInsets,
+    ResolvedOutputSpecification,
     resolve_presentation_geometry,
 )
 from refrain.qr import PRODUCTION_QR_PARAMETERS, render_qr_code, resolve_qr_placement
@@ -204,9 +204,7 @@ def test_existing_refrain_png_is_not_part_of_show_entry_publication(
         image.close()
 
 
-def test_show_entry_does_not_save_a_diagnostic_png(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_show_entry_does_not_save_a_diagnostic_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config, content = workspace(tmp_path)
     (content / "entry.yaml").write_text('id: entry\nquotations: ["A quotation."]\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -265,9 +263,7 @@ def test_information_target_takes_precedence_over_a_content_entry_with_the_same_
     monkeypatch.setattr(
         application,
         "prepare_information_view",
-        lambda configuration, output_specifications: {
-            output_specifications[0]: (Image.new("RGB", (4, 4), (7, 8, 9)),)
-        },
+        lambda configuration, output_specifications: {output_specifications[0]: (Image.new("RGB", (4, 4), (7, 8, 9)),)},
     )
     monkeypatch.setattr(
         application,
@@ -331,8 +327,7 @@ def test_partial_publication_failure_isolated_and_closes_backends(
     config.write_text(
         _CONFIG.replace(
             '    - type: "window"',
-            '    - type: "window"\n    - type: "image-server"\n'
-            '      outputs:\n        - id: "default"',
+            '    - type: "window"\n    - type: "image-server"\n' '      outputs:\n        - id: "default"',
         ),
         encoding="utf-8",
     )
@@ -443,9 +438,7 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
         image.close()
 
 
-def test_cli_uses_default_configuration_path_for_show_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_uses_default_configuration_path_for_show_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = tmp_path / "default-config.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
     observed = []
