@@ -128,19 +128,23 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Reveal Stage:** A cumulative set of content fields eligible for presentation at a particular point in the configured reveal schedule.
 
-**Presentation Aspect Ratio:** The declared ratio that determines composition and selects a canonical working/design canvas independently of raster dimensions.
+**Presentation Aspect Ratio:** The declared ratio that selects the design canvas and determines the exact-ratio dimensions of the presentation canvas.
 
-**Output Specification:** The resolved presentation aspect ratio and requested raster resolution for a configured destination, according to that backend's configuration and defaults.
+**Design Canvas:** The high-resolution, aspect-specific graphical composition and authored-layout space selected from the fixed 3840 × 2400 reference envelope. It is independent of requested output resolution.
 
-**Prepared Raster Variant:** A complete, persisted image for one reveal stage and one output specification. Destinations with identical output specifications may share a variant.
+**Presentation Canvas:** The raster on which literary layout, text, QR, and diagnostic overlays are resolved and rendered for one output specification.
 
-**Prepared Image:** A complete, persisted image representing one reveal stage of the committed daily selection for a particular output specification.
+**Output Image:** The completed presentation canvas, optionally resized once as a whole to the exact requested dimensions. It is the image persisted as a prepared PNG and delivered to display backends.
 
-**Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared raster variants.
+**Output Specification:** The declared presentation aspect ratio and requested output resolution for a configured destination, according to that backend's configuration and defaults.
+
+**Prepared Image:** A persisted output image representing one reveal stage of the committed daily selection for one output specification. Destinations with identical output specifications may share it.
+
+**Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared output images.
 
 **Renderer:** The hardware-independent component responsible for composing complete presentation images.
 
-**Display Backend:** The component responsible for presenting the prepared raster variant matching its configured output specification through a destination, including directly connected display hardware or a network-accessible image service.
+**Display Backend:** The component responsible for presenting the prepared output image matching its configured output specification through a destination, including directly connected display hardware or a network-accessible image service.
 
 **Persistent State:** The authoritative operational state containing the current daily selection, selection revision, active repetition history, reveal progress, and scheduling context required for recovery across application restarts.
 
@@ -219,15 +223,15 @@ Failure to record global history must not cause a committed quotation to be sele
 
 ### Preparation
 
-Preparation resolves the unique output specifications required by configured destinations and generates a complete prepared raster variant for every required reveal stage and output specification.
+Preparation resolves the unique output specifications required by configured destinations and generates a complete prepared output image for every required reveal stage and output specification.
 
-Destinations with identical output specifications share the same prepared raster variants. Prepared images are persisted independently of the content library.
+Destinations with identical output specifications share the same prepared output images. Prepared images are persisted independently of the content library.
 
 Preparation does not modify the committed selection or its selection histories.
 
 ### Presentation
 
-The display scheduler determines which reveal stage should currently be presented. Each destination receives the prepared raster variant matching its output specification.
+The display scheduler determines which reveal stage should currently be presented. Each destination receives the prepared output image matching its output specification.
 
 Normal scheduled reveals do not invoke the renderer or consult the content library.
 
@@ -659,7 +663,7 @@ The daily selection record contains a complete copy of the selected quotation an
 
 It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, and any selected content preferences needed to interpret or present the quotation. It does not contain other quotations from the entry.
 
-The record is not a serialized rendering plan. Do not store output dimensions, working-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Current configuration, content-level preferences, and available assets are used to prepare images.
+The record is not a serialized rendering plan. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Current configuration, content-level preferences, and available assets are used to prepare images.
 
 Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location; it must not silently replace the selected content or modify the state file. For a standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For an overridden state path, identify that path and direct the operator to stop Refrain and manually back up and remove or quarantine only that file; `--reset` does not manage custom paths.
 
@@ -939,30 +943,38 @@ Rendered output must be testable and inspectable without Raspberry Pi display ha
 
 Daily-image preparation separates graphical composition from the shared literary renderer. The renderer owns the typography, fitting, positioning, and drawing of the quotation and its optional source and attribution within the resolved literary rectangle. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
 
-#### Output and working canvases
+#### Image spaces and output geometry
 
-Aspect ratio is a first-class presentation property: it determines composition and the canonical working/design canvas used for layout coordinates. The set of supported ratios is extensible. The initial supported landscape ratios are 4:3, 5:3, 16:9, and 16:10.
+The literary presentation pipeline has exactly three primary image spaces: the design canvas, the presentation canvas, and the output image. They have distinct responsibilities and coordinate systems.
 
-Each supported ratio has one canonical working/design canvas. The 3840 × 2400 reference artwork envelope remains a fixed authoring reference, independent of output dimensions and display hardware. Derive each canonical canvas by reducing only the dimension that exceeds its ratio, centered within that envelope:
+The fixed 3840 × 2400 reference envelope defines the maximum design area. The declared presentation aspect selects the corresponding centered design canvas by reducing only the dimension that exceeds the ratio:
 
-| Aspect ratio | Canonical working/design canvas | Centered reference-envelope crop |
+| Aspect ratio | Design canvas | Reference-envelope crop |
 |---|---:|---|
 | 4:3 | 3200 × 2400 | 320 pixels from each horizontal edge |
 | 5:3 | 3840 × 2304 | 48 pixels from each vertical edge |
 | 16:9 | 3840 × 2160 | 120 pixels from each vertical edge |
 | 16:10 | 3840 × 2400 | None |
 
-Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested raster resolution. Backend-specific configuration and defaults determine these values; do not infer the declared aspect ratio from requested dimensions. Destinations resolving to identical specifications share one prepared raster variant.
+The design canvas is the high-resolution, aspect-specific graphical composition and authored-layout space. It is independent of requested output resolution. Its operations are creation of the paper-white base; background scaling, cropping, and composition; decoration-layer composition, `contain`, `cover`, and `nine-slice` transformations; decoration tinting; and resolution of configured presentation geometry expressed in design-canvas units. Configured measurements use design-canvas units unless a field explicitly describes source-asset pixels.
 
-For each output specification, render natively at the requested integer-pixel resolution when it exactly matches the declared aspect ratio. Otherwise, render the complete presentation at the nearest integer-pixel resolution matching the declared ratio, then resample the complete rendered image to the exact requested dimensions. The complete-image resample occurs only in the mismatched case. Backend-specific configuration or defaults may determine an output specification, but the renderer owns composition and canonical-canvas geometry; hardware does not redefine either.
+Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested output resolution. Backend-specific configuration and defaults determine these values; do not infer the declared ratio from requested dimensions. The presentation-canvas dimensions are derived from the specification and do not form part of artifact identity. When requested dimensions exactly match the declared ratio, the presentation canvas has those dimensions. Otherwise, it is the nearest positive integer-pixel resolution that exactly matches the declared ratio, using the existing deterministic nearest-raster and tie-breaking rules.
 
-Artwork authoring measurements use the fixed reference envelope and map to the canonical canvas for the selected aspect according to the artwork contract. Presentation insets are defined directly in canonical working-canvas pixels and are not reference-envelope geometry. Scale canonical working-canvas coordinates uniformly to the native render resolution for each output specification. Convert mapped edges to the nearest integer pixel, rounding exact half-pixel values upward. Resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps. Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
+For a mismatched request, reduce the declared ratio to integer dimensions `(rw, rh)`, then compute `k = max(1, round_half_up((rw × requested_width + rh × requested_height) / (rw² + rh²)))`. The presentation canvas is `(rw × k, rh × k)`. This projected scale and half-up tie break define the nearest exact-ratio raster deterministically.
+
+Scale the completed graphical composition from the design canvas as one image to the presentation canvas. Scale design-canvas presentation measurements into presentation-canvas coordinates using deterministic nearest-integer rounding, with exact half-pixel values rounded upward. Map rectangle edges independently; resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps. Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
+
+When the requested resolution already matches the declared aspect, the presentation canvas is also the output image and no final resize is required. Otherwise, after all presentation-canvas composition is complete, resize that complete image once to the exact requested dimensions. This may intentionally distort the presentation. No layout, geometry resolution, text fitting or rendering, QR generation or composition, graphical composition, diagnostic annotation, or element-specific scaling or positioning occurs after this resize. Persist the resulting output image as the prepared PNG artifact and deliver it unchanged to the appropriate display backend, except for backend-owned hardware pixel-format or orientation conversion explicitly permitted by the backend contract.
+
+Any transient geometry retained for diagnostics, including literary bounds, is expressed in presentation-canvas coordinates and is not authoritative application state. It does not become output-image geometry merely because the resulting PNG is persisted. When enabled for an aspect-mismatched output, draw diagnostic overlays on the presentation canvas before applying the same final whole-image resize as the displayed content.
+
+For example, a declared 16:9 aspect and requested 1920 × 1080 resolution use a 3840 × 2160 design canvas, a 1920 × 1080 presentation canvas, and a 1920 × 1080 output image, with no final resize. A declared 4:3 aspect and requested 1600 × 1190 resolution use a 3200 × 2400 design canvas and the nearest exact 4:3 presentation canvas, 1596 × 1197. Background and decoration composition occurs on the design canvas; the completed graphical composition is scaled to the presentation canvas, where literary, QR, and diagnostic composition occurs before one complete-image resize. The output image is 1600 × 1190. No element is laid out or rendered in 1600 × 1190 coordinates.
 
 #### Literary presentation geometry
 
-The literary region is defined by four independent working-canvas pixel insets: `left`, `right`, `top`, and `bottom`. Each is measured inward from the corresponding edge of the canonical canvas for the selected aspect ratio. For example, `left: 180` means 180 working-canvas pixels from the left edge regardless of output resolution. Insets are not first applied to the full reference envelope and are not intersected with a cropped reference rectangle. Scale the resulting working-space rectangle uniformly to each variant's native render resolution using deterministic nearest-integer, half-up edge rounding.
+Literary insets are design-canvas measurements, each measured inward from the corresponding design-canvas edge for the selected aspect ratio. Resolve the literary rectangle in design-canvas coordinates, then map its edges to the presentation canvas using deterministic nearest-integer, half-up rounding. Do not derive literary geometry from aspect-mismatched output-image dimensions.
 
-Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve the rectangle and layout independently for each raster variant, then keep them unchanged across that variant's reveal stages. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
+Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve and scale the rectangle for the presentation canvas, then keep it unchanged across that output specification's reveal stages. Configured minimum and maximum literary font sizes are also design-canvas measurements; scale the effective bounds to presentation-canvas pixels with deterministic nearest-integer, half-up rounding before fitting and rendering. Quotation fitting and wrapping operate only in presentation-canvas coordinates. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
 
 Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
 
@@ -970,26 +982,44 @@ Presentation insets are independent of decoration slice coordinates, PNG dimensi
 
 Prepare each literary reveal-stage image in this order:
 
-1. Resolve the unique output specifications and the canonical working/design canvas for each declared aspect ratio.
-2. For each specification, determine its native render resolution and map canonical geometry to that raster.
-3. Independently resolve the variant's effective QR viability and geometry.
-4. Compose a paper-white base, the selected background, and selected decoration PNG layers for the variant, processing layers in manifest order.
-5. Fit and render literary text at the variant's native resolution using that variant's effective rectangle.
-6. When QR generation is available for the variant, generate and composite it at native resolution.
-7. If the requested dimensions do not match the declared aspect ratio, resample the complete rendered image to those exact dimensions. Otherwise, do not apply a final whole-image resample.
-8. Persist complete images for every required reveal stage and output specification, then publish each destination's matching variant through the existing backend architecture.
+```text
+source assets
+    ↓
+DESIGN CANVAS
+    paper-white base
+    background composition
+    decoration composition
+    authored/configured presentation geometry
+    ↓
+scale complete graphical composition
+scale design-space presentation measurements
+    ↓
+PRESENTATION CANVAS
+    literary-region geometry resolution
+    literary fitting and rendering
+    QR generation and composition
+    diagnostic overlays
+    ↓
+optional whole-image resize only
+    ↓
+OUTPUT IMAGE
+    persisted/published image
+    no further presentation operations
+```
 
-Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. Each variant's geometry and graphical composition remain stable across its reveal stages. Other views, including the information view, retain their separate composition and QR behavior while observing the same output-specification model.
+Resolve each output specification's design canvas and presentation canvas. Compose the paper-white base, selected background, and active decoration PNG layers on the design canvas, processing layers in manifest order. Scale the completed graphical image to the presentation canvas and map presentation measurements there. Perform literary-region geometry resolution, configured font-bound scaling, text fitting and wrapping, quotation/source/attribution rendering, QR viability evaluation, QR rasterization and composition, and diagnostic/debug overlays on the presentation canvas. If the requested dimensions differ from it, resize the completed presentation canvas once as a whole; otherwise use it unchanged as the output image. Persist complete output images for every required reveal stage and output specification, then publish each destination's matching image through the existing backend architecture.
+
+Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. Each output specification's geometry and graphical composition remain stable across its reveal stages. Other views, including the information view, retain their separate composition and QR behavior while observing the same output-specification model.
 
 #### Decoration layers
 
-A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order. The methods are `contain`, which aspect-preservingly scales the image to fit the canonical working canvas; `cover`, which aspect-preservingly scales the source directly to cover that canvas and crops excess artwork symmetrically around its center; and `nine-slice`, which adapts an image using four explicit source-pixel slice insets. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
+A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. Layers are composed in manifest order on the design canvas. The methods are `contain`, which aspect-preservingly scales the image to fit that canvas; `cover`, which aspect-preservingly scales the source directly to cover that canvas and crops excess artwork symmetrically around its center; and `nine-slice`, which adapts an image using four explicit source-image pixel distances. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
 
-For `nine-slice`, 3840 × 2400 PNGs are the reference-quality authoring size. Smaller or differently proportioned custom PNGs remain measured in their actual source pixels: fit the complete source uniformly within the fixed reference envelope using centered `contain`, with scale `min(3840 / source_width, 2400 / source_height)`, and apply that same scale and centered offset to its slice boundaries. This maps source measurements into reference-space artwork measurements; it does not change the fixed reference coordinate system. Upscaling a smaller source cannot restore detail and may visibly soften artwork. Four source-pixel boundaries (`left`, `right`, `top`, `bottom`) partition the PNG into nine regions. Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
+For `nine-slice`, the configured `left`, `right`, `top`, and `bottom` distances partition the source image directly into nine regions in its actual source-pixel coordinates. Reject non-integer, negative, overlapping, or out-of-bounds boundaries. Do not first scale the source into the reference envelope or scale its slice boundaries through that envelope. The configured distances are also the preserved edge thicknesses on the design canvas, numerically 1:1, regardless of the source image's overall dimensions.
 
-Map nine-slice source coordinates to high-resolution working-space measurements once. Then place the four corners at the corresponding canonical working-canvas edges and preserve their resolved widths and heights across supported aspect ratios. Do not apply an additional working-canvas-to-reference-envelope ratio to corner dimensions. For example, a resolved 240 × 180 working-space corner remains 240 × 180 on each supported canvas when those dimensions fit. Horizontal and vertical edge thicknesses remain fixed; only their lengths adapt to the destination canvas. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends of that edge segment; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. The center region stretches in both dimensions to fill its destination rectangle. Edge tiling is not supported.
+Preserve corner widths and heights and horizontal- and vertical-edge thicknesses on the design canvas. Adapt only edge lengths according to their configured `stretch` or `crop` behavior; stretch the center region in both dimensions. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. Reject a design canvas smaller than the combined opposing preserved edge thicknesses. Edge tiling is not supported.
 
-Use the deterministic source-to-reference contain transform and nearest-integer, half-up rounding rule for source boundaries and their resolved working-space measurements. Preserve corner dimensions after that mapping. Resolve shared destination boundaries once and assign any rounding remainder to the adjoining edge, so regions meet without gaps or overlaps. Reject a destination smaller than the combined preserved corner dimensions with an actionable diagnostic. Preserve source alpha through scaling and alpha composition.
+For example, applying 20-pixel slices to a 1920 × 1200 source on a 3840 × 2400 design canvas preserves four 20 × 20 corners. The top and bottom center regions are 3800 × 20, the left and right center regions are 20 × 2360, and the center is 3800 × 2360. The source center and edge pixels are transformed to fill their destination regions according to the existing stretch/crop policy. Preserve source alpha through scaling and alpha composition.
 
 #### Decoration tinting
 
@@ -1004,15 +1034,15 @@ Select uniformly among distinct usable identifiers at the first applicable level
 
 #### QR generation and conditional artwork
 
-The presentation-level QR policy defaults to enabled and may be disabled. Effective QR viability is resolved independently for each raster variant before selecting its conditional decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, and valid placement maps to a native-render-resolution rectangle large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the canonical working canvas, or insufficient native render pixels produce an actionable warning and suppress QR for that variant without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order.
+The presentation-level QR policy defaults to enabled and may be disabled. Resolve the QR allocation and placement in design-canvas coordinates, then map its four edges independently to presentation-canvas coordinates using deterministic nearest-integer, half-up rounding. Effective QR viability is resolved on the presentation canvas for each output specification before selecting conditional decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, and valid placement maps to a rectangle large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the design canvas, or insufficient presentation-canvas pixels produce an actionable warning and suppress QR for that output specification without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order.
 
 For Version 0.1, an available literary QR code encodes `https://github.com/ControlForgeHQ/refrain`, independently of the selected quotation, entry, display date, or reveal stage. Resolve the destination separately from encoding, rasterization, and placement so a future companion experience can change destination resolution without redesigning those operations. Do not add a configurable destination or depend on the deferred companion experience.
 
-Version 0.1 uses QR version 4, error-correction level M, UTF-8 byte encoding, and a complete four-module quiet zone. The 33 × 33 symbol and eight quiet-zone modules occupy a fixed application-level allocation of 246 × 246 pixels on the selected canonical working canvas. This allocation is independent of aspect ratio, output resolution, decoration, and literary insets; decorations cannot redefine its dimensions. A payload that does not fit the selected version and error-correction level produces an actionable preparation error.
+Version 0.1 uses QR version 4, error-correction level M, UTF-8 byte encoding, and a complete four-module quiet zone. The 33 × 33 symbol and eight quiet-zone modules occupy a fixed application-level allocation of 246 × 246 design-canvas pixels. This allocation is independent of aspect ratio, output resolution, decoration, and literary insets; decorations cannot redefine its dimensions. A payload that does not fit the selected version and error-correction level produces an actionable preparation error.
 
-Resolve QR payload independently from encoding, rasterization, and placement. A selected decoration may position the complete allocation with one horizontal method (`qr_from_left`, `qr_from_right`, or `qr_centered: horizontal`) and one vertical method (`qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical`). Directional offsets are nonnegative canonical working-canvas pixels. When an axis has no method, its independent default is 20 pixels from the right or bottom edge. `qr_centered` is one scalar value and cannot center both axes. Positioning fields are mutually exclusive per axis; malformed or conflicting values suppress QR instead of selecting a precedence or silently using defaults. Centering and bounds validation use the canonical canvas for the variant's declared aspect. Map the allocation's four edges independently to native render coordinates using deterministic nearest-integer, half-up rounding.
+Resolve QR payload independently from encoding, rasterization, and placement. A selected decoration may position the complete allocation with one horizontal method (`qr_from_left`, `qr_from_right`, or `qr_centered: horizontal`) and one vertical method (`qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical`). Directional offsets are nonnegative design-canvas pixels. When an axis has no method, its independent default is 20 pixels from the right or bottom edge. `qr_centered` is one scalar value and cannot center both axes. Positioning fields are mutually exclusive per axis; malformed or conflicting values suppress QR instead of selecting a precedence or silently using defaults. Centering and bounds validation use the design canvas for the variant's declared aspect.
 
-Use the mapped native-render allocation rectangle as authoritative, including any width or height difference caused by independent edge rounding. Choose the largest fitting module size for each variant as `min(render_width, render_height) // 41`. If this is zero, warn and suppress QR for that variant. Otherwise rasterize square integer-pixel modules and the complete quiet zone without antialiasing. Center the complete square footprint inside the allocation using half-up rounding when unused pixels are odd; do not clip, distort, or resample it before any required complete-image resampling. Resolve the same placement and QR pixels across every reveal stage of one variant.
+Use the mapped presentation-canvas allocation rectangle as authoritative, including any width or height difference caused by independent edge rounding. Choose the largest fitting module size for each output specification as `min(allocation_width, allocation_height) // 41`. If this is zero, warn and suppress QR for that output specification. Otherwise rasterize square integer-pixel modules and the complete quiet zone without antialiasing. Center the complete square footprint inside the allocation using half-up rounding when unused pixels are odd. Do not generate, position, resize, or rerasterize QR specifically for the output image; if a final resize is required, the complete QR is distorted only as part of the complete-image resize. Resolve the same placement and QR pixels across every reveal stage of one output specification.
 
 QR output is composited after literary text. The literary renderer must fit the complete literary composition within the configured literary rectangle, but this does not protect text from independently composited artwork or QR output. QR placement does not change literary insets, rearrange text, or reserve additional space. Refrain does not detect or correct QR/text overlap. A complete valid prepared-image cache remains reusable without reevaluating QR placement; regeneration may use current configuration without changing committed selection state. The information view remains outside literary QR behavior.
 
@@ -1077,7 +1107,7 @@ The registries, valid identifiers, image requirements, pool configuration, and c
 
 Preparation resolves current configuration and available visual resources once for the complete reveal-stage set. It applies the documented fallback and diagnostic policies to unavailable or invalid resources without changing the selected quotation or its reveal progression.
 
-Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation applies deterministic, aspect-preserving centered cover scaling and equal-edge cropping at working resolution, then composites the result over paper-white while preserving source alpha. Decoration layers use the configured rendering method at working resolution. Their slice coordinates and transformations do not determine the literary insets.
+Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation applies deterministic, aspect-preserving centered cover scaling and equal-edge cropping on the design canvas, then composites the result over paper-white while preserving source alpha. Decoration layers use the configured rendering method on the design canvas. Their slice coordinates and transformations do not determine the literary insets.
 
 A missing or invalid optional visual resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required selection data or an unrenderable literary composition, remain errors.
 
@@ -1179,7 +1209,7 @@ The byline retains its applicable leading dash and separator punctuation through
 
 Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
 
-Presentation insets are canonical working-canvas pixels, measured inward from each edge of the canvas for the declared aspect ratio. Apply them directly in working space, then uniformly scale the resulting geometry to each variant's native render resolution.
+Presentation insets are design-canvas pixels, measured inward from each edge of the canvas for the declared aspect ratio. Resolve them on the design canvas, then map their edges to the presentation canvas using deterministic nearest-integer, half-up rounding.
 
 Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
 
@@ -1230,7 +1260,7 @@ Automatic font selection requires at least one usable member in the effective de
 
 Font selection is independent for each complete image preparation. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
-Resolve the selected decoration and font bundle, then resolve all role faces once for the complete required variant set. Preserve those font identities across its raster variants and reveal stages; do not select fonts independently for a variant or stage.
+Resolve the selected decoration and font bundle, then resolve all role faces once for the complete required output specifications. Preserve those font identities across output images and reveal stages; do not select fonts independently for an output specification or stage.
 
 Reuse a valid complete cached image set without resolving fonts. When regeneration is required, resolve bundle and face preferences from the selected content properties and current decoration, registry, and global configuration, using the precedence and failure behavior above. Font identifiers, paths, face choices, and font contents are not persisted in operational state. Use one consistent bundle and role-face resolution across all variants and stages prepared together.
 
@@ -1272,7 +1302,7 @@ The treatment must not reveal readable text through insufficient distortion or i
 
 Additional configurable concealment styles are not required.
 
-Each raster variant's reveal stages use the same resolved composition layout.
+Each output specification's reveal stages use the same resolved composition layout.
 
 Content that cannot be rendered legibly within the supported literary rectangle must be handled explicitly rather than silently clipped, truncated, or omitted.
 
@@ -1280,7 +1310,7 @@ Content that cannot be rendered legibly within the supported literary rectangle 
 
 The daily selection record contains the selected entry identity, normalized quotation identity, original quotation text, optional source and attribution, effective reveal schedule, display date, and any selected content-level properties or preferences needed to interpret or present the quotation. Selection revision, repetition history, highest reveal stage, and scheduling context are held in authoritative operational state.
 
-The record does not contain resolved rendering values. Output dimensions, working-canvas size, inset rectangle, font and face choices, palette RGB values, visual-resource selections, tinting decisions, QR settings or placement, layer transformations, and other derived presentation parameters are resolved during image preparation and are not persisted solely for pixel-identical recovery.
+The record does not contain resolved rendering values. Output dimensions, design-canvas and presentation-canvas sizes, inset rectangle, font and face choices, palette RGB values, visual-resource selections, tinting decisions, QR settings or placement, layer transformations, and other derived presentation parameters are resolved during image preparation and are not persisted solely for pixel-identical recovery.
 
 Required selected content remains available even when its source YAML entry is edited or unavailable. Changes to content-level and global presentation preferences can affect a newly generated cache, but do not alter the selected quotation or its effective reveal schedule.
 
@@ -1292,7 +1322,7 @@ Presentation preparation resolves presentation-wide choices consistently and pro
 
 Each image represents a cumulative visibility stage for one output specification.
 
-Within one raster variant, all stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes. Across variants, selected presentation resources and other presentation-wide choices remain consistent, while raster-dependent sizes, geometry, wrapping, and QR results are resolved independently.
+Within one output specification, all stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes. Across output specifications, selected presentation resources and other presentation-wide choices remain consistent, while presentation-canvas sizes, geometry, wrapping, and QR results are resolved independently.
 
 The renderer does not independently recalculate the composition for each reveal stage.
 
@@ -1345,7 +1375,7 @@ Version 0.1 provides three built-in display backends:
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
 - `image-server`: Makes the current complete image available to network clients through a read-only HTTP service.
 
-Each configured backend receives the complete prepared raster variant matching its resolved output specification for each reveal stage. Backends may share a variant when their output specifications are identical. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
+Each configured backend receives the complete prepared output image matching its resolved output specification for each reveal stage. Backends may share an image when their output specifications are identical. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux. Its image-display area matches the supplied image dimensions and presents the image at native pixel size. A later update with different dimensions resizes the display area; it does not resample, crop, or letterbox the image.
 
@@ -1362,7 +1392,7 @@ The Waveshare backend owns model-specific hardware operations, including:
 - hardware error reporting;
 - cleanup.
 
-The Waveshare 13.3-inch panel resolves to the fixed 4:3 @ 1600 × 1200 output specification. Its backend receives the matching prepared raster and must not resample arbitrary presentation images. An update with dimensions other than 1600 × 1200 is invalid and reports a backend update failure as a contract violation; it is not resized to fit. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete native-size image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
+The Waveshare 13.3-inch panel resolves to the fixed 4:3 @ 1600 × 1200 output specification. Its backend receives the matching output image and must not resize it. An update with dimensions other than 1600 × 1200 is invalid and reports a backend update failure as a contract violation; it is not resized to fit. Images with alpha or palette transparency must be converted at the backend boundary. The backend converts the complete output image before initializing the controller and verifies that conversion produced exactly 960,000 packed elements. Each valid update initializes the controller, transfers the complete image, and returns the controller to sleep. It does not clear the display before an update or during shutdown. `close()` is repeatable and sleeps the controller only when an update has left it active.
 
 The image-server backend owns an HTTP service that exposes the most recently accepted complete image. Its publication and lifecycle responsibilities are defined separately below.
 
@@ -1382,7 +1412,7 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 Refrain coordinates publication of the current prepared presentation independently to every configured display backend.
 
-A single committed daily selection and its coherent set of prepared raster variants are shared by all destinations. Only the selection is authoritative.
+A single committed daily selection and its coherent set of prepared output images are shared by all destinations. Only the selection is authoritative.
 
 Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent subsequent scheduling evaluation.
 
@@ -1627,15 +1657,15 @@ The complete symbol and quiet-zone footprint is placed at the requested integer-
 
 ### Interactive decoration preview
 
-Use `--test-decoration all` to preview all available decorations or `--test-decoration ID` to inspect one. A sorted decoration picker allows direct selection. The preview starts with a short quotation; `--test-quotation medium|long` selects another initial length, and `--test-aspect 4:3|5:3|16:9|16:10` selects its working canvas. The configured aspect is used when no override is given; requested output dimensions do not determine diagnostic render dimensions. Diagnostics render directly at the canonical working-canvas sizes: 3200 × 2400 for 4:3, 3840 × 2304 for 5:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. `--no-qr`, `--no-background`, and `--no-tinting` establish diagnostic-only initial overrides; `--debug-layout` also enables diagnostic geometry overlays.
+Use `--test-decoration all` to preview all available decorations or `--test-decoration ID` to inspect one. A sorted decoration picker allows direct selection. The preview starts with a short quotation; `--test-quotation medium|long` selects another initial length, and `--test-aspect 4:3|5:3|16:9|16:10` selects its design canvas. The configured aspect is used when no override is given. For each selected aspect, the diagnostic uses the design-canvas dimensions as its requested exact-aspect size, so the presentation canvas has the same dimensions: 3200 × 2400 for 4:3, 3840 × 2304 for 5:3, 3840 × 2160 for 16:9, and 3840 × 2400 for 16:10. `--no-qr`, `--no-background`, and `--no-tinting` establish diagnostic-only initial overrides; `--debug-layout` also enables diagnostic geometry overlays.
 
-The desktop preview uses the normal preparation and rendering pipeline. Only after the complete full-working-canvas composition is rendered is it uniformly downscaled to fit the available screen area. The image is not stretched, cropped, or scrolled. Window fitting accounts for the toolbar, status/help area, and optional expanded Geometry panel; all controls remain outside the composition. Right/Space and Left navigate decorations; the picker selects an ID directly; Up and Down cycle quotation lengths; A cycles 4:3, 5:3, 16:9, and 16:10 and resizes and centers the window; Q, B, T, and D toggle QR, graphical background, decoration tinting, and geometry overlays; R/F5 reload configuration and assets; X exits. Mouse toolbar controls perform the same state transitions.
+The desktop preview uses the normal preparation and rendering pipeline. Only after the complete presentation canvas is composed and rendered as an output image is the desktop preview uniformly downscaled to fit the available screen area. This display-only preview scaling does not change the output image. The image is not stretched, cropped, or scrolled. Window fitting accounts for the toolbar, status/help area, and optional expanded Geometry panel; all controls remain outside the composition. Right/Space and Left navigate decorations; the picker selects an ID directly; Up and Down cycle quotation lengths; A cycles 4:3, 5:3, 16:9, and 16:10 and resizes and centers the window; Q, B, T, and D toggle QR, graphical background, decoration tinting, and geometry overlays; R/F5 reload configuration and assets; X exits. Mouse toolbar controls perform the same state transitions.
 
-The collapsed Geometry panel exposes presentation insets and QR anchoring for interactive inspection only. Its values are in working-canvas pixels, independent of output resolution and desktop preview scaling. The panel identifies decoration-defined values separately from inherited configuration/default values and temporary overrides. Numeric edits apply on Enter or focus loss; valid edits rerender through the normal preparation pipeline, while invalid literary insets leave the last successfully rendered image intact. QR placement continues to use the authoritative resolver and its normal unavailable-QR behavior. Expanding the panel reduces only the desktop preview scale; it does not change the rendered composition or its aspect ratio.
+The collapsed Geometry panel exposes presentation insets and QR anchoring for interactive inspection only. Its configured values are in design-canvas pixels, independent of output resolution and desktop preview scaling. Resolved diagnostic bounds, including literary bounds, use presentation-canvas coordinates; overlays are composed there before any optional final whole-image resize. The panel identifies decoration-defined values separately from inherited configuration/default values and temporary overrides. Numeric edits apply on Enter or focus loss; valid edits rerender through the normal preparation pipeline, while invalid literary insets leave the last successfully rendered image intact. QR placement continues to use the authoritative resolver and its normal unavailable-QR behavior. Expanding the panel reduces only the desktop preview scale; it does not change the rendered composition or its aspect ratio.
 
 Temporary inset overrides are independent per edge, and QR overrides are independent per axis and decoration. Centering an axis remembers its most recent edge-relative method and offset; uncentering it restores that anchor, including when centering the other axis requires one axis to be uncentered. They remain session-only across other preview controls and reloads; reload refreshes every value without an override from the current manifest or configuration. **Reset to manifest** discards the selected decoration's overrides and remembered anchors. **Copy values** copies an explicit manifest YAML fragment for the current valid effective geometry, including inherited values; it never writes a manifest or configuration file. These controls do not affect headless PNG export or production rendering. See [decoration manifest metadata](CONTENT_FORMAT.md#decoration-manifests) for the authoritative geometry and QR property definitions.
 
-`--test-decoration ID --test-output PATH` renders exactly one composition to a full-working-canvas PNG without opening Tk or initializing a display backend. The output path's parent directories are created when needed. A directory cannot be used as `PATH`; provide a filename. Individual PNGs are written atomically. `all` is not valid with `--test-output`; select an ID. The export applies the selected aspect, quotation, and diagnostic presentation options, and contains no preview scaling or toolbar.
+`--test-decoration ID --test-output PATH` renders exactly one composition to an aspect-specific design-canvas-sized output image without opening Tk or initializing a display backend. The output path's parent directories are created when needed. A directory cannot be used as `PATH`; provide a filename. Individual PNGs are written atomically. `all` is not valid with `--test-output`; select an ID. The export applies the selected aspect, quotation, and diagnostic presentation options, and contains no preview scaling or toolbar.
 
 `--test-decoration ID --test-variants DIRECTORY` writes a complete batch under a new `DIRECTORY/ID` subdirectory. Existing `DIRECTORY/ID` paths are never overwritten or merged. Aspect directories are generated in stable order (`4x3`, `5x3`, `16x9`, `16x10`), with quotation lengths (`short`, `medium`, `long`) and QR-on before QR-off when effective QR is available. Filenames are `<length>-qr-on.png` and `<length>-qr-off.png`; when QR is unavailable for an aspect, only its QR-off files are written. Configuration QR policy, decoration readiness, placement, and normal conditional-layer selection determine effective availability. Batch mode generates every aspect and quotation length automatically, so it rejects `--test-aspect`, `--test-quotation`, and `--no-qr`; it is also mutually exclusive with `--test-output` and does not accept `all`. `--no-background`, `--no-tinting`, and `--debug-layout` apply to every image.
 
@@ -1762,10 +1792,10 @@ The following must remain true as the project evolves:
 15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
 16. A committed daily selection preserves the selected content and effective reveal schedule independently of subsequent content-library changes.
 17. Every required reveal-stage image is generated for each unique required output specification.
-18. Presentation-wide choices remain consistent across raster variants, while raster-dependent layout and rendering results are resolved independently for each variant.
-19. Aspect ratio is distinct from requested raster resolution and determines composition and the canonical working/design canvas.
-20. A correctly proportioned requested resolution is rendered natively; an aspect-mismatched request is rendered at the nearest matching integer-pixel resolution and the complete image is then resampled to the exact request.
-21. Destinations with identical output specifications may share a prepared variant, and each backend receives its matching variant without owning literary composition or presentation policy.
+18. Presentation-wide choices remain consistent across output specifications, while presentation-canvas layout and rendering results are resolved independently for each specification.
+19. The declared aspect ratio is distinct from requested output resolution: it selects the design canvas and determines the exact-ratio presentation-canvas dimensions for each output specification.
+20. Graphical composition and configured presentation measurements move from the design canvas to the presentation canvas before all literary, QR, and diagnostic composition; only an optional final whole-image resize to the exact requested dimensions may follow.
+21. Destinations with identical output specifications may share a prepared output image, and each backend receives it without owning literary composition or presentation policy.
 22. Complete prepared-variant sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
 23. Missing or unusable variants can be prepared from the committed selection without reselection, history changes, or reveal regression.
 24. A restart retains the committed selection and reveal progression only while the current logical display date matches the committed date.

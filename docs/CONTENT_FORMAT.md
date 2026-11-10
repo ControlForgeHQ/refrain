@@ -378,7 +378,7 @@ The optional `presentation.qr` mapping controls QR generation for literary prese
 |---|---|---|---|
 | `presentation.qr.enabled` | Boolean | No | `true` |
 
-When `enabled` is `false`, no QR code is generated for literary presentations. A selected decoration's `qr_ready: false` also suppresses QR generation. Valid positioning that places the complete QR allocation outside the working canvas, or output resolution too small for a complete one-pixel-per-module symbol, suppresses QR with an actionable warning but does not invalidate the decoration or literary presentation. Resolve effective availability once for each complete image preparation, before selecting conditional decoration artwork. This setting does not affect the standalone information view.
+When `enabled` is `false`, no QR code is generated for literary presentations. A selected decoration's `qr_ready: false` also suppresses QR generation. Valid positioning that places the complete QR allocation outside the design canvas, or a presentation canvas too small for a complete one-pixel-per-module symbol, suppresses QR with an actionable warning but does not invalidate the decoration or literary presentation. Resolve effective availability once for each complete image preparation, before selecting conditional decoration artwork. This setting does not affect the standalone information view.
 
 For Version 0.1, an enabled literary QR code always encodes `https://github.com/ControlForgeHQ/refrain`, independently of content, display date, and reveal stage. Its production encoding and raster contract is defined in [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork). The destination is not configurable, and no content-entry QR field exists.
 
@@ -454,22 +454,22 @@ A fixed quotation font size is not required.
 
 ### Output resolution and presentation insets
 
-The optional `layout.output_size` is a two-item sequence of positive integer pixel dimensions in width, height order. It defaults to `[1920, 1080]`.
+The optional `layout.output_size` is the requested output resolution: a two-item sequence of positive integer pixel dimensions in width, height order. It defaults to `[1920, 1080]`.
 
-The configured output must use exactly one of the supported landscape aspect ratios: 4:3, 16:9, or 16:10. Its dimensions must be positive integers, but the 3840 × 2400 reference envelope does not limit final output dimensions. For example, `[1920, 1080]` and `[3840, 2160]` are valid 16:9 sizes. Output may be smaller or larger than the ratio-specific working canvas.
+The declared presentation aspect ratio for an output specification must be one of the supported landscape ratios: 4:3, 5:3, 16:9, or 16:10. Requested dimensions are positive integers and need not exactly match the declared aspect ratio. The 3840 × 2400 reference envelope does not limit requested output dimensions. For example, `[1920, 1080]` is an exact 16:9 resolution, while `[1600, 1190]` may be requested for a declared 4:3 presentation aspect.
 
-Boolean values, non-integer dimensions, zero or negative values, and unsupported aspect ratios are invalid and produce an actionable configuration error. An omitted value uses the documented default. The backend adapts the globally prepared output to its destination; display hardware does not constrain the output-size options or cause core rendering to select another resolution.
+Boolean values, non-integer dimensions, zero or negative values, and unsupported declared aspect ratios are invalid and produce an actionable configuration error. An omitted size uses the documented default. The presentation canvas and final whole-image resize are defined in [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry). The backend adapts the output image to its destination; display hardware does not constrain the requested output size or cause core rendering to select another resolution.
 
-The optional `layout.presentation_insets` mapping defines the default literary rectangle as four independent working-canvas pixel measurements. If omitted, it defaults to `left: 384`, `right: 384`, `top: 324`, and `bottom: 324`:
+The optional `layout.presentation_insets` mapping defines the default literary rectangle as four independent design-canvas pixel measurements. If omitted, it defaults to `left: 384`, `right: 384`, `top: 324`, and `bottom: 324`:
 
 | Field | Type | Required |
 |---|---|---|
-| `layout.presentation_insets.left` | Nonnegative working-canvas pixel integer | Yes, when the mapping is supplied |
-| `layout.presentation_insets.right` | Nonnegative working-canvas pixel integer | Yes, when the mapping is supplied |
-| `layout.presentation_insets.top` | Nonnegative working-canvas pixel integer | Yes, when the mapping is supplied |
-| `layout.presentation_insets.bottom` | Nonnegative working-canvas pixel integer | Yes, when the mapping is supplied |
+| `layout.presentation_insets.left` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `layout.presentation_insets.right` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `layout.presentation_insets.top` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `layout.presentation_insets.bottom` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
 
-The 3840 × 2400 envelope defines the maximum high-resolution authoring space from which the working canvas is derived. Insets are applied directly inward from the selected working canvas's edges, not from the full reference envelope. Thus `left: 180` means 180 working-resolution pixels at every supported aspect ratio. Insets are not normalized coordinates; they are uniformly scaled from the working canvas to final output dimensions. Boolean values and non-integer values are invalid.
+The 3840 × 2400 envelope defines the maximum design area from which the aspect-specific design canvas is selected. Insets are applied inward from that design canvas's edges, not from the full reference envelope. Thus `left: 180` means 180 design-canvas pixels at every supported aspect ratio. Insets are not normalized coordinates; resolve the literary rectangle in design-canvas coordinates and scale its edges to the presentation canvas using the deterministic rounding rules in `ARCHITECTURE.md`. Do not scale literary geometry directly to aspect-mismatched requested output dimensions. Boolean values and non-integer values are invalid.
 
 For example:
 
@@ -483,11 +483,11 @@ layout:
     bottom: 324
 ```
 
-Each opposing pair must leave a positive width or height on the active working canvas for the configured aspect ratio. A missing edge in a supplied mapping, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
+Each opposing pair must leave a positive width or height on the active design canvas for the declared presentation aspect ratio. A missing edge in a supplied mapping, negative value, or degenerate resulting rectangle is an error. When a decoration supplies `presentation_insets`, it must provide all four edges and the complete mapping replaces the global mapping. Otherwise the global mapping applies. Insets are independent of decoration image dimensions, slice coordinates, and transformations.
 
 The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage. This fitting guarantee does not prevent the text rectangle from overlapping independently composited artwork or QR output. The default configuration and bundled artwork must avoid undesirable overlap; custom configuration and decoration authors are responsible for checking their composition. Refrain does not detect or correct graphical overlap.
 
-YAML supplies the configured output dimensions, working-canvas pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Working-canvas dimensions and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
+YAML supplies the requested output dimensions, design-canvas pixel insets, and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Design-canvas dimensions, presentation-canvas dimensions, and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
 
 A content entry cannot directly specify presentation insets.
 
@@ -677,23 +677,23 @@ layers:
 | `format` | Integer version (`1`) | Yes | — |
 | `id` | Asset identifier | Yes | — |
 | `layers` | Nonempty ordered sequence of layer mappings | Yes | — |
-| `presentation_insets` | Complete four-edge mapping of nonnegative working-canvas pixel integers | No | Global `layout.presentation_insets` |
+| `presentation_insets` | Complete four-edge mapping of nonnegative design-canvas pixel integers | No | Global `layout.presentation_insets` |
 | `font` | Font identifier | No | None |
 | `font_faces` | Mapping of literary roles to face identifiers | No | None |
 | `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 | `background` | Background identifier or `"none"` | No | None |
 | `qr_ready` | Boolean | No | `true` |
-| `qr_from_left` | Nonnegative working-canvas pixel integer | No | — |
-| `qr_from_right` | Nonnegative working-canvas pixel integer | No | `20` when no horizontal method is supplied |
-| `qr_from_top` | Nonnegative working-canvas pixel integer | No | — |
-| `qr_from_bottom` | Nonnegative working-canvas pixel integer | No | `20` when no vertical method is supplied |
+| `qr_from_left` | Nonnegative design-canvas pixel integer | No | — |
+| `qr_from_right` | Nonnegative design-canvas pixel integer | No | `20` when no horizontal method is supplied |
+| `qr_from_top` | Nonnegative design-canvas pixel integer | No | — |
+| `qr_from_bottom` | Nonnegative design-canvas pixel integer | No | `20` when no vertical method is supplied |
 | `qr_centered` | Scalar string: `horizontal` or `vertical` | No | — |
 | `tintable` | Boolean | No | `true` |
 | `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 
 `format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Each layer's image path is resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, invalid layer definitions, and unreadable manifests or images exclude only the affected decoration.
 
-The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are working-canvas measurements, validated and resolved according to [Output resolution and presentation insets](#output-resolution-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
+The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are design-canvas measurements, validated and resolved according to [Output resolution and presentation insets](#output-resolution-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
 
 An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid inset metadata or artwork excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
@@ -703,11 +703,11 @@ The decoration-wide `tintable` property must be a YAML boolean and defaults to `
 
 `qr_ready` must be a YAML boolean and defaults to `true`. When false, QR generation is intentionally suppressed for this selected decoration regardless of the presentation-level QR setting. A malformed value produces a warning and uses the default.
 
-The optional directional offsets are nonnegative integer distances in ratio-specific working-canvas pixels, measured inward from their named edges. Booleans, strings, fractional values, nulls, and other types are invalid. `qr_centered` accepts only one scalar YAML string, `horizontal` or `vertical`; lists, mappings, null, and other values are invalid. Horizontally, at most one of `qr_from_left`, `qr_from_right`, or `qr_centered: horizontal` may be supplied. Vertically, at most one of `qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical` may be supplied. Simultaneous horizontal and vertical centering is not supported. An unspecified horizontal axis defaults to `qr_from_right: 20`; an unspecified vertical axis defaults to `qr_from_bottom: 20`. These defaults apply independently, including when there is no selected decoration.
+The optional directional offsets are nonnegative integer distances in design-canvas pixels, measured inward from their named edges. Booleans, strings, fractional values, nulls, and other types are invalid. `qr_centered` accepts only one scalar YAML string, `horizontal` or `vertical`; lists, mappings, null, and other values are invalid. Horizontally, at most one of `qr_from_left`, `qr_from_right`, or `qr_centered: horizontal` may be supplied. Vertically, at most one of `qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical` may be supplied. Simultaneous horizontal and vertical centering is not supported. An unspecified horizontal axis defaults to `qr_from_right: 20`; an unspecified vertical axis defaults to `qr_from_bottom: 20`. These defaults apply independently, including when there is no selected decoration.
 
-Offsets and centering position the complete QR allocation from the selected working canvas's edges or center. They are independent of `presentation_insets` and decoration slice geometry; they are not final-output pixel distances. A malformed value, conflicting anchors, or out-of-bounds allocation disables QR for that preparation with an actionable warning. Refrain does not infer precedence, fall back to another position, clamp the allocation, or exclude the otherwise valid decoration. A valid position that maps to insufficient final-output pixels also disables QR with a warning while allowing literary preparation to continue.
+Offsets and centering position the complete QR allocation from the selected design canvas's edges or center. They are independent of `presentation_insets` and decoration slice geometry. A malformed value, conflicting anchors, or out-of-bounds allocation disables QR for that preparation with an actionable warning. Refrain does not infer precedence, fall back to another position, clamp the allocation, or exclude the otherwise valid decoration. Map the allocation to presentation-canvas coordinates and evaluate raster viability there; insufficient presentation-canvas pixels disables QR with a warning while allowing literary preparation to continue. QR is not generated, positioned, resized, or rerasterized for the output image. Any required final resize distorts it only as part of the complete image.
 
-The application owns a fixed 246 × 246 working-canvas allocation, including the complete four-module quiet zone. Decorations position this allocation but cannot change its dimensions, define a separate QR region, or configure the payload or encoding. Refrain maps all allocation edges independently to final output coordinates and chooses the largest integer module size that fits the resulting rectangle. See [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork) for the production raster contract.
+The application owns a fixed 246 × 246 design-canvas allocation, including the complete four-module quiet zone. Decorations position this allocation but cannot change its dimensions, define a separate QR region, or configure the payload or encoding. Refrain maps all allocation edges independently to the presentation canvas and chooses the largest integer module size that fits the resulting rectangle. See [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork) for the production raster contract.
 
 Each `layers` item is a mapping with the following fields:
 
@@ -719,20 +719,20 @@ Each `layers` item is a mapping with the following fields:
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the working canvas with transparent margins as needed. `cover` preserves aspect ratio, uniformly scales the source until it covers the selected working canvas, then crops excess artwork symmetrically around its center. For example, a 3840 × 2400 image used with `cover` on the 3200 × 2400 working canvas is cropped by 320 pixels from each horizontal edge. Cover uses the source dimensions directly for this transform, not an intermediate reference-envelope scale. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` and `cover` accept no `slices` mapping. `nine-slice` requires a `slices` mapping:
+For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the design canvas with transparent margins as needed. `cover` preserves aspect ratio, uniformly scales the source until it covers the selected design canvas, then crops excess artwork symmetrically around its center. For example, a 3840 × 2400 image used with `cover` on the 3200 × 2400 design canvas is cropped by 320 pixels from each horizontal edge. Cover uses the source dimensions directly for this transform, not an intermediate reference-envelope scale. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` and `cover` accept no `slices` mapping. `nine-slice` requires a `slices` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `slices.left` | Nonnegative source-pixel integer | Yes | — |
-| `slices.right` | Nonnegative source-pixel integer | Yes | — |
-| `slices.top` | Nonnegative source-pixel integer | Yes | — |
-| `slices.bottom` | Nonnegative source-pixel integer | Yes | — |
+| `slices.left` | Nonnegative source-image pixel distance | Yes | — |
+| `slices.right` | Nonnegative source-image pixel distance | Yes | — |
+| `slices.top` | Nonnegative source-image pixel distance | Yes | — |
+| `slices.bottom` | Nonnegative source-image pixel distance | Yes | — |
 | `slices.horizontal` | `"stretch"` or `"crop"` | No | `"stretch"` |
 | `slices.vertical` | `"stretch"` or `"crop"` | No | `"stretch"` |
 
-The four insets partition the source image into nine regions in its actual source-pixel coordinates, regardless of its dimensions. Booleans and non-integer measurements are invalid. Left and right insets may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. The architecture defines how source artwork and boundaries map to working-space measurements; smaller images do not change the coordinate system. After that mapping, corner dimensions are preserved across aspect ratios. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Destinations too small to preserve both opposing corners are invalid. Geometry and rounding follow the deterministic architecture contract.
+The four distances partition the source image directly into nine regions in its actual source-image pixel coordinates, regardless of its dimensions. Booleans and non-integer measurements are invalid. Left and right distances may not exceed the source width in total; top and bottom may not exceed its height. Slice boundaries must resolve to valid source regions. Do not scale the source image or its slice boundaries through the 3840 × 2400 reference envelope. Each configured distance is also the preserved edge thickness on the design canvas, numerically 1:1, regardless of the source image's overall dimensions. Crop retains edge scale and removes equal amounts from opposite ends of that edge segment; when the destination segment is longer than its source, reject the transformation. Stretch adapts an edge along its length. The center stretches in both dimensions. Design canvases too small to preserve the opposing edge thicknesses are invalid. Geometry and rounding follow the deterministic architecture contract.
 
-`condition: always` includes the layer regardless of QR availability; `qr` includes it only when QR is effectively available; `no-qr` includes it only when QR is effectively unavailable. Availability includes presentation-level policy, the selected decoration's `qr_ready` preference, valid placement, and sufficient final-output pixels. A condition never changes the order of the remaining layers. Invalid conditions, methods, parameter combinations, paths, or source images exclude the containing decoration with an actionable diagnostic. A malformed `tintable` value produces a warning and uses `true`.
+`condition: always` includes the layer regardless of QR availability; `qr` includes it only when QR is effectively available; `no-qr` includes it only when QR is effectively unavailable. Availability includes presentation-level policy, the selected decoration's `qr_ready` preference, valid placement, and sufficient presentation-canvas pixels. A condition never changes the order of the remaining layers. Invalid conditions, methods, parameter combinations, paths, or source images exclude the containing decoration with an actionable diagnostic. A malformed `tintable` value produces a warning and uses `true`.
 
 The effective tintability of each layer is `decoration.tintable AND layer.tintable`. Both values default to `true`. When any layer is effectively tintable, Refrain selects one decoration color according to the precedence below; successful selection activates tinting. There is no separate activation setting or field. Artwork intended to retain authored RGB must set `tintable: false` at the decoration or layer level. Per-layer palette selection is not supported. Tinting replaces RGB while preserving source alpha.
 
@@ -851,8 +851,8 @@ The `layout.text` mapping defines the permitted font-size bounds for the primary
 
 | Field | Type | Required |
 |---|---|---|
-| `layout.text.min_font_size` | Positive integer | Yes |
-| `layout.text.max_font_size` | Positive integer | Yes |
+| `layout.text.min_font_size` | Positive design-canvas pixel integer | Yes |
+| `layout.text.max_font_size` | Positive design-canvas pixel integer | Yes |
 
 For example:
 
@@ -863,7 +863,7 @@ layout:
     max_font_size: 100
 ```
 
-Font sizes are expressed in rendered-image pixels.
+Configured font-size bounds are design-canvas pixel measurements. Scale the effective bounds to presentation-canvas pixels before fitting and rendering; do not derive them from aspect-mismatched output-image dimensions.
 
 The maximum must be greater than or equal to the minimum.
 
@@ -897,9 +897,9 @@ Decorations may define presentation insets, but content entries reference decora
 
 Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
-Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared final-resolution image; independent per-backend resolutions are not supported. Each backend is responsible for adapting that image to its physical or network destination. A backend's destination dimensions or capabilities do not constrain core rendering.
+Output resolution is configured globally through `layout.output_size`. Every backend receives the same globally prepared output image; independent per-backend resolutions are not supported. A backend may perform only explicitly permitted destination operations, such as hardware pixel-format or orientation conversion, and must not resize the presentation. A backend's destination dimensions or capabilities do not constrain core rendering.
 
-The renderer derives a centered working canvas by cropping the fixed reference envelope to the configured landscape aspect ratio. It applies the configured working-canvas insets directly at that canvas's edges, then uniformly scales the resulting geometry to final output dimensions.
+The renderer derives the aspect-specific design canvas by cropping the fixed reference envelope. It applies configured design-canvas insets there and scales the resulting geometry to the presentation canvas, as defined in `ARCHITECTURE.md`.
 
 ## Content entries
 
