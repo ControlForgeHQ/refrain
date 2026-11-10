@@ -10,9 +10,9 @@ from PIL import Image
 import refrain.__main__ as cli
 import refrain.application as application
 from refrain import ApplicationError
+from refrain.geometry import ResolvedOutputSpecification
 from refrain.display import DisplayBackendInitializationError
 from refrain.geometry import (
-    DEFAULT_OUTPUT_SIZE,
     DEFAULT_PRESENTATION_INSETS,
     PresentationInsets,
     resolve_presentation_geometry,
@@ -42,13 +42,15 @@ layout:
 
 def assert_default_literary_bounds(image: Image.Image) -> None:
     bounds = resolve_presentation_geometry(
-        DEFAULT_OUTPUT_SIZE, PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
-    ).output_region
+        ResolvedOutputSpecification("16:9", (1920, 1080)),
+        PresentationInsets(*DEFAULT_PRESENTATION_INSETS),
+    ).presentation_literary_bounds
     assert image.getpixel((bounds[0], bounds[1])) == (127, 127, 127)
 
 
 def assert_production_qr_geometry(image: Image.Image) -> None:
-    qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size, resolve_qr_placement(image.size))
+    specification = ResolvedOutputSpecification("16:9", image.size)
+    qr = render_qr_code(PRODUCTION_QR_PARAMETERS, image.size, resolve_qr_placement(specification))
     try:
         left, top, _, _ = qr.geometry.bounds
         quiet_zone = qr.geometry.quiet_zone_pixels
@@ -66,6 +68,9 @@ class RecordingBackend:
     def update(self, image: Image.Image) -> None:
         self.images.append(image.copy())
 
+    def update_output(self, _output_id: str, image: Image.Image) -> None:
+        self.update(image)
+
     def close(self) -> None:
         self.closed = True
 
@@ -79,7 +84,7 @@ def workspace(root: Path) -> tuple[Path, Path]:
     return config, content
 
 
-def test_show_entry_selects_first_quote_and_saves_exact_fully_revealed_image(
+def test_show_entry_selects_first_quote_and_publishes_fully_revealed_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, content = workspace(tmp_path)
@@ -107,10 +112,10 @@ quotations:
     captured: dict[str, object] = {}
     prepare = application.prepare_daily_images
 
-    def capture_preparation(snapshot, stages, configuration, **kwargs):
+    def capture_preparation(snapshot, stages, configuration, output_specifications, **kwargs):
         captured["snapshot"] = snapshot
         captured["stages"] = stages
-        return prepare(snapshot, stages, configuration, **kwargs)
+        return prepare(snapshot, stages, configuration, output_specifications, **kwargs)
 
     def unexpected_selection(*_args, **_kwargs):
         pytest.fail("diagnostic selection must not use the ordinary candidate pool")
@@ -133,16 +138,13 @@ quotations:
     assert snapshot.attribution == "An author"
     assert captured["stages"][-1].source
     assert captured["stages"][-1].attribution
-    assert output == output_directory / "refrain-requested-entry.png"
-    assert output.is_file()
+    assert output is None
+    assert list(output_directory.iterdir()) == []
     assert len(backend.images) == 1
-    with Image.open(output) as saved:
-        assert saved.format == "PNG"
-        assert saved.mode == backend.images[0].mode
-        assert saved.size == backend.images[0].size
-        assert saved.tobytes() == backend.images[0].tobytes()
-        assert_default_literary_bounds(saved)
-        assert_production_qr_geometry(saved)
+    assert backend.images[0].mode == "RGB"
+    assert backend.images[0].size == (1920, 1080)
+    assert_default_literary_bounds(backend.images[0])
+    assert_production_qr_geometry(backend.images[0])
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -184,7 +186,7 @@ def test_cli_returns_nonzero_for_a_missing_entry(
     assert not (tmp_path / "refrain-missing-entry.png").exists()
 
 
-def test_existing_diagnostic_png_is_never_overwritten_or_published(
+def test_existing_refrain_png_is_not_part_of_show_entry_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, content = workspace(tmp_path)
@@ -192,33 +194,30 @@ def test_existing_diagnostic_png_is_never_overwritten_or_published(
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "refrain-entry.png"
     output.write_bytes(b"existing file")
+    backend = RecordingBackend()
 
-    def factory(_configuration):
-        pytest.fail("an existing output must be rejected before backend initialization")
-
-    with pytest.raises(ApplicationError, match="already exists"):
-        application.run_show_entry(config, "entry", backend_factory=factory)
+    assert application.run_show_entry(config, "entry", backend_factory=lambda _: backend) is None
     assert output.read_bytes() == b"existing file"
+    assert len(backend.images) == 1
+    assert backend.closed
+    for image in backend.images:
+        image.close()
 
 
-def test_failed_png_write_removes_partial_output_before_backend_initialization(
+def test_show_entry_does_not_save_a_diagnostic_png(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, content = workspace(tmp_path)
     (content / "entry.yaml").write_text('id: entry\nquotations: ["A quotation."]\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    def fail_save(*_args, **_kwargs):
-        raise OSError("disk full")
-
-    def unexpected_backend(_configuration):
-        pytest.fail("backend initialization must follow successful PNG creation")
-
-    monkeypatch.setattr(Image.Image, "save", fail_save)
-
-    with pytest.raises(ApplicationError, match="cannot save diagnostic PNG.*disk full"):
-        application.run_show_entry(config, "entry", backend_factory=unexpected_backend)
+    backend = RecordingBackend()
+    assert application.run_show_entry(config, "entry", backend_factory=lambda _: backend) is None
     assert not (tmp_path / "refrain-entry.png").exists()
+    assert len(backend.images) == 1
+    assert backend.closed
+    for image in backend.images:
+        image.close()
 
 
 def test_information_target_uses_existing_renderer_without_loading_content(
@@ -231,9 +230,9 @@ def test_information_target_uses_existing_renderer_without_loading_content(
     prepared = []
     prepare = application.prepare_information_view
 
-    def capture_information(configuration):
+    def capture_information(configuration, output_specifications):
         prepared.append(configuration)
-        return prepare(configuration)
+        return prepare(configuration, output_specifications)
 
     def unexpected_content_load(_directory):
         pytest.fail("the reserved information target must not load the content library")
@@ -243,13 +242,11 @@ def test_information_target_uses_existing_renderer_without_loading_content(
     output = application.run_show_entry(config, "information", debug_layout=True, backend_factory=lambda _: backend)
 
     assert prepared and prepared[0].information_view_duration == 0
-    assert output == tmp_path / "refrain-information.png"
+    assert output is None
     assert len(backend.images) == 1
-    with Image.open(output) as saved:
-        assert saved.mode == backend.images[0].mode == "RGB"
-        assert saved.size == backend.images[0].size == (1920, 1080)
-        assert saved.tobytes() == backend.images[0].tobytes()
-        assert saved.getpixel((1437, 1037)) == (250, 249, 245)
+    assert backend.images[0].mode == "RGB"
+    assert backend.images[0].size == (1920, 1080)
+    assert backend.images[0].getpixel((1437, 1037)) == (250, 249, 245)
     assert backend.closed
     for image in backend.images:
         image.close()
@@ -268,7 +265,9 @@ def test_information_target_takes_precedence_over_a_content_entry_with_the_same_
     monkeypatch.setattr(
         application,
         "prepare_information_view",
-        lambda _configuration: Image.new("RGB", (4, 4), (7, 8, 9)),
+        lambda configuration, output_specifications: {
+            output_specifications[0]: (Image.new("RGB", (4, 4), (7, 8, 9)),)
+        },
     )
     monkeypatch.setattr(
         application,
@@ -278,9 +277,8 @@ def test_information_target_takes_precedence_over_a_content_entry_with_the_same_
 
     output = application.run_show_entry(config, "information", debug_layout=True, backend_factory=lambda _: backend)
 
-    with Image.open(output) as saved:
-        assert saved.size == (4, 4)
-        assert saved.getpixel((0, 0)) == (7, 8, 9)
+    assert output is None
+    assert len(backend.images) == 1
     assert backend.images[0].getpixel((0, 0)) == (7, 8, 9)
     assert backend.closed
     for image in backend.images:
@@ -292,7 +290,12 @@ def test_every_configured_backend_receives_the_same_diagnostic_image(
 ) -> None:
     config, content = workspace(tmp_path)
     config.write_text(
-        _CONFIG.replace('    - type: "window"', '    - type: "window"\n    - type: "image-server"'),
+        _CONFIG.replace(
+            '    - type: "window"',
+            '    - type: "window"\n    - type: "image-server"\n'
+            '      outputs:\n        - id: "default"\n'
+            '          aspect_ratio: "4:3"\n          resolution: [1600, 1200]',
+        ),
         encoding="utf-8",
     )
     (content / "entry.yaml").write_text('id: entry\nquotations: ["A quotation."]\n', encoding="utf-8")
@@ -306,19 +309,19 @@ def test_every_configured_backend_receives_the_same_diagnostic_image(
         backend_factory=lambda configuration: backends[configuration.type],
     )
 
-    assert (tmp_path / "refrain-entry.png") == output
+    assert output is None
     assert all(len(backend.images) == 1 and backend.closed for backend in backends.values())
-    assert backends["window"].images[0].tobytes() == backends["image-server"].images[0].tobytes()
-    with Image.open(output) as saved:
-        assert saved.tobytes() == backends["window"].images[0].tobytes()
-        assert_default_literary_bounds(saved)
-        assert_production_qr_geometry(saved)
+    assert backends["window"].images[0].size == (1920, 1080)
+    assert backends["image-server"].images[0].size == (1600, 1200)
+    assert backends["window"].images[0].tobytes() != backends["image-server"].images[0].tobytes()
+    assert_default_literary_bounds(backends["window"].images[0])
+    assert_production_qr_geometry(backends["window"].images[0])
     for backend in backends.values():
         for image in backend.images:
             image.close()
 
 
-def test_partial_publication_failure_preserves_png_and_closes_backends(
+def test_partial_publication_failure_isolated_and_closes_backends(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -326,7 +329,11 @@ def test_partial_publication_failure_preserves_png_and_closes_backends(
 ) -> None:
     config, content = workspace(tmp_path)
     config.write_text(
-        _CONFIG.replace('    - type: "window"', '    - type: "window"\n    - type: "image-server"'),
+        _CONFIG.replace(
+            '    - type: "window"',
+            '    - type: "window"\n    - type: "image-server"\n'
+            '      outputs:\n        - id: "default"',
+        ),
         encoding="utf-8",
     )
     (content / "entry.yaml").write_text('id: entry\nquotations: ["A quotation."]\n', encoding="utf-8")
@@ -350,9 +357,9 @@ def test_partial_publication_failure_preserves_png_and_closes_backends(
     )
     assert cli.main(["--show-entry", "entry", "--config", str(config)]) == 1
 
-    assert initialized == ["window", "image-server"]
+    assert set(initialized) == {"window", "image-server"}
     assert healthy.closed
-    assert (tmp_path / "refrain-entry.png").is_file()
+    assert not (tmp_path / "refrain-entry.png").exists()
     assert "image-server" in caplog.text
     assert "not published by every" in capsys.readouterr().err
     for image in healthy.images:
@@ -425,7 +432,8 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
         )
         == 0
     )
-    assert str(working_directory / "refrain-entry.png") in capsys.readouterr().out
+    assert capsys.readouterr().out == ""
+    assert not (working_directory / "refrain-entry.png").exists()
     assert state.read_bytes() == b"unchanged state"
     assert history.read_bytes() == b"unchanged history"
     assert (artifacts / "production.png").read_bytes() == b"unchanged artifact"
@@ -436,7 +444,7 @@ def test_cli_ignores_production_persistence_overrides_and_uses_configured_file(
 
 
 def test_cli_uses_default_configuration_path_for_show_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = tmp_path / "default-config.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
@@ -449,9 +457,8 @@ def test_cli_uses_default_configuration_path_for_show_entry(
     monkeypatch.setattr(
         cli,
         "run_show_entry",
-        lambda path, entry_id, **kwargs: observed.append((path, entry_id, kwargs)) or tmp_path,
+        lambda path, entry_id, **kwargs: observed.append((path, entry_id, kwargs)),
     )
 
     assert cli.main(["--show-entry", "entry", "--debug-layout"]) == 0
     assert observed == [(config, "entry", {"debug_layout": True})]
-    assert str(tmp_path) in capsys.readouterr().out

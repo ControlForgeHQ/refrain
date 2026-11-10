@@ -21,6 +21,10 @@ display:
   backends:
     - type: window
     - type: image-server
+      outputs:
+        - id: default
+          aspect_ratio: "16:9"
+          resolution: [1920, 1080]
 layout:
   presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
@@ -57,6 +61,9 @@ class RecordingBackend:
 
     def update(self, image):
         self.images.append(image.copy())
+
+    def update_output(self, _output_id, image):
+        self.update(image)
 
     def close(self):
         self.closed = True
@@ -112,7 +119,7 @@ def test_sequence_discovery_controls_and_isolation(workspace, monkeypatch, capsy
     output = capsys.readouterr().out
     assert "Presentation: 1 of 12" in output
     assert "Quotation: SHORT" in output and "Quotation: LONG" in output
-    assert "Literary output bounds: (384, 324, 3456, 1836)" in output
+    assert "Literary presentation bounds: (384, 324, 3456, 1836)" in output
     first, second = backends.values()
     assert len(first.images) == len(second.images) == len(snapshots)
     assert [image.tobytes() for image in first.images] == [image.tobytes() for image in second.images]
@@ -262,8 +269,8 @@ def test_reload_invalid_recover_image_manifest_and_debug_region(workspace, capsy
     )
     captured = capsys.readouterr()
     assert captured.out.count("Presentation: 1 of 12") == 5
-    assert "Literary output bounds: (384, 324, 3456, 1836)" in captured.out
-    assert "Literary output bounds: (768, 648, 3072, 1512)" in captured.out
+    assert "Literary presentation bounds: (384, 324, 3456, 1836)" in captured.out
+    assert "Literary presentation bounds: (768, 648, 3072, 1512)" in captured.out
     assert captured.err.count("Cannot present decoration") == 2
     assert len(backend.images) == 6
     assert backend.images[0].tobytes() != backend.images[2].tobytes()
@@ -456,16 +463,15 @@ def test_diagnostic_state_wraps_and_keyboard_controls_match_actions():
 @pytest.mark.parametrize(
     ("aspect", "size"),
     [
-        ("configured", (3840, 2160)),
         ("4:3", (3200, 2400)),
+        ("5:3", (3840, 2304)),
         ("16:9", (3840, 2160)),
         ("16:10", (3840, 2400)),
     ],
 )
 def test_aspect_output_geometry_and_screen_fit(workspace, aspect, size):
     config, _ = workspace
-    configuration = diagnostic._load_configuration(config)
-    assert diagnostic._with_aspect(configuration, aspect).output_size == size
+    assert diagnostic.design_canvas_for_aspect(aspect)[0] == size
     preview = diagnostic.preview_size_for_screen(size, (1366, 768))
     assert preview[0] <= 1326 and preview[1] <= 564
     assert preview[0] * size[1] == preview[1] * size[0] or preview == (1, 1)
@@ -473,12 +479,9 @@ def test_aspect_output_geometry_and_screen_fit(workspace, aspect, size):
 
 
 def test_aspect_override_resolves_exact_geometry_for_other_configured_widths(workspace):
-    config, _ = workspace
-    configuration = diagnostic._load_configuration(config)
-    configuration = replace(configuration, output_size=(1000, 750))
-    assert diagnostic._with_aspect(configuration, "configured").output_size == (3200, 2400)
-    assert diagnostic._with_aspect(configuration, "16:9").output_size == (3840, 2160)
-    assert diagnostic._with_aspect(configuration, "16:10").output_size == (3840, 2400)
+    assert diagnostic._output_specification("4:3", (1000, 750)).presentation_canvas_size == (1000, 750)
+    assert diagnostic.design_canvas_for_aspect("16:9")[0] == (3840, 2160)
+    assert diagnostic.design_canvas_for_aspect("16:10")[0] == (3840, 2400)
 
 
 def test_geometry_initialization_inheritance_and_independent_inset_overrides(workspace):
@@ -542,9 +545,10 @@ def test_geometry_qr_methods_exclusivity_and_manifest_fragment(workspace):
     assert (horizontal.method, horizontal.offset) == ("right", 51)
     assert vertical.method == "center"
     assert metadata == {"qr_from_right": 51, "qr_centered": "vertical"}
-    placement = diagnostic.resolve_qr_placement(configuration.output_size, metadata)
-    assert placement.working_bounds[0] == 3840 - 246 - 51
-    fragment, _ = diagnostic._geometry_manifest_values(configuration, resource, overrides, configuration.output_size)
+    output_specification = diagnostic._output_specification("16:10")
+    placement = diagnostic.resolve_qr_placement(output_specification, metadata)
+    assert placement.design_bounds[0] == 3840 - 246 - 51
+    fragment, _ = diagnostic._geometry_manifest_values(configuration, resource, overrides, output_specification)
     parsed = yaml.safe_load(fragment)
     assert parsed == {
         "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
@@ -745,9 +749,9 @@ def test_geometry_override_rendering_aspect_and_debug_bounds(workspace):
         geometry_overrides=overrides,
     )
     try:
-        assert details[0].geometry.working_region == (500, 324, 2816, 2076)
-        assert details[0].qr_placement.working_bounds[0] == 60
-        assert details[0].qr_placement.image_size == image.size == (3200, 2400)
+        assert details[0].geometry.design_literary_bounds == (500, 324, 2816, 2076)
+        assert details[0].qr_placement.design_bounds[0] == 60
+        assert details[0].qr_placement.presentation_canvas_size == image.size == (3200, 2400)
         assert image.tobytes() != clean.tobytes()
     finally:
         image.close()
@@ -770,13 +774,15 @@ def test_geometry_validation_rejects_degenerate_insets_and_unresolvable_qr(works
     resource = configuration.decorations["a-custom"]
     with pytest.raises(diagnostic.PresentationGeometryError, match="no positive literary rectangle"):
         diagnostic.resolve_presentation_geometry(
-            configuration.output_size,
+            diagnostic._output_specification("4:3"),
             diagnostic.PresentationInsets(1920, 1920, 324, 324),
         )
 
     invalid_qr = diagnostic.GeometryOverrides(qr_horizontal=diagnostic._QRPosition("left", 100_000))
     with pytest.raises(diagnostic.QRCodePlacementError, match="extends outside"):
-        diagnostic._geometry_manifest_values(configuration, resource, invalid_qr, configuration.output_size)
+        diagnostic._geometry_manifest_values(
+            configuration, resource, invalid_qr, diagnostic._output_specification("16:10")
+        )
 
 
 def test_reload_preserves_valid_selection_and_overrides(workspace):
@@ -1571,15 +1577,15 @@ def test_tk_toolbar_keyboard_dispatch_and_close_lifecycle(workspace, monkeypatch
         if len(submitted_states) == 1:
             initial_render_started.set()
             assert release_initial_render.wait(5)
-        current_configuration = diagnostic._with_aspect(configuration, state.aspect_ratio)
+        specification = diagnostic._output_specification(state.aspect_ratio, state.requested_output_size)
         geometry = diagnostic.resolve_presentation_geometry(
-            current_configuration.output_size, current_configuration.presentation_insets
+            specification, configuration.presentation_insets
         )
         return diagnostic._RenderedPreview(
-            Image.new("RGB", current_configuration.output_size, "white"),
+            Image.new("RGB", specification.requested_output_size, "white"),
             None,
             diagnostic.PreparationDiagnostics(geometry, None, "disabled", (), ()),
-            current_configuration,
+            configuration,
             state,
         )
 

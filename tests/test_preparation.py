@@ -15,18 +15,21 @@ from refrain import (
     DailyImagePreparationError,
     DailySnapshot,
     DisplayBackendConfiguration,
+    DisplayOutputConfiguration,
     FontResource,
     PresentationInsets,
+    ResolvedOutputSpecification,
     RevealSchedule,
     SchedulingContext,
     resolve_reveal_stages,
 )
 from refrain import (
-    prepare_daily_images as _prepare_daily_images,
+    prepare_daily_images as _prepare_daily_image_variants,
 )
 from refrain.config import BackgroundResource, DecorationLayerResource, DecorationResource
 
-_IMAGE_SIZE = (1920, 1080)
+_DEFAULT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
+_IMAGE_SIZE = _DEFAULT_SPECIFICATION.requested_output_size
 _LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
 _LORA_ITALIC = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
 _FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
@@ -85,7 +88,7 @@ def _configuration(
     decorations: dict[str, DecorationResource] | None = None,
     *,
     insets: PresentationInsets = PresentationInsets(384, 384, 216, 216),
-    output_size: tuple[int, int] = _IMAGE_SIZE,
+    output_specification: ResolvedOutputSpecification = _DEFAULT_SPECIFICATION,
     min_font_size: int = 12,
     max_font_size: int = 32,
     default_fonts: tuple[str, ...] | None = None,
@@ -95,11 +98,15 @@ def _configuration(
 ) -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),
-        display_backends=(DisplayBackendConfiguration("window"),),
+        display_backends=(
+            DisplayBackendConfiguration(
+                "window",
+                outputs=(DisplayOutputConfiguration("window", output_specification),),
+            ),
+        ),
         day_start=time(6),
         content_directory=Path("/content"),
         reveal=RevealSchedule(time(12), time(18)),
-        output_size=output_size,
         presentation_insets=insets,
         fonts=fonts,
         default_fonts=tuple(fonts) if default_fonts is None else default_fonts,
@@ -144,7 +151,7 @@ def prepare_daily_images(
             backgrounds,
             decorations,
             insets=kwargs.pop("insets", PresentationInsets(384, 384, 216, 216)),
-            output_size=kwargs.pop("output_size", _IMAGE_SIZE),
+            output_specification=kwargs.pop("output_specification", _DEFAULT_SPECIFICATION),
             min_font_size=kwargs.pop("min_font_size", 12),
             max_font_size=kwargs.pop("max_font_size", 32),
             default_fonts=kwargs.pop("default_fonts", None),
@@ -152,7 +159,25 @@ def prepare_daily_images(
             default_decorations=kwargs.pop("default_decorations", ("none",)),
         )
     )
-    return _prepare_daily_images(snapshot, stages, configuration, **kwargs)
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        stages,
+        configuration,
+        configuration.required_output_specifications,
+        **kwargs,
+    )
+    return variants[configuration.required_output_specifications[0]]
+
+
+def _prepare_configured_images(snapshot, stages, configuration, **kwargs):
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        stages,
+        configuration,
+        configuration.required_output_specifications,
+        **kwargs,
+    )
+    return variants[configuration.required_output_specifications[0]]
 
 
 @pytest.mark.parametrize(
@@ -209,19 +234,29 @@ def test_prepares_all_optional_field_combinations_from_one_embedded_layout(
     assert snapshot == original_snapshot
 
 
-@pytest.mark.parametrize("output_size", [(1600, 1200), (1920, 1080), (3840, 2400), (808, 505)])
-def test_prepared_reveal_images_use_configured_output_resolution(output_size: tuple[int, int]) -> None:
+@pytest.mark.parametrize(
+    "specification",
+    [
+        ResolvedOutputSpecification("4:3", (1600, 1200)),
+        ResolvedOutputSpecification("16:9", (1920, 1080)),
+        ResolvedOutputSpecification("16:10", (3840, 2400)),
+        ResolvedOutputSpecification("16:10", (808, 505)),
+    ],
+)
+def test_prepared_reveal_images_use_destination_output_resolution(
+    specification: ResolvedOutputSpecification,
+) -> None:
     snapshot = make_snapshot("lora")
-    configuration = replace(_configuration(_FONT_REGISTRY), output_size=output_size)
+    configuration = _configuration(_FONT_REGISTRY, output_specification=specification)
 
-    images = _prepare_daily_images(
+    images = _prepare_configured_images(
         snapshot,
         resolve_reveal_stages(snapshot),
         configuration,
     )
     try:
         assert len(images) == 3
-        assert all(image.size == output_size for image in images)
+        assert all(image.size == specification.requested_output_size for image in images)
         assert all(image.mode == "RGB" for image in images)
     finally:
         for image in images:
@@ -229,19 +264,19 @@ def test_prepared_reveal_images_use_configured_output_resolution(output_size: tu
 
 
 @pytest.mark.parametrize(
-    ("output_size", "working_size"),
+    ("specification", "design_canvas_size"),
     [
-        ((1600, 1200), (3200, 2400)),
-        ((1920, 1080), (3840, 2160)),
-        ((3840, 2400), (3840, 2400)),
-        ((4000, 3000), (3200, 2400)),
+        (ResolvedOutputSpecification("4:3", (1600, 1200)), (3200, 2400)),
+        (ResolvedOutputSpecification("16:9", (1920, 1080)), (3840, 2160)),
+        (ResolvedOutputSpecification("16:10", (3840, 2400)), (3840, 2400)),
+        (ResolvedOutputSpecification("4:3", (1600, 1190)), (3200, 2400)),
     ],
 )
-def test_graphical_composition_uses_working_canvas_and_resamples_once_when_needed(
+def test_graphical_composition_uses_design_presentation_and_output_canvases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    output_size: tuple[int, int],
-    working_size: tuple[int, int],
+    specification: ResolvedOutputSpecification,
+    design_canvas_size: tuple[int, int],
 ) -> None:
     decoration_path = tmp_path / "overlay.png"
     with Image.new("RGBA", (2, 1), (200, 20, 40, 128)) as decoration_image:
@@ -250,7 +285,7 @@ def test_graphical_composition_uses_working_canvas_and_resamples_once_when_neede
     configuration = _configuration(
         _FONT_REGISTRY,
         decorations={"overlay": _decoration_resource("overlay", decoration_path)},
-        output_size=output_size,
+        output_specification=specification,
         qr_enabled=False,
     )
     background_sizes: list[tuple[int, int]] = []
@@ -269,7 +304,7 @@ def test_graphical_composition_uses_working_canvas_and_resamples_once_when_neede
         return apply_decoration(background, *args, **kwargs)
 
     def capture_resize(image, size, *args, **kwargs):
-        if image.size == working_size:
+        if image.size in {design_canvas_size, specification.presentation_canvas_size}:
             resize_calls.append((image.size, size))
         return resize(image, size, *args, **kwargs)
 
@@ -277,16 +312,23 @@ def test_graphical_composition_uses_working_canvas_and_resamples_once_when_neede
     monkeypatch.setattr(preparation, "_apply_daily_decoration", capture_decoration)
     monkeypatch.setattr(Image.Image, "resize", capture_resize)
 
-    images = _prepare_daily_images(snapshot, (CompositionVisibility(),), configuration)
+    images = _prepare_configured_images(snapshot, (CompositionVisibility(),), configuration)
     try:
-        assert background_sizes == [working_size]
-        assert decoration_sizes == [working_size]
-        expected_resizes = [] if working_size == output_size else [(working_size, output_size)]
+        assert background_sizes == [design_canvas_size]
+        assert decoration_sizes == [design_canvas_size]
+        presentation_canvas_size = specification.presentation_canvas_size
+        expected_resizes = []
+        if design_canvas_size != presentation_canvas_size:
+            expected_resizes.append((design_canvas_size, presentation_canvas_size))
+        if presentation_canvas_size != specification.requested_output_size:
+            expected_resizes.append((presentation_canvas_size, specification.requested_output_size))
         assert resize_calls == expected_resizes
-        assert images[0].size == output_size
+        assert images[0].size == specification.requested_output_size
         assert images[0].mode == "RGB"
-        assert images[0].getpixel((output_size[0] // 2, 10)) == (255, 255, 255)
-        center = images[0].getpixel((output_size[0] // 4, output_size[1] // 2))
+        assert images[0].getpixel((specification.requested_output_size[0] // 2, 10)) == (255, 255, 255)
+        center = images[0].getpixel(
+            (specification.requested_output_size[0] // 4, specification.requested_output_size[1] // 2)
+        )
         assert all(abs(actual - expected) <= 2 for actual, expected in zip(center, (227, 137, 147), strict=True))
     finally:
         for image in images:
@@ -327,7 +369,7 @@ def test_background_is_beneath_quotation_and_alpha_exposes_white(tmp_path: Path,
         (CompositionVisibility(),),
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", path, False)},
-        output_size=(1600, 1200),
+        output_specification=ResolvedOutputSpecification("4:3", (1600, 1200)),
     )
     try:
         image = images[0]
@@ -352,11 +394,11 @@ def test_background_cover_scaling_crops_center_of_wide_source(tmp_path: Path) ->
     configuration = _configuration(
         _FONT_REGISTRY,
         backgrounds={"wide": BackgroundResource("wide", path, False)},
-        output_size=(1600, 1200),
+        output_specification=ResolvedOutputSpecification("4:3", (1600, 1200)),
         qr_enabled=False,
     )
 
-    images = _prepare_daily_images(
+    images = _prepare_configured_images(
         snapshot,
         (CompositionVisibility(),),
         configuration,
@@ -394,7 +436,7 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
         {"paper": BackgroundResource("paper", background_path, False)},
         {"overlay": _decoration_resource("overlay", decoration_path)},
         insets=PresentationInsets(2400, 160, 1800, 120),
-        output_size=(1600, 1200),
+        output_specification=ResolvedOutputSpecification("4:3", (1600, 1200)),
         min_font_size=16,
         max_font_size=24,
     )
@@ -428,7 +470,7 @@ def test_intentional_qr_disabling_skips_placement_without_warning(monkeypatch, c
         "resolve_qr_placement",
         lambda *_: pytest.fail("disabled QR must not resolve placement"),
     )
-    images = _prepare_daily_images(snapshot, (CompositionVisibility(),), configuration)
+    images = _prepare_configured_images(snapshot, (CompositionVisibility(),), configuration)
     try:
         assert len(images) == 1
         assert "QR generation is disabled" not in caplog.text
@@ -465,7 +507,7 @@ def test_invalid_qr_placement_warns_before_artwork_and_preserves_decoration(monk
         lambda *_args, **_kwargs: pytest.fail("suppressed QR must not be rasterized"),
     )
 
-    images = _prepare_daily_images(snapshot, resolve_reveal_stages(snapshot), configuration)
+    images = _prepare_configured_images(snapshot, resolve_reveal_stages(snapshot), configuration)
     try:
         assert len(images) == 3
         assert events == ["placement", "artwork"]
@@ -481,13 +523,13 @@ def test_insufficient_output_pixels_warn_and_keep_literary_preparation(caplog) -
     snapshot = make_snapshot("lora", source=None, attribution=None)
     configuration = _configuration(
         _FONT_REGISTRY,
-        output_size=(80, 60),
+        output_specification=ResolvedOutputSpecification("4:3", (80, 60)),
         insets=PresentationInsets(0, 0, 0, 0),
         min_font_size=1,
         max_font_size=1,
     )
 
-    images = _prepare_daily_images(snapshot, (CompositionVisibility(),), configuration)
+    images = _prepare_configured_images(snapshot, (CompositionVisibility(),), configuration)
     try:
         assert len(images) == 1
         assert images[0].size == (80, 60)
@@ -522,7 +564,7 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
         _FONT_REGISTRY,
         {"paper": BackgroundResource("paper", background_path, False)},
         {"overlay": _decoration_resource("overlay", decoration_path)},
-        output_size=(1600, 1200),
+        output_specification=ResolvedOutputSpecification("4:3", (1600, 1200)),
     )
     try:
         image = images[0]
@@ -538,17 +580,17 @@ def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_p
 
 
 @pytest.mark.parametrize(
-    ("output_size", "cover_sample", "top_sample"),
+    ("specification", "cover_sample", "top_sample"),
     [
-        ((1600, 1200), (40, 80, 120), (255, 255, 0)),
-        ((1920, 1080), (255, 0, 0), (40, 80, 120)),
-        ((1920, 1200), (255, 0, 0), (255, 255, 0)),
+        (ResolvedOutputSpecification("4:3", (1600, 1200)), (40, 80, 120), (255, 255, 0)),
+        (ResolvedOutputSpecification("16:9", (1920, 1080)), (255, 0, 0), (40, 80, 120)),
+        (ResolvedOutputSpecification("16:10", (1920, 1200)), (255, 0, 0), (255, 255, 0)),
     ],
 )
 def test_cover_decoration_prepares_all_aspects_and_reveal_stages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    output_size: tuple[int, int],
+    specification: ResolvedOutputSpecification,
     cover_sample: tuple[int, int, int],
     top_sample: tuple[int, int, int],
 ) -> None:
@@ -582,17 +624,17 @@ def test_cover_decoration_prepares_all_aspects_and_reveal_stages(
         stages,
         _FONT_REGISTRY,
         decoration_registry={"cover": decoration},
-        output_size=output_size,
+        output_specification=specification,
     )
     try:
         assert len(images) == len(stages) == 3
-        assert all(image.size == output_size for image in images)
+        assert all(image.size == specification.requested_output_size for image in images)
         assert len(layouts) == 1
-        assert layouts[0].quotation.bounds[2] <= output_size[0]
-        assert layouts[0].quotation.bounds[3] <= output_size[1]
+        assert layouts[0].quotation.bounds[2] <= specification.presentation_canvas_size[0]
+        assert layouts[0].quotation.bounds[3] <= specification.presentation_canvas_size[1]
 
-        cover_point = (50, output_size[1] // 2)
-        top_point = (output_size[0] // 2, 40)
+        cover_point = (50, specification.requested_output_size[1] // 2)
+        top_point = (specification.requested_output_size[0] // 2, 40)
         for image in images:
             assert image.getpixel(cover_point) == cover_sample
             assert image.getpixel(top_point) == top_sample

@@ -26,7 +26,12 @@ def available_port() -> int:
         return listener.getsockname()[1]
 
 
-def request(port: int, method: str = "GET", path: str = "/display/current", headers: dict[str, str] | None = None):
+def request(
+    port: int,
+    method: str = "GET",
+    path: str = "/display/default/current",
+    headers: dict[str, str] | None = None,
+):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     try:
         connection.request(method, path, headers=headers or {})
@@ -110,6 +115,38 @@ def test_conditional_requests_and_replacement_use_content_etags() -> None:
         backend.close()
 
 
+def test_named_outputs_keep_independent_images_and_entity_tags() -> None:
+    port = available_port()
+    backend = ImageServerDisplayBackend(port=port, output_ids=("kitchen", "hallway"))
+    kitchen = Image.new("RGB", (2, 2), "red")
+    hallway = Image.new("RGB", (3, 3), "blue")
+    try:
+        backend.update_output("kitchen", kitchen)
+        backend.update_output("hallway", hallway)
+
+        kitchen_response = request(port, path="/display/kitchen/current")
+        hallway_response = request(port, path="/display/hallway/current")
+        assert kitchen_response[0] == hallway_response[0] == 200
+        assert kitchen_response[1]["ETag"] != hallway_response[1]["ETag"]
+        with Image.open(io.BytesIO(kitchen_response[2])) as served:
+            assert served.size == (2, 2)
+            assert served.getpixel((0, 0)) == (255, 0, 0)
+        with Image.open(io.BytesIO(hallway_response[2])) as served:
+            assert served.size == (3, 3)
+            assert served.getpixel((0, 0)) == (0, 0, 255)
+        assert request(port, path="/display/kitchen/current", headers={"If-None-Match": kitchen_response[1]["ETag"]})[
+            0
+        ] == 304
+        assert request(port, path="/display/hallway/current", headers={"If-None-Match": kitchen_response[1]["ETag"]})[
+            0
+        ] == 200
+        assert request(port, path="/display/unknown/current")[0] == 404
+    finally:
+        kitchen.close()
+        hallway.close()
+        backend.close()
+
+
 def test_browser_refresh_uses_a_new_connection_after_each_response() -> None:
     backend, port = backend_at_available_port()
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
@@ -117,7 +154,7 @@ def test_browser_refresh_uses_a_new_connection_after_each_response() -> None:
     second_image = Image.new("RGB", (2, 2), "blue")
     try:
         backend.update(first_image)
-        connection.request("GET", "/display/current")
+        connection.request("GET", "/display/default/current")
         first_response = connection.getresponse()
         first_body = first_response.read()
 
@@ -126,7 +163,7 @@ def test_browser_refresh_uses_a_new_connection_after_each_response() -> None:
         assert connection.sock is None
 
         backend.update(second_image)
-        connection.request("GET", "/display/current")
+        connection.request("GET", "/display/default/current")
         second_response = connection.getresponse()
         second_body = second_response.read()
 
@@ -172,7 +209,8 @@ def test_unsupported_methods_paths_and_malformed_requests_do_not_stop_service() 
         assert headers["Allow"] == "GET"
         assert request(port, method="HEAD")[0] == 405
         assert request(port, path="/")[0] == 404
-        assert request(port, path="/display/current?path=../")[0] == 404
+        assert request(port, path="/display/unknown/current")[0] == 404
+        assert request(port, path="/display/current")[0] == 404
 
         with socket.create_connection(("127.0.0.1", port), timeout=2) as connection:
             connection.sendall(b"not an HTTP request\r\n\r\n")
@@ -257,7 +295,7 @@ def test_close_joins_incomplete_request_handler_and_releases_client(monkeypatch:
     monkeypatch.setattr(image_server_module, "_REQUEST_LIFETIME", 0.1)
     backend, port = backend_at_available_port()
     with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
-        client.sendall(b"GET /display/current HTTP/1.1\r\n")
+        client.sendall(b"GET /display/default/current HTTP/1.1\r\n")
         handler_threads = wait_for_handler_threads(backend)
 
         started = time.monotonic()
@@ -272,7 +310,7 @@ def test_close_joins_incomplete_request_handler_and_releases_client(monkeypatch:
 def test_disconnected_incomplete_client_does_not_leave_handler_running() -> None:
     backend, port = backend_at_available_port()
     client = socket.create_connection(("127.0.0.1", port), timeout=2)
-    client.sendall(b"GET /display/current HTTP/1.1\r\n")
+    client.sendall(b"GET /display/default/current HTTP/1.1\r\n")
     handler_threads = wait_for_handler_threads(backend)
 
     client.close()
@@ -324,7 +362,7 @@ def test_close_does_not_deadlock_with_active_request_and_update(monkeypatch: pyt
     monkeypatch.setattr(image_server_module, "_REQUEST_LIFETIME", 0.1)
     backend, port = backend_at_available_port()
     client = socket.create_connection(("127.0.0.1", port), timeout=2)
-    client.sendall(b"GET /display/current HTTP/1.1\r\n")
+    client.sendall(b"GET /display/default/current HTTP/1.1\r\n")
     handler_threads = wait_for_handler_threads(backend)
 
     entered_copy = Event()

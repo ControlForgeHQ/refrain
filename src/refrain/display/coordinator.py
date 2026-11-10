@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from threading import Condition, Event, Lock, Thread
+from threading import Condition, Event, Lock, Thread, current_thread
 from typing import Callable, Mapping
 
 from PIL import Image
@@ -222,7 +222,7 @@ class DisplayPublicationCoordinator:
             for state, thread in zip(self._states.values(), self._threads, strict=True)
             if thread.is_alive()
         }
-        for backend_type, backend in self._backends.items():
+        for backend_type in tuple(self._backends):
             if backend_type in active_backend_types:
                 _LOGGER.error(
                     "Display backend %s remains in use by an active destination worker; it will not be closed "
@@ -230,10 +230,12 @@ class DisplayPublicationCoordinator:
                     backend_type,
                 )
                 continue
-            try:
-                backend.close()
-            except Exception as error:
-                _LOGGER.warning("Display backend %s cleanup failed: %s", backend_type, error)
+            with self._backend_locks[backend_type]:
+                backend = self._backends.get(backend_type)
+                if backend is None:
+                    continue
+                self._backends.pop(backend_type, None)
+                self._close_backend(backend_type, backend)
 
     @staticmethod
     def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image]) -> None:
@@ -270,6 +272,28 @@ class DisplayPublicationCoordinator:
             return backend
 
     @staticmethod
+    def _close_backend(backend_type: str, backend: DisplayBackend) -> None:
+        try:
+            backend.close()
+        except Exception as error:
+            _LOGGER.warning("Display backend %s cleanup failed: %s", backend_type, error)
+
+    def _close_backend_after_worker_exit(self, backend_type: str) -> None:
+        with self._backend_locks[backend_type]:
+            worker = current_thread()
+            if any(
+                thread is not worker
+                and thread.is_alive()
+                and state.backend_configuration.type == backend_type
+                for state, thread in zip(self._states.values(), self._threads, strict=True)
+            ):
+                return
+            with self._condition:
+                backend = self._backends.pop(backend_type, None)
+            if backend is not None:
+                self._close_backend(backend_type, backend)
+
+    @staticmethod
     def _update_destination(
         backend: DisplayBackend,
         configuration: DisplayBackendConfiguration,
@@ -294,6 +318,7 @@ class DisplayPublicationCoordinator:
                 ):
                     self._condition.wait()
                 if self._stopping:
+                    self._close_backend_after_worker_exit(state.backend_configuration.type)
                     return
                 assert self._desired is not None
                 presentation = self._desired

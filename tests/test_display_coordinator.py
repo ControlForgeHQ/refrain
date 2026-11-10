@@ -6,9 +6,24 @@ from threading import Event
 import pytest
 from PIL import Image
 
-from refrain import DisplayBackendConfiguration
+from refrain import (
+    DisplayBackendConfiguration,
+    DisplayOutputConfiguration,
+    ResolvedOutputSpecification,
+)
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
 from refrain.display.coordinator import DisplayPublicationCoordinator
+
+_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
+_OUTPUT = DisplayOutputConfiguration("default", _SPECIFICATION)
+
+
+def configuration(backend_type: str) -> DisplayBackendConfiguration:
+    return DisplayBackendConfiguration(backend_type, outputs=(_OUTPUT,))
+
+
+def publication(value: int) -> dict[ResolvedOutputSpecification, Image.Image]:
+    return {_SPECIFICATION: image(value)}
 
 
 def wait_until(predicate, timeout: float = 2.0) -> bool:
@@ -37,6 +52,9 @@ class SimulatedBackend:
             assert release.wait(2)
             assert image.getpixel((0, 0))[0] == value
 
+    def update_output(self, _output_id: str, image: Image.Image) -> None:
+        self.update(image)
+
     def close(self) -> None:
         self.closed = True
 
@@ -46,7 +64,7 @@ def image(value: int) -> Image.Image:
 
 
 def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() -> None:
-    configurations = (DisplayBackendConfiguration("window"), DisplayBackendConfiguration("image-server"))
+    configurations = (configuration("window"), configuration("image-server"))
     updates = {"window": [], "image-server": []}
     first_entered, release_first = Event(), Event()
     latest_entered, release_latest = Event(), Event()
@@ -60,23 +78,26 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
 
     coordinator = DisplayPublicationCoordinator(configurations, factory)
     try:
-        coordinator.publish((7, 0), image(1))
+        coordinator.publish((7, 0), publication(1))
         assert first_entered.wait(1)
-        assert wait_until(lambda: coordinator.acknowledgements["image-server"] == (7, 0))
+        assert wait_until(lambda: coordinator.acknowledgements["image-server:default"] == (7, 0))
 
-        coordinator.publish((7, 1), image(2))
+        coordinator.publish((7, 1), publication(2))
         assert wait_until(lambda: updates["image-server"][-1:] == [2])
-        coordinator.publish((7, 2), image(3))
-        assert wait_until(lambda: coordinator.acknowledgements["image-server"] == (7, 2))
+        coordinator.publish((7, 2), publication(3))
+        assert wait_until(lambda: coordinator.acknowledgements["image-server:default"] == (7, 2))
         assert updates["window"] == [1]
 
         release_first.set()
         assert latest_entered.wait(1)
-        assert coordinator.acknowledgements["window"] == (7, 0)
+        assert coordinator.acknowledgements["window:default"] == (7, 0)
         release_latest.set()
         assert coordinator.wait_for_publication((7, 2), timeout=1)
         assert updates["window"] == [1, 3]
-        assert coordinator.acknowledgements == {"window": (7, 2), "image-server": (7, 2)}
+        assert coordinator.acknowledgements == {
+            "window:default": (7, 2),
+            "image-server:default": (7, 2),
+        }
     finally:
         release_first.set()
         release_latest.set()
@@ -86,23 +107,48 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
 
 
 def test_identical_desired_presentation_is_not_published_twice() -> None:
-    configuration = (DisplayBackendConfiguration("window"),)
+    window_configuration = (configuration("window"),)
     updates = {"window": []}
     backend = SimulatedBackend("window", updates)
-    coordinator = DisplayPublicationCoordinator(configuration, lambda _configuration: backend)
+    coordinator = DisplayPublicationCoordinator(window_configuration, lambda _configuration: backend)
     try:
-        coordinator.publish((3, 1), image(9))
+        coordinator.publish((3, 1), publication(9))
         assert coordinator.wait_for_publication((3, 1), timeout=1)
-        coordinator.publish((3, 1), image(9))
+        coordinator.publish((3, 1), publication(9))
         time.sleep(0.02)
         assert updates["window"] == [9]
     finally:
         coordinator.close()
 
 
+def test_destinations_receive_images_matching_their_output_specification() -> None:
+    wide = ResolvedOutputSpecification("16:9", (1920, 1080))
+    portrait = ResolvedOutputSpecification("4:3", (1600, 1200))
+    configurations = (
+        DisplayBackendConfiguration("window", outputs=(DisplayOutputConfiguration("window", wide),)),
+        DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("default", portrait),)),
+    )
+    updates = {"window": [], "image-server": []}
+    backends = {}
+
+    def factory(backend_configuration):
+        backend = SimulatedBackend(backend_configuration.type, updates)
+        backends[backend_configuration.type] = backend
+        return backend
+
+    coordinator = DisplayPublicationCoordinator(configurations, factory)
+    images = {wide: image(21), portrait: image(42)}
+    try:
+        coordinator.publish((4, 2), images)
+        assert coordinator.wait_for_publication((4, 2), timeout=1)
+        assert updates == {"window": [21], "image-server": [42]}
+    finally:
+        coordinator.close()
+
+
 @pytest.mark.parametrize("failure", ["initialization", "update"])
 def test_terminal_backend_failure_does_not_stop_an_operational_destination(failure: str) -> None:
-    configurations = (DisplayBackendConfiguration("window"), DisplayBackendConfiguration("image-server"))
+    configurations = (configuration("window"), configuration("image-server"))
     updates = {"image-server": []}
     healthy = SimulatedBackend("image-server", updates)
     closed = Event()
@@ -124,14 +170,14 @@ def test_terminal_backend_failure_does_not_stop_an_operational_destination(failu
 
     coordinator = DisplayPublicationCoordinator(configurations, factory)
     try:
-        coordinator.publish((5, 0), image(4))
+        coordinator.publish((5, 0), publication(4))
         assert coordinator.wait_for_publication((5, 0), timeout=1)
         assert not coordinator.all_unavailable
-        assert coordinator.acknowledgements == {"window": None, "image-server": (5, 0)}
+        assert coordinator.acknowledgements == {"window:default": None, "image-server:default": (5, 0)}
         results = coordinator.publication_results((5, 0))
         window_error = "no graphical session" if failure == "initialization" else "display disabled"
-        assert results["window"] == (False, window_error)
-        assert results["image-server"] == (True, None)
+        assert results["window:default"] == (False, window_error)
+        assert results["image-server:default"] == (True, None)
     finally:
         coordinator.close()
     assert healthy.closed
@@ -139,7 +185,7 @@ def test_terminal_backend_failure_does_not_stop_an_operational_destination(failu
 
 
 def test_recoverable_initialization_failure_is_retried() -> None:
-    configuration = (DisplayBackendConfiguration("window"),)
+    window_configuration = (configuration("window"),)
     attempts = []
     updates = {"window": []}
     backend = SimulatedBackend("window", updates)
@@ -150,9 +196,9 @@ def test_recoverable_initialization_failure_is_retried() -> None:
             raise DisplayBackendInitializationError("temporarily unavailable")
         return backend
 
-    coordinator = DisplayPublicationCoordinator(configuration, factory)
+    coordinator = DisplayPublicationCoordinator(window_configuration, factory)
     try:
-        coordinator.publish((9, 0), image(7))
+        coordinator.publish((9, 0), publication(7))
         assert coordinator.wait_for_publication((9, 0), timeout=3)
         assert len(attempts) == 2 and updates["window"] == [7]
     finally:
@@ -161,7 +207,7 @@ def test_recoverable_initialization_failure_is_retried() -> None:
 
 
 def test_recoverable_update_failure_retries_without_reinitializing() -> None:
-    configuration = (DisplayBackendConfiguration("window"),)
+    window_configuration = (configuration("window"),)
     attempts = []
 
     class RecoveringBackend(SimulatedBackend):
@@ -173,9 +219,9 @@ def test_recoverable_update_failure_retries_without_reinitializing() -> None:
 
     updates = {"window": []}
     backend = RecoveringBackend("window", updates)
-    coordinator = DisplayPublicationCoordinator(configuration, lambda _configuration: backend)
+    coordinator = DisplayPublicationCoordinator(window_configuration, lambda _configuration: backend)
     try:
-        coordinator.publish((8, 0), image(6))
+        coordinator.publish((8, 0), publication(6))
         assert coordinator.wait_for_publication((8, 0), timeout=3)
         assert len(attempts) == 2 and updates["window"] == [6]
     finally:
@@ -185,7 +231,7 @@ def test_recoverable_update_failure_retries_without_reinitializing() -> None:
 
 @pytest.mark.parametrize("operation", ["initialization", "update"])
 def test_unexpected_backend_exception_is_terminal(operation: str) -> None:
-    configuration = (DisplayBackendConfiguration("window"),)
+    window_configuration = (configuration("window"),)
     attempts = []
     backend_closed = Event()
 
@@ -203,8 +249,8 @@ def test_unexpected_backend_exception_is_terminal(operation: str) -> None:
             raise RuntimeError("programming error")
         return UnexpectedBackend()
 
-    coordinator = DisplayPublicationCoordinator(configuration, factory)
-    coordinator.publish((10, 0), image(5))
+    coordinator = DisplayPublicationCoordinator(window_configuration, factory)
+    coordinator.publish((10, 0), publication(5))
     try:
         assert wait_until(lambda: coordinator.all_unavailable)
         expected_attempts = ["initialize"] if operation == "initialization" else ["initialize", "update"]
@@ -232,10 +278,10 @@ def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, capl
 
     backend = BlockingBackend()
     coordinator = DisplayPublicationCoordinator(
-        (DisplayBackendConfiguration("window"),),
+        (configuration("window"),),
         lambda _configuration: backend,
     )
-    coordinator.publish((11, 0), image(12))
+    coordinator.publish((11, 0), publication(12))
     assert entered.wait(1)
 
     started = time.monotonic()
