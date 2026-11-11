@@ -908,7 +908,7 @@ def test_missing_configuration_is_actionable_and_does_not_fall_back(
     assert cli.main([]) == 1
     diagnostic = capsys.readouterr().err
     assert str(paths.config_file) in diagnostic
-    assert "python -m refrain --initialize" in diagnostic
+    assert "refrain --initialize" in diagnostic
     assert not paths.config_directory.exists()
 
 
