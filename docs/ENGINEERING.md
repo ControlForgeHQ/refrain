@@ -495,7 +495,7 @@ An idempotent retry preserves any subsequent reveal progression and does not com
 
 The store assumes one writer at a time. Revision checks reject stale proposals and reveal-progress updates but are not a cross-process compare-and-swap. Callers must serialize concurrent writes sharing the same state path.
 
-No general locking or transaction framework is required.
+No general state-store locking or transaction framework is required; resident process exclusivity is specified separately under [runtime ownership](#resident-process-ownership-and-runtime-control).
 
 ### Repetition-history cleanup
 
@@ -644,6 +644,50 @@ Remove obsolete cache files without disturbing active readers or the complete se
 
 The cache store must not modify authoritative selection state. Cache errors are reported and handled by regeneration from the valid daily selection; they must never authorize reselection or reveal regression.
 
+## Resident process ownership and runtime control
+
+### Exclusive ownership
+
+Use a small cross-platform ownership abstraction built on standard-library access to operating-system exclusive locks. Normal runtime and `--demo` acquire the per-user Refrain ownership lock non-blockingly before loading operational state or constructing display backends, and retain it for the complete backend-owning process lifetime. Release it during orderly shutdown; rely on the operating system to release it when a process exits abnormally. A persistent lock-file path may identify the lock, but file existence or a stored PID must never determine ownership or be used as stale-lock recovery.
+
+`--initialize`, `--reset`, `--purge`, and any other command that creates or mutates the standard installation acquire the same lock non-blockingly for the duration of their operation. Keep the lock metadata outside trees reset or purge can remove. A busy lock produces an actionable diagnostic and no operation proceeds. A second normal or demo process likewise fails before it opens configured backends. One-shot control clients, including `refrain --refresh`, do not acquire this ownership lock.
+
+Keep platform-specific locking details behind the small abstraction, using standard-library and operating-system facilities rather than a lock server or process-management dependency. Locking must work across processes, not merely threads. Ownership metadata and lock behavior must be scoped to the current user's standard Refrain installation even when runtime configuration selects custom state paths.
+
+### Local runtime-control IPC
+
+Use Python standard-library local IPC behind one application-facing client/listener abstraction: Unix-domain local IPC on Linux and Windows named-pipe IPC on Windows. `multiprocessing.connection.Listener` and `Client` may supply these transports. Do not use TCP to unify the implementation or expose a control listener on a LAN address. The `image-server` HTTP backend remains separate and is not the control transport.
+
+Authenticate each connection with a per-runtime unpredictable credential available only through appropriately protected per-user runtime metadata. Do not treat a local socket or pipe alone as authorization. `--demo` is a standalone backend-owning mode and does not provide the runtime-control listener.
+
+Restrict runtime metadata and credential files to the owning user using platform-appropriate permissions. Remove endpoint and credential artifacts during orderly shutdown. After abnormal exit, tolerate stale filesystem artifacts: their existence does not establish that a runtime is alive. Acquire the process ownership lock before reconciling or replacing stale endpoint metadata, and use a successful authenticated IPC connection—not the presence of a path or credential file—to establish that a control endpoint is responsive.
+
+Use a bounded, explicitly versioned protocol over byte-oriented operations such as `send_bytes()` and `recv_bytes()`. JSON may carry operation metadata and output specifications. Transfer completed images as separately bounded binary payloads rather than embedding them in JSON. Do not use pickle-based `send()` or `recv()` for control payloads. Apply explicit limits to message size, image dimensions, image count, and selected destinations. Reject unknown versions or operations, malformed metadata, unsupported encodings, oversized or inconsistent payloads, and incomplete requests before they can trigger backend access.
+
+### Publication coordination
+
+Extend the existing application-owned publication coordinator. Transient and scheduled publication must use the same configured backend instances, per-instance serialization, lifecycle ownership, and safe shutdown behavior; do not create a second path that independently constructs or opens hardware.
+
+Keep the normal desired scheduled presentation distinct from transient request state. Reserve all selected destinations atomically only after validating the complete request and confirming immediate safe admission. Reject a busy request in full rather than partially publishing or queuing it. Preserve scheduler responsiveness while receiving image data and waiting for publication; ordinary threads may perform control handling where needed, but no asynchronous framework or external daemon is required.
+
+Bound retained image memory and reuse one complete image variant for destinations with identical output specifications wherever ownership and lifetime allow. Avoid unnecessary copies while ensuring each image remains valid until every backend operation using it has completed. An admitted transient operation must not cause an active backend call to be interrupted or concurrently closed.
+
+### Runtime-control validation
+
+Add hardware-independent tests using fake backends and controlled synchronization. Cover:
+
+- exclusive normal and demo ownership, rejection of a second process and concurrent demo, release on shutdown, installation-management exclusion, and control-client behavior with no resident runtime;
+- authenticated local connections, malformed, unsupported, oversized, and inconsistent protocol requests, and rejection before backend access;
+- discovery of canonical destination IDs and output specifications, including single-output and named multi-output backends, and rejection when a destination or specification changes after discovery;
+- exact output-dimension validation, missing image variants, and shared image use for destinations with identical specifications;
+- atomic busy rejection for one destination and for `all`, no partial publication after failed admission, independent operation on different backend instances, and serialization on the same instance;
+- scheduled desired state remaining authoritative after a transient push, no repaint on routine reevaluation of an unchanged scheduled identity, and scheduled replacement at the next genuine presentation change;
+- no push mutation of selection, revision, global or repetition history, reveal progression, scheduling state, or prepared artifacts;
+- refresh republication of the currently scheduled presentation, including the current reveal stage rather than pre-push pixels, plus synchronous push/refresh completion and visible CLI progress;
+- generic viewer routing without backend-type conditionals.
+
+These tests establish software behavior only. Actual Waveshare validation must confirm that a preview is published by the already-running Refrain process, does not overlap another physical refresh, remains displayed after push completion, is replaced by `refrain --refresh`, and leaves the controller and normal runtime usable afterward.
+
 ## Rendering and image preparation
 
 ### Use Pillow for image composition
@@ -668,9 +712,9 @@ Avoid unnecessary upscaling of source raster resources and unnecessary full-canv
 
 Runtime and `refrain-viewer` must call the same presentation-construction, preference-resolution, geometry, QR, and image-preparation operations. Keep precedence and fallback rules authoritative in shared presentation machinery; represent optional viewer choices with a typed override model and apply them there, not in a second viewer-side resolver. Viewer font-size bounds must use the shared configured-bound resolution, design-to-presentation scaling, and fitting path. Normal runtime preparation supplies no viewer overrides.
 
-The viewer selects a validated content entry and one 1-based quotation directly, without eligibility, priority, repetition, scheduling, or selection commitment. Its built-in `@preview` fixture belongs only to the viewer. It resolves one viewer-owned output specification, uses the same design/presentation/output pipeline, and writes or displays the final output image without using configured display backends.
+For local inspection and export, the viewer selects a validated content entry and one 1-based quotation directly, without eligibility, priority, repetition, scheduling, or selection commitment. Its built-in `@preview` fixture belongs only to the viewer. It resolves one viewer-owned output specification, uses the same design/presentation/output pipeline, and writes or displays the final output image without using configured display backends. In push mode, it instead renders against runtime-discovered destination specifications and may produce multiple unique output variants.
 
-Keep the viewer independent of operational state, global history, and prepared-artifact storage, including configuration-relative paths. Window presentation is viewer-owned, display-only UI: it may scale a copy for desktop fit but must not alter the rendered output image. It must not import or initialize the configured backend lifecycle.
+Keep the viewer independent of operational state, global history, and prepared-artifact storage, including configuration-relative paths. Window presentation is viewer-owned, display-only UI: it may scale a copy for desktop fit but must not alter the rendered output image. In every mode, the viewer must never construct, initialize, or directly access configured backend instances; in push mode it only asks the resident runtime to publish the completed images.
 
 ### Font loading and resolution
 
@@ -1238,7 +1282,7 @@ Test default and explicit `@preview` selection, exact normal-entry selection, om
 
 Verify `refrain-viewer --debug-layout` uses the shared presentation diagnostics without enabling overlays in normal runtime or demo preparation.
 
-Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. Use sentinel persistence locations and backend factories to verify that viewer execution never reads or modifies state, history, or artifacts and never initializes or publishes to configured backends. Do not treat mocked window behavior as graphical-session validation.
+Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline for local inspection/export, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. For local inspection/export, use sentinel persistence locations and backend factories to verify the viewer never accesses configured backends or runtime persistence. For push, verify it never constructs, initializes, or directly accesses configured backends, but does exercise the resident runtime-control publication path using discovered output specifications. Verify that a destination reported as not supporting transient publication is rejected before rendering, both when selected directly and when included by `--push all`. Do not treat mocked window behavior as graphical-session validation.
 
 ### Core test coverage
 
@@ -1415,7 +1459,7 @@ Initialization is noninteractive and repeatable. Preflight every required path a
 
 Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configured runtime storage values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
 
-Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory after explicit confirmation. Both operations are intended for use while the application is stopped. Do not claim protection against arbitrary concurrent hostile filesystem mutation or add cross-process locking without an approved requirement.
+Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory after explicit confirmation. Both operations are intended for use while Refrain is stopped; their standard-installation mutation paths must also participate in the runtime ownership lock described above. This protects against cooperating Refrain processes, not arbitrary concurrent hostile filesystem mutation.
 
 ### Service management
 
@@ -1539,7 +1583,7 @@ Engineering practices should not introduce:
 - a general plugin framework;
 - an elaborate dependency-injection system;
 - a custom hardware abstraction framework;
-- runtime web services for Version 0.1;
+- a general-purpose management/web application service or runtime web infrastructure beyond explicitly documented backends and features;
 - unnecessary asynchronous processing frameworks;
 - automated release infrastructure before the project has a demonstrated release need.
 
