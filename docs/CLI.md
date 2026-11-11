@@ -22,6 +22,14 @@ refrain-viewer
 
 In ordinary inspection and export modes, the viewer does not use configured display backends or runtime persistence.
 
+### Configuration selection
+
+```text
+--config PATH
+```
+
+`--config` selects the application configuration used by the viewer for content, assets, preferences, and presentation rendering. When omitted, the viewer uses the standard Refrain configuration. In push mode, it continues to control these viewer-owned rendering inputs; it never determines or overrides the resident runtime's configured destination topology or output specifications.
+
 ### Destination discovery
 
 Use the standalone control-client operation below to discover canonical destination identifiers before using `--push`:
@@ -32,7 +40,7 @@ refrain-viewer --list-destinations
 
 This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its canonical destination identifier, declared presentation aspect ratio, requested output resolution, and whether externally supplied transient publication is supported. Destination identifiers are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
 
-`--list-destinations` is a standalone mode. It does not load viewer content, presentation assets, or configuration to discover topology; `--config` does not determine the resident destinations. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
+`--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
 
 ### Entry selection
 
@@ -109,7 +117,7 @@ refrain-viewer [presentation selection and overrides...] --push TARGET
 
 `TARGET` is `all` or one canonical destination identifier returned by `--list-destinations`. Identifiers are supplied by the runtime and are opaque. `all` means every configured destination.
 
-Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push all` is likewise rejected before rendering if any configured destination does not support it; `all` never silently means “all supported destinations.” The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. Push obtains all output geometry exclusively from the resident runtime.
+Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push all` is likewise rejected before rendering if any configured destination does not support it; `all` never silently means “all supported destinations.” The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
 
 `--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
 
