@@ -1129,7 +1129,7 @@ The registries, valid identifiers, image requirements, pool configuration, and c
 
 ### Background and decoration recovery
 
-Preparation resolves current configuration and available visual resources once for the complete reveal-stage set. It applies the documented fallback and diagnostic policies to unavailable or invalid resources without changing the selected quotation or its reveal progression.
+Preparation resolves current configuration and available visual resources for the complete required variant collection. Presentation-wide resource choices remain coherent across variants prepared together; output-specification-dependent geometry, QR availability, transformations, and other raster-dependent results are resolved separately for each specification. It applies the documented fallback and diagnostic policies to unavailable or invalid resources without changing the committed quotation or its reveal progression.
 
 Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation applies deterministic, aspect-preserving centered cover scaling and equal-edge cropping on the design canvas, then composites the result over paper-white while preserving source alpha. Decoration layers use the configured rendering method on the design canvas. Their slice coordinates and transformations do not determine the literary insets.
 
