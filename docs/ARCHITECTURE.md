@@ -1384,10 +1384,10 @@ Refrain presents complete rendered images through narrow, hardware-independent d
 
 A display backend provides two operations:
 
-- `update(image)` presents a complete Pillow image through a selected output destination. For a backend with multiple named outputs, the coordinator associates each publication with its configured output ID and the backend instance serves that named destination.
+- A destination-aware publication operation that presents a complete Pillow image through one selected configured destination. The contract must identify the destination generically; an image-only operation is insufficient when one backend instance owns multiple named outputs. The contract does not prescribe a Python method signature.
 - `close()` releases resources owned by the backend.
 
-Refrain selects one or more built-in display backends through validated runtime configuration. Each backend type may be configured at most once.
+Refrain selects one or more built-in display backends through validated runtime configuration. Each backend type may be configured at most once, but one backend type may own multiple named output destinations.
 
 Backend selection occurs at application startup and does not require modifications to application code or replacement of installed modules.
 
@@ -1397,7 +1397,7 @@ Version 0.1 provides three built-in display backends:
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).
 - `image-server`: Serves one or more named prepared output images to network clients through a read-only HTTP service.
 
-Each configured output destination receives the complete prepared output image matching its resolved output specification for each reveal stage. Destinations may share an image when their specifications are identical; destinations with different specifications receive different variants. One image-server backend instance may expose multiple named output destinations. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
+Each configured output destination has its own canonical runtime destination identity and receives the complete prepared output image matching its resolved output specification for each reveal stage. Destinations may share an image when their specifications are identical; destinations with different specifications receive different variants. Sharing an output specification or image does not merge destination identity, publication, or acknowledgement. One backend instance may expose multiple named output destinations. The coordinator and runtime-control clients use generic destination routing and contain no backend-specific routing rules. Backend selection does not introduce independent content selection, reveal scheduling, composition, or presentation policy.
 
 The desktop window backend presents complete images in a graphical window suitable for development and validation on Windows and Linux. Its image-display area matches the supplied image dimensions and presents the image at native pixel size. A later update with different dimensions resizes the display area; it does not resample, crop, or letterbox the image.
 
@@ -1418,11 +1418,11 @@ The Waveshare 13.3-inch panel resolves to the fixed 4:3 @ 1600 × 1200 output sp
 
 The image-server backend owns one HTTP service that exposes the most recently accepted image for each configured named output. Its publication and lifecycle responsibilities are defined separately below.
 
-The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. The Waveshare backend owns hardware-specific color and pixel conversion, transfer, refresh, sleep, and cleanup, but not image resizing or literary composition. The window backend displays at native pixel size, and the image-server backend exposes each prepared output without resizing or cropping. No backend may mutate the image supplied by the coordinator. A backend unable to perform its required operation reports a backend-specific update failure; that failure does not alter any output specification, persistent state, selection, or publication to other destinations.
+The common interface does not expose hardware-specific initialization, SPI, GPIO, controller commands, refresh mechanisms, or network transport operations. The Waveshare backend owns hardware-specific color and pixel conversion, transfer, refresh, sleep, and cleanup, but not image resizing or literary composition. The window backend displays at native pixel size, and the image-server backend exposes each prepared output without resizing or cropping. No backend may mutate the image supplied by the coordinator. A backend unable to perform its required operation reports a backend-specific publication failure; that failure does not alter any output specification, persistent state, selection, or publication to other destinations.
 
 The image-server backend serves each named output's matching prepared variant with its dimensions and pixel content unchanged. Backend adaptation policies and their visual consequences belong to the relevant backend contract, not to the core renderer.
 
-A completed `update()` indicates that the individual backend's presentation operation completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
+A completed destination publication operation indicates that the operation for that destination completed successfully. For a network image service, this means the replacement image is available to clients, not that any client has retrieved or displayed it.
 
 Failures and uncertain hardware outcomes must remain distinguishable where the underlying implementation permits.
 
@@ -1436,15 +1436,15 @@ For normal scheduled publication, Refrain coordinates publication of the current
 
 A single committed daily selection and its coherent set of prepared output images are shared by all destinations. Only the selection is authoritative.
 
-For normal scheduled publication, each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent subsequent scheduling evaluation.
+For normal scheduled publication, destinations are tracked independently. A slow or failed operation on one backend instance must not delay publication through another available backend instance or prevent subsequent scheduling evaluation. Destinations sharing one backend instance share its lifecycle and serialization.
 
-An active update to one backend must not overlap another update to the same backend. Updates to different backends may proceed concurrently.
+An active publication to one backend instance must not overlap another publication to that instance, including operations for different named destinations. Operations to different backend instances may proceed concurrently.
 
 The persisted highest reveal stage represents the application's globally reached reveal progression. It does not certify successful presentation by any particular backend.
 
 Reveal progression advances monotonically when a later stage becomes required and is durably recorded independently of backend publication outcomes.
 
-The application coordinator maintains independent acknowledgement of the scheduled presentation identity for each configured destination, including every named image-server output, during the application lifetime. It tracks transient operation completion separately from this scheduled acknowledgement. Successful transient publication must not clear or replace the scheduled acknowledgement used to suppress redundant scheduled updates.
+The application coordinator maintains independent acknowledgement of the scheduled presentation identity for each configured destination, including every named output, during the application lifetime. It tracks transient operation completion separately from this scheduled acknowledgement. Successful transient publication must not clear or replace the scheduled acknowledgement used to suppress redundant scheduled updates.
 
 For normal scheduled publication, the application must distinguish the currently required variant for each destination from the scheduled identity last acknowledged there. A successful scheduled update to one destination does not establish successful publication to another. Literal last-published pixels may instead be a transient preview and do not determine whether the scheduled identity remains acknowledged.
 
@@ -1452,11 +1452,11 @@ Publication tracking is owned by the application coordinator, not by individual 
 
 Publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available destination.
 
-If a new scheduled presentation or variant becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
+If a new scheduled presentation or variant becomes required while a backend instance is busy, each affected destination must eventually receive its latest required image rather than replaying obsolete intermediate scheduled updates.
 
 An active hardware update need not be interrupted when a newer presentation becomes available.
 
-Normal scheduled publication does not require simultaneous completion or acknowledgement from every destination. Transient push and refresh remain attached until every requested destination completes or fails, as defined under [Transient publication and refresh](#transient-publication-and-refresh).
+Normal scheduled publication does not require simultaneous completion or acknowledgement from every destination. Transient push and refresh use synchronous per-request completion reporting for every requested destination, as defined under [Transient publication and refresh](#transient-publication-and-refresh).
 
 The order of backend declarations does not establish publication priority.
 
@@ -1468,19 +1468,21 @@ The normal runtime's desired scheduled presentation is distinct from a one-shot 
 
 The runtime-control interface belongs to the resident Refrain process and is local-machine only, authenticated, and limited to explicitly defined operations. Its initial operations are destination discovery, transient complete-image publication, and refresh of the current scheduled presentation. It is separate from the `image-server` HTTP service and any public or future web presentation. It does not provide arbitrary filesystem access, backend-method invocation, configuration or content mutation, shell execution, or general remote procedure execution.
 
-The runtime is authoritative for configured publication destinations and their output specifications. Discovery returns each canonical runtime-supplied destination identifier, its declared aspect ratio, requested resolution, and whether it supports transient publication. Identifiers are opaque routing values: clients must not infer backend type, hardware, transport, or capabilities from their spelling. Backend-specific publication details remain runtime-owned. Destination discovery does not reserve a destination.
+The runtime is authoritative for configured publication destinations and their output specifications. Discovery returns each canonical runtime-supplied destination identifier, its declared aspect ratio, requested resolution, and whether it supports transient publication. Identifiers are opaque routing values: clients must not infer backend type, hardware, transport, or capabilities from their spelling. Backend-specific publication details remain runtime-owned. Destination discovery does not reserve a destination. Transient-publication capability indicates whether a destination accepts externally supplied completed images; it does not gate normal scheduled publication or refresh.
 
 An external preview contains complete output images rendered by the submitting viewer. The viewer remains authoritative for its pixels, using its own selected configuration, content, assets, and presentation overrides. The runtime does not reconstruct the preview from content or semantic presentation parameters. A viewer first discovers destination output specifications, renders one complete image variant for each unique specification, then submits those images and the specifications against which they were rendered. Presentation-wide choices remain coherent across variants generated together. Variants for identical specifications may share one image and transfer.
 
 Before any backend is accessed, the runtime validates the complete request: each destination still exists, each current output specification matches the discovered specification, every selected destination has an image variant, and every image has the exact required dimensions. Malformed, unsupported, or inconsistent requests are rejected without backend access; the runtime does not infer a replacement destination, adapt a changed specification, or resize an image. Backends continue to receive complete images.
 
-External publication is opportunistic, not queued. Admission is atomic across all requested destinations: if any selected destination is publishing or has work that prevents immediate safe admission, the entire request is rejected as busy before any transient publication begins. `all` therefore means all configured destinations are admitted or none are. Normal scheduled work has priority until an external operation is admitted. After admission, transient work is allowed to finish safely; newly required scheduled work may follow it but must not interrupt an active backend operation unless that backend explicitly supports safe interruption. Operations against the same backend instance never overlap.
+External publication is opportunistic, not queued. Admission is atomic across all requested destinations: if any selected destination is publishing or has work that prevents immediate safe admission, the entire request is rejected as busy before any transient publication begins. `all` therefore means all configured destinations are admitted or none are. Normal scheduled work has priority until an external operation is admitted. After admission, transient work is allowed to finish safely; newly required scheduled work may follow it but must not interrupt or replace the admitted operation. Operations against the same backend instance never overlap.
+
+Before admission, rejection means no requested publication has begun. After admission, the resident runtime owns the operation; client disconnection does not cancel, roll back, or preempt it. The operation continues under ordinary backend safety, serialization, and shutdown rules. If publication completes or partially completes but the terminal acknowledgement is not delivered, the client must treat the outcome as unconfirmed: it cannot infer that nothing was published, that every destination succeeded, or that every destination failed. The client must not automatically replay the request because the acknowledgement was lost. Publication across destinations is not transactional and cannot be rolled back.
 
 While a transient preview is visible, routine scheduler reevaluation of an unchanged scheduled identity does not repaint it solely because the destination contains different pixels. The preview may remain visible until ordinary scheduling requires a genuine presentation change or an explicit refresh is requested. There is no automatic timeout or restoration of the image that was visible before the preview.
 
-`refrain --refresh` is a one-shot control-client operation that asks the resident normal runtime to republish the presentation currently required by scheduling to the complete configured destination set. It is not historical restoration: for example, it publishes the current reveal stage if progression advanced after a preview. Admission is atomic across the complete destination set. Refresh is rejected as busy rather than queued when the complete operation cannot be safely admitted immediately, and once accepted remains attached until publication completes or fails. It does not independently load operational state or access backends.
+`refrain --refresh` is a one-shot control-client operation that asks the resident normal runtime to republish its own presentation currently required by scheduling to the complete configured destination set through the ordinary publication path. It is not historical restoration: for example, it publishes the current reveal stage if progression advanced after a preview. Refresh does not require transient-publication capability, so a destination may participate in scheduled publication and refresh without accepting externally supplied transient images. Admission is atomic across the complete destination set; ordinary backend availability and busy-admission rules apply. Refresh is rejected as busy rather than queued when the complete operation cannot be safely admitted immediately. Once admitted, it remains owned by the resident runtime even if the client disconnects.
 
-A successful transient push or refresh reports success only after every requested destination has completed its backend publication operation. A failure at one destination is reported; success at another does not make the complete request successful. The public commands provide visible progress before waiting on slow publication.
+A successful synchronous transient push or refresh reports success only after every requested destination has completed its backend publication operation successfully. A failure at one destination is reported; success at another does not make the complete request successful. If its terminal acknowledgement is lost, the client observes an unconfirmed outcome rather than success or failure. The public commands provide visible progress before waiting on slow publication.
 
 Any future configured destination that supports the ordinary complete-image publication contract participates through runtime-supplied discovery and routing, without viewer-specific backend logic. A destination that does not support transient publication is reported as such during discovery. If the requested destination is unsupported—or `all` includes any unsupported destination—the request is rejected before rendering or publication; `all` never silently omits configured destinations.
 
@@ -1512,7 +1514,7 @@ Clients determine when to retrieve images. A client may miss intermediate reveal
 
 The backend does not control client polling intervals, power management, physical display refreshes, or client-side image retention.
 
-The service must remain responsive between calls to `update(image)` without requiring the application scheduler to process HTTP requests.
+The service must remain responsive between image replacement operations without requiring the application scheduler to process HTTP requests.
 
 The backend owns its listening resources and concurrent request handling. Initialization must report failures that prevent the service from becoming available. Shutdown must release its listening resources and terminate backend-owned execution without leaving the HTTP service running independently of Refrain.
 
@@ -1729,9 +1731,9 @@ Recovery must not introduce additional history entries or silently substitute co
 
 Normal shutdown must stop new presentation requests and safely release resources owned by every configured display backend.
 
-Backend shutdown must account for active update operations without permitting unsafe overlapping hardware access.
+Backend shutdown must account for active publication operations without permitting unsafe overlapping hardware access.
 
-Shutdown waits for active synchronous updates only for a bounded period. It must not interrupt a backend operation or invoke that backend's cleanup concurrently with an active update. If an update remains blocked at the deadline, its worker retains the active image and attempts cleanup if the operation later returns; process termination may ultimately end a still-blocked worker.
+Shutdown waits for active synchronous publications only for a bounded period. It must not interrupt a backend operation or invoke that backend's cleanup concurrently with an active publication. If a publication remains blocked at the deadline, its worker retains the active image and attempts cleanup if the operation later returns; process termination may ultimately end a still-blocked worker.
 
 Failure to close one backend must not prevent cleanup attempts for other backends.
 
