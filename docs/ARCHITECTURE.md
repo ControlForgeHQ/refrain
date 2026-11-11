@@ -1665,13 +1665,11 @@ The installed `refrain-viewer` command owns one-shot presentation inspection and
 
 The built-in `@preview` pseudo-entry is viewer-owned fixture content, not part of the content library. It supplies short, medium, and long quotations with source and attribution metadata; the default invocation selects `@preview:2`. A normal entry selector ignores eligibility, priority, and repetition history, and does not change ordinary content-entry identifier syntax.
 
-Runtime and viewer share presentation construction, preference resolution, resource fallback, geometry, QR viability, image composition, and rendering. The runtime supplies no viewer overrides. The viewer may supply typed explicit overrides as the highest-precedence layer; all properties not explicitly overridden retain normal Refrain precedence and pool selection. Optional quotation font-size bounds are design-canvas measurements resolved with configuration values and scaled to the presentation canvas before fitting. An alternate `--config` selects the normal configuration layer and does not elevate it above entry or decoration preferences.
+Runtime and viewer share presentation construction, preference resolution, resource fallback, geometry, QR viability, image composition, and rendering. Normal runtime preparation supplies no viewer overrides or diagnostic overlays. The viewer may supply typed explicit overrides as the highest-precedence layer; all properties not explicitly overridden retain normal Refrain precedence and pool selection. Its `--debug-layout` option applies the shared presentation diagnostics to the prepared preview. Optional quotation font-size bounds are design-canvas measurements resolved with configuration values and scaled to the presentation canvas before fitting. An alternate `--config` selects the normal configuration layer and does not elevate it above entry or decoration preferences.
 
 The viewer creates one output specification independently of configured display-backend specifications. Its default is 16:10 at the full design-canvas dimensions. It follows the established design-canvas → presentation-canvas → requested-output pipeline. `--output` writes the final output PNG. The optional simple viewer window displays that same output and may scale only a private desktop copy to fit; it is not a configured display backend.
 
 Viewer execution loads no operational state, global history, or prepared artifacts, even when the configuration names custom storage paths. It does not initialize or publish to configured display backends. Its only filesystem output is an explicitly requested PNG.
-
-The existing `refrain --show-entry` and `refrain --test-decoration` diagnostics remain available during migration. They are transitional compatibility behavior; presentation inspection and authoring are not permanent responsibilities of the primary runtime CLI.
 
 ### Recovery
 

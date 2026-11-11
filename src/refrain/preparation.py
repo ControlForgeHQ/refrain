@@ -43,7 +43,6 @@ from .renderer import (
     CompositionVisibility,
     LiteraryComposition,
     QuotationRenderError,
-    annotate_literary_region,
     layout_composition,
     render_reveal_stages,
 )
@@ -824,7 +823,6 @@ def _prepare_daily_images_for_specification(
     *,
     strict_decoration: bool = False,
     on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
-    debug_layout: bool = False,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
     on_presentation_image: (
@@ -939,14 +937,6 @@ def _prepare_daily_images_for_specification(
                     qr_code = render_qr_code(qr_parameters, presentation_canvas_size, qr_placement)
                     for image in images:
                         composite_qr_code(image, qr_code)
-                if debug_layout:
-                    annotated_images = []
-                    for image in images:
-                        annotated = annotate_literary_region(image, geometry.presentation_literary_bounds)
-                        if annotated is not image:
-                            image.close()
-                        annotated_images.append(annotated)
-                    images = tuple(annotated_images)
                 diagnostics = PreparationDiagnostics(
                     geometry,
                     qr_placement,
@@ -987,7 +977,6 @@ def prepare_daily_images(
     force_white_background: bool = False,
     forced_decoration_tint: tuple[int, int, int] | None = None,
     overrides: PresentationOverrides | None = None,
-    debug_layout: bool = False,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
     on_presentation_image: (
@@ -1035,7 +1024,6 @@ def prepare_daily_images(
                 effective_overrides,
                 strict_decoration=strict_decoration,
                 on_resolved_bounds=on_resolved_bounds,
-                debug_layout=debug_layout,
                 qr_disabled_reason=qr_disabled_reason,
                 on_diagnostics=on_diagnostics,
                 on_presentation_image=on_presentation_image,

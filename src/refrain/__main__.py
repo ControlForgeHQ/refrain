@@ -1,20 +1,18 @@
-"""Command-line entry point for continuous and one-shot Refrain operation."""
+"""Command-line entry point for Refrain operation and installation management."""
 
 from __future__ import annotations
 
 import argparse
 import logging
 import math
-import re
 import signal
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from threading import Event
 
-from .application import ApplicationError, run_application, run_demo, run_show_entry, run_startup
+from .application import ApplicationError, run_application, run_demo
 from .config import ApplicationConfigurationError, load_application_config
-from .decoration_diagnostic import run_decoration_diagnostic
 from .installation import (
     InitializationError,
     InstallationOperationError,
@@ -25,30 +23,7 @@ from .installation import (
 )
 from .paths import ApplicationPathError, resolve_application_paths
 
-_SERVING_BACKENDS = {"window", "image-server"}
 _LOGGER = logging.getLogger(__name__)
-_ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-
-
-def _entry_id(value: str) -> str:
-    if not _ENTRY_ID.fullmatch(value):
-        raise argparse.ArgumentTypeError(
-            "entry ID must be nonempty, start with an ASCII letter or digit, and contain only "
-            "ASCII letters, digits, hyphens, and underscores"
-        )
-    return value
-
-
-def _hold_open(backend: str) -> None:
-    if backend not in _SERVING_BACKENDS:
-        return
-    print("Display is active; press Ctrl+C to exit and release it.", file=sys.stderr)
-    release = Event()
-    try:
-        while not release.wait(1):
-            pass
-    except KeyboardInterrupt:
-        pass
 
 
 def _demo_interval(value: str) -> float:
@@ -67,13 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Present Refrain quotations and manage its installation.",
     )
     parser.add_argument("--config", help="application configuration YAML file")
-    parser.add_argument(
-        "--debug-layout",
-        action="store_true",
-        help="outline the effective literary presentation region on published images",
-    )
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--once", action="store_true", help="run one startup/presentation cycle without scheduling")
     modes.add_argument(
         "--demo",
         type=_demo_interval,
@@ -91,113 +60,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     modes.add_argument(
         "--purge", action="store_true", help="remove the complete standard per-user installation, then exit"
     )
-    modes.add_argument(
-        "--show-entry",
-        type=_entry_id,
-        metavar="ENTRY_ID",
-        help="render and publish one content entry without changing operational state",
-    )
-    modes.add_argument(
-        "--test-decoration",
-        metavar="ID|all",
-        help="preview one decoration or all decorations without changing daily state",
-    )
-    parser.add_argument(
-        "--test-output",
-        metavar="PATH",
-        help="save a full-design-canvas diagnostic PNG instead of opening the preview (requires one decoration ID)",
-    )
-    parser.add_argument(
-        "--test-variants",
-        metavar="DIRECTORY",
-        help="export all supported diagnostic variants under a new decoration-named subdirectory",
-    )
-    parser.add_argument(
-        "--test-aspect",
-        choices=("4:3", "5:3", "16:9", "16:10"),
-        help="decoration-preview aspect ratio",
-    )
-    parser.add_argument(
-        "--test-resolution",
-        nargs=2,
-        type=int,
-        metavar=("WIDTH", "HEIGHT"),
-        help="requested output dimensions for headless --test-output export",
-    )
-    parser.add_argument(
-        "--test-quotation",
-        choices=("short", "medium", "long"),
-        help="initial decoration-preview quotation length (default: short)",
-    )
-    parser.add_argument(
-        "--no-qr", action="store_true", help="initially disable QR generation in the decoration preview"
-    )
-    parser.add_argument(
-        "--no-background", action="store_true", help="initially use a white background in the decoration preview"
-    )
-    parser.add_argument("--no-tinting", action="store_true", help="initially force tintable decoration layers to black")
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    specified_decoration_options = [
-        option
-        for option, value in (
-            ("--test-aspect", arguments.test_aspect),
-            ("--test-resolution", arguments.test_resolution),
-            ("--test-quotation", arguments.test_quotation),
-            ("--no-qr", arguments.no_qr),
-            ("--no-background", arguments.no_background),
-            ("--no-tinting", arguments.no_tinting),
-            ("--test-output", arguments.test_output),
-            ("--test-variants", arguments.test_variants),
-        )
-        if value is not None and value is not False
-    ]
-    if arguments.test_decoration is None and specified_decoration_options:
-        parser.error(
-            "decoration-preview options are only available with --test-decoration: "
-            + ", ".join(specified_decoration_options)
-        )
-    if arguments.test_output is not None and arguments.test_decoration is None:
-        parser.error("--test-output is only available with --test-decoration")
-    if arguments.test_output is not None and arguments.test_aspect is None:
-        parser.error("--test-output requires an explicit --test-aspect")
-    if arguments.test_resolution is not None and arguments.test_output is None:
-        parser.error("--test-resolution is only available with --test-output")
-    if arguments.test_output is not None and arguments.test_decoration == "all":
-        parser.error("--test-output requires exactly one decoration ID; 'all' cannot be exported")
-    if arguments.test_output is not None and arguments.test_variants is not None:
-        parser.error("--test-output and --test-variants are mutually exclusive")
-    if arguments.test_variants is not None and arguments.test_decoration == "all":
-        parser.error("--test-variants requires one specific decoration ID; 'all' is not supported")
-    if arguments.test_variants is not None:
-        incompatible_variants = [
-            option
-            for option, selected in (
-                ("--test-aspect", arguments.test_aspect is not None),
-                ("--test-quotation", arguments.test_quotation is not None),
-                ("--no-qr", arguments.no_qr),
-            )
-            if selected
-        ]
-        if incompatible_variants:
-            parser.error(
-                "--test-variants generates all aspect ratios, quotation lengths, and effective QR states; "
-                "do not combine it with " + ", ".join(incompatible_variants)
-            )
-    conflicting_modes = [
-        option
-        for option, selected in (
-            ("--once", arguments.once),
-            ("--demo", arguments.demo is not None),
-            ("--initialize", arguments.initialize),
-            ("--reset", arguments.reset),
-            ("--purge", arguments.purge),
-            ("--show-entry", arguments.show_entry is not None),
-        )
-        if selected
-    ]
-    if arguments.test_decoration is not None and conflicting_modes:
-        parser.error("--test-decoration cannot be combined with other modes: " + ", ".join(conflicting_modes))
     try:
         if arguments.initialize:
             if arguments.config is not None:
@@ -272,7 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        if arguments.demo is None and arguments.show_entry is None and arguments.test_decoration is None:
+        if arguments.demo is None:
             try:
                 configuration = load_application_config(config_absolute)
             except ApplicationConfigurationError as error:
@@ -285,80 +149,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.info("Effective artifacts path: %s", artifacts_path)
             _LOGGER.info("Effective history path: %s", history_path)
         else:
-            configuration = None
             _LOGGER.info(
                 "Effective configuration path: %s; %s",
                 config_absolute,
-                (
-                    "diagnostic presentation does not use production persistence"
-                    if arguments.show_entry is not None or arguments.test_decoration is not None
-                    else "demo persistence uses isolated temporary storage"
-                ),
+                "demo persistence uses isolated temporary storage",
             )
 
-        if arguments.once:
-            result = run_startup(
-                configuration,
-                state_path,
-                artifacts_path,
-                debug_layout=arguments.debug_layout,
-                history_path=history_path,
-                keep_open=_hold_open,
-            )
-        elif arguments.show_entry is not None:
-            run_show_entry(config_path, arguments.show_entry, debug_layout=arguments.debug_layout)
-            return 0
-        elif arguments.test_decoration is not None:
-            run_decoration_diagnostic(
-                config_path,
-                selection=arguments.test_decoration,
-                aspect_ratio=arguments.test_aspect,
-                requested_output_size=(None if arguments.test_resolution is None else tuple(arguments.test_resolution)),
-                quotation=arguments.test_quotation or "short",
-                qr_enabled=False if arguments.no_qr else None,
-                background_enabled=not arguments.no_background,
-                tinting_enabled=not arguments.no_tinting,
-                debug_layout=arguments.debug_layout,
-                output_path=arguments.test_output,
-                variants_directory=arguments.test_variants,
-            )
-            return 0
-        else:
-            shutdown = Event()
-            previous_handlers = {}
-            try:
-                for termination_signal in (signal.SIGINT, signal.SIGTERM):
-                    previous_handlers[termination_signal] = signal.signal(
-                        termination_signal, lambda signum, frame: shutdown.set()
-                    )
-                if arguments.demo is not None:
-                    run_demo(
-                        config_path,
-                        arguments.demo,
-                        debug_layout=arguments.debug_layout,
-                        shutdown_event=shutdown,
-                    )
-                else:
-                    run_application(
-                        configuration,
-                        state_path,
-                        artifacts_path,
-                        debug_layout=arguments.debug_layout,
-                        shutdown_event=shutdown,
-                        history_path=history_path,
-                    )
-            finally:
-                for termination_signal, handler in previous_handlers.items():
-                    signal.signal(termination_signal, handler)
-            return 0
+        shutdown = Event()
+        previous_handlers = {}
+        try:
+            for termination_signal in (signal.SIGINT, signal.SIGTERM):
+                previous_handlers[termination_signal] = signal.signal(
+                    termination_signal, lambda signum, frame: shutdown.set()
+                )
+            if arguments.demo is not None:
+                run_demo(
+                    config_path,
+                    arguments.demo,
+                    shutdown_event=shutdown,
+                )
+            else:
+                run_application(
+                    configuration,
+                    state_path,
+                    artifacts_path,
+                    shutdown_event=shutdown,
+                    history_path=history_path,
+                )
+        finally:
+            for termination_signal, handler in previous_handlers.items():
+                signal.signal(termination_signal, handler)
+        return 0
     except (ApplicationError, ApplicationPathError, InitializationError, InstallationOperationError) as error:
         print(f"refrain: {error}", file=sys.stderr)
         return 1
-    snapshot = result.state.snapshot
-    action = "Selected" if result.selected_initial_quotation else "Recovered"
-    message = f"{action} selection {result.state.revision} for {snapshot.display_date}"
-    print(f"{message}; presented stage {result.presented_stage}.")
-    return 0
 
 
 if __name__ == "__main__":

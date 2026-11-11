@@ -583,12 +583,10 @@ def test_viewer_automatic_fitting_obeys_shared_effective_bounds(
     assert rendered_sizes[1] == 20
 
 
-def test_debug_layout_uses_shared_literary_qr_and_nine_slice_overlays(
+def test_debug_layout_cli_uses_shared_literary_qr_and_nine_slice_overlays(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path, _ = _workspace(tmp_path, with_entry=False)
-    configuration = load_application_config(config_path)
-    specification = viewer._output_specification("16:10", (160, 100))
     diagnostics = SimpleNamespace(
         geometry=SimpleNamespace(
             presentation_literary_bounds=(10, 10, 150, 90),
@@ -605,13 +603,28 @@ def test_debug_layout_uses_shared_literary_qr_and_nine_slice_overlays(
 
     monkeypatch.setattr(viewer, "prepare_daily_images", prepare)
 
-    image = viewer.render_preview(configuration, ("@preview", 2), specification, debug_layout=True)
-    try:
+    output = tmp_path / "debug.png"
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--entry",
+                "@preview:2",
+                "--resolution",
+                "160",
+                "100",
+                "--output",
+                str(output),
+                "--debug-layout",
+            ]
+        )
+        == 0
+    )
+    with Image.open(output) as image:
         assert image.getpixel((10, 50)) == (127, 127, 127)
         assert image.getpixel((100, 65)) == (255, 0, 255)
         assert image.getpixel((30, 50)) == (255, 25, 25)
-    finally:
-        image.close()
 
 
 def test_runtime_and_viewer_share_presentation_construction_and_resolution(

@@ -264,13 +264,9 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         variants: Mapping[ResolvedOutputSpecification, Sequence[Image.Image]],
-        *,
-        debug_layout: bool = False,
     ) -> PreparedImageArtifactSet:
         """Publish all explicit variants and stages losslessly; inputs remain caller-owned."""
         expected_stages = _inputs(revision, stages)
-        if type(debug_layout) is not bool:
-            raise ValueError("debug_layout must be a boolean")
         if not isinstance(variants, Mapping) or not variants:
             raise ValueError("variants must be a nonempty mapping of output specifications to image sequences")
         specifications = _output_specifications(tuple(variants))
@@ -343,7 +339,6 @@ class PreparedImageArtifactStore:
             metadata = {
                 "revision": revision,
                 "image_directory": payload.name,
-                "debug_layout": debug_layout,
                 "variants": variant_metadata,
             }
             document = {"artifacts": metadata, "sha256": hashlib.sha256(_canonical_json(metadata)).hexdigest()}
@@ -379,13 +374,9 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         output_specifications: Sequence[ResolvedOutputSpecification],
-        *,
-        debug_layout: bool = False,
     ) -> PreparedImageArtifactSet | None:
         """Validate a whole expected set sequentially, retaining no decoded images."""
         expected_stages = _inputs(revision, stages)
-        if type(debug_layout) is not bool:
-            raise ValueError("debug_layout must be a boolean")
         expected_specifications = _output_specifications(output_specifications)
         stage_count = len(expected_stages)
         directory = self.root / f"revision-{revision}"
@@ -405,15 +396,13 @@ class PreparedImageArtifactStore:
             if not isinstance(document, dict) or set(document) != {"artifacts", "sha256"}:
                 raise ValueError("manifest must contain artifacts and sha256")
             metadata = document["artifacts"]
-            fields = {"revision", "image_directory", "debug_layout", "variants"}
+            fields = {"revision", "image_directory", "variants"}
             if not isinstance(metadata, dict) or set(metadata) != fields:
                 raise ValueError("manifest artifact fields are missing or unsupported")
             if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
                 raise ValueError("manifest checksum does not match")
             if type(metadata["revision"]) is not int or metadata["revision"] != revision:
                 raise ValueError("manifest revision does not match expected committed revision")
-            if type(metadata["debug_layout"]) is not bool or metadata["debug_layout"] != debug_layout:
-                raise ValueError("manifest debug-layout setting does not match the requested prepared images")
             name = metadata["image_directory"]
             if not isinstance(name, str) or not _PAYLOAD.fullmatch(name):
                 raise ValueError("invalid manifest image_directory")
@@ -554,11 +543,8 @@ def _manifest_payload(directory: Path, revision: int) -> str | None:
         if not isinstance(metadata, dict) or set(metadata) != {
             "revision",
             "image_directory",
-            "debug_layout",
             "variants",
         }:
-            return None
-        if type(metadata["debug_layout"]) is not bool:
             return None
         if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
             return None

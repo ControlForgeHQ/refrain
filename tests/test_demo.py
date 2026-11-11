@@ -87,6 +87,7 @@ class DemoWorkspace:
         self.stores = []
         self.selected = []
         self.prepared = []
+        self.recovery_kwargs = []
         self.publications = []
         self.clock = DemoClock()
         self.on_publish = None
@@ -120,6 +121,7 @@ class DemoWorkspace:
 
         def recover(state, store, stages, *args, **kwargs):
             assert workspace.stores[-1].load() == state
+            workspace.recovery_kwargs.append(kwargs.copy())
             result = real_recovery(state, store, stages, *args, **kwargs)
             workspace.prepared.append((state, stages, result))
             return result
@@ -223,11 +225,9 @@ def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, tmp_pa
     monkeypatch.setattr(cli.signal, "signal", install)
     monkeypatch.setattr(cli, "run_demo", run)
     monkeypatch.setattr(cli, "run_application", DemoWorkspace.forbidden)
-    monkeypatch.setattr(cli, "run_startup", DemoWorkspace.forbidden)
-    assert cli.main(["--config", config.name, "--demo", value, "--debug-layout"]) == 0
+    assert cli.main(["--config", config.name, "--demo", value]) == 0
     assert calls[0][:2] == (config.name, float(value))
-    assert calls[0][2]["debug_layout"] is True
-    assert set(calls[0][2]) == {"debug_layout", "shutdown_event"}
+    assert set(calls[0][2]) == {"shutdown_event"}
     assert handlers == {signal.SIGINT: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
 
 
@@ -240,18 +240,7 @@ def test_cli_rejects_invalid_intervals(monkeypatch, capsys, value):
     assert "positive finite number of seconds" in capsys.readouterr().err
 
 
-def test_cli_once_excludes_demo(capsys):
-    with pytest.raises(SystemExit) as error:
-        cli.main(["--config", "config.yaml", "--once", "--demo", "1"])
-    assert error.value.code == 2
-    assert "not allowed with argument" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("mode", "debug_layout"),
-    [([], False), (["--once"], False), ([], True), (["--once"], True)],
-)
-def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, debug_layout, tmp_path, monkeypatch):
+def test_normal_cli_uses_standard_persistence_paths_without_arguments(tmp_path, monkeypatch):
     config = tmp_path / "config.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
     state = tmp_path / "state" / "state.json"
@@ -264,20 +253,13 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(mode, debu
 
     def run(config_file, state_file, artifact_root, **kwargs):
         calls.append((config_file, state_file, artifact_root, kwargs))
-        return SimpleNamespace(
-            state=SimpleNamespace(revision=1, snapshot=SimpleNamespace(display_date=date(2026, 3, 10))),
-            selected_initial_quotation=True,
-            presented_stage=0,
-        )
 
     monkeypatch.setattr(cli, "run_application", run)
-    monkeypatch.setattr(cli, "run_startup", run)
-    arguments = [*mode, *(["--debug-layout"] if debug_layout else [])]
-    assert cli.main(arguments) == 0
+    assert cli.main([]) == 0
     assert calls[0][0].file == config.absolute()
     assert calls[0][1:3] == (state, artifacts)
     assert calls[0][3]["history_path"] == history
-    assert calls[0][3]["debug_layout"] is debug_layout
+    assert set(calls[0][3]) == {"shutdown_event", "history_path"}
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
@@ -314,7 +296,7 @@ def test_real_pipeline_uses_complete_canonical_stages_and_cleans_session(demo, m
     demo.assert_clean()
 
 
-def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, monkeypatch):
+def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
     package = demo.root / "assets" / "decorations" / "demo-overlay"
     overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
@@ -349,11 +331,12 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo, mon
 
     demo.on_publish = inspect_prepared_stage
 
-    demo.run(debug_layout=True)
+    demo.run()
 
     state, _, _ = demo.prepared[0]
     assert state.snapshot.decoration is None
     assert pixels[0] == (227, 137, 147)
+    assert all("debug_layout" not in kwargs for kwargs in demo.recovery_kwargs)
     demo.assert_clean()
 
 
