@@ -263,7 +263,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--resolution", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
     parser.add_argument("--output", type=Path, metavar="PATH")
     parser.add_argument("--window", action="store_true", help="also open a simple display-only viewer window")
-    parser.add_argument("--debug-layout", action="store_true", help="outline the effective literary region")
+    parser.add_argument("--debug-layout", action="store_true", help="show presentation geometry diagnostics")
     return parser
 
 
