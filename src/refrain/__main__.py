@@ -76,6 +76,7 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
         state_path = Path(configuration.storage.state or paths.state_file).absolute()
         artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
         history_path = Path(configuration.storage.history or paths.history_file).absolute()
+        ownership.ensure_outside((state_path, artifacts_path, history_path))
         _LOGGER.info("Effective configuration path: %s", configuration.file)
         _LOGGER.info("Effective state path: %s", state_path)
         _LOGGER.info("Effective artifacts path: %s", artifacts_path)

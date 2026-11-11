@@ -236,7 +236,7 @@ def test_ownership_remains_held_until_pending_backend_worker_exits(
 
 def test_refuses_lock_inside_installation_tree(tmp_path: Path) -> None:
     ownership = InstallationOwnership(tmp_path / "refrain" / "lock")
-    with pytest.raises(OwnershipError, match="inside a standard installation"):
+    with pytest.raises(OwnershipError, match="inside a managed path"):
         ownership.ensure_outside((tmp_path / "refrain",))
 
 
@@ -266,6 +266,29 @@ def test_failed_runtime_releases_ownership(
     monkeypatch.setattr(cli, "run_demo", fail)
     arguments = ["--config", str(config)] + (["--demo", "1"] if mode == "demo" else [])
     assert cli.main(arguments) == 1
+    with InstallationOwnership():
+        pass
+
+
+@pytest.mark.parametrize("storage", ["state", "history", "artifacts"])
+def test_runtime_rejects_storage_that_can_replace_ownership_lock(
+    storage: str,
+    user_environment: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lock = Path.home() / ".refrain-ownership.lock"
+    destination = lock.parent if storage == "artifacts" else lock
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8")
+        + f"\nstorage:\n  {storage}: '{destination.as_posix()}'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("runtime started"))
+    assert cli.main(["--config", str(config)]) == 1
+    assert "ownership lock" in capsys.readouterr().err
     with InstallationOwnership():
         pass
 

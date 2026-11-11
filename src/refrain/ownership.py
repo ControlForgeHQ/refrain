@@ -52,8 +52,8 @@ class InstallationOwnership:
             lock_path = self.path.resolve()
             if any(lock_path.is_relative_to(Path(root).resolve()) for root in roots):
                 raise OwnershipError(
-                    f"ownership lock {self.path} is inside a standard installation tree; "
-                    "correct the per-user installation paths before retrying"
+                    f"ownership lock {self.path} is inside a managed path; "
+                    "correct the installation or runtime storage paths before retrying"
                 )
         except (OSError, RuntimeError) as error:
             raise OwnershipError(f"cannot verify ownership lock location {self.path}: {error}") from error
