@@ -1175,6 +1175,8 @@ Avoid assumptions that a local day always contains 24 elapsed hours.
 
 Resolve ambiguous wall times to their first occurrence and nonexistent wall times to the first valid instant after the gap, including non-hour offset transitions.
 
+Resolve day-start boundaries through the same isolated local-time conversion rules used for scheduled deadlines. Follow Architecture's Logical-date evaluation: compare the current instant with the resolved day-start boundary for the current local calendar date; at or after it, use the boundary's local calendar date, otherwise use the preceding resolved display-day boundary's date. Compare timezone-aware instants in absolute-time order (for example, after conversion to UTC), preserving the distinction between occurrences in a fold. Do not implement this as a bare local `time` comparison when the date can contain an ambiguous or nonexistent boundary.
+
 Do not use fixed-duration sleeps as a substitute for correct calendar-boundary calculations.
 
 The scheduler should ordinarily wait until the next meaningful event rather than polling continuously.
@@ -1196,6 +1198,19 @@ Use monotonic elapsed time for retry intervals and other durations that should n
 Persist the display date and day-start context required by the architecture. On startup, compare the current logical display date with the committed date: retain the selection when they match and establish one selection for the current logical date when they differ.
 
 Test logical-date comparison across restarts, missed day starts, backward and forward clock adjustments, and large forward jumps. Repeated evaluations for the same committed logical date must not duplicate a selection. Do not add or infer clock-observation history.
+
+### Logical-date transition tests
+
+Require deterministic hardware-independent tests with explicit current instants and injected local-time rules, without changing the host operating-system clock or process timezone. Cover:
+
+- ordinary dates before, exactly at, and after day start, preserving the previous/current local calendar date behavior;
+- a fall-back transition with day start inside the repeated interval, verifying that the first occurrence is the boundary;
+- current time after the first day-start occurrence but before the clock fold, retaining the new logical date;
+- current time during the second occurrence of a wall time earlier than day start, such as second-occurrence 01:15 with `day_start: "01:30"`, retaining the new logical date rather than temporarily regressing;
+- a spring-forward transition with day start inside the nonexistent interval, retaining the preceding logical date before the first valid instant after the gap and using the new logical date at and after that instant;
+- non-hour offset folds and gaps where supported by the injected local-time rules;
+- startup, restart, and fresh evaluation within those transition intervals without prior boundary observations;
+- repeated evaluation and restart with a committed selection for the evaluated logical date, producing only one selection and no duplicate history records while retaining monotonic reveal progression.
 
 ### Demo-session ownership and timing
 

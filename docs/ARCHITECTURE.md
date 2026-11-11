@@ -396,6 +396,8 @@ The application must not assume that every local calendar day contains exactly 2
 
 An ambiguous scheduled wall time resolves to its first occurrence. A nonexistent scheduled wall time resolves to the first valid local instant after the gap. These rules apply to both reveal deadlines and display-day boundaries, including transitions whose offset changes are not whole hours.
 
+Logical-date evaluation orders the current instant and resolved display-day boundaries as timezone-aware instants, not solely by their local `HH:MM` values.
+
 Changing the host timezone is an operating-system operation. Refrain does not need to adapt its scheduling while running; restarting afterward is acceptable. At the next scheduling evaluation, the current host-local logical display date determines whether the committed selection remains active. Reveal progression does not move backward while that logical date remains unchanged.
 
 Clock changes must be handled according to the established display-day transition and reveal-progression policies.
@@ -420,7 +422,7 @@ When the logical date is unchanged, the existing selection remains authoritative
 
 ### Forward clock adjustments
 
-The current logical display date is calculated from host-local time and the configured day-start time. When the clock advances within that logical date, Refrain advances to the reveal stage appropriate to the new time.
+The current logical display date is calculated from resolved day-start boundaries as defined under Logical-date evaluation. When the clock advances within that logical date, Refrain advances to the reveal stage appropriate to the new time.
 
 Missed intermediate reveal stages are not presented sequentially.
 
@@ -447,9 +449,15 @@ Moving to another logical date does not reverse or remove prior selection or his
 
 ### Logical-date evaluation
 
-The display date is the local calendar date associated with the current logical display day: before the configured day-start time, it is the preceding local calendar date; at or after that time, it is the current local calendar date.
+The logical display date is the local calendar date associated with the most recent resolved day-start boundary not later than the current instant.
+
+Resolve the configured day-start for the current host-local calendar date using the Local time rules: an ambiguous wall time uses its first occurrence, and a nonexistent wall time uses the first valid local instant after the gap. Compare the current instant with that resolved boundary using timezone-aware instant ordering. At or after the boundary, the logical display date is the boundary's local calendar date; otherwise, it belongs to the preceding resolved display-day boundary. Do not determine whether the boundary has passed using only a local wall-clock-value comparison.
+
+On ordinary dates, this remains equivalent to the intuitive rule: before `day_start`, use the preceding local calendar date; at or after `day_start`, use the current local calendar date.
 
 For example, with `day_start: "06:00"`, Monday 05:00 has logical display date Sunday, and Monday 07:00 has logical display date Monday.
+
+During a fall-back transition with `day_start: "01:30"` inside the repeated interval, the first occurrence of 01:30 is authoritative. Both the interval after that occurrence and before the fold, and the second occurrence of 01:15, belong to the new logical display date: the resolved boundary has already passed in absolute time. The repeated hour must not temporarily regress the logical date or create extra selections or history records. During a spring-forward gap containing the configured day-start, the preceding logical date remains active until the first valid local instant after the gap.
 
 On startup and during ordinary scheduling, compare this date with the committed selection's display date. A mismatch requires one new selection for the current logical date; skipped dates do not require retrospective selections. The committed date and day-start context are sufficient for this comparison. Do not require a boundary-observation event, retain an outdated selection because a boundary was not observed, or persist or infer clock-observation history.
 
@@ -915,7 +923,7 @@ The hardware-independent scheduling evaluator determines whether an initial or n
 
 The public interface is `refrain.evaluate_scheduling(current_time, configuration, state)`. It returns an immutable `SchedulingDecision` whose `SchedulingAction` is `INITIAL_SELECTION`, `NEW_SELECTION`, `ADVANCE_REVEAL`, or `NO_ACTION`. Initial and new selections include `display_date`; decisions for a committed selection include `required_reveal_stage`. Invalid inputs raise `SchedulingEvaluationError` rather than producing a guessed date.
 
-The evaluator calculates the current logical display date using host-local civil time and `general.day_start`. With a committed selection, a different logical date requires a new selection for that date; the same date retains the selection and advances reveal progress monotonically. Repeated evaluation for one committed logical date does not request another selection. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
+The evaluator calculates the current logical display date from resolved host-local day-start boundary instants as defined under Logical-date evaluation, using `general.day_start`. With a committed selection, a different logical date requires a new selection for that date; the same date retains the selection and advances reveal progress monotonically. Repeated evaluation for one committed logical date does not request another selection. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
 
 `refrain.resolve_reveal_stages(selection)` returns the canonical ordered `CompositionVisibility` sequence for a committed daily selection. The coordinator uses this same sequence for image preparation and cache validation; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
 
