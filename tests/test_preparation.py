@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import date, time
 from importlib.resources import files
 from pathlib import Path
+from random import Random
 
 import pytest
 from PIL import Image
@@ -18,6 +19,7 @@ from refrain import (
     DisplayOutputConfiguration,
     FontResource,
     PresentationInsets,
+    PresentationOverrides,
     ResolvedOutputSpecification,
     RevealSchedule,
     SchedulingContext,
@@ -589,6 +591,149 @@ def test_qr_is_composited_last_over_background_and_decoration_for_every_stage(tm
     finally:
         for image in images:
             image.close()
+
+
+def test_explicit_presentation_overrides_precede_entry_and_decoration_preferences() -> None:
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        tintable=True,
+        qr_ready=False,
+    )
+    configuration = _configuration(
+        {**_MULTI_FACE_REGISTRY, "lora-alt": FontResource("lora-alt", _LORA, bundled=True)},
+        backgrounds={"paper": BackgroundResource("paper", Path("/unused-paper.png"), False)},
+        decorations={"frame": decoration},
+        qr_enabled=False,
+    )
+    snapshot = replace(
+        make_snapshot("lora-alt", metadata={"font_faces": {"quotation": "regular"}}),
+        background="none",
+        decoration="none",
+        text_color=("black",),
+        decoration_color=("black",),
+    )
+
+    choices = preparation._resolve_presentation_choices(
+        snapshot,
+        configuration,
+        Random(1),
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=PresentationOverrides(
+            font="lora",
+            font_faces={"attribution": "italic"},
+            background="paper",
+            decoration="frame",
+            text_color="burnt-orange",
+            tint="blue",
+            style="left-aligned",
+            qr_enabled=True,
+        ),
+    )
+
+    assert choices.fonts["quotation"].identifier == "lora"
+    assert choices.fonts["attribution"].identifier == "lora:italic"
+    assert choices.background_identifier == "paper"
+    assert choices.decoration_identifier == "frame"
+    assert choices.text_color == (198, 90, 32)
+    assert choices.decoration_tint == (0, 0, 255)
+    assert choices.presentation_style == "left-aligned"
+    assert choices.qr_enabled is True
+    assert choices.strict_background is True
+    assert choices.strict_decoration is True
+    assert choices.fonts["quotation"].identifier == "lora"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (PresentationOverrides(font="missing-font"), "explicit font"),
+        (PresentationOverrides(font_faces={"quotation": "bold"}), "explicit quotation face"),
+        (PresentationOverrides(background="missing-background"), "explicit background"),
+        (PresentationOverrides(decoration="missing-decoration"), "explicit decoration"),
+        (PresentationOverrides(text_color="missing-color"), "explicit text color"),
+        (PresentationOverrides(tint="missing-color"), "explicit decoration tint color"),
+        (PresentationOverrides(style="unsupported"), "unsupported presentation style"),
+    ],
+)
+def test_unavailable_explicit_presentation_overrides_fail_without_fallback(
+    overrides: PresentationOverrides, message: str
+) -> None:
+    configuration = _configuration(_MULTI_FACE_REGISTRY)
+
+    with pytest.raises(DailyImagePreparationError, match=message):
+        preparation._resolve_presentation_choices(
+            make_snapshot("lora"),
+            configuration,
+            Random(1),
+            force_white_background=False,
+            forced_decoration_tint=None,
+            overrides=overrides,
+        )
+
+
+def test_explicit_tint_does_not_make_non_tintable_decoration_tintable() -> None:
+    decoration = DecorationResource(
+        "untinted",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        tintable=False,
+    )
+    configuration = _configuration(_FONT_REGISTRY, decorations={"untinted": decoration})
+
+    choices = preparation._resolve_presentation_choices(
+        make_snapshot("lora"),
+        configuration,
+        Random(1),
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=PresentationOverrides(decoration="untinted", tint="blue"),
+    )
+
+    assert choices.decoration_tint is None
+
+
+def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
+    layer_path = tmp_path / "frame.png"
+    with Image.new("RGBA", (8, 8), (0, 0, 0, 0)) as layer:
+        layer.save(layer_path)
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(layer_path, "contain", tintable=False),),
+        False,
+        tintable=False,
+        qr_ready=False,
+    )
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        decorations={"frame": decoration},
+        output_specification=ResolvedOutputSpecification("16:10", (320, 200)),
+        qr_enabled=False,
+    )
+    diagnostics = {}
+
+    variants = preparation.prepare_daily_images(
+        replace(
+            make_snapshot("lora", source=None, attribution=None),
+            quotation_text="A",
+            quotation_identity="A",
+        ),
+        (CompositionVisibility(),),
+        configuration,
+        (ResolvedOutputSpecification("16:10", (320, 200)),),
+        overrides=PresentationOverrides(decoration="frame", qr_enabled=True),
+        on_diagnostics=diagnostics.__setitem__,
+    )
+    try:
+        result = diagnostics[ResolvedOutputSpecification("16:10", (320, 200))]
+        assert result.qr_placement is None
+        assert "not marked qr_ready" in result.qr_unavailable_reason
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
 
 
 @pytest.mark.parametrize("reason", ["policy", "decoration"])

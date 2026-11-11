@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import colorsys
 import hashlib
 import math
 import os
@@ -21,7 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from .application import (
     ApplicationError,
@@ -35,16 +34,16 @@ from .config import _BUNDLED_DECORATION_IDS, _parse_presentation_insets
 from .content import ContentEntry, Quotation, normalize_quotation
 from .display.coordinator import DisplayPublicationCoordinator
 from .geometry import (
-    PixelBounds,
     PresentationGeometryError,
     PresentationInsets,
     ResolvedOutputSpecification,
     resolve_presentation_geometry,
-    round_half_up,
 )
 from .preparation import PreparationDiagnostics, prepare_daily_images
+from .presentation_diagnostics import guide_color as _guide_color
+from .presentation_diagnostics import guide_groups as _guide_groups
+from .presentation_diagnostics import overlay_presentation_diagnostics
 from .qr import QRCodePlacementError, resolve_qr_placement
-from .renderer import annotate_literary_region
 from .scheduling import resolve_reveal_stages
 
 _QUOTATIONS = (
@@ -69,7 +68,6 @@ _ASPECTS = {
     "16:9": (3840, 2160),
     "16:10": (3840, 2400),
 }
-_QR_COLOR = "#FF00FF"
 
 
 @contextmanager
@@ -532,18 +530,6 @@ def normalize_key(key: str) -> str | None:
     )
 
 
-def _guide_color(index: int, count: int) -> str:
-    red, green, blue = colorsys.hsv_to_rgb(index / max(count, 1), 0.9, 1)
-    return f"#{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}"
-
-
-def _guide_groups(details: PreparationDiagnostics):
-    groups = {}
-    for guide in details.nine_slice_guides:
-        groups.setdefault((guide.x_bounds, guide.y_bounds), []).append(guide)
-    return groups
-
-
 def _state_action(key: str) -> str | None:
     normalized = normalize_key(key)
     return {
@@ -566,59 +552,7 @@ def _state_action(key: str) -> str | None:
 def _overlay_diagnostics(image: Image.Image, state: DiagnosticState, details: PreparationDiagnostics) -> Image.Image:
     if not state.debug_layout:
         return image
-    literary = annotate_literary_region(image, details.geometry.presentation_literary_bounds)
-    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    def outlined(bounds: PixelBounds, color: str, width: int = 4) -> None:
-        left, top, right, bottom = bounds
-        draw.rectangle((left, top, right - 1, bottom - 1), outline=color, width=width)
-
-    if details.qr_placement is not None:
-        outlined(details.qr_placement.presentation_allocation_bounds, "#000000", 8)
-        outlined(details.qr_placement.presentation_allocation_bounds, _QR_COLOR, 4)
-
-    groups = _guide_groups(details)
-    for color_index, (x_bounds, y_bounds) in enumerate(groups):
-        color = _guide_color(color_index, len(groups))
-        for x in x_bounds[1:-1]:
-            output_x = round_half_up(x * image.width, details.geometry.design_canvas_size[0])
-            if 0 <= output_x < image.width:
-                draw.line((output_x, 0, output_x, image.height - 1), fill="#000000", width=4)
-                draw.line((output_x, 0, output_x, image.height - 1), fill=color, width=2)
-        for y in y_bounds[1:-1]:
-            output_y = round_half_up(y * image.height, details.geometry.design_canvas_size[1])
-            if 0 <= output_y < image.height:
-                draw.line((0, output_y, image.width - 1, output_y), fill="#000000", width=4)
-                draw.line((0, output_y, image.width - 1, output_y), fill=color, width=2)
-
-    if groups:
-        font = ImageFont.load_default()
-        entries = [
-            (", ".join(f"Layer {guide.layer_index}" for guide in guides), _guide_color(index, len(groups)))
-            for index, guides in enumerate(groups.values())
-        ]
-        line_height = 18
-        text_width = max(draw.textbbox((0, 0), label, font=font)[2] for label, _ in entries)
-        legend_left = 12
-        legend_top = 12
-        legend_right = min(image.width - 1, legend_left + text_width + 42)
-        legend_bottom = min(image.height - 1, legend_top + len(entries) * line_height + 8)
-        draw.rectangle((legend_left, legend_top, legend_right, legend_bottom), fill=(0, 0, 0, 210))
-        for index, (label, color) in enumerate(entries):
-            top = legend_top + 4 + index * line_height
-            draw.line((legend_left + 6, top + 5, legend_left + 22, top + 5), fill="#FFFFFF", width=5)
-            draw.line((legend_left + 6, top + 5, legend_left + 22, top + 5), fill=color, width=3)
-            draw.text((legend_left + 28, top), label, font=font, fill="#FFFFFF")
-
-    background = literary.convert("RGBA")
-    try:
-        result = Image.alpha_composite(background, overlay).convert(image.mode)
-    finally:
-        background.close()
-    overlay.close()
-    literary.close()
-    return result
+    return overlay_presentation_diagnostics(image, details)
 
 
 def _render(
