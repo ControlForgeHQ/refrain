@@ -191,7 +191,7 @@ class DisplayPublicationCoordinator:
                 self._condition.wait(remaining)
             return any(state.successful_identity == identity for state in self._states.values())
 
-    def close(self) -> None:
+    def close(self) -> tuple[Thread, ...]:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
         with self._condition:
             self._stopping = True
@@ -202,8 +202,9 @@ class DisplayPublicationCoordinator:
             if remaining <= 0:
                 break
             thread.join(remaining)
+        active_threads = tuple(thread for thread in self._threads if thread.is_alive())
         for state, thread in zip(self._states.values(), self._threads, strict=True):
-            if thread.is_alive():
+            if thread in active_threads:
                 _LOGGER.error(
                     "Display destination %s did not stop within %.0f seconds; "
                     "its active update will not be interrupted or closed concurrently",
@@ -216,7 +217,7 @@ class DisplayPublicationCoordinator:
         active_backend_types = {
             state.backend_configuration.type
             for state, thread in zip(self._states.values(), self._threads, strict=True)
-            if thread.is_alive()
+            if thread in active_threads
         }
         for backend_type in tuple(self._backends):
             if backend_type in active_backend_types:
@@ -232,6 +233,7 @@ class DisplayPublicationCoordinator:
                     continue
                 self._backends.pop(backend_type, None)
                 self._close_backend(backend_type, backend)
+        return active_threads
 
     @staticmethod
     def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image]) -> None:

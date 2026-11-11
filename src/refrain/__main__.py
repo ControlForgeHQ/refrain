@@ -21,9 +21,29 @@ from .installation import (
     purge_installation,
     reset_installation,
 )
-from .paths import ApplicationPathError, resolve_application_paths
+from .ownership import InstallationOwnership, OwnershipError
+from .paths import ApplicationPathError, ApplicationPaths, resolve_application_paths
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _installation_ownership(paths: ApplicationPaths) -> InstallationOwnership:
+    ownership = InstallationOwnership()
+    ownership.ensure_outside(
+        (
+            paths.config_directory,
+            paths.content_directory,
+            paths.assets_directory,
+            *paths.asset_directories,
+            paths.operational_directory,
+            paths.state_directory,
+            paths.cache_directory,
+            paths.artifacts_directory,
+            paths.state_file,
+            paths.history_file,
+        )
+    )
+    return ownership
 
 
 def _demo_interval(value: str) -> float:
@@ -68,7 +88,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parser.error("--initialize cannot be combined with --config")
             paths = resolve_application_paths()
             print("Initializing Refrain using the platform-standard per-user locations")
-            initialize_installation(paths, progress=print)
+            with _installation_ownership(paths):
+                initialize_installation(paths, progress=print)
             print("Initialization complete.")
             return 0
 
@@ -92,7 +113,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 if not confirmed:
                     return 1
-                reset_installation(paths)
+                with _installation_ownership(paths):
+                    reset_installation(paths)
                 print("Reset complete.")
             else:
                 confirmed = confirm_operation(
@@ -118,7 +140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 if not confirmed:
                     return 1
-                removed = purge_installation(paths)
+                with _installation_ownership(paths):
+                    removed = purge_installation(paths)
                 for path in removed:
                     print(f"Removed: {path}")
                 print("Purge complete.")
@@ -162,25 +185,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 previous_handlers[termination_signal] = signal.signal(
                     termination_signal, lambda signum, frame: shutdown.set()
                 )
-            if arguments.demo is not None:
-                run_demo(
-                    config_path,
-                    arguments.demo,
-                    shutdown_event=shutdown,
-                )
-            else:
-                run_application(
-                    configuration,
-                    state_path,
-                    artifacts_path,
-                    shutdown_event=shutdown,
-                    history_path=history_path,
-                )
+            with InstallationOwnership() as ownership:
+                if arguments.demo is not None:
+                    run_demo(
+                        config_path,
+                        arguments.demo,
+                        shutdown_event=shutdown,
+                        pending_shutdown=ownership.defer_release_until,
+                    )
+                else:
+                    run_application(
+                        configuration,
+                        state_path,
+                        artifacts_path,
+                        shutdown_event=shutdown,
+                        history_path=history_path,
+                        pending_shutdown=ownership.defer_release_until,
+                    )
         finally:
             for termination_signal, handler in previous_handlers.items():
                 signal.signal(termination_signal, handler)
         return 0
-    except (ApplicationError, ApplicationPathError, InitializationError, InstallationOperationError) as error:
+    except (
+        ApplicationError,
+        ApplicationPathError,
+        InitializationError,
+        InstallationOperationError,
+        OwnershipError,
+    ) as error:
         print(f"refrain: {error}", file=sys.stderr)
         return 1
 

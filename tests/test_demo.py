@@ -227,7 +227,7 @@ def test_cli_demo_accepts_interval_without_persistence_paths(monkeypatch, tmp_pa
     monkeypatch.setattr(cli, "run_application", DemoWorkspace.forbidden)
     assert cli.main(["--config", config.name, "--demo", value]) == 0
     assert calls[0][:2] == (config.name, float(value))
-    assert set(calls[0][2]) == {"shutdown_event"}
+    assert set(calls[0][2]) == {"shutdown_event", "pending_shutdown"}
     assert handlers == {signal.SIGINT: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
 
 
@@ -259,7 +259,7 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(tmp_path, 
     assert calls[0][0].file == config.absolute()
     assert calls[0][1:3] == (state, artifacts)
     assert calls[0][3]["history_path"] == history
-    assert set(calls[0][3]) == {"shutdown_event", "history_path"}
+    assert set(calls[0][3]) == {"shutdown_event", "history_path", "pending_shutdown"}
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
@@ -660,6 +660,30 @@ def test_cleanup_oserror_does_not_mask_primary_error(demo, monkeypatch, caplog):
     with pytest.raises(application.ApplicationError, match="primary fatal failure"):
         demo.run()
     assert "Cannot remove temporary demo storage" in caplog.text
+    demo.assert_clean()
+
+
+def test_demo_reports_pending_backend_shutdown(demo, monkeypatch):
+    demo.entry()
+    workers = (object(),)
+    callbacks = []
+    original_coordinator = application.DisplayPublicationCoordinator
+
+    def coordinator(*args, **kwargs):
+        instance = original_coordinator(*args, **kwargs)
+        original_close = instance.close
+
+        def close():
+            original_close()
+            return workers
+
+        instance.close = close
+        return instance
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", coordinator)
+    demo.clock = DemoClock(waits=1)
+    demo.run(pending_shutdown=lambda pending, finish: callbacks.append((pending, finish)))
+    assert callbacks == [(workers, demo.coordinators[0].close)]
     demo.assert_clean()
 
 

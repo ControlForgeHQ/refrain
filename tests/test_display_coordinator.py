@@ -286,9 +286,10 @@ def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, capl
 
     started = time.monotonic()
     with caplog.at_level("ERROR"):
-        coordinator.close()
+        pending = coordinator.close()
 
     assert time.monotonic() - started < 0.5
+    assert len(pending) == 1 and pending[0].is_alive()
     assert "did not stop within" in caplog.text
     assert not backend_closed.is_set()
     assert retained_images[0].getpixel((0, 0)) == (12, 0, 0)

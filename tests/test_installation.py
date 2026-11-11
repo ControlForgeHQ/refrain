@@ -877,7 +877,7 @@ def test_demo_uses_default_configuration_and_never_receives_production_persisten
 
     assert cli.main(["--demo", "5"]) == 0
     assert calls[0][0] == (paths.config_file, 5.0)
-    assert set(calls[0][1]) == {"shutdown_event"}
+    assert set(calls[0][1]) == {"shutdown_event", "pending_shutdown"}
 
 
 def test_missing_configuration_is_actionable_and_does_not_fall_back(
