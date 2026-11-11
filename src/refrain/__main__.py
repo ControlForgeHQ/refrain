@@ -267,7 +267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _LOGGER.info("Effective configuration path: %s", config_absolute)
             print(
                 f"refrain: configuration file does not exist: {config_absolute}\n"
-                "Initialize the standard per-user configuration with `python -m refrain --initialize`, "
+                "Initialize the standard per-user configuration with `refrain --initialize`, "
                 "or provide an existing file with --config.",
                 file=sys.stderr,
             )

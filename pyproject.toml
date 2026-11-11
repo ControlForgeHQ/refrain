@@ -10,6 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
+refrain = "refrain.__main__:main"
 refrain-viewer = "refrain.viewer:main"
 
 [project.optional-dependencies]
