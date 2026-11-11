@@ -147,6 +147,12 @@ It answers:
 
 > Where does this behavior belong, and how must the system behave?
 
+### docs/CLI.md
+
+The CLI reference owns public command syntax, argument behavior, command-mode conflicts, exit and result semantics, and user-facing command diagnostics.
+
+The architecture owns the runtime semantics behind those commands. Engineering owns CLI implementation and testing guidance.
+
 ### docs/ENGINEERING.md
 
 This document owns coding conventions, implementation standards, dependency practices, validation expectations, and contributor requirements.
