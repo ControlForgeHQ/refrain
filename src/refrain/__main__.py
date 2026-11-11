@@ -21,9 +21,29 @@ from .installation import (
     purge_installation,
     reset_installation,
 )
-from .paths import ApplicationPathError, resolve_application_paths
+from .ownership import InstallationOwnership, OwnershipError
+from .paths import ApplicationPathError, ApplicationPaths, resolve_application_paths
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _installation_ownership(paths: ApplicationPaths) -> InstallationOwnership:
+    ownership = InstallationOwnership(Path(paths.ownership_file))
+    ownership.ensure_outside(
+        (
+            paths.config_directory,
+            paths.content_directory,
+            paths.assets_directory,
+            *paths.asset_directories,
+            paths.operational_directory,
+            paths.state_directory,
+            paths.cache_directory,
+            paths.artifacts_directory,
+            paths.state_file,
+            paths.history_file,
+        )
+    )
+    return ownership
 
 
 def _demo_interval(value: str) -> float:
@@ -34,6 +54,67 @@ def _demo_interval(value: str) -> float:
     if not math.isfinite(seconds) or seconds <= 0:
         raise argparse.ArgumentTypeError("demo interval must be a positive finite number of seconds")
     return seconds
+
+
+def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownership: InstallationOwnership) -> int:
+    config_path = arguments.config if arguments.config is not None else paths.config_file
+    config_absolute = Path(config_path).absolute()
+    if not config_absolute.exists():
+        _LOGGER.info("Effective configuration path: %s", config_absolute)
+        print(
+            f"refrain: configuration file does not exist: {config_absolute}\n"
+            "Initialize the standard per-user configuration with `refrain --initialize`, "
+            "or provide an existing file with --config.",
+            file=sys.stderr,
+        )
+        return 1
+    if arguments.demo is None:
+        try:
+            configuration = load_application_config(config_absolute)
+        except ApplicationConfigurationError as error:
+            raise ApplicationError(f"application configuration is invalid: {error}") from error
+        state_path = Path(configuration.storage.state or paths.state_file).absolute()
+        artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
+        history_path = Path(configuration.storage.history or paths.history_file).absolute()
+        ownership.ensure_outside((state_path, artifacts_path, history_path))
+        _LOGGER.info("Effective configuration path: %s", configuration.file)
+        _LOGGER.info("Effective state path: %s", state_path)
+        _LOGGER.info("Effective artifacts path: %s", artifacts_path)
+        _LOGGER.info("Effective history path: %s", history_path)
+    else:
+        _LOGGER.info(
+            "Effective configuration path: %s; %s",
+            config_absolute,
+            "demo persistence uses isolated temporary storage",
+        )
+
+    shutdown = Event()
+    previous_handlers = {}
+    try:
+        for termination_signal in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[termination_signal] = signal.signal(
+                termination_signal, lambda signum, frame: shutdown.set()
+            )
+        if arguments.demo is not None:
+            run_demo(
+                config_path,
+                arguments.demo,
+                shutdown_event=shutdown,
+                pending_shutdown=ownership.defer_release_until,
+            )
+        else:
+            run_application(
+                configuration,
+                state_path,
+                artifacts_path,
+                shutdown_event=shutdown,
+                history_path=history_path,
+                pending_shutdown=ownership.defer_release_until,
+            )
+    finally:
+        for termination_signal, handler in previous_handlers.items():
+            signal.signal(termination_signal, handler)
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -68,7 +149,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parser.error("--initialize cannot be combined with --config")
             paths = resolve_application_paths()
             print("Initializing Refrain using the platform-standard per-user locations")
-            initialize_installation(paths, progress=print)
+            with _installation_ownership(paths):
+                initialize_installation(paths, progress=print)
             print("Initialization complete.")
             return 0
 
@@ -92,7 +174,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 if not confirmed:
                     return 1
-                reset_installation(paths)
+                with _installation_ownership(paths):
+                    reset_installation(paths)
                 print("Reset complete.")
             else:
                 confirmed = confirm_operation(
@@ -118,69 +201,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 if not confirmed:
                     return 1
-                removed = purge_installation(paths)
+                with _installation_ownership(paths):
+                    removed = purge_installation(paths)
                 for path in removed:
                     print(f"Removed: {path}")
                 print("Purge complete.")
             return 0
 
         paths = resolve_application_paths()
-        config_path = arguments.config if arguments.config is not None else paths.config_file
-        config_absolute = Path(config_path).absolute()
-        if not config_absolute.exists():
-            _LOGGER.info("Effective configuration path: %s", config_absolute)
-            print(
-                f"refrain: configuration file does not exist: {config_absolute}\n"
-                "Initialize the standard per-user configuration with `refrain --initialize`, "
-                "or provide an existing file with --config.",
-                file=sys.stderr,
-            )
-            return 1
-        if arguments.demo is None:
-            try:
-                configuration = load_application_config(config_absolute)
-            except ApplicationConfigurationError as error:
-                raise ApplicationError(f"application configuration is invalid: {error}") from error
-            state_path = Path(configuration.storage.state or paths.state_file).absolute()
-            artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
-            history_path = Path(configuration.storage.history or paths.history_file).absolute()
-            _LOGGER.info("Effective configuration path: %s", configuration.file)
-            _LOGGER.info("Effective state path: %s", state_path)
-            _LOGGER.info("Effective artifacts path: %s", artifacts_path)
-            _LOGGER.info("Effective history path: %s", history_path)
-        else:
-            _LOGGER.info(
-                "Effective configuration path: %s; %s",
-                config_absolute,
-                "demo persistence uses isolated temporary storage",
-            )
-
-        shutdown = Event()
-        previous_handlers = {}
-        try:
-            for termination_signal in (signal.SIGINT, signal.SIGTERM):
-                previous_handlers[termination_signal] = signal.signal(
-                    termination_signal, lambda signum, frame: shutdown.set()
-                )
-            if arguments.demo is not None:
-                run_demo(
-                    config_path,
-                    arguments.demo,
-                    shutdown_event=shutdown,
-                )
-            else:
-                run_application(
-                    configuration,
-                    state_path,
-                    artifacts_path,
-                    shutdown_event=shutdown,
-                    history_path=history_path,
-                )
-        finally:
-            for termination_signal, handler in previous_handlers.items():
-                signal.signal(termination_signal, handler)
-        return 0
-    except (ApplicationError, ApplicationPathError, InitializationError, InstallationOperationError) as error:
+        with _installation_ownership(paths) as ownership:
+            return _run_runtime(arguments, paths, ownership)
+    except (
+        ApplicationError,
+        ApplicationPathError,
+        InitializationError,
+        InstallationOperationError,
+        OwnershipError,
+    ) as error:
         print(f"refrain: {error}", file=sys.stderr)
         return 1
 

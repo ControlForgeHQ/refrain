@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Event, Thread
 
 from PIL import Image
 
@@ -447,6 +447,7 @@ def run_application(
     wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     monotonic_clock: Callable[[], float] = time.monotonic,
     scheduling_wait: Callable[..., bool] = wait_for_scheduling_event,
+    pending_shutdown: Callable[[tuple[Thread, ...], Callable[[], object]], None] | None = None,
 ) -> None:
     """Operate until shutdown, retaining independent display workers and authoritative state.
 
@@ -654,7 +655,9 @@ def run_application(
                 raise ApplicationError(f"scheduling evaluation failed: {error}") from error
     finally:
         if coordinator is not None:
-            coordinator.close()
+            workers = coordinator.close()
+            if workers and pending_shutdown is not None:
+                pending_shutdown(workers, coordinator.close)
         if information_view_images is not None:
             for image in information_view_images.values():
                 image.close()
@@ -673,6 +676,7 @@ def run_demo(
     wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     monotonic_clock: Callable[[], float] = time.monotonic,
     wait: Callable[[float], bool] | None = None,
+    pending_shutdown: Callable[[tuple[Thread, ...], Callable[[], object]], None] | None = None,
 ) -> None:
     """Cycle canonical stages using fresh session storage and a fixed eligibility date.
 
@@ -795,7 +799,9 @@ def run_demo(
     finally:
         try:
             if coordinator is not None:
-                coordinator.close()
+                workers = coordinator.close()
+                if workers and pending_shutdown is not None:
+                    pending_shutdown(workers, coordinator.close)
         finally:
             try:
                 session.cleanup()
