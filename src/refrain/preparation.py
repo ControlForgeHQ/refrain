@@ -886,7 +886,11 @@ def _prepare_daily_images_for_specification(
                 strict=strict_decoration or choices.strict_decoration,
                 qr_available=qr_placement is not None,
                 eligible_layers=decoration_layers,
-                on_nine_slice_guide=collect_nine_slice_guide if on_diagnostics is not None else None,
+                on_nine_slice_guide=(
+                    collect_nine_slice_guide
+                    if on_diagnostics is not None or on_presentation_image is not None
+                    else None
+                ),
             )
             background = _scale_design_composition_to_presentation(background, presentation_canvas_size)
             layout = layout_composition(

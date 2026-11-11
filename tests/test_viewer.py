@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -310,7 +311,38 @@ def test_viewer_passes_typed_overrides_to_shared_preparation(tmp_path: Path, mon
     )
     try:
         assert captured["overrides"] == overrides
-        assert captured["debug_layout"] is False
+        assert captured["on_presentation_image"] is None
+    finally:
+        image.close()
+
+
+def test_debug_layout_uses_shared_literary_qr_and_nine_slice_overlays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    specification = viewer._output_specification("16:10", (160, 100))
+    diagnostics = SimpleNamespace(
+        geometry=SimpleNamespace(
+            presentation_literary_bounds=(10, 10, 150, 90),
+            design_canvas_size=(160, 100),
+        ),
+        qr_placement=SimpleNamespace(presentation_allocation_bounds=(100, 60, 120, 80)),
+        nine_slice_guides=(SimpleNamespace(layer_index=1, x_bounds=(0, 30, 130, 160), y_bounds=(0, 40, 60, 100)),),
+    )
+
+    def prepare(_snapshot, _stages, _configuration, specifications, **kwargs):
+        image = Image.new("RGB", (160, 100), "white")
+        kwargs["on_presentation_image"](specifications[0], image, diagnostics)
+        return {specifications[0]: (image,)}
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", prepare)
+
+    image = viewer.render_preview(configuration, ("@preview", 2), specification, debug_layout=True)
+    try:
+        assert image.getpixel((10, 50)) == (127, 127, 127)
+        assert image.getpixel((100, 65)) == (255, 0, 255)
+        assert image.getpixel((30, 50)) == (255, 25, 25)
     finally:
         image.close()
 

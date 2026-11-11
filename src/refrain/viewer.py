@@ -25,6 +25,7 @@ from .preparation import (
     prepare_daily_images,
 )
 from .presentation import build_presentation_snapshot
+from .presentation_diagnostics import overlay_presentation_diagnostics
 from .scheduling import resolve_reveal_stages
 
 _ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
@@ -132,13 +133,20 @@ def render_preview(
         snapshot = build_presentation_snapshot(configuration, entry, quotation, date.today())
         specification = output_specification or _output_specification("16:10", None)
         stages = resolve_reveal_stages(snapshot)
+
+        def annotate_diagnostics(_specification, image, diagnostics) -> None:
+            annotated = overlay_presentation_diagnostics(image, diagnostics)
+            if annotated is not image:
+                image.paste(annotated)
+                annotated.close()
+
         prepared = prepare_daily_images(
             snapshot,
             (stages[-1],),
             configuration,
             (specification,),
             overrides=overrides,
-            debug_layout=debug_layout,
+            on_presentation_image=annotate_diagnostics if debug_layout else None,
         )
     except (ValueError, TypeError) as error:
         raise ViewerError(f"cannot prepare preview for entry {entry.id!r}: {error}") from error
