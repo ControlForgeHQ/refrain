@@ -10,6 +10,7 @@ from threading import Event, Thread
 import pytest
 
 import refrain.__main__ as cli
+import refrain.ownership as ownership_module
 from refrain.ownership import InstallationOwnership, OwnershipError
 from refrain.paths import resolve_application_paths
 
@@ -26,13 +27,23 @@ def user_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[st
         "XDG_CONFIG_HOME": home / "config",
         "XDG_STATE_HOME": home / "state",
         "XDG_CACHE_HOME": home / "cache",
+        "REFRAIN_TEST_HOME": home,
     }.items():
         monkeypatch.setenv(name, str(value))
+    monkeypatch.setattr(ownership_module, "_user_home", lambda: home)
     return os.environ.copy()
 
 
+_TEST_HOME = """
+import os
+from pathlib import Path
+import refrain.ownership as ownership
+ownership._user_home = lambda: Path(os.environ["REFRAIN_TEST_HOME"])
+"""
+
+
 def _start_holder(environment: dict[str, str], mode: str, config: Path) -> subprocess.Popen:
-    program = """
+    program = _TEST_HOME + """
 import sys
 import refrain.__main__ as cli
 def hold(*args, **kwargs):
@@ -81,7 +92,7 @@ def test_cross_process_exclusion_and_crash_recovery(user_environment: dict[str, 
     owner.acquire()
     with pytest.raises(OwnershipError, match="another Refrain"):
         InstallationOwnership(path).acquire()
-    probe = "from refrain.ownership import InstallationOwnership; InstallationOwnership().acquire()"
+    probe = _TEST_HOME + "\nfrom refrain.ownership import InstallationOwnership; InstallationOwnership().acquire()"
     result = subprocess.run([sys.executable, "-c", probe], env=user_environment, capture_output=True, text=True)
     assert result.returncode != 0
     assert "another Refrain" in result.stderr
@@ -91,9 +102,13 @@ def test_cross_process_exclusion_and_crash_recovery(user_environment: dict[str, 
     assert result.returncode == 0, result.stderr
 
     program = (
-        "from refrain.ownership import InstallationOwnership; "
-        "import sys; lock = InstallationOwnership(); lock.acquire(); "
-        "print('READY', flush=True); sys.stdin.readline()"
+        _TEST_HOME
+        + "\n"
+        + (
+            "from refrain.ownership import InstallationOwnership; "
+            "import sys; lock = InstallationOwnership(); lock.acquire(); "
+            "print('READY', flush=True); sys.stdin.readline()"
+        )
     )
     process = subprocess.Popen(
         [sys.executable, "-u", "-c", program],
@@ -134,7 +149,9 @@ def test_runtime_and_demo_contend_across_processes(
     monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: calls.append("demo"))
     arguments = ["--config", str(second)] + (["--demo", "1"] if contender == "demo" else [])
     try:
-        assert cli.main(arguments) == 1
+        with monkeypatch.context() as patch:
+            patch.setattr(cli, "load_application_config", lambda *args: pytest.fail("configuration opened"))
+            assert cli.main(arguments) == 1
         assert "another Refrain" in capsys.readouterr().err
         assert not calls
         assert not (tmp_path / "first-storage").exists()
@@ -223,6 +240,18 @@ def test_refuses_lock_inside_installation_tree(tmp_path: Path) -> None:
         ownership.ensure_outside((tmp_path / "refrain",))
 
 
+def test_profile_location_ignores_environment_home(tmp_path: Path) -> None:
+    program = "from refrain.ownership import _user_home; print(_user_home())"
+    homes = []
+    for name in ("first", "second"):
+        environment = os.environ.copy()
+        environment.update(HOME=str(tmp_path / name), USERPROFILE=str(tmp_path / name))
+        result = subprocess.run([sys.executable, "-c", program], env=environment, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        homes.append(result.stdout.strip())
+    assert homes[0] == homes[1]
+
+
 @pytest.mark.parametrize("mode", ["normal", "demo"])
 def test_failed_runtime_releases_ownership(
     mode: str, user_environment: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -244,3 +273,85 @@ def test_failed_runtime_releases_ownership(
 def test_open_failure_is_actionable(tmp_path: Path) -> None:
     with pytest.raises(OwnershipError, match="cannot open Refrain ownership lock"):
         InstallationOwnership(tmp_path / "missing" / "lock").acquire()
+
+
+def test_release_failure_is_actionable_and_closes_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    owner = InstallationOwnership(tmp_path / "lock")
+    owner.acquire()
+    platform_locks = ownership_module.msvcrt if os.name == "nt" else ownership_module.fcntl
+    lock_function = "locking" if os.name == "nt" else "flock"
+
+    def fail(*args):
+        raise OSError("injected unlock failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(platform_locks, lock_function, fail)
+        with pytest.raises(OwnershipError, match="cannot release Refrain ownership lock"):
+            owner.release()
+    owner.release()
+    with InstallationOwnership(owner.path):
+        pass
+
+
+@pytest.mark.parametrize("mode", ["normal", "demo"])
+def test_real_lifecycle_holds_lock_until_fake_backend_is_closed(
+    mode: str,
+    user_environment: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["--initialize"]) == 0
+    config = Path(resolve_application_paths().config_file)
+    program = _TEST_HOME + """
+import sys
+from threading import Thread
+import refrain.__main__ as cli
+
+class Backend:
+    def update_output(self, output_id, image):
+        print("READY", flush=True)
+    def close(self):
+        print("CLOSING", flush=True)
+        sys.stdin.readline()
+        print("CLOSED", flush=True)
+
+def wrap(run):
+    def start(*args, **kwargs):
+        shutdown = kwargs["shutdown_event"]
+        Thread(target=lambda: (sys.stdin.readline(), shutdown.set()), daemon=True).start()
+        return run(*args, backend_factory=lambda configuration: Backend(), **kwargs)
+    return start
+
+cli.run_application = wrap(cli.run_application)
+cli.run_demo = wrap(cli.run_demo)
+raise SystemExit(cli.main(sys.argv[1:]))
+"""
+    arguments = ["--config", str(config)] + (["--demo", "1"] if mode == "demo" else [])
+    process = subprocess.Popen(
+        [sys.executable, "-u", "-c", program, *arguments],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=user_environment,
+    )
+    try:
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == "READY"
+        monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
+        monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("backend opened"))
+        monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("backend opened"))
+        assert cli.main(arguments) == 1
+        assert "another Refrain" in capsys.readouterr().err
+        assert process.stdin is not None
+        process.stdin.write("shutdown\n")
+        process.stdin.flush()
+        assert process.stdout.readline().strip() == "CLOSING"
+        assert cli.main(arguments) == 1
+        assert "another Refrain" in capsys.readouterr().err
+    finally:
+        stdout, stderr = process.communicate("\n", timeout=30)
+    assert process.returncode == 0, (stdout, stderr)
+    assert "CLOSED" in stdout
+    with InstallationOwnership():
+        pass

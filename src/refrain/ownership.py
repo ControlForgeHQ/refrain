@@ -11,9 +11,11 @@ from pathlib import Path
 from threading import Thread
 
 if os.name == "nt":
+    import ctypes
     import msvcrt
 else:
     import fcntl
+    import pwd
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,13 +24,23 @@ class OwnershipError(Exception):
     """Raised when installation ownership cannot be acquired or released."""
 
 
+def _user_home() -> Path:
+    if os.name == "nt":
+        buffer = ctypes.create_unicode_buffer(32768)
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x28, None, 0, buffer)
+        if result != 0 or not buffer.value:
+            raise OSError(f"cannot resolve the Windows user profile directory (HRESULT {result:#x})")
+        return Path(buffer.value)
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
 class InstallationOwnership:
     """A non-blocking operating-system lock, independent of runtime storage paths."""
 
     def __init__(self, path: Path | None = None) -> None:
         try:
-            self.path = path if path is not None else Path.home() / ".refrain-ownership.lock"
-        except (OSError, RuntimeError) as error:
+            self.path = path if path is not None else _user_home() / ".refrain-ownership.lock"
+        except (OSError, RuntimeError, KeyError) as error:
             raise OwnershipError(f"cannot determine the per-user ownership lock location: {error}") from error
         self._fd: int | None = None
         self._pending_workers: tuple[Thread, ...] = ()

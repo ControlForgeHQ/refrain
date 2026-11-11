@@ -56,6 +56,66 @@ def _demo_interval(value: str) -> float:
     return seconds
 
 
+def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownership: InstallationOwnership) -> int:
+    config_path = arguments.config if arguments.config is not None else paths.config_file
+    config_absolute = Path(config_path).absolute()
+    if not config_absolute.exists():
+        _LOGGER.info("Effective configuration path: %s", config_absolute)
+        print(
+            f"refrain: configuration file does not exist: {config_absolute}\n"
+            "Initialize the standard per-user configuration with `refrain --initialize`, "
+            "or provide an existing file with --config.",
+            file=sys.stderr,
+        )
+        return 1
+    if arguments.demo is None:
+        try:
+            configuration = load_application_config(config_absolute)
+        except ApplicationConfigurationError as error:
+            raise ApplicationError(f"application configuration is invalid: {error}") from error
+        state_path = Path(configuration.storage.state or paths.state_file).absolute()
+        artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
+        history_path = Path(configuration.storage.history or paths.history_file).absolute()
+        _LOGGER.info("Effective configuration path: %s", configuration.file)
+        _LOGGER.info("Effective state path: %s", state_path)
+        _LOGGER.info("Effective artifacts path: %s", artifacts_path)
+        _LOGGER.info("Effective history path: %s", history_path)
+    else:
+        _LOGGER.info(
+            "Effective configuration path: %s; %s",
+            config_absolute,
+            "demo persistence uses isolated temporary storage",
+        )
+
+    shutdown = Event()
+    previous_handlers = {}
+    try:
+        for termination_signal in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[termination_signal] = signal.signal(
+                termination_signal, lambda signum, frame: shutdown.set()
+            )
+        if arguments.demo is not None:
+            run_demo(
+                config_path,
+                arguments.demo,
+                shutdown_event=shutdown,
+                pending_shutdown=ownership.defer_release_until,
+            )
+        else:
+            run_application(
+                configuration,
+                state_path,
+                artifacts_path,
+                shutdown_event=shutdown,
+                history_path=history_path,
+                pending_shutdown=ownership.defer_release_until,
+            )
+    finally:
+        for termination_signal, handler in previous_handlers.items():
+            signal.signal(termination_signal, handler)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="refrain",
@@ -148,64 +208,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         paths = resolve_application_paths()
-        config_path = arguments.config if arguments.config is not None else paths.config_file
-        config_absolute = Path(config_path).absolute()
-        if not config_absolute.exists():
-            _LOGGER.info("Effective configuration path: %s", config_absolute)
-            print(
-                f"refrain: configuration file does not exist: {config_absolute}\n"
-                "Initialize the standard per-user configuration with `refrain --initialize`, "
-                "or provide an existing file with --config.",
-                file=sys.stderr,
-            )
-            return 1
-        if arguments.demo is None:
-            try:
-                configuration = load_application_config(config_absolute)
-            except ApplicationConfigurationError as error:
-                raise ApplicationError(f"application configuration is invalid: {error}") from error
-            state_path = Path(configuration.storage.state or paths.state_file).absolute()
-            artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
-            history_path = Path(configuration.storage.history or paths.history_file).absolute()
-            _LOGGER.info("Effective configuration path: %s", configuration.file)
-            _LOGGER.info("Effective state path: %s", state_path)
-            _LOGGER.info("Effective artifacts path: %s", artifacts_path)
-            _LOGGER.info("Effective history path: %s", history_path)
-        else:
-            _LOGGER.info(
-                "Effective configuration path: %s; %s",
-                config_absolute,
-                "demo persistence uses isolated temporary storage",
-            )
-
-        shutdown = Event()
-        previous_handlers = {}
-        try:
-            for termination_signal in (signal.SIGINT, signal.SIGTERM):
-                previous_handlers[termination_signal] = signal.signal(
-                    termination_signal, lambda signum, frame: shutdown.set()
-                )
-            with InstallationOwnership() as ownership:
-                if arguments.demo is not None:
-                    run_demo(
-                        config_path,
-                        arguments.demo,
-                        shutdown_event=shutdown,
-                        pending_shutdown=ownership.defer_release_until,
-                    )
-                else:
-                    run_application(
-                        configuration,
-                        state_path,
-                        artifacts_path,
-                        shutdown_event=shutdown,
-                        history_path=history_path,
-                        pending_shutdown=ownership.defer_release_until,
-                    )
-        finally:
-            for termination_signal, handler in previous_handlers.items():
-                signal.signal(termination_signal, handler)
-        return 0
+        with InstallationOwnership() as ownership:
+            return _run_runtime(arguments, paths, ownership)
     except (
         ApplicationError,
         ApplicationPathError,

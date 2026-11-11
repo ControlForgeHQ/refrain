@@ -1609,6 +1609,31 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
         image.close()
 
 
+def test_continuous_reports_pending_backend_shutdown(workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    callbacks = []
+    workers = (object(),)
+    original_coordinator = application.DisplayPublicationCoordinator
+
+    class Coordinator(original_coordinator):
+        def close(self):
+            super().close()
+            return workers
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", Coordinator)
+    clock = RuntimeClock(at(10, 7))
+    run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        await_publication_before_scheduling=True,
+        pending_shutdown=lambda pending, finish: callbacks.append((pending, finish)),
+    )
+    assert len(callbacks) == 1
+    assert callbacks[0][0] == workers
+    assert isinstance(callbacks[0][1].__self__, Coordinator)
+
+
 def test_continuous_http_publication_progresses_while_another_backend_is_busy(workspace) -> None:
     ordinary(workspace)
     with socket.socket() as listener:
