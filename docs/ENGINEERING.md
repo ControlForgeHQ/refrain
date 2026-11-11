@@ -660,6 +660,8 @@ Use Python standard-library local IPC behind one application-facing client/liste
 
 Authenticate each connection with a per-runtime unpredictable credential available only through appropriately protected per-user runtime metadata. Do not treat a local socket or pipe alone as authorization. `--demo` is a standalone backend-owning mode and does not provide the runtime-control listener.
 
+Restrict runtime metadata and credential files to the owning user using platform-appropriate permissions. Remove endpoint and credential artifacts during orderly shutdown. After abnormal exit, tolerate stale filesystem artifacts: their existence does not establish that a runtime is alive. Acquire the process ownership lock before reconciling or replacing stale endpoint metadata, and use a successful authenticated IPC connection—not the presence of a path or credential file—to establish that a control endpoint is responsive.
+
 Use a bounded, explicitly versioned protocol over byte-oriented operations such as `send_bytes()` and `recv_bytes()`. JSON may carry operation metadata and output specifications. Transfer completed images as separately bounded binary payloads rather than embedding them in JSON. Do not use pickle-based `send()` or `recv()` for control payloads. Apply explicit limits to message size, image dimensions, image count, and selected destinations. Reject unknown versions or operations, malformed metadata, unsupported encodings, oversized or inconsistent payloads, and incomplete requests before they can trigger backend access.
 
 ### Publication coordination
@@ -1581,7 +1583,7 @@ Engineering practices should not introduce:
 - a general plugin framework;
 - an elaborate dependency-injection system;
 - a custom hardware abstraction framework;
-- runtime web services for Version 0.1;
+- a general-purpose management/web application service or runtime web infrastructure beyond explicitly documented backends and features;
 - unnecessary asynchronous processing frameworks;
 - automated release infrastructure before the project has a demonstrated release need.
 

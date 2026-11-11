@@ -1432,11 +1432,11 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 ### Multi-backend publication
 
-Refrain coordinates publication of the current prepared presentation to every configured output destination. A backend with multiple named outputs remains one backend instance, while each named output is a distinct publication destination.
+For normal scheduled publication, Refrain coordinates publication of the current prepared presentation to every configured output destination. A backend with multiple named outputs remains one backend instance, while each named output is a distinct publication destination. The independent scheduling, coalescing, and acknowledgement behavior in this section applies to normal scheduled publication; transient push and refresh use the admission and completion rules in [Transient publication and refresh](#transient-publication-and-refresh).
 
 A single committed daily selection and its coherent set of prepared output images are shared by all destinations. Only the selection is authoritative.
 
-Each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent subsequent scheduling evaluation.
+For normal scheduled publication, each backend operates independently. A slow or failed update must not delay publication to another available backend or prevent subsequent scheduling evaluation.
 
 An active update to one backend must not overlap another update to the same backend. Updates to different backends may proceed concurrently.
 
@@ -1444,19 +1444,19 @@ The persisted highest reveal stage represents the application's globally reached
 
 Reveal progression advances monotonically when a later stage becomes required and is durably recorded independently of backend publication outcomes.
 
-The application coordinator maintains independent successful-publication status for each configured destination, including every named image-server output, during the application lifetime.
+The application coordinator maintains independent acknowledgement of the scheduled presentation identity for each configured destination, including every named image-server output, during the application lifetime. It tracks transient operation completion separately from this scheduled acknowledgement. Successful transient publication must not clear or replace the scheduled acknowledgement used to suppress redundant scheduled updates.
 
-The application must distinguish the currently required variant for each destination from the variant last successfully published there. A successful update to one destination does not establish successful publication to another.
+For normal scheduled publication, the application must distinguish the currently required variant for each destination from the scheduled identity last acknowledged there. A successful scheduled update to one destination does not establish successful publication to another. Literal last-published pixels may instead be a transient preview and do not determine whether the scheduled identity remains acknowledged.
 
 Publication tracking is owned by the application coordinator, not by individual display backends. Backends receive complete images and do not interpret selection revisions, reveal stages, or persistent operational state.
 
 Publication status is transient and does not require separate durable storage. After application restart, the coordinator supplies the currently required prepared image to each available destination.
 
-If a new presentation or variant becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
+If a new scheduled presentation or variant becomes required while a backend is busy, the backend must eventually receive the latest required image rather than replaying obsolete intermediate updates.
 
 An active hardware update need not be interrupted when a newer presentation becomes available.
 
-Publication does not require simultaneous completion or acknowledgement from every destination.
+Normal scheduled publication does not require simultaneous completion or acknowledgement from every destination. Transient push and refresh remain attached until every requested destination completes or fails, as defined under [Transient publication and refresh](#transient-publication-and-refresh).
 
 The order of backend declarations does not establish publication priority.
 
@@ -1468,7 +1468,7 @@ The normal runtime's desired scheduled presentation is distinct from a one-shot 
 
 The runtime-control interface belongs to the resident Refrain process and is local-machine only, authenticated, and limited to explicitly defined operations. Its initial operations are destination discovery, transient complete-image publication, and refresh of the current scheduled presentation. It is separate from the `image-server` HTTP service and any public or future web presentation. It does not provide arbitrary filesystem access, backend-method invocation, configuration or content mutation, shell execution, or general remote procedure execution.
 
-The runtime is authoritative for configured publication destinations and their output specifications. Discovery returns each canonical runtime-supplied destination identifier, its declared aspect ratio, and requested resolution. Identifiers are opaque routing values: clients must not infer backend type, hardware, transport, or capabilities from their spelling. Backend-specific publication details remain runtime-owned. Destination discovery does not reserve a destination.
+The runtime is authoritative for configured publication destinations and their output specifications. Discovery returns each canonical runtime-supplied destination identifier, its declared aspect ratio, requested resolution, and whether it supports transient publication. Identifiers are opaque routing values: clients must not infer backend type, hardware, transport, or capabilities from their spelling. Backend-specific publication details remain runtime-owned. Destination discovery does not reserve a destination.
 
 An external preview contains complete output images rendered by the submitting viewer. The viewer remains authoritative for its pixels, using its own selected configuration, content, assets, and presentation overrides. The runtime does not reconstruct the preview from content or semantic presentation parameters. A viewer first discovers destination output specifications, renders one complete image variant for each unique specification, then submits those images and the specifications against which they were rendered. Presentation-wide choices remain coherent across variants generated together. Variants for identical specifications may share one image and transfer.
 
@@ -1482,7 +1482,7 @@ While a transient preview is visible, routine scheduler reevaluation of an uncha
 
 A successful transient push or refresh reports success only after every requested destination has completed its backend publication operation. A failure at one destination is reported; success at another does not make the complete request successful. The public commands provide visible progress before waiting on slow publication.
 
-Any future configured destination that supports the ordinary complete-image publication contract participates through runtime-supplied discovery and routing, without viewer-specific backend logic. If a destination cannot support transient publication, that capability is represented by its runtime-side destination contract.
+Any future configured destination that supports the ordinary complete-image publication contract participates through runtime-supplied discovery and routing, without viewer-specific backend logic. A destination that does not support transient publication is reported as such during discovery. If the requested destination is unsupported—or `all` includes any unsupported destination—the request is rejected before rendering or publication; `all` never silently omits configured destinations.
 
 ### Network image service
 
@@ -1701,7 +1701,7 @@ Runtime and viewer share presentation construction, preference resolution, resou
 
 The viewer creates one output specification independently of configured display-backend specifications. Its default is 16:10 at the full design-canvas dimensions. It follows the established design-canvas → presentation-canvas → requested-output pipeline. `--output` writes the final output PNG. The optional simple viewer window displays that same output and may scale only a private desktop copy to fit; it is not a configured display backend.
 
-Viewer execution loads no operational state, global history, or prepared artifacts, even when the configuration names custom storage paths. Without `--push`, it does not initialize or publish to configured display backends. Its only filesystem output is an explicitly requested PNG.
+Viewer execution loads no operational state, global history, or prepared artifacts, even when the configuration names custom storage paths. The viewer never constructs, initializes, or directly accesses configured display backends. In push mode, it only asks the resident runtime to publish its rendered images. In inspection and export modes, its only filesystem output is an explicitly requested PNG.
 
 The final intended push form is `refrain-viewer [presentation overrides...] --push TARGET`, where `TARGET` is `all` or one canonical destination identifier discovered from the running normal runtime. The viewer treats identifiers as opaque and uses runtime discovery for output geometry. `--push` is mutually exclusive with `--window`, `--output`, `--aspect`, and `--resolution`; presentation options such as `--config`, `--entry`, font and face, background, decoration, text and tint color, style, QR policy, quotation font-size bounds, and `--debug-layout` remain available. The runtime owns destination geometry; the viewer owns the complete rendered pixels.
 
