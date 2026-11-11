@@ -491,140 +491,7 @@ def test_daily_snapshot_does_not_persist_qr_rendering_parameters(workspace: Work
     assert "quiet_zone" not in serialized
 
 
-def test_debug_layout_uses_presentation_bounds_for_cached_images(workspace: Workspace, caplog) -> None:
-    ordinary(workspace)
-    _, baseline_display = workspace.run(at(10, 7))
-    cached = {path: path.read_bytes() for path in png_files(workspace.artifacts)}
-    committed = workspace.load()
-
-    _, debug_display = workspace.run(at(10, 7), debug_layout=True)
-
-    assert baseline_display.images[0].getpixel((192, 162)) == (255, 255, 255)
-    assert debug_display.images[0].getpixel((192, 162)) == (127, 127, 127)
-    updated_paths = set(png_files(workspace.artifacts))
-    assert set(cached).issubset(updated_paths)
-    assert len(updated_paths - set(cached)) == len(cached)
-    assert "resolved geometry is unavailable" not in caplog.text
-    assert workspace.load() == committed
-    for display in (baseline_display, debug_display):
-        for image in display.images:
-            image.close()
-
-
-def test_debug_layout_uses_current_presentation_bounds_after_resource_changes(workspace: Workspace, caplog) -> None:
-    package = workspace.root / "assets" / "decorations" / "custom"
-    package.mkdir(parents=True)
-    Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)).save(package / "overlay.png")
-    write_decoration_manifest(
-        package,
-        "custom",
-        presentation_insets={"left": 768, "right": 768, "top": 648, "bottom": 648},
-    )
-    ordinary(workspace, extra='decoration: "custom"\n')
-    _, baseline_display = workspace.run(at(10, 7))
-    committed = workspace.load()
-    cached = {path: path.read_bytes() for path in png_files(workspace.artifacts)}
-
-    workspace.config.write_text(
-        workspace.config.read_text(encoding="utf-8").replace(
-            "x: 0.1, y: 0.15, width: 0.8, height: 0.55",
-            "x: 0.3, y: 0.4, width: 0.4, height: 0.3",
-        ),
-        encoding="utf-8",
-    )
-    write_decoration_manifest(
-        package,
-        "custom",
-        presentation_insets={"left": 1536, "right": 384, "top": 1080, "bottom": 216},
-    )
-    _, debug_display = workspace.run(at(10, 7), debug_layout=True)
-
-    assert committed.snapshot.decoration == "custom"
-    assert debug_display.images[0].getpixel((768, 540)) == (127, 127, 127)
-    updated_paths = set(png_files(workspace.artifacts))
-    assert set(cached).issubset(updated_paths)
-    assert len(updated_paths - set(cached)) == len(cached)
-    assert "resolved geometry is unavailable" not in caplog.text
-    assert workspace.load() == committed
-    for display in (baseline_display, debug_display):
-        for image in display.images:
-            image.close()
-
-
-def test_debug_layout_reuses_prepared_automatic_decoration_region_for_cached_artifact(
-    workspace: Workspace, caplog
-) -> None:
-    package = workspace.root / "assets" / "decorations" / "custom"
-    package.mkdir(parents=True)
-    Image.new("RGBA", (1600, 1200), (0, 0, 0, 0)).save(package / "overlay.png")
-    write_decoration_manifest(
-        package,
-        "custom",
-        presentation_insets={"left": 768, "right": 768, "top": 648, "bottom": 648},
-    )
-    workspace.config.write_text(
-        _CONFIG.replace(
-            "  fonts:",
-            '  decorations: {default: ["custom"]}\n  fonts:',
-        ),
-        encoding="utf-8",
-    )
-    ordinary(workspace)
-
-    first, first_display = workspace.run(at(10, 7), debug_layout=True)
-    assert first.state.snapshot.decoration is None
-    with Image.open(png_files(workspace.artifacts)[0]) as prepared:
-        assert first_display.images[0].getpixel((384, 324)) == prepared.getpixel((384, 324))
-        assert first_display.images[0].getpixel((160, 180)) == prepared.getpixel((160, 180))
-
-    workspace.config.write_text(
-        workspace.config.read_text(encoding="utf-8")
-        .replace(
-            "presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}",
-            "presentation_insets: {left: 100, right: 100, top: 100, bottom: 100}",
-        )
-        .replace('default: ["custom"]', 'default: ["none"]'),
-        encoding="utf-8",
-    )
-    caplog.clear()
-    second, second_display = workspace.run(at(10, 7), debug_layout=True)
-    with Image.open(png_files(workspace.artifacts)[0]) as prepared:
-        assert second_display.images[0].tobytes() == prepared.tobytes()
-    assert second.state == first.state
-    assert "resolved geometry is unavailable" not in caplog.text
-
-    for display in (first_display, second_display):
-        for image in display.images:
-            image.close()
-
-
-def test_one_shot_debug_layout_only_outlines_the_daily_presentation(workspace: Workspace, monkeypatch) -> None:
-    ordinary(workspace)
-    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
-    prepared_information = []
-    prepare_information = application.prepare_information_view
-
-    def capture_information(configuration, output_specifications):
-        images = prepare_information(configuration, output_specifications)
-        prepared_information.append(images[output_specifications[0]][0].copy())
-        return images
-
-    monkeypatch.setattr(application, "prepare_information_view", capture_information)
-
-    result, display = workspace.run(at(10, 7), debug_layout=True)
-
-    assert result.state.revision == 1
-    assert display.sizes == [(1600, 1200), (1600, 1200)]
-    assert display.images[0].tobytes() != display.images[1].tobytes()
-    assert display.images[0].tobytes() == prepared_information[0].tobytes()
-    assert display.images[1].getpixel((192, 162)) == (127, 127, 127)
-    assert len(workspace.history_records()) == 1
-    prepared_information[0].close()
-    for image in display.images:
-        image.close()
-
-
-def test_one_shot_startup_advances_reveal_due_during_information_interval(workspace: Workspace) -> None:
+def test_startup_advances_reveal_due_during_information_interval(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
     elapsed = [0.0]
@@ -649,7 +516,7 @@ def test_one_shot_startup_advances_reveal_due_during_information_interval(worksp
     assert state.revision == 1 and len(workspace.history_records()) == 1
 
 
-def test_one_shot_startup_selects_current_date_after_information_interval(workspace: Workspace) -> None:
+def test_startup_selects_current_date_after_information_interval(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
     elapsed = [0.0]
@@ -710,7 +577,6 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
         workspace.state,
         workspace.artifacts,
         history_path=workspace.history,
-        debug_layout=True,
         now=at(10, 7),
         random_source=Random(1),
         backend_factory=factory,
@@ -719,8 +585,8 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
     assert result.state.revision == 1
     assert displays["window"].sizes == [(1920, 1080)] and displays["window"].closed == 1
     assert displays["image-server"].sizes == [(3840, 2400)] and displays["image-server"].closed == 1
-    assert displays["window"].images[0].getpixel((192, 162)) == (127, 127, 127)
-    assert displays["image-server"].images[0].getpixel((384, 324)) == (127, 127, 127)
+    assert displays["window"].images[0].getpixel((192, 162)) == (255, 255, 255)
+    assert displays["image-server"].images[0].getpixel((384, 324)) == (255, 255, 255)
     for display in displays.values():
         for image in display.images:
             image.close()
@@ -1270,38 +1136,6 @@ def test_failed_reveal_progress_update_is_reported(workspace: Workspace, monkeyp
     assert display.closed == 0 and workspace.load().highest_reveal_stage == 0
 
 
-def test_keep_open_runs_before_backend_is_closed(workspace: Workspace) -> None:
-    ordinary(workspace)
-    workspace.config.write_text(
-        workspace.config.read_text(encoding="utf-8").replace(
-            'type: "waveshare-13in3-e"',
-            'type: "window"',
-        ),
-        encoding="utf-8",
-    )
-    display = FakeDisplay()
-    seen: list[tuple[str, int]] = []
-    workspace.run(at(10, 8), display, keep_open=lambda backend: seen.append((backend, display.closed)))
-    assert seen == [("window", 0)] and display.closed == 1
-
-
-def test_command_line_runs_startup(workspace: Workspace, monkeypatch, capsys) -> None:
-    ordinary(workspace)
-    workspace.config.write_text(
-        _CONFIG
-        + "\nstorage:\n  state: state/state.json\n  history: state/global-history.jsonl\n  artifacts: artifacts\n",
-        encoding="utf-8",
-    )
-    display = FakeDisplay()
-    monkeypatch.setattr(application, "create_display_backend", lambda *args, **kwargs: display)
-    arguments = ["--once", "--config", str(workspace.config)]
-    assert main(arguments) == 0
-    assert "Selected selection 1" in capsys.readouterr().out
-    assert main(arguments) == 0
-    assert "Recovered selection 1" in capsys.readouterr().out
-    assert workspace.load().revision == 1 and display.closed == 2
-
-
 def test_command_line_reports_errors(workspace: Workspace, capsys) -> None:
     code = main(["--config", str(workspace.root / "nope.yaml")])
     assert code == 1
@@ -1747,6 +1581,7 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
 
     def recover(state, *args, **kwargs):
         recovered.append(state.revision)
+        assert "debug_layout" not in kwargs
         return original(state, *args, **kwargs)
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
@@ -1760,7 +1595,6 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
         workspace,
         clock,
         monkeypatch,
-        debug_layout=True,
         await_publication_before_scheduling=True,
     )
     assert stages == [(1, 0), (1, 1), (1, 2)]
@@ -1770,7 +1604,7 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert clock.deadlines[:2] == [at(10, 12), at(10, 18)]
     assert workspace.load().highest_reveal_stage == 2
     assert len(workspace.history_records()) == 1
-    assert [image.getpixel((192, 162)) for image in display.images] == [(127, 127, 127)] * 3
+    assert [image.getpixel((192, 162)) for image in display.images] == [(255, 255, 255)] * 3
     for image in display.images:
         image.close()
 

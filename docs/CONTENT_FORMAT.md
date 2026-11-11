@@ -1069,7 +1069,6 @@ Changing a file's name or location does not change the entry identifier.
 
 Individual quotations do not have separately assigned identifiers.
 
-The identifier `information` remains valid for content entries. The diagnostic `--show-entry information` target is reserved for Refrain's application-owned information screen; this does not change content validation or ordinary selection.
 
 ### Quotations
 

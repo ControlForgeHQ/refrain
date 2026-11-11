@@ -107,7 +107,7 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
     stage_paths = _variant(result).stage_paths
     assert tuple(path.name for path in stage_paths) == tuple(f"stage-{i}.png" for i in range(count))
     metadata = json.loads((result.directory / "manifest.json").read_bytes())["artifacts"]
-    assert set(metadata) == {"revision", "image_directory", "debug_layout", "variants"}
+    assert set(metadata) == {"revision", "image_directory", "variants"}
     variant_metadata = metadata["variants"][0]
     assert set(variant_metadata) == {"aspect_ratio", "requested_output_size", "mode", "stages"}
     assert variant_metadata["aspect_ratio"] == _SPECIFICATION.aspect_ratio

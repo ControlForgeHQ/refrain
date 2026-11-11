@@ -38,7 +38,7 @@ from .persistence import (
     StateCommitError,
     StateRecoveryError,
 )
-from .preparation import DailyImagePreparationError, prepare_daily_images
+from .preparation import DailyImagePreparationError
 from .presentation import build_presentation_snapshot
 from .recovery import recover_prepared_daily_images
 from .scheduling import (
@@ -52,7 +52,6 @@ from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
 
 _LOGGER = logging.getLogger(__name__)
 _INFORMATION_VIEW_IDENTITY = (0, -1)
-_DIAGNOSTIC_PRESENTATION_IDENTITY = (0, -2)
 _INFORMATION_VIEW_PUBLICATION_TIMEOUT = 60.0
 
 
@@ -155,101 +154,6 @@ def _build_snapshot(
         raise ApplicationError(f"entry {entry.id!r} cannot produce a valid daily selection: {error}") from error
 
 
-def run_show_entry(
-    config_file: str | Path,
-    entry_id: str,
-    *,
-    debug_layout: bool = False,
-    random_source: random.Random | None = None,
-    backend_factory: BackendFactory = _default_backend_factory,
-) -> None:
-    """Render and publish one fully revealed entry without accessing operational state."""
-    configuration = _load_configuration(config_file)
-    chooser = random_source if random_source is not None else random.Random()
-    output_specifications = configuration.required_output_specifications
-    prepared_images: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]]
-    snapshot: DailySnapshot | None = None
-    if entry_id == "information":
-        try:
-            prepared_images = prepare_information_view(configuration, output_specifications)
-        except InformationViewPreparationError as error:
-            raise ApplicationError(f"cannot prepare information view: {error}") from error
-    else:
-        try:
-            entries = load_content_library(configuration.content_directory)
-        except ContentLibraryError as error:
-            raise ApplicationError(f"content library is invalid: {error}") from error
-
-        entry = next((candidate for candidate in entries if candidate.id == entry_id), None)
-        if entry is None:
-            raise ApplicationError(
-                f"content entry {entry_id!r} was not found in configured content library "
-                f"{configuration.content_directory}; confirm that the ID is exact and the entry has at least "
-                "one usable quotation"
-            )
-        if not entry.quotations:
-            raise ApplicationError(f"content entry {entry_id!r} has no usable quotations to present")
-        snapshot = _build_snapshot(configuration, entry, entry.quotations[0], date.today())
-        stages = resolve_reveal_stages(snapshot)
-        try:
-            prepared_images = prepare_daily_images(
-                snapshot,
-                (stages[-1],),
-                configuration,
-                output_specifications,
-                chooser=chooser,
-                debug_layout=debug_layout,
-            )
-        except Exception as error:
-            raise ApplicationError(f"cannot prepare diagnostic presentation for entry {entry_id!r}: {error}") from error
-
-    images = {specification: stages[-1] for specification, stages in prepared_images.items()}
-    coordinator: DisplayPublicationCoordinator | None = None
-    transferred = False
-    try:
-        identity = _DIAGNOSTIC_PRESENTATION_IDENTITY
-        try:
-            coordinator = DisplayPublicationCoordinator(
-                configuration.display_backends,
-                backend_factory,
-                retry=False,
-            )
-        except Exception as error:
-            raise ApplicationError(f"cannot initialize diagnostic display publication: {error}") from error
-        try:
-            coordinator.publish(identity, images)
-            transferred = True
-            coordinator.wait_for_publication(identity)
-        except Exception as error:
-            raise ApplicationError(f"cannot publish diagnostic presentation: {error}") from error
-
-        results = coordinator.publication_results(identity)
-        failed = not results
-        for destination, (published, error) in results.items():
-            if published:
-                _LOGGER.info("Diagnostic image published to display destination %s", destination)
-            else:
-                failed = True
-                _LOGGER.error(
-                    "Diagnostic image publication failed for destination %s: %s",
-                    destination,
-                    error or "no successful acknowledgement",
-                )
-        if failed:
-            raise ApplicationError("diagnostic image was not published by every configured display destination")
-        return None
-    finally:
-        if coordinator is not None:
-            coordinator.close()
-        if not transferred:
-            for image in images.values():
-                image.close()
-        for specification, stages in prepared_images.items():
-            for prepared_image in stages:
-                if prepared_image is not images[specification]:
-                    prepared_image.close()
-
-
 def _commit_selection(
     store: PersistentStateStore, proposal: SelectionProposal, snapshot: DailySnapshot
 ) -> PersistentState:
@@ -343,8 +247,6 @@ def _recover_images(
     artifact_store: PreparedImageArtifactStore,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
-    *,
-    debug_layout: bool = False,
 ) -> PreparedImageArtifactSet:
     try:
         return recover_prepared_daily_images(
@@ -353,7 +255,6 @@ def _recover_images(
             resolve_reveal_stages(state.snapshot),
             configuration,
             configuration.required_output_specifications,
-            debug_layout=debug_layout,
             chooser=chooser,
         )
     except DailyImagePreparationError as error:
@@ -390,11 +291,9 @@ def run_startup(
     artifact_root: str | Path,
     *,
     history_path: str | Path,
-    debug_layout: bool = False,
     now: datetime | None = None,
     random_source: random.Random | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
-    keep_open: Callable[[str], None] | None = None,
     wall_clock: Callable[[], datetime] | None = None,
     monotonic_clock: Callable[[], float] = time.monotonic,
     wait: Callable[[float], None] = time.sleep,
@@ -402,8 +301,6 @@ def run_startup(
     """Run one startup cycle: recover or select, prepare images, and publish the required stage.
 
     ``now`` defaults to the current UTC time and exists so tests can control scheduling.
-    ``keep_open`` is called with one successfully updated serving backend name while its
-    backend remains open.
     """
     configuration = _load_configuration(config_file)
     store = PersistentStateStore(Path(state_path).absolute())
@@ -496,7 +393,6 @@ def run_startup(
                 artifact_store,
                 configuration,
                 chooser,
-                debug_layout=debug_layout,
             )
             try:
                 images = _load_stage_variants(
@@ -529,15 +425,6 @@ def run_startup(
             coordinator.publish(identity, images)
             if not coordinator.wait_for_publication(identity):
                 raise ApplicationError("all configured display destinations are unavailable")
-            if keep_open is not None:
-                for backend_configuration in configuration.display_backends:
-                    if backend_configuration.type in {"window", "image-server"} and any(
-                        coordinator.acknowledgements.get(f"{backend_configuration.type}:{output.identifier}")
-                        == identity
-                        for output in backend_configuration.outputs
-                    ):
-                        keep_open(backend_configuration.type)
-                        break
             break
     finally:
         if coordinator is not None:
@@ -554,7 +441,6 @@ def run_application(
     artifact_root: str | Path,
     *,
     history_path: str | Path,
-    debug_layout: bool = False,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
@@ -639,7 +525,6 @@ def run_application(
                         artifact_store,
                         configuration,
                         chooser,
-                        debug_layout=debug_layout,
                     )
                     artifact_revision = state.revision
                     try:
@@ -782,7 +667,6 @@ def run_demo(
     config_file: str | Path,
     interval: float,
     *,
-    debug_layout: bool = False,
     shutdown_event: Event | None = None,
     random_source: random.Random | None = None,
     backend_factory: BackendFactory = _default_backend_factory,
@@ -854,7 +738,6 @@ def run_demo(
                         artifact_store,
                         configuration,
                         chooser,
-                        debug_layout=debug_layout,
                     )
                     try:
                         artifact_store.cleanup(state.revision)

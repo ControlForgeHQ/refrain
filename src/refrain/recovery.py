@@ -26,7 +26,6 @@ def recover_prepared_daily_images(
     configuration: ApplicationConfiguration,
     output_specifications: Sequence[ResolvedOutputSpecification],
     *,
-    debug_layout: bool = False,
     chooser: random.Random | None = None,
 ) -> PreparedImageArtifactSet:
     """Reuse or regenerate the complete images for an existing committed selection.
@@ -64,7 +63,6 @@ def recover_prepared_daily_images(
             state.revision,
             ordered_stages,
             output_specifications,
-            debug_layout=debug_layout,
         )
     except ArtifactValidationError:
         existing = None
@@ -82,7 +80,6 @@ def recover_prepared_daily_images(
         configuration,
         output_specifications,
         chooser=chooser,
-        debug_layout=debug_layout,
         on_resolved_bounds=remember_bounds,
     )
     try:
@@ -90,7 +87,6 @@ def recover_prepared_daily_images(
             state.revision,
             ordered_stages,
             prepared_variants,
-            debug_layout=debug_layout,
         )
         artifact_variants = dict(artifact_set.variants)
         for output_specification, bounds in presentation_canvas_literary_bounds.items():

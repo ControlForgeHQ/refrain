@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import io
 import signal
-from datetime import date
 from pathlib import Path, PureWindowsPath
-from types import SimpleNamespace
 
 import pytest
 
@@ -801,21 +799,15 @@ def test_alternate_config_does_not_relocate_omitted_storage_paths(
     paths = _paths(tmp_path)
     _install_cli_paths(monkeypatch, paths)
     calls = []
-    result = SimpleNamespace(
-        state=SimpleNamespace(revision=1, snapshot=SimpleNamespace(display_date=date(2026, 1, 1))),
-        selected_initial_quotation=True,
-        presented_stage=0,
-    )
 
     def run(config, state, artifacts, **kwargs):
         calls.append((config, state, artifacts, kwargs))
-        return result
 
-    monkeypatch.setattr(cli, "run_startup", run)
+    monkeypatch.setattr(cli, "run_application", run)
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "custom.yaml"
     config_path.write_text(Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8"))
-    assert cli.main(["--once", "--config", str(config_path)]) == 0
+    assert cli.main(["--config", str(config_path)]) == 0
     configuration, state_path, artifacts_path, kwargs = calls[0]
     assert configuration.file == config_path.absolute()
     assert (state_path, artifacts_path) == (paths.state_file, paths.artifacts_directory)
@@ -828,15 +820,10 @@ def test_custom_state_path_does_not_relocate_omitted_history(tmp_path: Path, mon
     _install_cli_paths(monkeypatch, paths)
     calls = []
 
-    def startup(*args, **kwargs):
+    def run(*args, **kwargs):
         calls.append((args, kwargs))
-        return SimpleNamespace(
-            state=SimpleNamespace(revision=1, snapshot=SimpleNamespace(display_date=date(2026, 1, 1))),
-            selected_initial_quotation=True,
-            presented_stage=0,
-        )
 
-    monkeypatch.setattr(cli, "run_startup", startup)
+    monkeypatch.setattr(cli, "run_application", run)
     config_path = tmp_path / "custom.yaml"
     config_path.write_text(
         Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8")
@@ -844,7 +831,7 @@ def test_custom_state_path_does_not_relocate_omitted_history(tmp_path: Path, mon
         encoding="utf-8",
     )
 
-    assert cli.main(["--once", "--config", str(config_path)]) == 0
+    assert cli.main(["--config", str(config_path)]) == 0
 
     assert calls[0][0][1] == config_path.parent / "custom-state.json"
     assert calls[0][1]["history_path"] == paths.history_file
@@ -858,13 +845,8 @@ def test_storage_configuration_overrides_each_runtime_path(tmp_path: Path, monke
 
     def run(config, state, artifacts, **kwargs):
         calls.append((config, state, artifacts, kwargs))
-        return SimpleNamespace(
-            state=SimpleNamespace(revision=1, snapshot=SimpleNamespace(display_date=date(2026, 1, 1))),
-            selected_initial_quotation=True,
-            presented_stage=0,
-        )
 
-    monkeypatch.setattr(cli, "run_startup", run)
+    monkeypatch.setattr(cli, "run_application", run)
     config_path = tmp_path / "alternate" / "config.yaml"
     config_path.parent.mkdir()
     config_path.write_text(
@@ -877,7 +859,7 @@ def test_storage_configuration_overrides_each_runtime_path(tmp_path: Path, monke
         ),
         encoding="utf-8",
     )
-    assert cli.main(["--once", "--config", str(config_path)]) == 0
+    assert cli.main(["--config", str(config_path)]) == 0
     configuration, state_path, artifacts_path, kwargs = calls[0]
     assert configuration.file == config_path
     assert state_path == config_path.parent / "runtime/state.json"
@@ -895,7 +877,7 @@ def test_demo_uses_default_configuration_and_never_receives_production_persisten
 
     assert cli.main(["--demo", "5"]) == 0
     assert calls[0][0] == (paths.config_file, 5.0)
-    assert set(calls[0][1]) == {"debug_layout", "shutdown_event"}
+    assert set(calls[0][1]) == {"shutdown_event"}
 
 
 def test_missing_configuration_is_actionable_and_does_not_fall_back(
@@ -938,6 +920,55 @@ def test_removed_storage_options_are_rejected(option: str, capsys: pytest.Captur
     assert "unrecognized arguments" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--show-entry", "entry"],
+        ["--test-decoration", "all"],
+        ["--test-output", "preview.png"],
+        ["--test-variants", "previews"],
+        ["--test-aspect", "4:3"],
+        ["--test-resolution", "1600", "1200"],
+        ["--test-quotation", "short"],
+        ["--no-qr"],
+        ["--no-background"],
+        ["--no-tinting"],
+        ["--once"],
+        ["--debug-layout"],
+    ],
+)
+def test_legacy_presentation_options_are_rejected(arguments: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(arguments)
+
+    assert error.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_main_help_omits_legacy_presentation_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--help"])
+
+    assert error.value.code == 0
+    output = capsys.readouterr().out
+    assert "--demo" in output
+    for option in (
+        "--show-entry",
+        "--test-decoration",
+        "--test-output",
+        "--test-variants",
+        "--test-aspect",
+        "--test-resolution",
+        "--test-quotation",
+        "--no-qr",
+        "--no-background",
+        "--no-tinting",
+        "--once",
+        "--debug-layout",
+    ):
+        assert option not in output
+
+
 @pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
 def test_installation_operations_ignore_configured_storage_paths(
     operation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -978,7 +1009,7 @@ def test_administrative_operations_reject_alternate_configuration(
     assert "cannot be combined with --config" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("mode", [["--once"], ["--demo", "5"]])
+@pytest.mark.parametrize("mode", [["--demo", "5"]])
 @pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
 def test_administrative_operations_are_mutually_exclusive_with_runtime_modes(
     operation: str, mode: list[str], capsys: pytest.CaptureFixture[str]
@@ -995,7 +1026,6 @@ def test_initialize_cli_exits_without_starting_application(
     paths = _paths(tmp_path)
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
-    monkeypatch.setattr(cli, "run_startup", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
     monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
 
     assert cli.main(["--initialize"]) == 0
@@ -1022,7 +1052,6 @@ def test_destructive_cli_operations_require_confirmation_before_work(
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: False)
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
-    monkeypatch.setattr(cli, "run_startup", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
     monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
     monkeypatch.setattr(cli, "reset_installation", lambda *args: pytest.fail("reset ran before confirmation"))
     monkeypatch.setattr(cli, "purge_installation", lambda *args: pytest.fail("purge ran before confirmation"))
@@ -1075,7 +1104,6 @@ def test_destructive_cli_operations_exit_without_starting_application(
         lambda *args: calls.append(args) or (() if method == "purge_installation" else None),
     )
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
-    monkeypatch.setattr(cli, "run_startup", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
     monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
 
     assert cli.main([operation]) == 0

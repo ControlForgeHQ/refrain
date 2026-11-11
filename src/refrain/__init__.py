@@ -7,7 +7,6 @@ from .application import (
     present_prepared_stage,
     run_application,
     run_demo,
-    run_show_entry,
     run_startup,
 )
 from .artifacts import (
@@ -113,7 +112,6 @@ __all__ = [
     "present_prepared_stage",
     "run_application",
     "run_demo",
-    "run_show_entry",
     "run_startup",
     "ArtifactAccessError",
     "ArtifactCleanupError",
