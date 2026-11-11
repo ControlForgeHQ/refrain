@@ -20,6 +20,12 @@ Override a registered presentation choice:
 refrain-viewer --decoration simple-border
 ```
 
+Constrain automatic quotation fitting with design-canvas pixel bounds:
+
+```text
+refrain-viewer --min-font-size 48 --max-font-size 120
+```
+
 Select an alternate configuration and save the final PNG:
 
 ```text
