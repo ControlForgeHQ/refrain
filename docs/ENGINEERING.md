@@ -670,6 +670,8 @@ Extend the existing application-owned publication coordinator. Transient and sch
 
 Keep the normal desired scheduled presentation distinct from transient request state. Reserve all selected destinations atomically only after validating the complete request and confirming immediate safe admission. Reject a busy request in full rather than partially publishing or queuing it. Preserve scheduler responsiveness while receiving image data and waiting for publication; ordinary threads may perform control handling where needed, but no asynchronous framework or external daemon is required.
 
+Separate request admission from client connection lifetime. Rejection before admission means no requested publication began. After admission, the resident runtime owns the operation: socket or pipe closure is not cancellation, and admitted work continues under ordinary backend safety and serialization rules. If the client is gone, safely discard or fail delivery of the terminal response without starting another publication attempt. A lost terminal acknowledgement leaves the client's outcome unconfirmed; do not imply rollback, exactly-once delivery, or automatically replay the request. No durable transaction journal or replay protocol is required.
+
 Bound retained image memory and reuse one complete image variant for destinations with identical output specifications wherever ownership and lifetime allow. Avoid unnecessary copies while ensuring each image remains valid until every backend operation using it has completed. An admitted transient operation must not cause an active backend call to be interrupted or concurrently closed.
 
 ### Runtime-control validation
@@ -681,9 +683,11 @@ Add hardware-independent tests using fake backends and controlled synchronizatio
 - discovery of canonical destination IDs and output specifications, including single-output and named multi-output backends, and rejection when a destination or specification changes after discovery;
 - exact output-dimension validation, missing image variants, and shared image use for destinations with identical specifications;
 - atomic busy rejection for one destination and for `all`, no partial publication after failed admission, independent operation on different backend instances, and serialization on the same instance;
-- scheduled desired state remaining authoritative after a transient push, no repaint on routine reevaluation of an unchanged scheduled identity, and scheduled replacement at the next genuine presentation change;
+- per-destination scheduled acknowledgement and coalescing, including distinct acknowledgements for named destinations with identical output specifications;
+- scheduled desired state remaining authoritative after an admitted transient push, transient completion remaining separate from scheduled acknowledgement, no replacement of admitted transient work by later scheduling, and no repaint on routine reevaluation of an unchanged scheduled identity;
 - no push mutation of selection, revision, global or repetition history, reveal progression, scheduling state, or prepared artifacts;
-- refresh republication of the currently scheduled presentation, including the current reveal stage rather than pre-push pixels, plus synchronous push/refresh completion and visible CLI progress;
+- refresh republication of the currently scheduled presentation to every configured destination, including destinations without transient-publication capability and the current reveal stage rather than pre-push pixels, plus synchronous push/refresh completion and visible CLI progress;
+- client disconnection before and after admission, continued ownership of admitted work, safe loss of terminal-response delivery, unconfirmed outcomes, and no automatic publication replay;
 - generic viewer routing without backend-type conditionals.
 
 These tests establish software behavior only. Actual Waveshare validation must confirm that a preview is published by the already-running Refrain process, does not overlap another physical refresh, remains displayed after push completion, is replaced by `refrain --refresh`, and leaves the controller and normal runtime usable afterward.
@@ -916,17 +920,11 @@ The initial implementation needs one application-owned information-view layout. 
 
 ### Interface and implementation boundaries
 
-Provide a small display backend interface equivalent to:
-
-```python
-class DisplayBackend(Protocol):
-    def update(self, image: Image.Image) -> None: ...
-    def close(self) -> None: ...
-```
+Provide a small synchronous display backend interface whose publication operation accepts a complete Pillow image and identifies one selected configured destination. The destination may be passed explicitly or represented by an equivalent destination-bound abstraction; an image-only `update(image)` operation is not sufficient for a backend that owns multiple named outputs. The contract is generic and does not prescribe a particular Python method signature.
 
 The interface operates on complete Pillow images rather than artifact paths.
 
-Callers own the supplied images and their lifetimes. A backend must not require an image to remain available after `update()` returns unless it has independently retained the data it requires.
+Callers own the supplied images and their lifetimes. A backend must not require an image to remain available after its synchronous publication operation returns unless it has independently retained the data it requires.
 
 Keep the interface independent of Waveshare, SPI, GPIO, desktop GUI libraries, selection, persistence, and reveal scheduling.
 
@@ -954,35 +952,37 @@ Backend construction and initialization failures must be isolated so that an una
 
 ### Multi-backend coordination
 
-Use independent execution for each configured backend so that slow or blocked updates do not delay publication to other destinations.
+Use independent execution for each configured backend instance so that slow or blocked operations do not delay publication through other backend instances. Destinations sharing one backend instance share its lifecycle and serialization.
 
-A dedicated worker per backend is the preferred initial implementation. Use ordinary Python threading facilities rather than introducing a separate asynchronous framework or process-management service.
+A dedicated worker per backend instance is the preferred initial implementation. Use ordinary Python threading facilities rather than introducing a separate asynchronous framework or process-management service.
 
-Keep each backend's existing synchronous `update()` interface.
+Keep backend publication synchronous and based on complete Pillow images.
 
-Serialize updates and lifecycle operations for each individual backend. Never invoke overlapping updates on the same backend instance.
+Serialize publication and lifecycle operations for each individual backend instance. Never invoke overlapping operations on the same instance, including operations for different named destinations.
 
-Maintain at most one pending desired presentation per backend. When a newer presentation becomes required, replace the pending request rather than accumulating obsolete stages.
+For normal scheduled publication only, maintain at most one pending desired presentation identity per configured destination. When a newer scheduled presentation becomes required, replace that destination's obsolete pending scheduled request rather than accumulating stages, and retain the latest required identity for that destination. Track the most recent successful scheduled publication independently per destination, including named outputs even when they share an output specification or backend instance.
 
 Do not interrupt an active hardware transfer unless its backend explicitly supports safe interruption.
 
-Bound shutdown waiting to 60 seconds total across workers. If a synchronous update is still blocked at the deadline, report it and return without calling `close()` concurrently with that update. Keep the worker daemonized and retain its active image until the update returns or the process exits; the worker then attempts backend cleanup if it returns.
+Bound shutdown waiting to 60 seconds total across workers. If a synchronous publication is still blocked at the deadline, report it and return without calling `close()` concurrently with that operation. Keep the worker daemonized and retain its active image until the operation returns or the process exits; the worker then attempts backend cleanup if it returns.
 
 The coordinator must remain responsive to scheduling events while backend workers are active.
 
-Track the latest required presentation independently from each backend's most recent successful update.
+Track each destination's latest required scheduled presentation independently from its most recent successful scheduled publication.
 
-Persist advancement of the globally required reveal stage through the existing operational-state mechanism without waiting for all backend updates to complete. Backend workers must not independently advance authoritative reveal progress. A failed or uncertain backend update affects only that backend's publication status and recovery requirements.
+Persist advancement of the globally required reveal stage through the existing operational-state mechanism without waiting for all backend updates to complete. Backend workers must not independently advance authoritative reveal progress. A failed or uncertain destination publication affects only that destination's publication status and recovery requirements.
 
-A backend update is successful only when its own `update()` operation completes successfully. Success on another backend must not satisfy its pending update.
+A scheduled destination acknowledgement is successful only when that destination's publication operation completes successfully. Success for another destination must not satisfy its scheduled acknowledgement, even when both use one backend instance or the same image variant.
 
 Identify each requested presentation using an opaque identity associated with the prepared image. The coordinator may derive this identity from the committed selection revision and resolved reveal stage, but backend implementations must not depend on those values or inspect persistent operational state.
 
-Associate each outstanding backend update with the identity of the presentation it was asked to publish. Record successful publication only for that identity, so completion of an older update cannot incorrectly satisfy a newer pending request.
+Associate each outstanding scheduled destination publication with the identity it was asked to publish. Record scheduled acknowledgement only for that identity, so completion of an older operation cannot incorrectly satisfy a newer pending request.
 
-Avoid unnecessary image duplication. Backend workers must receive images whose lifetime remains valid throughout their update operation.
+Transient publication uses separate admission and completion state, not the replaceable scheduled-presentation slot. Once admitted, a transient request must complete or fail for every requested destination and must not be replaced because newer scheduled work appears. It neither changes the scheduled desired identity nor clears or satisfies scheduled acknowledgement. Shared backend serialization, image ownership, resource lifetime, and safe shutdown rules apply to both scheduled and transient operations.
 
-Coordinate artifact cleanup with outstanding image readers and backend operations. Do not remove prepared images while an active or pending update still requires them.
+Avoid unnecessary image duplication. Backend workers must receive images whose lifetime remains valid throughout their publication operation.
+
+Coordinate artifact cleanup with outstanding image readers and backend operations. Do not remove prepared images while an active or pending publication still requires them.
 
 Do not persist backend-specific presentation acknowledgements. On every startup, recovery must reconcile the currently configured destinations and output specifications, then publish the currently required reveal stage to every available configured destination.
 
@@ -1016,7 +1016,7 @@ Prefer the Python standard library unless an additional dependency provides a de
 
 Keep HTTP request handling and network-resource ownership within the backend. The application scheduler must not run a server event loop or process individual HTTP requests.
 
-The service must remain responsive between calls to `update(image)`.
+The service must remain responsive between image replacement operations.
 
 Backend construction must establish that the configured listening address and port are usable before reporting successful initialization. Binding and startup failures must produce actionable diagnostics through the common display-backend error interface.
 
@@ -1141,9 +1141,9 @@ Include hardware-independent tests covering:
 - Independent initialization and failure reporting.
 - One backend continuing while another is blocked or slow.
 - No overlapping updates to an individual backend.
-- Replacement of pending stages with the latest required presentation.
-- Independent successful-publication tracking.
-- Failed and uncertain updates not being treated as successful.
+- For normal scheduled publication, replacement of obsolete per-destination pending stages with the latest required presentation.
+- Independent successful scheduled-publication tracking per destination, including named outputs sharing one output specification.
+- Failed and uncertain destination publications not being treated as successful.
 - Recovery from individual backend failures without reselection.
 - Startup recovery and republication to available backends.
 - Artifact lifetimes while updates remain active.
