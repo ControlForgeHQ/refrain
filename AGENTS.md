@@ -18,7 +18,10 @@ These documents have distinct responsibilities:
 - `docs/ROADMAP.md` defines product scope, release goals, and development priorities.
 - `docs/ARCHITECTURE.md` defines runtime behavior, component boundaries, persistent-state semantics, and architectural invariants.
 - `docs/ENGINEERING.md` defines implementation standards, dependency practices, testing, deployment, and review requirements.
+- `docs/CLI.md` defines public command syntax, argument behavior, command-mode conflicts, exit/result semantics, and user-facing CLI diagnostics.
 - `docs/CONTENT_FORMAT.md` defines the public YAML configuration and content-entry schemas.
+
+The architecture owns the runtime semantics behind commands documented in `docs/CLI.md`; Engineering owns their implementation and testing guidance.
 
 Do not treat instructions in this file as a substitute for those documents.
 

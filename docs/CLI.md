@@ -1,59 +1,124 @@
 # Command-line usage
 
+This document is the authoritative public reference for command syntax, argument behavior, mode conflicts, results, and user-facing command diagnostics. Runtime behavior behind these commands is defined in [the architecture](ARCHITECTURE.md); implementation and testing guidance is in [Engineering](ENGINEERING.md).
+
 ## Resident runtime control
+
+### Refresh
 
 The primary `refrain --refresh` command requires an already-running normal Refrain instance. It asks that runtime to republish the presentation currently required by scheduling to every configured destination. It does not restore historical pre-preview pixels: if reveal progression advanced, refresh publishes the current reveal stage.
 
 Refresh uses ordinary scheduled publication and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
 
-Refresh is a synchronous one-shot control request, not another resident runtime. Refrain reports visible progress before waiting and remains attached until publication to all configured destinations completes or fails. The command succeeds only if every destination succeeds. If the operation cannot be admitted safely at once, it is rejected as busy rather than queued. Refresh does not start Refrain or access configured backends independently.
+Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all configured destinations completes or fails. Exit status zero means every configured destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
 
 ## Presentation viewer
 
-`refrain-viewer` renders one fully revealed Refrain presentation. With no arguments it uses the standard configuration, selects the medium built-in `@preview` quotation, and opens a simple local window:
+`refrain-viewer` renders one fully revealed Refrain presentation. With no arguments it uses the standard configuration, selects `@preview:2` (the medium built-in preview quotation), and opens a simple local window:
 
 ```text
 refrain-viewer
 ```
 
-Select a content entry and its 1-based quotation number:
+In ordinary inspection and export modes, the viewer does not use configured display backends or runtime persistence.
+
+### Configuration selection
 
 ```text
-refrain-viewer --entry johnson-maggie:6
+--config PATH
 ```
 
-Override a registered presentation choice:
+`--config` selects the application configuration used by the viewer for content, assets, preferences, and presentation rendering. When omitted, the viewer uses the standard Refrain configuration. In push mode, it continues to control these viewer-owned rendering inputs; it never determines or overrides the resident runtime's configured destination topology or output specifications.
+
+### Destination discovery
+
+Use the standalone control-client operation below to discover canonical destination identifiers before using `--push`:
 
 ```text
-refrain-viewer --decoration simple-border
+refrain-viewer --list-destinations
 ```
 
-Constrain automatic quotation fitting with design-canvas pixel bounds:
+This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its canonical destination identifier, declared presentation aspect ratio, requested output resolution, and whether externally supplied transient publication is supported. Destination identifiers are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
+
+`--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
+
+### Entry selection
+
+Select an entry and an optional 1-based quotation number with:
 
 ```text
+--entry ENTRY_ID[:QUOTATION_NUMBER]
+```
+
+Quotation numbers are positive integers starting at `1`; if omitted, quotation `1` is selected. The built-in `@preview` pseudo-entry provides its documented short, medium, and long preview quotations: bare `@preview` selects `@preview:1`. Without `--entry`, the viewer selects `@preview:2`.
+
+Malformed selectors, unknown entries, and quotation numbers outside the selected entry are errors. Selecting an entry in the viewer ignores normal eligibility, priority, repetition history, and scheduling.
+
+### Presentation overrides
+
+The following options explicitly override a presentation choice:
+
+| Option | Accepted value |
+|---|---|
+| `--font FONT_ID` | Identifier of a registered font bundle. |
+| `--quotation-face FACE_ID` | Face identifier available in the selected font bundle for the quotation role. |
+| `--source-face FACE_ID` | Face identifier available in the selected font bundle for the source role. |
+| `--attribution-face FACE_ID` | Face identifier available in the selected font bundle for the attribution role. |
+| `--background BACKGROUND_ID\|none` | Registered background identifier, or `none` to suppress the background. |
+| `--decoration DECORATION_ID\|none` | Registered decoration identifier, or `none` to suppress the decoration. |
+| `--text-color COLOR_ID` | Identifier of a color in the shared palette for literary text. |
+| `--tint COLOR_ID` | Identifier of a color in the shared palette for tintable decoration artwork. |
+| `--style centered\|left-aligned` | One of the two supported literary presentation styles. |
+| `--qr` | Enable the literary QR code. |
+| `--no-qr` | Suppress the literary QR code. |
+| `--min-font-size PIXELS` | Positive integer design-canvas pixels; lower bound for quotation fitting. |
+| `--max-font-size PIXELS` | Positive integer design-canvas pixels; upper bound for quotation fitting. |
+| `--debug-layout` | Enable presentation layout diagnostics. |
+
+`--qr` and `--no-qr` are mutually exclusive. When both font-size bounds are supplied, the minimum may not exceed the maximum.
+
+An explicit viewer override is strict. If an explicitly requested registered resource, face, color, style, or other value cannot be used, viewer preparation fails with an actionable diagnostic rather than silently falling back to a lower-precedence preference or default pool. Properties not explicitly overridden continue to use normal Refrain preference resolution and pool selection. `none` explicitly suppresses only the background or decoration, as shown above.
+
+For example:
+
+```text
+refrain-viewer --entry johnson-maggie:6 --decoration simple-border
 refrain-viewer --min-font-size 48 --max-font-size 120
 ```
 
-Select an alternate configuration and save the final PNG:
+### Local inspection and export
+
+Local inspection and export accept these controls:
+
+| Option | Behavior |
+|---|---|
+| `--aspect ASPECT` | Select a supported presentation aspect: `4:3`, `5:3`, `16:9`, or `16:10`. |
+| `--resolution WIDTH HEIGHT` | Set requested output width and height in positive integer pixels. |
+| `--output PATH` | Write the completed output PNG to `PATH`. |
+| `--window` | Open the simple local viewer window. |
+
+When omitted, the aspect defaults to `16:10` and the resolution uses the full design canvas for the selected aspect. The [architecture](ARCHITECTURE.md#image-spaces-and-output-geometry) defines the design-canvas, presentation-canvas, and output-image geometry; the CLI does not redefine that pipeline.
+
+`--output` writes the PNG without opening a window unless `--window` is also supplied. Without `--output`, the normal default behavior opens the simple local viewer window.
+
+For example, select a configuration and export a PNG:
 
 ```text
 refrain-viewer --config ./experimental.yaml --background aged-paper --output preview.png
 ```
 
-`--output` saves the final output image without opening a window. Add `--window` to save and display the same presentation. In ordinary inspection and export modes, the viewer does not use configured display backends or runtime persistence.
-
 ### Push to configured destinations
 
-The final intended push form is:
+The push form is:
 
 ```text
-refrain-viewer [presentation overrides...] --push TARGET
+refrain-viewer [presentation selection and overrides...] --push TARGET
 ```
 
-`TARGET` is either `all` or one canonical destination identifier discovered from the running normal Refrain instance. `all` selects every configured destination. Identifiers are supplied by the runtime and are opaque: the viewer does not infer a backend type or output behavior from their names. A backend with one output may be identified by its backend ID; a backend with multiple outputs may expose distinct IDs such as `image-server:default`.
+`TARGET` is `all` or one canonical destination identifier returned by `--list-destinations`. Identifiers are supplied by the runtime and are opaque. `all` means every configured destination.
 
-Push requires a running normal Refrain instance. The viewer asks it for the selected destination identifiers, their aspect ratios and requested resolutions, and whether they support transient publication. If the selected destination does not support transient publication, or if `all` includes any such destination, the request is rejected before rendering or publication; `all` never silently skips destinations. The viewer renders complete image variants using its own selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. The runtime owns destination geometry and publication; the viewer owns the preview pixels. Destinations with identical output specifications may share one rendered variant. Discovery does not reserve a destination, so publication may be rejected as busy if runtime work begins while the viewer renders.
+Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push all` is likewise rejected before rendering if any configured destination does not support it; `all` never silently means “all supported destinations.” The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
 
-`--push` is mutually exclusive with `--window`, `--output`, `--aspect`, and `--resolution`; output geometry in push mode comes entirely from the selected runtime destinations. Presentation options remain available, including `--config`, `--entry`, `--font`, `--quotation-face`, `--source-face`, `--attribution-face`, `--background`, `--decoration`, `--text-color`, `--tint`, `--style`, `--qr` / `--no-qr`, `--min-font-size`, `--max-font-size`, and `--debug-layout`.
+`--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
 
-Push is synchronous. Before waiting for potentially slow publication, the viewer identifies the selected destination set and reports visible progress. It remains attached until publication to every selected destination has completed or failed; a zero exit status means every selected destination succeeded. Busy requests are rejected without queuing or partial publication. A changed destination or output specification is rejected rather than inferred or resized.
+Preparation progress may be reported while images are rendered. After runtime admission, the viewer reports that publication has begun before waiting on potentially slow backend work. It remains attached for the terminal result. Exit status zero means every selected destination succeeded. Busy, rejected, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero.
