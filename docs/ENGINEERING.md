@@ -418,9 +418,9 @@ A nonempty effective content library may be used for new selections even when in
 
 Do not treat missing or inaccessible sources, unsuccessful discovery, or an empty effective content library as successful content removal for repetition-history cleanup.
 
-Preserve content-level presentation preferences in the daily selection record when needed to interpret or present the selected quotation. Resolve visual resources and rendering settings during image preparation, not before selection commitment.
+Preserve the selected content's presentation preferences in the daily selection record when needed to interpret or present the quotation. Those captured preferences are authoritative for the committed selection: do not reread the original content entry after commitment, and do not let later edits to it change the captured values.
 
-After commitment, the selected presentation must not depend on changes to the original content or configuration files.
+The semantic committed selection and its captured preferences do not change when source content or configuration files are edited. If a valid prepared cache cannot be reused, resolve the captured preferences against current application configuration and available assets during regeneration. Derived visual resources and rendering decisions are not frozen at commitment, so regenerated appearance may differ.
 
 Do not rewrite user-authored configuration or content files as part of validation.
 
@@ -630,9 +630,9 @@ Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
 #### Complete-set cache
 
-The prepared-image cache is derived output, not authoritative state. Associate a set with the committed selection revision and expected ordered reveal stages; do not fingerprint every visual choice or serialize a rendering plan. Each stage is a complete, independently displayable lossless PNG. All files in a set must be readable, have consistent dimensions and mode, and pass the integrity checks used to detect truncation or damage.
+The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, expected output specifications, and ordered reveal stages; do not fingerprint every visual choice or serialize a rendering plan. Every required stage for every output specification must be present. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate collection completeness and file integrity, detecting missing, damaged, truncated, or inconsistent files.
 
-During ordinary operation, reuse a complete valid set without checking whether configuration, fonts, palette, or image assets have changed. If the set is absent, incomplete, damaged, or otherwise unusable, resolve current configuration and resources and prepare all stages together. Publish the replacement safely only after the complete new set is ready. A replacement may look different from the prior set.
+During ordinary operation, reuse a complete valid set without checking whether configuration, fonts, palette, or image assets have changed. If the set is absent, incomplete, damaged, or otherwise unusable, resolve current configuration and resources and prepare the complete required variant collection together. Publish the replacement safely only after the complete new collection is ready. A replacement may look different from the prior set.
 
 ### Prerelease implementation simplification
 
@@ -774,7 +774,7 @@ When preparation cannot resolve or decode an optional background, report a warni
 
 Decoration identifiers, the initial ordered-layer manifest schema, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
 
-Resolve decoration, font, background, output specifications, design-canvas insets, QR availability, and layer transforms once per complete preparation. Keep selection outside rendering. Resolve effective QR availability before selecting conditional decoration layers; compose the resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
+Resolve presentation-wide choices such as decoration, font, background, palette, and layer preferences consistently for a complete preparation, while resolving output-specification-dependent insets, transforms, and raster results for each specification as defined in `docs/ARCHITECTURE.md`. Resolve effective QR availability separately for each output specification before selecting its conditional decoration layers. Keep selection outside rendering; compose each resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
 
 Test centered cover scaling and cropping directly on the design canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd crop differences, and matching-size sources that need no transform. Test nine-slice source boundaries, 1:1 preservation of configured source-pixel thicknesses on the design canvas, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. For example, a 1920 × 1200 source with 20-pixel slices on a 3840 × 2400 design canvas must retain 20-pixel edge/corner thicknesses. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
 
@@ -828,9 +828,9 @@ Do not introduce a general-purpose layout framework or font-selection optimizati
 
 ### Stable presentation geometry
 
-Resolve the complete literary composition once, including all present source and attribution fields.
+For each output specification's preparation, resolve the complete literary composition once, including all present source and attribution fields, using the full composition that will be visible across the reveal sequence.
 
-The resulting layout must contain sufficient information to reproduce the same typography and field positions across every reveal stage.
+That specification's resulting layout must contain sufficient information to reproduce stable typography and field positions across every reveal stage. Different output specifications may have different raster dimensions, wrapping, fitted font pixel sizes, and mapped geometry.
 
 Presentation styles determine layout geometry. Image drawing uses the resolved geometry rather than independently interpreting style identifiers.
 
@@ -840,7 +840,7 @@ The initial implementation needs only the `centered` and `left-aligned` styles.
 
 A small internal dispatch mechanism for selecting built-in layout behavior is sufficient. Do not introduce a public styling plugin interface or generalized layout framework without a demonstrated requirement.
 
-All reveal stages for one committed selection must use consistent layout geometry.
+All reveal stages within one output specification must use consistent layout geometry.
 
 Reserved space for future reveals must not cause previously visible content to move when additional information becomes visible.
 
@@ -850,9 +850,9 @@ If the complete composition cannot fit within the supported presentation region,
 
 ### Preparation and validation
 
-Prepare the complete set of required reveal-stage images from the durable daily selection and current presentation inputs.
+For each required output specification, prepare its complete set of reveal-stage images from the durable daily selection and current presentation inputs. Use that specification's complete fully revealed literary composition to determine geometry for every stage in its set; do not require different specifications to share raster geometry.
 
-Resolve the complete composition layout once and reuse it for every required cumulative visibility stage.
+Resolve the complete composition layout once per output specification and reuse it for every required cumulative visibility stage of that specification.
 
 Each prepared image must be independently displayable.
 
