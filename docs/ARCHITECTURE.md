@@ -663,9 +663,9 @@ After commitment, the active selection must not require access to the original Y
 
 The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library.
 
-It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, and any selected content preferences needed to interpret or present the quotation. It does not contain other quotations from the entry.
+It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, and any selected content preferences needed to interpret or present the quotation. These captured preferences remain authoritative for this selection; later edits to the source entry do not replace them, and recovery never rereads that entry to obtain them. The record does not contain other quotations from the entry.
 
-The record is not a serialized rendering plan. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Current configuration, content-level preferences, and available assets are used to prepare images.
+The record is not a serialized rendering plan. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. The captured content-level preferences are resolved against current application configuration and available assets when images are prepared.
 
 Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location; it must not silently replace the selected content or modify the state file. For a platform-standard state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state path outside the standard location, identify that path and direct the operator to stop Refrain and manually back up and remove or quarantine only that file; `--reset` does not manage custom paths.
 
@@ -756,6 +756,8 @@ After selection commitment, Refrain resolves current presentation configuration,
 
 Variants for all required output specifications are a coherent prepared presentation. Presentation-wide choices are resolved consistently across variants; raster-dependent layout and rendering results are resolved independently for each variant.
 
+For each output specification, the prepared images form an ordered reveal-stage set. Images within that set have the same expected output dimensions and compatible image mode; different output specifications may have different dimensions and raster-dependent results.
+
 Prepared images are persisted on disk and associated with the committed selection and their output specifications.
 
 They are derived artifacts, not independently authoritative application state.
@@ -766,7 +768,7 @@ A complete, valid set is reused throughout ordinary operation and after applicat
 
 If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation.
 
-All output variants prepared together use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior.
+All output variants prepared together use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior. Within one output specification, its complete literary composition determines stable geometry for every reveal stage; this does not require different specifications to share geometry.
 
 When output requirements change, any newly required variants are prepared from the existing committed selection without changing the quotation or reveal progress. Variants may share preparation-wide choices; if existing cached variants cannot form a consistent required set with new variants, regenerate the required set coherently. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward.
 
@@ -1330,11 +1332,11 @@ Content that cannot be rendered legibly within the supported literary rectangle 
 
 ### Daily selection data
 
-The daily selection record contains the selected entry identity, normalized quotation identity, original quotation text, optional source and attribution, effective reveal schedule, display date, and any selected content-level properties or preferences needed to interpret or present the quotation. Selection revision, repetition history, highest reveal stage, and scheduling context are held in authoritative operational state.
+The daily selection record contains the selected entry identity, normalized quotation identity, original quotation text, optional source and attribution, effective reveal schedule, display date, and any selected content-level properties or preferences needed to interpret or present the quotation. These captured preferences are authoritative for the committed selection; preparation and recovery do not reread the source entry. Selection revision, repetition history, highest reveal stage, and scheduling context are held in authoritative operational state.
 
 The record does not contain resolved rendering values. Output dimensions, design-canvas and presentation-canvas sizes, inset rectangle, font and face choices, palette RGB values, visual-resource selections, tinting decisions, QR settings or placement, layer transformations, and other derived presentation parameters are resolved during image preparation and are not persisted solely for pixel-identical recovery.
 
-Required selected content remains available even when its source YAML entry is edited or unavailable. Changes to content-level and global presentation preferences can affect a newly generated cache, but do not alter the selected quotation or its effective reveal schedule.
+The selected quotation and captured content-level preferences remain available even when the source YAML entry is edited or unavailable. Editing that entry does not change the committed selection. If regeneration is needed, captured preferences are resolved against current application configuration and available assets; those current inputs may change visual output without altering the selected quotation, captured preferences, or effective reveal schedule.
 
 Preparation errors are reported without changing the committed selection, repetition history, or reveal progress.
 
@@ -1342,9 +1344,9 @@ Preparation errors are reported without changing the committed selection, repeti
 
 Presentation preparation resolves presentation-wide choices consistently and produces every image requested for the committed selection, each required output specification, and every reveal stage. The caller supplies the cumulative stage sequence; preparation does not calculate reveal times or determine the current stage.
 
-Each image represents a cumulative visibility stage for one output specification.
+Each image represents a cumulative visibility stage for one output specification. The complete fully revealed literary composition determines that specification's stable geometry for every stage. Raster dimensions, wrapping, fitted font pixel sizes, and mapped geometry may differ across specifications.
 
-Within one output specification, all stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes. Across output specifications, selected presentation resources and other presentation-wide choices remain consistent, while presentation-canvas sizes, geometry, wrapping, and QR results are resolved independently.
+Within one output specification, all stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes. Across output specifications, selected presentation resources and other presentation-wide choices remain consistent, while presentation-canvas sizes, geometry, wrapping, fitted font pixel sizes, and QR results are resolved independently.
 
 The renderer does not independently recalculate the composition for each reveal stage.
 
@@ -1689,7 +1691,7 @@ Demo progression belongs to the application controller, not the scheduler, rende
 
 The initial stage is requested as soon as it is ready. Each stage receives the requested minimum monotonic viewing interval beginning at its first successful backend acknowledgement. After the final stage's interval, the controller commits another selection. Failed preparation or publication does not complete a stage or authorize reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
 
-Operational state, prepared artifacts, and global history are isolated in fresh temporary session storage using their existing formats. Configured and platform-standard production persistence locations are never used or modified in demo mode. Committed resources remain authoritative within a quotation, and selection revisions and repetition history work normally within the session. Shutdown releases session resources; demo sessions are neither retained nor resumed. Loss of all display destinations terminates the session.
+Operational state, prepared artifacts, and global history are isolated in fresh temporary session storage using their existing formats. Configured and platform-standard production persistence locations are never used or modified in demo mode. The committed quotation, captured content preferences, and reveal progression remain authoritative within the session. A complete valid prepared set remains stable while reused; after cache loss or invalidation, preparation may resolve current configuration and available resources according to the ordinary regeneration rules. Shutdown releases session resources; demo sessions are neither retained nor resumed. Loss of all display destinations terminates the session.
 
 Lifecycle, retry, timing, and testing implementation guidance belongs in `docs/ENGINEERING.md`.
 
@@ -1828,7 +1830,7 @@ The following must remain true as the project evolves:
 13. An interrupted operational-state commitment must not leave a partially committed selection or inconsistent repetition history.
 14. Selection revisions increase monotonically and are maintained independently of global history.
 15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
-16. A committed daily selection preserves the selected content and effective reveal schedule independently of subsequent content-library changes.
+16. A committed daily selection preserves the selected content, captured content-level preferences, and effective reveal schedule independently of subsequent content-library changes.
 17. Every required reveal-stage image is generated for each unique required output specification.
 18. Presentation-wide choices remain consistent across output specifications, while presentation-canvas layout and rendering results are resolved independently for each specification.
 19. The declared aspect ratio is distinct from requested output resolution: it selects the design canvas and determines the exact-ratio presentation-canvas dimensions for each output specification.

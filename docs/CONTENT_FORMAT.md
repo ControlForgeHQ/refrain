@@ -432,7 +432,7 @@ The optional `presentation.qr` mapping controls QR generation for literary prese
 |---|---|---|---|
 | `presentation.qr.enabled` | Boolean | No | `true` |
 
-When `enabled` is `false`, no QR code is generated for literary presentations. A selected decoration's `qr_ready: false` also suppresses QR generation. Valid positioning that places the complete QR allocation outside the design canvas, or a presentation canvas too small for a complete one-pixel-per-module symbol, suppresses QR with an actionable warning but does not invalidate the decoration or literary presentation. Resolve effective availability once for each complete image preparation, before selecting conditional decoration artwork. This setting does not affect the standalone information view.
+When `enabled` is `false`, no QR code is generated for literary presentations. A selected decoration's `qr_ready: false` also suppresses QR generation. Valid positioning that places the complete QR allocation outside the design canvas, or a presentation canvas too small for a complete one-pixel-per-module symbol, suppresses QR with an actionable warning but does not invalidate the decoration or literary presentation. Resolve effective availability separately for each output specification, before selecting its conditional decoration artwork; keep the result stable across that specification's reveal stages. This setting does not affect the standalone information view.
 
 For Version 0.1, an enabled literary QR code always encodes `https://github.com/ControlForgeHQ/refrain`, independently of content, display date, and reveal stage. Its production encoding and raster contract is defined in [QR generation and conditional artwork](ARCHITECTURE.md#qr-generation-and-conditional-artwork). The destination is not configurable, and no content-entry QR field exists.
 
@@ -887,9 +887,9 @@ An absent decoration preference does not prevent explicit content-entry resource
 
 The selected decoration's complete inset override applies when present; otherwise the global insets apply.
 
-Content-level fields in this document express presentation preferences. Their resolved resources, colors, output geometry, effective insets, QR enablement, ordered layers, and transformations are determined during image preparation and are not committed as daily selection data.
+Content-level fields in this document express presentation preferences. The selected entry's preferences needed to interpret or present the committed quotation are captured in its daily selection record; regeneration does not reread the original content entry, and later edits do not change those captured preferences. Their resolved resources, colors, output geometry, effective insets, QR availability, ordered layers, and transformations are derived during image preparation and are not committed as resolved rendering decisions.
 
-All images generated together use one consistent resolution of those preferences and the available configuration and assets. A valid cached image set is reused even when those inputs change. If a new set must be generated, current inputs may result in different visual choices.
+All variants generated together use consistent presentation-wide choices from the captured preferences, current configuration, and available assets. Raster-dependent geometry, wrapping, fitted font pixel sizes, QR viability and module size, and conditional QR/no-QR decoration layers may differ by output specification. A valid cached image set is reused even when those inputs change. If a new set must be generated, the captured preferences are resolved against current inputs and the resulting visual choices may differ.
 
 The presentation-level QR policy defaults to enabled. Effective QR availability is resolved for each output specification using that policy, the selected decoration's `qr_ready` value, valid in-bounds design-space placement, and sufficient presentation-canvas pixels for at least one pixel per QR module. Resolve this complete decision before selecting conditional decoration layers. QR rasterization and composition occur later on the presentation canvas after literary rendering; layer `condition` values select artwork but do not enable or disable QR generation.
 
@@ -1439,7 +1439,7 @@ An entry cannot override the quotation reveal time in Version 0.1.
 
 The effective reveal schedule is resolved when preparing the daily selection record.
 
-The selected quotation and its resolved reveal schedule do not change if the original entry or global configuration later changes. A regenerated image set may reflect currently available presentation configuration and assets.
+The selected quotation, its captured content-level presentation preferences, and its resolved reveal schedule do not change if the original entry or global configuration later changes. Regeneration does not reread the original entry. If regeneration is necessary, captured preferences are resolved against current application configuration and available assets, so the resulting image set may reflect those current inputs.
 
 ### Override validation
 
