@@ -11,7 +11,8 @@ import refrain.application as application
 import refrain.display
 import refrain.preparation as preparation
 import refrain.viewer as viewer
-from refrain.config import load_application_config
+from refrain.config import ApplicationConfiguration, load_application_config
+from refrain.geometry import ResolvedOutputSpecification
 from refrain.preparation import PresentationOverrides, prepare_daily_images
 from refrain.presentation import build_presentation_snapshot
 from refrain.scheduling import resolve_reveal_stages
@@ -64,6 +65,27 @@ def _workspace(root: Path, *, with_entry: bool = True) -> tuple[Path, Path]:
     return config, content
 
 
+def _capture_rendered_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+    configuration: ApplicationConfiguration,
+    selector: tuple[str, int],
+    specification: ResolvedOutputSpecification,
+    overrides: PresentationOverrides | None = None,
+) -> tuple[int, int]:
+    bounds: list[tuple[int, int]] = []
+    layout = preparation.layout_composition
+
+    def capture(*args, **kwargs):
+        bounds.append((args[4], args[5]))
+        return layout(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "layout_composition", capture)
+    image = viewer.render_preview(configuration, selector, specification, overrides=overrides)
+    image.close()
+    assert len(bounds) == 1
+    return bounds[0]
+
+
 @pytest.mark.parametrize(
     ("selector", "expected"),
     [
@@ -82,6 +104,44 @@ def test_entry_selector_supports_exact_ids_and_one_based_indexes(selector: str, 
 def test_entry_selector_rejects_malformed_or_nonpositive_indexes(selector: str) -> None:
     with pytest.raises(viewer.argparse.ArgumentTypeError):
         viewer.parse_entry_selector(selector)
+
+
+@pytest.mark.parametrize(
+    ("option", "expected"),
+    [
+        ("--min-font-size", 48),
+        ("--max-font-size", 120),
+    ],
+)
+def test_font_size_options_accept_positive_integers(option: str, expected: int) -> None:
+    arguments = viewer._parser().parse_args([option, str(expected)])
+
+    assert getattr(arguments, option[2:].replace("-", "_")) == expected
+
+
+def test_font_size_options_can_be_supplied_together() -> None:
+    arguments = viewer._parser().parse_args(["--min-font-size", "48", "--max-font-size", "120"])
+
+    assert arguments.min_font_size == 48
+    assert arguments.max_font_size == 120
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--min-font-size", "0"),
+        ("--min-font-size", "-1"),
+        ("--min-font-size", "1.5"),
+        ("--min-font-size", "nope"),
+        ("--max-font-size", "0"),
+        ("--max-font-size", "-1"),
+        ("--max-font-size", "1.5"),
+        ("--max-font-size", "nope"),
+    ],
+)
+def test_font_size_options_reject_nonpositive_or_noninteger_values(option: str, value: str) -> None:
+    with pytest.raises(SystemExit):
+        viewer._parser().parse_args([option, value])
 
 
 @pytest.mark.parametrize(
@@ -183,6 +243,10 @@ def test_png_export_uses_shared_presentation_without_persistence_or_backend_acce
                 str(config),
                 "--entry",
                 "requested-entry:2",
+                "--min-font-size",
+                "36",
+                "--max-font-size",
+                "90",
                 "--resolution",
                 "320",
                 "200",
@@ -316,6 +380,209 @@ def test_viewer_passes_typed_overrides_to_shared_preparation(tmp_path: Path, mon
         image.close()
 
 
+def test_main_builds_font_size_overrides_from_cli_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(viewer, "run_viewer", lambda **kwargs: captured.update(kwargs))
+
+    assert viewer.main(["--min-font-size", "48", "--max-font-size", "120"]) == 0
+
+    overrides = captured["overrides"]
+    assert isinstance(overrides, PresentationOverrides)
+    assert overrides.min_font_size == 48
+    assert overrides.max_font_size == 120
+
+
+def test_alternate_config_remains_beneath_explicit_viewer_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    config_path.write_text(
+        _CONFIG.replace("min_font_size: 28, max_font_size: 100", "min_font_size: 36, max_font_size: 140")
+    )
+    bounds: list[tuple[int, int]] = []
+    layout = preparation.layout_composition
+
+    def capture(*args, **kwargs):
+        bounds.append((args[4], args[5]))
+        return layout(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "layout_composition", capture)
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--entry",
+                "@preview:1",
+                "--min-font-size",
+                "48",
+                "--resolution",
+                "320",
+                "200",
+                "--output",
+                str(tmp_path / "preview.png"),
+            ]
+        )
+        == 0
+    )
+    assert bounds == [(4, 12)]
+
+
+@pytest.mark.parametrize(
+    ("configured_minimum", "configured_maximum", "overrides", "expected_design_bounds"),
+    [
+        (28, 100, PresentationOverrides(min_font_size=48), (48, 100)),
+        (28, 100, PresentationOverrides(max_font_size=120), (28, 120)),
+        (28, 100, PresentationOverrides(), (28, 100)),
+        (28, 100, PresentationOverrides(min_font_size=60, max_font_size=80), (60, 80)),
+        (36, 140, PresentationOverrides(min_font_size=48), (48, 140)),
+    ],
+)
+def test_font_size_overrides_precede_each_selected_configuration_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_minimum: int,
+    configured_maximum: int,
+    overrides: PresentationOverrides,
+    expected_design_bounds: tuple[int, int],
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    config_path.write_text(
+        _CONFIG.replace(
+            "min_font_size: 28, max_font_size: 100",
+            f"min_font_size: {configured_minimum}, max_font_size: {configured_maximum}",
+        ),
+        encoding="utf-8",
+    )
+    configuration = load_application_config(config_path)
+    specification = viewer._output_specification("16:10", (320, 200))
+
+    bounds = _capture_rendered_bounds(monkeypatch, configuration, ("@preview", 1), specification, overrides)
+
+    assert bounds == tuple(max(1, preparation.round_half_up(value * 320, 3840)) for value in expected_design_bounds)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "configured_minimum", "configured_maximum"),
+    [
+        (["--min-font-size", "120"], 28, 100),
+        (["--max-font-size", "20"], 28, 100),
+        (["--min-font-size", "60", "--max-font-size", "40"], 28, 100),
+    ],
+)
+def test_cli_rejects_invalid_effective_font_size_ranges(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    arguments: list[str],
+    configured_minimum: int,
+    configured_maximum: int,
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    config_path.write_text(
+        _CONFIG.replace(
+            "min_font_size: 28, max_font_size: 100",
+            f"min_font_size: {configured_minimum}, max_font_size: {configured_maximum}",
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--entry",
+                "@preview:1",
+                *arguments,
+                "--output",
+                str(tmp_path / "preview.png"),
+            ]
+        )
+        == 1
+    )
+    assert "invalid effective font-size range" in capsys.readouterr().err
+    assert not (tmp_path / "preview.png").exists()
+
+
+@pytest.mark.parametrize(
+    ("resolution", "expected_bounds"),
+    [
+        (None, (48, 120)),
+        ((1920, 1200), (24, 60)),
+        ((1600, 900), (19, 49)),
+    ],
+)
+def test_font_size_overrides_scale_from_design_canvas_not_requested_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resolution: tuple[int, int] | None,
+    expected_bounds: tuple[int, int],
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    specification = viewer._output_specification("16:10", resolution)
+
+    bounds = _capture_rendered_bounds(
+        monkeypatch,
+        configuration,
+        ("@preview", 1),
+        specification,
+        PresentationOverrides(min_font_size=48, max_font_size=120),
+    )
+
+    assert bounds == expected_bounds
+    if resolution is not None:
+        assert specification.requested_output_size == resolution
+    if resolution == (1600, 900):
+        assert specification.presentation_canvas_size != resolution
+
+
+@pytest.mark.parametrize("quotation_number", [1, 3])
+def test_viewer_automatic_fitting_obeys_shared_effective_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quotation_number: int,
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    specification = viewer._output_specification("16:10", (1920, 1200))
+    rendered_sizes: list[int] = []
+    layout = preparation.layout_composition
+
+    def capture(*args, **kwargs):
+        fitted = layout(*args, **kwargs)
+        rendered_sizes.append(fitted.quotation.font_size)
+        return fitted
+
+    monkeypatch.setattr(preparation, "layout_composition", capture)
+    image = viewer.render_preview(configuration, ("@preview", quotation_number), specification)
+    image.close()
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--entry",
+                f"@preview:{quotation_number}",
+                "--min-font-size",
+                "40",
+                "--max-font-size",
+                "40",
+                "--resolution",
+                "1920",
+                "1200",
+                "--output",
+                str(tmp_path / "constrained.png"),
+            ]
+        )
+        == 0
+    )
+
+    assert rendered_sizes[0] > 20
+    assert rendered_sizes[1] == 20
+
+
 def test_debug_layout_uses_shared_literary_qr_and_nine_slice_overlays(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -356,13 +623,20 @@ def test_runtime_and_viewer_share_presentation_construction_and_resolution(
     runtime_snapshot = application._build_snapshot(configuration, entry, quotation, date.today())
     viewer_snapshot = build_presentation_snapshot(configuration, entry, quotation, date.today())
     resolutions = []
+    layout_bounds: list[tuple[int, int]] = []
     resolve_choices = preparation._resolve_presentation_choices
+    layout = preparation.layout_composition
 
     def capture_resolution(*args, **kwargs):
         resolutions.append(kwargs["overrides"])
         return resolve_choices(*args, **kwargs)
 
+    def capture_layout(*args, **kwargs):
+        layout_bounds.append((args[4], args[5]))
+        return layout(*args, **kwargs)
+
     monkeypatch.setattr(preparation, "_resolve_presentation_choices", capture_resolution)
+    monkeypatch.setattr(preparation, "layout_composition", capture_layout)
     specification = viewer._output_specification("16:10", (320, 200))
     runtime_images = prepare_daily_images(
         runtime_snapshot,
@@ -375,7 +649,7 @@ def test_runtime_and_viewer_share_presentation_construction_and_resolution(
             configuration,
             ("@preview", 2),
             specification,
-            overrides=PresentationOverrides(style="left-aligned"),
+            overrides=PresentationOverrides(style="left-aligned", min_font_size=48, max_font_size=120),
         )
         viewer_image.close()
     finally:
@@ -386,4 +660,5 @@ def test_runtime_and_viewer_share_presentation_construction_and_resolution(
     assert runtime_snapshot == viewer_snapshot
     assert len(resolutions) == 2
     assert resolutions[0] == PresentationOverrides()
-    assert resolutions[1] == PresentationOverrides(style="left-aligned")
+    assert resolutions[1] == PresentationOverrides(style="left-aligned", min_font_size=48, max_font_size=120)
+    assert layout_bounds == [(2, 8), (4, 10)]

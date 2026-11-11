@@ -90,6 +90,8 @@ class PresentationOverrides:
     tint: str | None = None
     style: str | None = None
     qr_enabled: bool | None = None
+    min_font_size: int | None = None
+    max_font_size: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "font_faces", MappingProxyType(dict(self.font_faces)))
@@ -168,6 +170,7 @@ def _resolve_presentation(
     decoration: DecorationResource | None,
     output_specification: ResolvedOutputSpecification,
     presentation_style: str,
+    overrides: PresentationOverrides,
 ) -> tuple[LiteraryComposition, PresentationGeometry, int, int, str]:
     composition = LiteraryComposition(
         quotation=snapshot.quotation_text,
@@ -183,13 +186,27 @@ def _resolve_presentation(
         geometry = resolve_presentation_geometry(output_specification, insets)
     except PresentationGeometryError as error:
         raise DailyImagePreparationError(f"cannot resolve literary presentation geometry: {error}") from error
+    min_design_font_size = configuration.min_font_size if overrides.min_font_size is None else overrides.min_font_size
+    max_design_font_size = configuration.max_font_size if overrides.max_font_size is None else overrides.max_font_size
+    for field_name, font_size in (
+        ("min_font_size", min_design_font_size),
+        ("max_font_size", max_design_font_size),
+    ):
+        if isinstance(font_size, bool) or not isinstance(font_size, int) or font_size <= 0:
+            raise DailyImagePreparationError(f"{field_name} override must be a positive integer")
+    if min_design_font_size > max_design_font_size:
+        raise DailyImagePreparationError(
+            "invalid effective font-size range: "
+            f"minimum {min_design_font_size} exceeds maximum {max_design_font_size}; "
+            "adjust the viewer overrides or configured bounds so the minimum is less than or equal to the maximum"
+        )
     design_width = geometry.design_canvas_size[0]
     presentation_width = geometry.presentation_canvas_size[0]
     return (
         composition,
         geometry,
-        max(1, round_half_up(configuration.min_font_size * presentation_width, design_width)),
-        max(1, round_half_up(configuration.max_font_size * presentation_width, design_width)),
+        max(1, round_half_up(min_design_font_size * presentation_width, design_width)),
+        max(1, round_half_up(max_design_font_size * presentation_width, design_width)),
         presentation_style,
     )
 
@@ -803,6 +820,7 @@ def _prepare_daily_images_for_specification(
     configuration: ApplicationConfiguration,
     output_specification: ResolvedOutputSpecification,
     choices: _PresentationChoices,
+    overrides: PresentationOverrides,
     *,
     strict_decoration: bool = False,
     on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
@@ -829,7 +847,7 @@ def _prepare_daily_images_for_specification(
     decoration_identifier = choices.decoration_identifier
     decoration = choices.decoration
     composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-        snapshot, configuration, decoration, output_specification, choices.presentation_style
+        snapshot, configuration, decoration, output_specification, choices.presentation_style, overrides
     )
     presentation_canvas_size = geometry.presentation_canvas_size
     qr_placement: QRCodePlacement | None = None
@@ -997,13 +1015,14 @@ def prepare_daily_images(
     )
     results: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]] = {}
     chooser = chooser if chooser is not None else random.Random()
+    effective_overrides = PresentationOverrides() if overrides is None else overrides
     choices = _resolve_presentation_choices(
         snapshot,
         configuration,
         chooser,
         force_white_background=force_white_background,
         forced_decoration_tint=forced_decoration_tint,
-        overrides=PresentationOverrides() if overrides is None else overrides,
+        overrides=effective_overrides,
     )
     try:
         for output_specification in unique_specifications:
@@ -1013,6 +1032,7 @@ def prepare_daily_images(
                 configuration,
                 output_specification,
                 choices,
+                effective_overrides,
                 strict_decoration=strict_decoration,
                 on_resolved_bounds=on_resolved_bounds,
                 debug_layout=debug_layout,

@@ -666,7 +666,7 @@ Avoid unnecessary upscaling of source raster resources and unnecessary full-canv
 
 ### Shared presentation and viewer
 
-Runtime and `refrain-viewer` must call the same presentation-construction, preference-resolution, geometry, QR, and image-preparation operations. Keep precedence and fallback rules authoritative in shared presentation machinery; represent optional viewer choices with a typed override model and apply them there, not in a second viewer-side resolver. Normal runtime preparation supplies no viewer overrides.
+Runtime and `refrain-viewer` must call the same presentation-construction, preference-resolution, geometry, QR, and image-preparation operations. Keep precedence and fallback rules authoritative in shared presentation machinery; represent optional viewer choices with a typed override model and apply them there, not in a second viewer-side resolver. Viewer font-size bounds must use the shared configured-bound resolution, design-to-presentation scaling, and fitting path. Normal runtime preparation supplies no viewer overrides.
 
 The viewer selects a validated content entry and one 1-based quotation directly, without eligibility, priority, repetition, scheduling, or selection commitment. Its built-in `@preview` fixture belongs only to the viewer. It resolves one viewer-owned output specification, uses the same design/presentation/output pipeline, and writes or displays the final output image without using configured display backends.
 

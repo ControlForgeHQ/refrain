@@ -82,6 +82,12 @@ def _identifier(value: str) -> str:
     return value
 
 
+def _positive_font_size(value: str) -> int:
+    if not value.isascii() or not value.isdecimal() or int(value) < 1:
+        raise argparse.ArgumentTypeError("font size must be a positive integer number of design-canvas pixels")
+    return int(value)
+
+
 def _select_entry(
     configuration: ApplicationConfiguration,
     selector: tuple[str, int],
@@ -250,6 +256,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--quotation-face", type=_identifier, metavar="FACE_ID")
     parser.add_argument("--source-face", type=_identifier, metavar="FACE_ID")
     parser.add_argument("--attribution-face", type=_identifier, metavar="FACE_ID")
+    parser.add_argument(
+        "--min-font-size",
+        type=_positive_font_size,
+        metavar="PIXELS",
+        help="minimum design-canvas pixel size for automatic quotation fitting",
+    )
+    parser.add_argument(
+        "--max-font-size",
+        type=_positive_font_size,
+        metavar="PIXELS",
+        help="maximum design-canvas pixel size for automatic quotation fitting",
+    )
     parser.add_argument("--background", type=_identifier, metavar="BACKGROUND_ID|none")
     parser.add_argument("--decoration", type=_identifier, metavar="DECORATION_ID|none")
     parser.add_argument("--text-color", type=_identifier, metavar="COLOR_ID")
@@ -281,6 +299,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if face is not None
         },
+        min_font_size=arguments.min_font_size,
+        max_font_size=arguments.max_font_size,
         background=arguments.background,
         decoration=arguments.decoration,
         text_color=arguments.text_color,
