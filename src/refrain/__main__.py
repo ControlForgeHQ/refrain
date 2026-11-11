@@ -28,7 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _installation_ownership(paths: ApplicationPaths) -> InstallationOwnership:
-    ownership = InstallationOwnership()
+    ownership = InstallationOwnership(Path(paths.ownership_file))
     ownership.ensure_outside(
         (
             paths.config_directory,
@@ -209,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         paths = resolve_application_paths()
-        with InstallationOwnership() as ownership:
+        with _installation_ownership(paths) as ownership:
             return _run_runtime(arguments, paths, ownership)
     except (
         ApplicationError,

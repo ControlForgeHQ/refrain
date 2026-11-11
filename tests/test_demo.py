@@ -8,7 +8,6 @@ from pathlib import Path
 from random import Random
 from tempfile import TemporaryDirectory
 from threading import Event
-from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -246,7 +245,17 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(tmp_path, 
     state = tmp_path / "state" / "state.json"
     artifacts = tmp_path / "cache" / "artifacts"
     history = tmp_path / "state" / "global-history.jsonl"
-    paths = SimpleNamespace(config_file=config, state_file=state, history_file=history, artifacts_directory=artifacts)
+    paths = cli.ApplicationPaths(
+        config_directory=tmp_path / "config",
+        config_file=config,
+        content_directory=tmp_path / "content",
+        operational_directory=tmp_path / "state",
+        state_directory=tmp_path / "state",
+        state_file=state,
+        history_file=history,
+        cache_directory=tmp_path / "cache",
+        artifacts_directory=artifacts,
+    )
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
     calls = []

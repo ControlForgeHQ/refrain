@@ -52,6 +52,7 @@ def test_linux_default_paths_and_cwd_independence(tmp_path: Path, monkeypatch: p
     assert actual.state_file == home / ".local/state/refrain/state.json"
     assert actual.history_file == home / ".local/state/refrain/global-history.jsonl"
     assert actual.artifacts_directory == home / ".cache/refrain/artifacts"
+    assert actual.ownership_file == home / ".local/state/.refrain-ownership.lock"
 
 
 def test_linux_paths_respect_absolute_xdg_overrides(tmp_path: Path) -> None:
@@ -71,6 +72,7 @@ def test_linux_paths_respect_absolute_xdg_overrides(tmp_path: Path) -> None:
     assert paths.config_file == config / "refrain/config.yaml"
     assert paths.state_file == state / "refrain/state.json"
     assert paths.artifacts_directory == cache / "refrain/artifacts"
+    assert paths.ownership_file == state / ".refrain-ownership.lock"
 
 
 def test_absolute_xdg_overrides_do_not_require_a_home_directory(tmp_path: Path) -> None:
@@ -126,6 +128,7 @@ def test_windows_roaming_and_local_paths_are_platform_independent() -> None:
     assert str(paths.state_file) == r"C:\Users\Ada\AppData\Local\Refrain\State\state.json"
     assert str(paths.history_file) == r"C:\Users\Ada\AppData\Local\Refrain\State\global-history.jsonl"
     assert str(paths.artifacts_directory) == r"C:\Users\Ada\AppData\Local\Refrain\Cache\artifacts"
+    assert str(paths.ownership_file) == r"C:\Users\Ada\AppData\Local\.refrain-ownership.lock"
 
 
 @pytest.mark.parametrize(
@@ -147,6 +150,7 @@ def test_macos_uses_user_library_locations(tmp_path: Path) -> None:
     assert paths.config_file == home / "Library/Application Support/Refrain/config.yaml"
     assert paths.state_file == home / "Library/Application Support/Refrain/State/state.json"
     assert paths.artifacts_directory == home / "Library/Caches/Refrain/artifacts"
+    assert paths.ownership_file == home / "Library/Application Support/.refrain-ownership.lock"
 
 
 def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp_path: Path) -> None:

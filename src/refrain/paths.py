@@ -28,6 +28,11 @@ class ApplicationPaths:
     artifacts_directory: PurePath
 
     @property
+    def ownership_file(self) -> PurePath:
+        """Lock metadata outside the standard Refrain installation trees."""
+        return self.operational_directory.parent / ".refrain-ownership.lock"
+
+    @property
     def assets_directory(self) -> PurePath:
         """Standard user-owned assets beside the per-user configuration."""
         return self.config_directory / "assets"

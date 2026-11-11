@@ -1502,9 +1502,6 @@ Document required SPI and GPIO permissions for the supported deployment.
 
 Persistent state and generated images must be writable by the service identity.
 
-The operating-system account's home or profile directory must exist and be writable for the per-user ownership lock,
-even when runtime storage or XDG locations are configured elsewhere.
-
 User-authored content and configuration should not require write access from the running application unless a defined feature requires it.
 
 ### Filesystem locations
