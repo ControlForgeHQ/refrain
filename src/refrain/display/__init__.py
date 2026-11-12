@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from PIL import Image
 
@@ -19,6 +19,15 @@ class DisplayBackend(Protocol):
 
     def close(self) -> None:
         """Release resources owned by this backend."""
+        ...
+
+
+@runtime_checkable
+class WithdrawableDisplayBackend(Protocol):
+    """Optionally report intentional user withdrawal of a backend's destinations."""
+
+    def set_withdrawal_callback(self, callback: Callable[[], None]) -> None:
+        """Register the owner notification, including any earlier user withdrawal."""
         ...
 
 

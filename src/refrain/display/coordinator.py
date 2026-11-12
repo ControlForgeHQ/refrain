@@ -18,7 +18,7 @@ from PIL import Image
 
 from ..config import DisplayBackendConfiguration, DisplayOutputConfiguration
 from ..geometry import ResolvedOutputSpecification
-from . import DisplayBackend, DisplayBackendError, create_display_backend
+from . import DisplayBackend, DisplayBackendError, WithdrawableDisplayBackend, create_display_backend
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
@@ -791,6 +791,18 @@ class DisplayPublicationCoordinator:
                 if initialize_backend:
                     try:
                         backend = self._factory(configuration)
+                        if isinstance(backend, WithdrawableDisplayBackend):
+                            try:
+
+                                def withdraw_backend() -> None:
+                                    for state in states:
+                                        self.withdraw_destination(state.key)
+
+                                backend.set_withdrawal_callback(withdraw_backend)
+                            except Exception:
+                                self._close_backend(configuration.type, backend)
+                                backend = None
+                                raise
                     except Exception as error:
                         recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                         with self._condition:
