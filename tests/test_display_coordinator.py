@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -148,6 +149,24 @@ def test_backend_withdraws_all_its_destinations_atomically() -> None:
         callbacks[0]()
         assert all(status["withdrawn"] for status in coordinator.destination_statuses)
         assert not all_unavailable.is_set()
+    finally:
+        coordinator.close()
+
+
+def test_withdrawal_logs_each_transition_once(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="refrain.display.coordinator")
+    outputs = (DisplayOutputConfiguration("one", _SPECIFICATION), DisplayOutputConfiguration("two", _SPECIFICATION))
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    coordinator = DisplayPublicationCoordinator((config,))
+    try:
+        assert coordinator._withdraw_destinations(("image-server:one", "image-server:two"))
+        assert not coordinator.withdraw_destination("image-server:one")
+        assert not coordinator.withdraw_destination("missing")
+        assert [record.getMessage() for record in caplog.records] == [
+            "Display destination image-server:one withdrawn from publication for this runtime",
+            "Display destination image-server:two withdrawn from publication for this runtime",
+        ]
+        assert all(record.levelno == logging.INFO for record in caplog.records)
     finally:
         coordinator.close()
 

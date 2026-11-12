@@ -110,6 +110,60 @@ def test_backend_withdrawal_discards_pending_and_skips_future_publications() -> 
         coordinator.close()
 
 
+@pytest.mark.parametrize("recoverable", [False, True])
+def test_withdrawal_during_scheduled_failure_preserves_availability(monkeypatch, recoverable: bool) -> None:
+    entered, release = Event(), Event()
+    backends = {}
+    publications = []
+
+    class Backend:
+        def __init__(self, backend_type):
+            self.backend_type = backend_type
+            self.callback = None
+
+        def set_withdrawal_callback(self, callback):
+            self.callback = callback
+
+        def publish(self, _destination, image):
+            publications.append((self.backend_type, image.getpixel((0, 0))[0]))
+            if self.backend_type == "window":
+                entered.set()
+                assert release.wait(5)
+                raise DisplayBackendUpdateError("window closed during publication", recoverable=recoverable)
+
+        def close(self):
+            pass
+
+    def factory(config):
+        backend = Backend(config.type)
+        backends[config.type] = backend
+        return backend
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"), _configuration("image-server")), factory)
+    images = _images(_WIDE, value=1)
+    closes = _track_image_closes(monkeypatch, images)
+    try:
+        coordinator.publish((1, 0), images)
+        assert entered.wait(2)
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 0))
+        coordinator.publish((1, 1), _images(_WIDE, value=2))
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 1))
+        backends["window"].callback()
+        release.set()
+        with coordinator._condition:
+            assert coordinator._condition.wait_for(lambda: coordinator._states["window"].active_identity is None, 2)
+        status = coordinator.destination_statuses[0]
+        assert (status["participating"], status["withdrawn"], status["available"]) == (False, True, True)
+        assert closes[id(images[_WIDE])] == 1
+        coordinator.publish((1, 2), _images(_WIDE, value=3))
+        assert coordinator.wait_for_publication((1, 2), timeout=2)
+        assert [value for backend, value in publications if backend == "window"] == [1]
+        assert [value for backend, value in publications if backend == "image-server"] == [1, 2, 3]
+    finally:
+        release.set()
+        coordinator.close()
+
+
 @pytest.mark.parametrize("forced", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
 def test_backend_withdrawal_does_not_cancel_admitted_one_shot(forced: bool, fail: bool) -> None:
@@ -159,6 +213,10 @@ def test_backend_withdrawal_does_not_cancel_admitted_one_shot(forced: bool, fail
         release.set()
         assert operation.wait(2).status is (PublicationStatus.FAILED if fail else PublicationStatus.SUCCEEDED)
         assert operation.result.destinations["window"][0] is not fail
+        if fail:
+            assert operation.result.destinations["window"][1] == "window closed during publication"
+        status = coordinator.destination_statuses[0]
+        assert (status["participating"], status["withdrawn"], status["available"]) == (False, True, True)
         assert operation.result.destinations["image-server:image-server"][0] is True
         assert sorted(publications) == ["image-server", "window"]
     finally:

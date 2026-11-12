@@ -20,7 +20,7 @@ from refrain.display import (
     DisplayBackendUpdateError,
     create_display_backend,
 )
-from refrain.display.coordinator import DisplayPublicationCoordinator
+from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 from refrain.display.window import WindowDisplayBackend
 
 
@@ -298,6 +298,53 @@ def test_close_before_coordinator_registration_is_not_lost(monkeypatch: pytest.M
         assert coordinator.destination_statuses[0]["available"] is True
         assert presented == []
     finally:
+        coordinator.close()
+
+
+@pytest.mark.parametrize("operation_type", ["scheduled", "transient", "refresh"])
+def test_window_close_during_publication_preserves_availability(
+    monkeypatch: pytest.MonkeyPatch, operation_type: str
+) -> None:
+    roots, _ = install_fake_gui(monkeypatch)
+    entered, release = threading.Event(), threading.Event()
+    specification = ResolvedOutputSpecification("16:9", (16, 9))
+    configuration = DisplayBackendConfiguration(
+        "window", outputs=(DisplayOutputConfiguration("default", specification),)
+    )
+
+    class BlockingWindow(WindowDisplayBackend):
+        def publish(self, destination, image):
+            if image.getpixel((0, 0))[0] == 2:
+                entered.set()
+                assert release.wait(5)
+            super().publish(destination, image)
+
+    coordinator = DisplayPublicationCoordinator((configuration,), lambda _config: BlockingWindow())
+    try:
+        coordinator.publish((1, 0), {specification: Image.new("RGB", (16, 9), (1, 0, 0))})
+        assert coordinator.wait_for_publication((1, 0), timeout=2)
+        images = {specification: Image.new("RGB", (16, 9), (2, 0, 0))}
+        if operation_type == "scheduled":
+            coordinator.publish((1, 1), images)
+            operation = None
+        elif operation_type == "transient":
+            operation = coordinator.publish_transient("window", {"window": specification}, images)
+        else:
+            operation = coordinator.force_scheduled_publication((1, 0), images)
+        assert entered.wait(2)
+        roots[0].close_protocol()
+        release.set()
+        if operation is None:
+            with coordinator._condition:
+                assert coordinator._condition.wait_for(lambda: coordinator._states["window"].active_identity is None, 2)
+        else:
+            result = operation.wait(2)
+            assert result.status is PublicationStatus.FAILED
+            assert result.destinations["window"] == (False, "cannot update a closed desktop display")
+        status = coordinator.destination_statuses[0]
+        assert (status["participating"], status["withdrawn"], status["available"]) == (False, True, True)
+    finally:
+        release.set()
         coordinator.close()
 
 

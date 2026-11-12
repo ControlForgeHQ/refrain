@@ -297,6 +297,7 @@ class DisplayPublicationCoordinator:
                 self._release(state.pending)
                 state.pending = None
                 changed = True
+                _LOGGER.info("Display destination %s withdrawn from publication for this runtime", identifier)
             if changed:
                 self._signal_all_unavailable()
                 if self._all_withdrawn_event is not None and all(state.withdrawn for state in self._states.values()):
@@ -530,7 +531,7 @@ class DisplayPublicationCoordinator:
             if operation.forced and state.desired_identity == operation.identity:
                 state.successful_identity = operation.identity
                 state.successful_at = self._monotonic_clock()
-        else:
+        elif not state.withdrawn:
             state.error = error
         operation.operation._update(
             PublicationResult(
@@ -898,8 +899,9 @@ class DisplayPublicationCoordinator:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
                         retry = recoverable and not self._stopping and not self._draining
-                        ready.error = str(error)
-                        ready.terminal = not recoverable
+                        if not ready.withdrawn:
+                            ready.error = str(error)
+                            ready.terminal = not recoverable
                         if one_shot is not None:
                             ready.one_shot_active = False
                             if retry:
