@@ -186,7 +186,7 @@ def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path
     data = configuration_data()
     data["layout"]["fonts"] = {
         "default": ["lora"],
-        "font_faces": {"quotation": "regular", "attribution": "italic"},
+        "font_faces": {"quotation": "regular", "source": "italic"},
     }
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
     assert dict(config.font_faces) == {"quotation": "regular", "attribution": "italic"}
@@ -826,7 +826,7 @@ def test_representative_configuration_example_loads() -> None:
     config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
 
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
-    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
+    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "source-sans-3")
     assert config.default_backgrounds == (
         "none",
         "aged-paper",

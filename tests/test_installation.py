@@ -165,7 +165,7 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     assert [(backend.type, backend.host, backend.port) for backend in config.display_backends] == [
         ("image-server", "127.0.0.1", 8080)
     ]
-    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3")
+    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "source-sans-3")
     assert config.default_backgrounds == (
         "none",
         "aged-paper",
