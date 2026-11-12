@@ -446,6 +446,39 @@ def test_forced_completion_does_not_ack_a_newer_scheduled_identity() -> None:
         coordinator.close()
 
 
+def test_forced_publication_fails_when_any_participating_destination_fails() -> None:
+    publications: list[str] = []
+
+    class Backend:
+        def __init__(self, backend_type: str):
+            self.backend_type = backend_type
+
+        def publish(self, _destination, image):
+            publications.append(self.backend_type)
+            if image.getpixel((0, 0))[0] == 5 and self.backend_type == "window":
+                raise DisplayBackendUpdateError("forced refresh failed", recoverable=False)
+
+        def close(self):
+            pass
+
+    configurations = (_configuration("window"), _configuration("waveshare-13in3-e"))
+    coordinator = DisplayPublicationCoordinator(configurations, lambda config: Backend(config.type), retry=False)
+    try:
+        coordinator.publish((1, 0), {_WIDE: Image.new("RGB", (4, 4), (1, 0, 0))})
+        assert _wait_until(lambda: coordinator.acknowledgements == {"window": (1, 0), "waveshare-13in3-e": (1, 0)})
+        forced = coordinator.force_scheduled_publication((1, 0), _images(_WIDE, value=5))
+        result = forced.wait(1)
+        assert result.status is PublicationStatus.FAILED
+        assert result.destinations == {
+            "window": (False, "forced refresh failed"),
+            "waveshare-13in3-e": (True, None),
+        }
+        assert publications.count("window") == 2
+        assert publications.count("waveshare-13in3-e") == 2
+    finally:
+        coordinator.close()
+
+
 @pytest.mark.parametrize("forced", [False, True])
 def test_shutdown_retains_active_one_shot_image_until_backend_returns(monkeypatch, forced: bool) -> None:
     monkeypatch.setattr("refrain.display.coordinator._SHUTDOWN_TIMEOUT", 0.02)
