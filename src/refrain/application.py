@@ -280,6 +280,7 @@ def _refresh_scheduled(
     shutdown: Event,
     state_lock: Lock,
     admit: Callable[[tuple[int, int], Mapping[ResolvedOutputSpecification, Image.Image]], PublicationOperation],
+    remember_artifacts: Callable[[int, PreparedImageArtifactSet], None] | None = None,
 ) -> PublicationOperation:
     """Prepare and admit only the scheduled identity still required by the runtime."""
 
@@ -297,6 +298,8 @@ def _refresh_scheduled(
         if coordinator.desired_identity != identity:
             return rejected(PublicationStatus.INVALID)
         artifacts = _recover_images(state, artifact_store, configuration, chooser)
+        if remember_artifacts is not None:
+            remember_artifacts(state.revision, artifacts)
         images = _load_stage_variants(artifacts, configuration.required_output_specifications, identity[1])
         try:
             decision = evaluate_scheduling(wall_clock(), configuration, state)
@@ -563,6 +566,12 @@ def run_application(
     information_view_acknowledgement_logged = False
     state_lock = Lock()
     control: RuntimeControlServer | None = None
+
+    def remember_artifacts(revision: int, recovered: PreparedImageArtifactSet) -> None:
+        nonlocal artifact_revision, artifacts
+        artifact_revision = revision
+        artifacts = recovered
+
     _LOGGER.info("Starting continuous presentation")
     try:
         if control_metadata_path is not None:
@@ -586,6 +595,7 @@ def run_application(
                         shutdown,
                         state_lock,
                         admit,
+                        remember_artifacts,
                     ),
                     shutdown_event=shutdown,
                     transient_admission=lambda destinations, specifications, images, admit: _admit_transient(
@@ -798,13 +808,16 @@ def run_application(
                 if control_workers:
 
                     def finish_control_shutdown() -> None:
+                        deadline = time.monotonic() + _CONTROL_SHUTDOWN_TIMEOUT
                         for worker in control_workers:
-                            worker.join()
+                            worker.join(max(0.0, deadline - time.monotonic()))
                         workers = coordinator.close()
                         for worker in workers:
                             worker.join()
                         if workers:
                             coordinator.close()
+                        for worker in control_workers:
+                            worker.join()
 
                     cleanup = Thread(target=finish_control_shutdown, name="refrain-control-cleanup", daemon=True)
                     cleanup.start()

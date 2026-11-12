@@ -790,6 +790,7 @@ class DisplayPublicationCoordinator:
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
+                        recoverable = recoverable and not self._stopping
                         ready.error = str(error)
                         ready.terminal = not recoverable
                         if one_shot is not None:

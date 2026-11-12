@@ -203,6 +203,44 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
     assert workspace.history.read_bytes() == history_before
 
 
+def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 13))
+    configuration = application.load_application_config(workspace.config)
+    store = PersistentStateStore(workspace.state)
+    artifact_store = PreparedImageArtifactStore(workspace.artifacts)
+    old = application._recover_images(store.load(), artifact_store, configuration, Random(1))
+    specification = configuration.required_output_specifications[0]
+    old.variant_for(specification).stage_paths[-1].unlink()
+    remembered = []
+
+    class Coordinator:
+        desired_identity = (1, 1)
+
+    def admit(_identity, images):
+        for image in images.values():
+            image.close()
+        return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
+
+    result = application._refresh_scheduled(
+        Coordinator(),
+        store,
+        artifact_store,
+        configuration,
+        Random(1),
+        lambda: at(10, 13),
+        Event(),
+        Lock(),
+        admit,
+        lambda revision, artifacts: remembered.append((revision, artifacts)),
+    )
+    assert result.result.status is PublicationStatus.SUCCEEDED
+    revision, regenerated = remembered[0]
+    assert revision == 1
+    assert regenerated.variant_for(specification).stage_paths != old.variant_for(specification).stage_paths
+    assert all(path.exists() for path in regenerated.variant_for(specification).stage_paths)
+
+
 def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: Workspace) -> None:
     ordinary(workspace)
     workspace.run(at(10, 11))
