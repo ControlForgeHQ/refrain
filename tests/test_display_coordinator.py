@@ -127,6 +127,31 @@ def test_withdrawal_signals_when_remaining_destinations_are_terminal() -> None:
         coordinator.close()
 
 
+def test_backend_withdraws_all_its_destinations_atomically() -> None:
+    all_unavailable = Event()
+    callbacks = []
+    outputs = (DisplayOutputConfiguration("one", _SPECIFICATION), DisplayOutputConfiguration("two", _SPECIFICATION))
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+
+    class Backend(SimulatedBackend):
+        def set_withdrawal_callback(self, callback):
+            callbacks.append(callback)
+
+    coordinator = DisplayPublicationCoordinator(
+        (config,), lambda config: Backend(config.type, {"image-server": []}), all_unavailable_event=all_unavailable
+    )
+    try:
+        coordinator.publish((1, 0), publication(1))
+        assert coordinator.wait_for_publication((1, 0), timeout=2)
+        with coordinator._condition:
+            coordinator._states["image-server:two"].terminal = True
+        callbacks[0]()
+        assert all(status["withdrawn"] for status in coordinator.destination_statuses)
+        assert not all_unavailable.is_set()
+    finally:
+        coordinator.close()
+
+
 def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() -> None:
     configurations = (configuration("window"), configuration("image-server"))
     updates = {"window": [], "image-server": []}

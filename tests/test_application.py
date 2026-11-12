@@ -1431,6 +1431,7 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
             self.acknowledged = set()
             self.closed = False
             self.all_unavailable = False
+            self.has_participating_destinations = True
             instances.append(self)
 
         def publish(self, identity, images):
@@ -1455,6 +1456,37 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
 
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", RecordingCoordinator)
     return instances
+
+
+def test_withdrawal_wakes_information_view_and_continues_scheduling(workspace: Workspace, monkeypatch) -> None:
+    ordinary(workspace)
+    workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
+    coordinators = install_recording_coordinator(monkeypatch, acknowledge_information_view=False)
+    clock = RuntimeClock(at(10, 7))
+    waits = []
+
+    def scheduling_wait(_deadline, wake_event, **_kwargs):
+        waits.append(wake_event)
+        if len(waits) == 1:
+            coordinators[0].has_participating_destinations = False
+            assert wake_event.is_set()
+        else:
+            clock.set()
+        return wake_event.is_set()
+
+    run_application(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        history_path=workspace.history,
+        shutdown_event=clock,
+        random_source=Random(1),
+        wall_clock=lambda: clock.now,
+        monotonic_clock=lambda: clock.elapsed,
+        scheduling_wait=scheduling_wait,
+    )
+    assert len(waits) == 2
+    assert waits[1] is clock
 
 
 def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(

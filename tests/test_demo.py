@@ -498,7 +498,7 @@ def test_long_interval_uses_bounded_waits_and_shutdown_stops_progression(demo):
     demo.assert_clean()
 
 
-def test_demo_waits_for_shutdown_when_every_destination_is_withdrawn(demo):
+def test_demo_stops_when_every_destination_is_withdrawn(demo):
     demo.entry()
     attempts = []
     waits = []
@@ -508,16 +508,11 @@ def test_demo_waits_for_shutdown_when_every_destination_is_withdrawn(demo):
         coordinator.has_participating_destinations = False
         return False
 
-    def wait_for_shutdown(timeout=None):
-        waits.append(timeout)
-        demo.clock.set()
-        return True
-
     demo.on_ack = withdrawn
-    demo.clock.wait = wait_for_shutdown
+    demo.clock.wait = lambda timeout=None: waits.append(timeout)
     demo.run()
     assert len(attempts) == 1
-    assert waits == [None]
+    assert waits == []
 
 
 def test_unacknowledged_stage_neither_waits_interval_nor_selects_again(demo):

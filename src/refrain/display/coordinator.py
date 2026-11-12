@@ -282,16 +282,23 @@ class DisplayPublicationCoordinator:
 
     def withdraw_destination(self, identifier: str) -> bool:
         """Withdraw a configured destination for the rest of this runtime."""
+        return self._withdraw_destinations((identifier,))
+
+    def _withdraw_destinations(self, identifiers: Iterable[str]) -> bool:
         with self._condition:
-            state = self._states.get(identifier)
-            if state is None or state.withdrawn:
-                return False
-            state.withdrawn = True
-            self._release(state.pending)
-            state.pending = None
-            self._signal_all_unavailable()
-            self._condition.notify_all()
-            return True
+            changed = False
+            for identifier in identifiers:
+                state = self._states.get(identifier)
+                if state is None or state.withdrawn:
+                    continue
+                state.withdrawn = True
+                self._release(state.pending)
+                state.pending = None
+                changed = True
+            if changed:
+                self._signal_all_unavailable()
+                self._condition.notify_all()
+            return changed
 
     def publish_transient(
         self,
@@ -805,8 +812,7 @@ class DisplayPublicationCoordinator:
                             try:
 
                                 def withdraw_backend() -> None:
-                                    for state in states:
-                                        self.withdraw_destination(state.key)
+                                    self._withdraw_destinations(state.key for state in states)
 
                                 backend.set_withdrawal_callback(withdraw_backend)
                             except Exception:
