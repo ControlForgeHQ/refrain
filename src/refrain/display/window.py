@@ -10,6 +10,7 @@ from typing import Any
 
 from PIL import Image
 
+from ..config import DisplayOutputConfiguration
 from . import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
@@ -145,6 +146,11 @@ class WindowDisplayBackend:
         if command.error is not None:
             message = f"could not present the image in the desktop window: {command.error}"
             raise DisplayBackendUpdateError(message, recoverable=not self._closed) from command.error
+
+    def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
+        """Present the image through this configured single-output destination."""
+        del destination
+        self.update(image)
 
     def close(self) -> None:
         """Close the window and wait for its GUI thread to release resources."""

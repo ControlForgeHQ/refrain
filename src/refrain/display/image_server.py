@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlsplit
 
 from PIL import Image
 
+from ..config import DisplayOutputConfiguration
 from . import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
@@ -274,6 +275,10 @@ class ImageServerDisplayBackend:
             if self._closed:
                 raise DisplayBackendUpdateError("cannot update a closed image-server display", recoverable=False)
             self._representations[output_id] = image_bytes, entity_tag
+
+    def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
+        """Publish the complete image through the selected named output."""
+        self.update_output(destination.identifier, image)
 
     def _get_representation(self, output_id: str) -> tuple[bytes, str] | None:
         with self._state_lock:

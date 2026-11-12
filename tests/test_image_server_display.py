@@ -11,6 +11,7 @@ from threading import Event
 import pytest
 from PIL import Image
 
+from refrain import DisplayOutputConfiguration, ResolvedOutputSpecification
 from refrain.display import (
     DisplayBackend,
     DisplayBackendInitializationError,
@@ -118,10 +119,10 @@ def test_conditional_requests_and_replacement_use_content_etags() -> None:
 def test_named_outputs_keep_independent_images_and_entity_tags() -> None:
     port = available_port()
     backend = ImageServerDisplayBackend(port=port, output_ids=("kitchen", "hallway"))
-    kitchen = Image.new("RGB", (2, 2), "red")
+    kitchen = Image.new("RGB", (4, 3), "red")
     hallway = Image.new("RGB", (3, 3), "blue")
     try:
-        backend.update_output("kitchen", kitchen)
+        backend.publish(DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3))), kitchen)
         backend.update_output("hallway", hallway)
 
         kitchen_response = request(port, path="/display/kitchen/current")
@@ -129,7 +130,7 @@ def test_named_outputs_keep_independent_images_and_entity_tags() -> None:
         assert kitchen_response[0] == hallway_response[0] == 200
         assert kitchen_response[1]["ETag"] != hallway_response[1]["ETag"]
         with Image.open(io.BytesIO(kitchen_response[2])) as served:
-            assert served.size == (2, 2)
+            assert served.size == (4, 3)
             assert served.getpixel((0, 0)) == (255, 0, 0)
         with Image.open(io.BytesIO(hallway_response[2])) as served:
             assert served.size == (3, 3)

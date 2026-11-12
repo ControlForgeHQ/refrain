@@ -353,6 +353,8 @@ import refrain.__main__ as cli
 class Backend:
     def update_output(self, output_id, image):
         print("READY", flush=True)
+    def publish(self, destination, image):
+        self.update_output(destination.identifier, image)
     def close(self):
         print("CLOSING", flush=True)
         sys.stdin.readline()

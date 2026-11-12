@@ -1,11 +1,11 @@
-"""Independent publication workers for configured display destinations."""
+"""Serialized publication workers for configured display backends."""
 
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from threading import Condition, Event, Lock, Thread, current_thread
+from threading import Condition, Event, Thread
 from typing import Callable, Mapping
 
 from PIL import Image
@@ -31,14 +31,28 @@ class _DestinationState:
     backend_configuration: DisplayBackendConfiguration
     destination: DisplayOutputConfiguration
     key: str
+    desired_identity: tuple[int, int] | None = None
+    pending: _Presentation | None = None
+    active_identity: tuple[int, int] | None = None
     successful_identity: tuple[int, int] | None = None
     successful_at: float | None = None
+    retry_at: float = 0.0
+    retry_delay: float = 1.0
     terminal: bool = False
     error: str | None = None
 
 
+def _destination_identifier(
+    configuration: DisplayBackendConfiguration,
+    destination: DisplayOutputConfiguration,
+) -> str:
+    if configuration.type == "image-server" or len(configuration.outputs) > 1:
+        return f"{configuration.type}:{destination.identifier}"
+    return configuration.type
+
+
 class DisplayPublicationCoordinator:
-    """Publish each destination's matching variant on an independent worker."""
+    """Publish each destination's matching variant on its backend's worker."""
 
     def __init__(
         self,
@@ -55,27 +69,31 @@ class DisplayPublicationCoordinator:
         self._all_unavailable_event = all_unavailable_event
         self._monotonic_clock = monotonic_clock
         self._stopping = False
-        self._desired: _Presentation | None = None
-        self._backend_configurations = {configuration.type: configuration for configuration in configurations}
-        self._backend_locks = {backend_type: Lock() for backend_type in self._backend_configurations}
-        self._backends: dict[str, DisplayBackend] = {}
         self._states = {
-            f"{configuration.type}:{destination.identifier}": _DestinationState(
-                configuration,
-                destination,
-                f"{configuration.type}:{destination.identifier}",
-            )
+            identifier: _DestinationState(configuration, destination, identifier)
             for configuration in configurations
             for destination in configuration.outputs
+            for identifier in (_destination_identifier(configuration, destination),)
         }
+        expected_destinations = sum(len(configuration.outputs) for configuration in configurations)
+        if len(self._states) != expected_destinations:
+            raise ValueError("configured display destinations must have unique canonical identifiers")
+        self._states_by_backend = {
+            configuration.type: tuple(
+                state for state in self._states.values() if state.backend_configuration is configuration
+            )
+            for configuration in configurations
+        }
+        self._worker_configurations = configurations
+        self._backends: dict[str, DisplayBackend] = {}
         self._threads = [
             Thread(
-                target=self._run_destination,
-                args=(state,),
-                name=f"refrain-display-{state.key}",
+                target=self._run_backend,
+                args=(configuration, self._states_by_backend[configuration.type]),
+                name=f"refrain-display-{configuration.type}",
                 daemon=True,
             )
-            for state in self._states.values()
+            for configuration in configurations
         ]
         for thread in self._threads:
             thread.start()
@@ -92,7 +110,13 @@ class DisplayPublicationCoordinator:
     @property
     def desired_identity(self) -> tuple[int, int] | None:
         with self._condition:
-            return None if self._desired is None else self._desired.identity
+            return next(iter(self._states.values())).desired_identity if self._states else None
+
+    @property
+    def destination_identifiers(self) -> tuple[str, ...]:
+        """Return the canonical runtime identifiers owned by this coordinator."""
+        with self._condition:
+            return tuple(self._states)
 
     @property
     def all_unavailable(self) -> bool:
@@ -109,29 +133,39 @@ class DisplayPublicationCoordinator:
         identity: tuple[int, int],
         images: Mapping[ResolvedOutputSpecification, Image.Image],
     ) -> None:
-        """Replace the pending desired variant set; ownership transfers to the coordinator."""
+        """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
             if self._stopping:
                 self._close_images(images)
                 raise RuntimeError("display publication coordinator is stopping")
-            if self._desired is not None and self._desired.identity == identity:
+            if self._states and all(state.desired_identity == identity for state in self._states.values()):
                 self._close_images(images)
                 return
             required = {state.destination.output_specification for state in self._states.values() if not state.terminal}
             if required - images.keys():
                 self._close_images(images)
                 raise ValueError(f"publication is missing output variants: {required - images.keys()}")
-            previous = self._desired
-            self._desired = _Presentation(identity, images)
-            self._release(previous)
+
+            presentation = _Presentation(identity, images)
+            for state in self._states.values():
+                state.desired_identity = identity
+                if state.terminal:
+                    continue
+                self._release(state.pending)
+                state.pending = presentation
+                presentation.references += 1
+                state.retry_at = 0.0
+                state.retry_delay = 1.0
+            self._release(presentation)
             self._condition.notify_all()
 
     def clear_desired(self) -> None:
-        """Discard an obsolete pending variant set without interrupting active updates."""
+        """Discard pending scheduled images without interrupting active updates."""
         with self._condition:
-            previous = self._desired
-            self._desired = None
-            self._release(previous)
+            for state in self._states.values():
+                self._release(state.pending)
+                state.pending = None
+                state.desired_identity = None
             self._condition.notify_all()
 
     def wait_for_publication(self, identity: tuple[int, int], timeout: float | None = None) -> bool:
@@ -195,6 +229,10 @@ class DisplayPublicationCoordinator:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
         with self._condition:
             self._stopping = True
+            for state in self._states.values():
+                self._release(state.pending)
+                state.pending = None
+                state.desired_identity = None
             self._condition.notify_all()
         deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
         for thread in self._threads:
@@ -203,41 +241,31 @@ class DisplayPublicationCoordinator:
                 break
             thread.join(remaining)
         active_threads = tuple(thread for thread in self._threads if thread.is_alive())
-        for state, thread in zip(self._states.values(), self._threads, strict=True):
-            if thread in active_threads:
-                _LOGGER.error(
-                    "Display destination %s did not stop within %.0f seconds; "
-                    "its active update will not be interrupted or closed concurrently",
-                    state.key,
-                    _SHUTDOWN_TIMEOUT,
-                )
-        with self._condition:
-            self._release(self._desired)
-            self._desired = None
         active_backend_types = {
-            state.backend_configuration.type
-            for state, thread in zip(self._states.values(), self._threads, strict=True)
+            configuration.type
+            for configuration, thread in zip(
+                self._worker_configurations,
+                self._threads,
+                strict=True,
+            )
             if thread in active_threads
         }
-        for backend_type in tuple(self._backends):
-            if backend_type in active_backend_types:
-                _LOGGER.error(
-                    "Display backend %s remains in use by an active destination worker; it will not be closed "
-                    "concurrently",
-                    backend_type,
-                )
-                continue
-            with self._backend_locks[backend_type]:
-                backend = self._backends.get(backend_type)
-                if backend is None:
-                    continue
-                self._backends.pop(backend_type, None)
-                self._close_backend(backend_type, backend)
+        for backend_type in active_backend_types:
+            _LOGGER.error(
+                "Display backend %s worker did not stop within %.0f seconds; "
+                "its active update will not be interrupted or closed concurrently",
+                backend_type,
+                _SHUTDOWN_TIMEOUT,
+            )
         return active_threads
 
     @staticmethod
     def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image]) -> None:
+        closed: set[int] = set()
         for image in images.values():
+            if id(image) in closed:
+                continue
+            closed.add(id(image))
             image.close()
 
     def _release(self, presentation: _Presentation | None) -> None:
@@ -250,24 +278,137 @@ class DisplayPublicationCoordinator:
             except Exception:
                 _LOGGER.exception("Failed to release prepared presentation images")
 
-    def _wait_before_retry(self, delay: float) -> bool:
-        deadline = time.monotonic() + delay
-        with self._condition:
-            while not self._stopping:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return True
-                self._condition.wait(remaining)
-            return False
+    def _run_backend(
+        self,
+        configuration: DisplayBackendConfiguration,
+        states: tuple[_DestinationState, ...],
+    ) -> None:
+        backend: DisplayBackend | None = None
+        backend_retry_at = 0.0
+        backend_retry_delay = 1.0
+        try:
+            while True:
+                ready: _DestinationState | None = None
+                presentation: _Presentation | None = None
+                initialize_backend = False
+                with self._condition:
+                    while True:
+                        if self._stopping:
+                            return
+                        now = time.monotonic()
+                        eligible = next(
+                            (
+                                state
+                                for state in states
+                                if not state.terminal and state.pending is not None and state.retry_at <= now
+                            ),
+                            None,
+                        )
+                        if backend is None and eligible is not None and now >= backend_retry_at:
+                            initialize_backend = True
+                            break
+                        if backend is not None and eligible is not None:
+                            ready = eligible
+                            presentation = ready.pending
+                            assert presentation is not None
+                            ready.pending = None
+                            ready.active_identity = presentation.identity
+                            break
+                        deadlines = [
+                            state.retry_at
+                            for state in states
+                            if not state.terminal and state.pending is not None and state.retry_at > now
+                        ]
+                        if backend is None and backend_retry_at > now:
+                            if any(state.pending is not None and not state.terminal for state in states):
+                                deadlines.append(backend_retry_at)
+                        timeout = min(deadlines) - now if deadlines else None
+                        self._condition.wait(timeout)
 
-    def _get_backend(self, configuration: DisplayBackendConfiguration) -> DisplayBackend:
-        backend_type = configuration.type
-        with self._backend_locks[backend_type]:
-            backend = self._backends.get(backend_type)
-            if backend is None:
-                backend = self._factory(configuration)
-                self._backends[backend_type] = backend
-            return backend
+                if initialize_backend:
+                    try:
+                        backend = self._factory(configuration)
+                    except Exception as error:
+                        recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
+                        with self._condition:
+                            if recoverable:
+                                backend_retry_at = time.monotonic() + backend_retry_delay
+                                backend_retry_delay = min(_MAX_RETRY_DELAY, backend_retry_delay * 2)
+                            for state in states:
+                                if state.terminal:
+                                    continue
+                                state.error = str(error)
+                                state.terminal = not recoverable
+                                if state.terminal:
+                                    self._release(state.pending)
+                                    state.pending = None
+                                if state.pending is not None:
+                                    state.retry_at = backend_retry_at
+                            self._signal_all_unavailable()
+                            self._condition.notify_all()
+                        if isinstance(error, DisplayBackendError):
+                            _LOGGER.warning("Display backend %s initialization failed: %s", configuration.type, error)
+                        else:
+                            _LOGGER.exception(
+                                "Unexpected display backend %s initialization failure", configuration.type
+                            )
+                        if not recoverable:
+                            return
+                        continue
+
+                    with self._condition:
+                        self._backends[configuration.type] = backend
+                        if self._stopping:
+                            self._condition.notify_all()
+                            return
+                    backend_retry_at = 0.0
+                    backend_retry_delay = 1.0
+                    continue
+
+                assert ready is not None and presentation is not None and backend is not None
+                try:
+                    image = presentation.images[ready.destination.output_specification]
+                    backend.publish(ready.destination, image)
+                except Exception as error:
+                    recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
+                    with self._condition:
+                        ready.active_identity = None
+                        ready.error = str(error)
+                        ready.terminal = not recoverable
+                        if recoverable and ready.pending is None and ready.desired_identity == presentation.identity:
+                            ready.pending = presentation
+                            ready.retry_at = time.monotonic() + ready.retry_delay
+                            ready.retry_delay = min(_MAX_RETRY_DELAY, ready.retry_delay * 2)
+                        else:
+                            self._release(presentation)
+                        if ready.terminal:
+                            self._release(ready.pending)
+                            ready.pending = None
+                        self._signal_all_unavailable()
+                        self._condition.notify_all()
+                        all_terminal = all(state.terminal for state in states)
+                    if isinstance(error, DisplayBackendError):
+                        _LOGGER.warning("Display destination %s update failed: %s", ready.key, error)
+                    else:
+                        _LOGGER.exception("Unexpected display destination %s update failure", ready.key)
+                    if all_terminal:
+                        return
+                    continue
+
+                with self._condition:
+                    ready.active_identity = None
+                    ready.successful_identity = presentation.identity
+                    ready.successful_at = self._monotonic_clock()
+                    ready.error = None
+                    ready.retry_at = 0.0
+                    ready.retry_delay = 1.0
+                    self._condition.notify_all()
+                    self._release(presentation)
+                _LOGGER.info("Display destination %s published presentation %s", ready.key, presentation.identity)
+        finally:
+            if backend is not None:
+                self._backends.pop(configuration.type, None)
+                self._close_backend(configuration.type, backend)
 
     @staticmethod
     def _close_backend(backend_type: str, backend: DisplayBackend) -> None:
@@ -275,86 +416,6 @@ class DisplayPublicationCoordinator:
             backend.close()
         except Exception as error:
             _LOGGER.warning("Display backend %s cleanup failed: %s", backend_type, error)
-
-    def _close_backend_after_worker_exit(self, backend_type: str) -> None:
-        with self._backend_locks[backend_type]:
-            worker = current_thread()
-            if any(
-                thread is not worker and thread.is_alive() and state.backend_configuration.type == backend_type
-                for state, thread in zip(self._states.values(), self._threads, strict=True)
-            ):
-                return
-            with self._condition:
-                backend = self._backends.pop(backend_type, None)
-            if backend is not None:
-                self._close_backend(backend_type, backend)
-
-    @staticmethod
-    def _update_destination(
-        backend: DisplayBackend,
-        configuration: DisplayBackendConfiguration,
-        destination: DisplayOutputConfiguration,
-        image: Image.Image,
-    ) -> None:
-        if configuration.type == "image-server":
-            update_output = getattr(backend, "update_output", None)
-            if update_output is None:
-                raise DisplayBackendError("image-server backend does not support named output updates")
-            update_output(destination.identifier, image)
-        else:
-            backend.update(image)
-
-    def _run_destination(self, state: _DestinationState) -> None:
-        name = state.key
-        retry_delay = 1.0
-        while True:
-            with self._condition:
-                while not self._stopping and (
-                    self._desired is None or self._desired.identity == state.successful_identity
-                ):
-                    self._condition.wait()
-                if self._stopping:
-                    self._close_backend_after_worker_exit(state.backend_configuration.type)
-                    return
-                assert self._desired is not None
-                presentation = self._desired
-                presentation.references += 1
-
-            try:
-                backend = self._get_backend(state.backend_configuration)
-                image = presentation.images[state.destination.output_specification]
-                with self._backend_locks[state.backend_configuration.type]:
-                    self._update_destination(backend, state.backend_configuration, state.destination, image)
-            except Exception as error:
-                recoverable = isinstance(error, DisplayBackendError) and error.recoverable
-                with self._condition:
-                    state.error = str(error)
-                    state.terminal = not recoverable or not self._retry
-                    self._signal_all_unavailable()
-                    self._condition.notify_all()
-                if isinstance(error, DisplayBackendError):
-                    _LOGGER.warning("Display destination %s update failed: %s", name, error)
-                else:
-                    _LOGGER.exception("Unexpected display destination %s update failure", name)
-                if state.terminal:
-                    with self._condition:
-                        self._release(presentation)
-                    return
-                with self._condition:
-                    self._release(presentation)
-                if not self._wait_before_retry(retry_delay):
-                    return
-                retry_delay = min(_MAX_RETRY_DELAY, retry_delay * 2)
-                continue
-
-            with self._condition:
-                state.successful_identity = presentation.identity
-                state.successful_at = self._monotonic_clock()
-                state.error = None
-                self._condition.notify_all()
-                self._release(presentation)
-            _LOGGER.info("Display destination %s published presentation %s", name, presentation.identity)
-            retry_delay = 1.0
 
     def _signal_all_unavailable(self) -> None:
         if self._all_unavailable_event is not None and all(state.terminal for state in self._states.values()):
