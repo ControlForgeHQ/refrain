@@ -54,6 +54,118 @@ def _wait_until(predicate, timeout: float = 2.0) -> bool:
     return predicate()
 
 
+def test_backend_withdrawal_discards_pending_and_skips_future_publications() -> None:
+    entered, release = Event(), Event()
+    publications: dict[str, list[int]] = {"window": [], "image-server": []}
+    backends = {}
+
+    class Backend:
+        def __init__(self, backend_type):
+            self.backend_type = backend_type
+            self.callback = None
+
+        def set_withdrawal_callback(self, callback):
+            self.callback = callback
+
+        def publish(self, _destination, image):
+            value = image.getpixel((0, 0))[0]
+            publications[self.backend_type].append(value)
+            if self.backend_type == "window" and value == 1:
+                entered.set()
+                assert release.wait(5)
+
+        def close(self):
+            pass
+
+    def factory(config):
+        backend = Backend(config.type)
+        backends[config.type] = backend
+        return backend
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"), _configuration("image-server")), factory)
+    try:
+        coordinator.publish((1, 0), _images(_WIDE, value=1))
+        assert entered.wait(2)
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 0))
+        coordinator.publish((1, 1), _images(_WIDE, value=2))
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 1))
+        backends["window"].callback()
+        assert coordinator._states["window"].pending is None
+        assert coordinator.destination_statuses[0]["withdrawn"] is True
+        release.set()
+        assert _wait_until(lambda: coordinator._states["window"].active_identity is None)
+        coordinator.publish((1, 2), _images(_WIDE, value=3))
+        assert coordinator.wait_for_publication((1, 2), timeout=2)
+        refresh = coordinator.force_scheduled_publication((1, 2), _images(_WIDE, value=4))
+        assert refresh.wait(2).status is PublicationStatus.SUCCEEDED
+        assert set(refresh.result.destinations) == {"image-server:image-server"}
+        transient = coordinator.publish_transient("all", {"image-server:image-server": _WIDE}, _images(_WIDE, value=5))
+        assert transient.wait(2).status is PublicationStatus.SUCCEEDED
+        assert set(transient.result.destinations) == {"image-server:image-server"}
+        rejected = coordinator.publish_transient("window", {"window": _WIDE}, _images(_WIDE))
+        assert rejected.result.status is PublicationStatus.WITHDRAWN
+        assert publications == {"window": [1], "image-server": [1, 2, 3, 4, 5]}
+    finally:
+        release.set()
+        coordinator.close()
+
+
+@pytest.mark.parametrize("forced", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_backend_withdrawal_does_not_cancel_admitted_one_shot(forced: bool, fail: bool) -> None:
+    entered, release = Event(), Event()
+    backends = {}
+    publications: list[str] = []
+
+    class Backend:
+        def __init__(self, backend_type):
+            self.backend_type = backend_type
+            self.callback = None
+
+        def set_withdrawal_callback(self, callback):
+            self.callback = callback
+
+        def publish(self, _destination, image):
+            if image.getpixel((0, 0))[0] == 2:
+                publications.append(self.backend_type)
+                if self.backend_type == "window":
+                    entered.set()
+                    assert release.wait(5)
+                    if fail:
+                        raise DisplayBackendUpdateError("window closed during publication", recoverable=False)
+
+        def close(self):
+            pass
+
+    def factory(config):
+        backend = Backend(config.type)
+        backends[config.type] = backend
+        return backend
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"), _configuration("image-server")), factory)
+    try:
+        coordinator.publish((1, 0), _images(_WIDE, value=1))
+        assert coordinator.wait_for_publication((1, 0), timeout=2)
+        if forced:
+            operation = coordinator.force_scheduled_publication((1, 0), _images(_WIDE))
+        else:
+            operation = coordinator.publish_transient(
+                "all", {"window": _WIDE, "image-server:image-server": _WIDE}, _images(_WIDE)
+            )
+        assert entered.wait(2)
+        backends["window"].callback()
+        assert coordinator.destination_statuses[0]["withdrawn"] is True
+        assert set(operation.result.destinations) == {"window", "image-server:image-server"}
+        release.set()
+        assert operation.wait(2).status is (PublicationStatus.FAILED if fail else PublicationStatus.SUCCEEDED)
+        assert operation.result.destinations["window"][0] is not fail
+        assert operation.result.destinations["image-server:image-server"][0] is True
+        assert sorted(publications) == ["image-server", "window"]
+    finally:
+        release.set()
+        coordinator.close()
+
+
 def test_transient_publication_preserves_scheduled_acknowledgement_and_pixels_until_new_identity() -> None:
     transient_entered, release_transient = Event(), Event()
     publications: list[int] = []

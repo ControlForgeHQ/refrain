@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
+from refrain import DisplayBackendConfiguration, DisplayOutputConfiguration, ResolvedOutputSpecification
 from refrain.display import (
     DisplayBackend,
     DisplayBackendCloseError,
@@ -19,6 +20,7 @@ from refrain.display import (
     DisplayBackendUpdateError,
     create_display_backend,
 )
+from refrain.display.coordinator import DisplayPublicationCoordinator
 from refrain.display.window import WindowDisplayBackend
 
 
@@ -193,6 +195,131 @@ def test_window_manager_close_is_clean_and_updates_are_rejected(monkeypatch: pyt
     with pytest.raises(DisplayBackendUpdateError, match="closed desktop display") as failure:
         backend.update(Image.new("RGB", (1, 1)))
     assert not failure.value.recoverable
+
+
+@pytest.mark.parametrize("register_before_close", [True, False])
+def test_window_manager_close_notifies_once_even_if_registration_is_late(
+    monkeypatch: pytest.MonkeyPatch, register_before_close: bool
+) -> None:
+    roots, _ = install_fake_gui(monkeypatch)
+    backend = WindowDisplayBackend()
+    notifications: list[str] = []
+
+    def callback() -> None:
+        notifications.append("withdrawn")
+
+    if register_before_close:
+        backend.set_withdrawal_callback(callback)
+    roots[0].close_protocol()
+    if not register_before_close:
+        backend.set_withdrawal_callback(callback)
+    roots[0].close_protocol()
+    backend.close()
+    assert notifications == ["withdrawn"]
+
+
+def test_application_close_does_not_notify_withdrawal(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots, _ = install_fake_gui(monkeypatch)
+    backend = WindowDisplayBackend()
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    backend.close()
+    roots[0].close_protocol()
+    assert notifications == []
+
+
+def test_window_manager_destroy_failure_does_not_notify_withdrawal(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots, _ = install_fake_gui(monkeypatch, close_error=RuntimeError("destroy failed"))
+    backend = WindowDisplayBackend()
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    with pytest.raises(RuntimeError, match="destroy failed"):
+        roots[0].close_protocol()
+    assert notifications == []
+    with pytest.raises(DisplayBackendCloseError):
+        backend.close()
+
+
+def test_close_before_coordinator_registration_is_not_lost(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots, presented = install_fake_gui(monkeypatch)
+    specification = ResolvedOutputSpecification("16:9", (16, 9))
+    configuration = DisplayBackendConfiguration(
+        "window", outputs=(DisplayOutputConfiguration("default", specification),)
+    )
+
+    def factory(_configuration):
+        backend = WindowDisplayBackend()
+        roots[0].close_protocol()
+        return backend
+
+    coordinator = DisplayPublicationCoordinator((configuration,), factory)
+    try:
+        coordinator.publish((1, 0), {specification: Image.new("RGB", (16, 9))})
+        with coordinator._condition:
+            assert coordinator._condition.wait_for(lambda: coordinator._states["window"].withdrawn, timeout=2)
+        assert coordinator.destination_statuses[0]["available"] is True
+        assert presented == []
+    finally:
+        coordinator.close()
+
+
+def test_user_close_immediately_withdraws_window_and_restart_restores_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots, _ = install_fake_gui(monkeypatch)
+    specification = ResolvedOutputSpecification("16:9", (16, 9))
+    configuration = DisplayBackendConfiguration(
+        "window", outputs=(DisplayOutputConfiguration("default", specification),)
+    )
+
+    def start() -> DisplayPublicationCoordinator:
+        coordinator = DisplayPublicationCoordinator((configuration,))
+        coordinator.publish((1, 0), {specification: Image.new("RGB", (16, 9))})
+        assert coordinator.wait_for_publication((1, 0), timeout=2)
+        return coordinator
+
+    coordinator = start()
+    try:
+        roots[0].close_protocol()
+        status = coordinator.destination_statuses[0]
+        assert status["identifier"] == "window"
+        assert status["participating"] is False
+        assert status["withdrawn"] is True
+        assert status["available"] is True
+    finally:
+        coordinator.close()
+
+    fresh = start()
+    try:
+        assert len(roots) == 2
+        status = fresh.destination_statuses[0]
+        assert status["participating"] is True
+        assert status["withdrawn"] is False
+        assert status["available"] is True
+    finally:
+        fresh.close()
+
+
+def test_unexpected_gui_exit_remains_backend_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots, _ = install_fake_gui(monkeypatch)
+    specification = ResolvedOutputSpecification("16:9", (16, 9))
+    configuration = DisplayBackendConfiguration(
+        "window", outputs=(DisplayOutputConfiguration("default", specification),)
+    )
+    coordinator = DisplayPublicationCoordinator((configuration,), retry=False)
+    try:
+        coordinator.publish((1, 0), {specification: Image.new("RGB", (16, 9))})
+        assert coordinator.wait_for_publication((1, 0), timeout=2)
+        roots[0].quit()
+        thread = coordinator._backends["window"]._thread
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        coordinator.publish((1, 1), {specification: Image.new("RGB", (16, 9))})
+        assert not coordinator.wait_for_publication((1, 1), timeout=2)
+        status = coordinator.destination_statuses[0]
+        assert status["participating"] is True
+        assert status["withdrawn"] is False
+        assert status["available"] is False
+    finally:
+        coordinator.close()
 
 
 def test_gui_initialization_failure_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
