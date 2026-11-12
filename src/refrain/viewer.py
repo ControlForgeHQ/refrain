@@ -26,6 +26,14 @@ from .preparation import (
 )
 from .presentation import build_presentation_snapshot
 from .presentation_diagnostics import overlay_presentation_diagnostics
+from .runtime_control import (
+    RuntimeAuthenticationError,
+    RuntimeControlClient,
+    RuntimeControlError,
+    RuntimeProtocolError,
+    RuntimeUnavailable,
+    RuntimeUnsupportedProtocol,
+)
 from .scheduling import resolve_reveal_stages
 
 _ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
@@ -245,13 +253,89 @@ def run_viewer(
         image.close()
 
 
+def _run_destination_discovery() -> int:
+    try:
+        paths = resolve_application_paths()
+        destinations = RuntimeControlClient(Path(paths.control_metadata_file)).discover()
+    except RuntimeUnavailable as error:
+        print(f"refrain-viewer: {error}", file=sys.stderr)
+        return 1
+    except RuntimeAuthenticationError as error:
+        print(
+            f"refrain-viewer: {error}; restart the resident Refrain runtime for this user and try again.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeUnsupportedProtocol as error:
+        print(
+            f"refrain-viewer: {error}; ensure the client and resident runtime versions are compatible.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeProtocolError as error:
+        print(
+            f"refrain-viewer: runtime-control protocol error: {error}; restart the resident Refrain runtime.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ApplicationPathError, RuntimeControlError) as error:
+        print(f"refrain-viewer: runtime destination discovery failed: {error}", file=sys.stderr)
+        return 1
+
+    if not destinations:
+        print("No destinations are configured in the resident Refrain runtime.")
+        return 0
+
+    print("Destination\tAspect\tResolution\tTransient\tParticipation\tAvailability\tWithdrawn")
+    for destination in destinations:
+        specification = destination["output_specification"]
+        width, height = specification.requested_output_size
+        print(
+            f"{destination['identifier']}\t{specification.aspect_ratio}\t{width}x{height}\t"
+            f"{'yes' if destination['supports_transient'] else 'no'}\t"
+            f"{'participating' if destination['participating'] else 'not participating'}\t"
+            f"{'available' if destination['available'] else 'unavailable/failed'}\t"
+            f"{'yes' if destination['withdrawn'] else 'no'}"
+        )
+    return 0
+
+
+def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    conflicts = []
+    for option, value in (
+        ("--config", arguments.config),
+        ("--entry", arguments.entry),
+        ("--font", arguments.font),
+        ("--quotation-face", arguments.quotation_face),
+        ("--source-face", arguments.source_face),
+        ("--attribution-face", arguments.attribution_face),
+        ("--min-font-size", arguments.min_font_size),
+        ("--max-font-size", arguments.max_font_size),
+        ("--background", arguments.background),
+        ("--decoration", arguments.decoration),
+        ("--text-color", arguments.text_color),
+        ("--tint", arguments.tint),
+        ("--style", arguments.style),
+        ("--qr/--no-qr", arguments.qr_enabled is not None),
+        ("--aspect", arguments.aspect),
+        ("--resolution", arguments.resolution),
+        ("--output", arguments.output),
+        ("--window", arguments.window),
+        ("--debug-layout", arguments.debug_layout),
+    ):
+        if value is not None and value is not False:
+            conflicts.append(option)
+    if conflicts:
+        parser.error("--list-destinations is standalone and cannot be combined with " + ", ".join(conflicts))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="refrain-viewer",
         description="Render one Refrain presentation for local inspection or PNG export.",
     )
     parser.add_argument("--config", help="application configuration YAML file")
-    parser.add_argument("--entry", type=parse_entry_selector, default=_DEFAULT_SELECTOR, metavar="ENTRY_ID[:N]")
+    parser.add_argument("--entry", type=parse_entry_selector, metavar="ENTRY_ID[:N]")
     parser.add_argument("--font", type=_identifier, metavar="FONT_ID")
     parser.add_argument("--quotation-face", type=_identifier, metavar="FACE_ID")
     parser.add_argument("--source-face", type=_identifier, metavar="FACE_ID")
@@ -277,17 +361,26 @@ def _parser() -> argparse.ArgumentParser:
     qr_options.add_argument("--qr", dest="qr_enabled", action="store_true")
     qr_options.add_argument("--no-qr", dest="qr_enabled", action="store_false")
     parser.set_defaults(qr_enabled=None)
-    parser.add_argument("--aspect", choices=tuple(SUPPORTED_PRESENTATION_ASPECTS), default="16:10")
+    parser.add_argument("--aspect", choices=tuple(SUPPORTED_PRESENTATION_ASPECTS))
     parser.add_argument("--resolution", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
     parser.add_argument("--output", type=Path, metavar="PATH")
     parser.add_argument("--window", action="store_true", help="also open a simple display-only viewer window")
     parser.add_argument("--debug-layout", action="store_true", help="show presentation geometry diagnostics")
+    parser.add_argument(
+        "--list-destinations",
+        action="store_true",
+        help="list destinations exposed by the running Refrain runtime and exit",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
+    if arguments.list_destinations:
+        _validate_discovery_arguments(parser, arguments)
+        return _run_destination_discovery()
+
     overrides = PresentationOverrides(
         font=arguments.font,
         font_faces={
@@ -312,8 +405,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         run_viewer(
             config_file=arguments.config,
-            selector=arguments.entry,
-            aspect=arguments.aspect,
+            selector=arguments.entry or _DEFAULT_SELECTOR,
+            aspect=arguments.aspect or "16:10",
             resolution=resolution,
             output=arguments.output,
             window=arguments.window,

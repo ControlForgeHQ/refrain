@@ -13,6 +13,7 @@ from threading import Event
 
 from .application import ApplicationError, run_application, run_demo
 from .config import ApplicationConfigurationError, load_application_config
+from .display.coordinator import PublicationResult, PublicationStatus
 from .installation import (
     InitializationError,
     InstallationOperationError,
@@ -23,6 +24,15 @@ from .installation import (
 )
 from .ownership import InstallationOwnership, OwnershipError
 from .paths import ApplicationPathError, ApplicationPaths, resolve_application_paths
+from .runtime_control import (
+    RuntimeAuthenticationError,
+    RuntimeControlClient,
+    RuntimeControlError,
+    RuntimeProtocolError,
+    RuntimeUnavailable,
+    RuntimeUnconfirmed,
+    RuntimeUnsupportedProtocol,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -118,6 +128,74 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
     return 0
 
 
+def _report_refresh_result(result: PublicationResult) -> int:
+    if (
+        result.status is PublicationStatus.SUCCEEDED
+        and result.destinations
+        and all(success is True for success, _error in result.destinations.values())
+    ):
+        print("Refresh completed successfully.")
+        return 0
+
+    messages = {
+        PublicationStatus.BUSY: (
+            "refresh was not accepted because publication is busy; wait for the current update to finish"
+        ),
+        PublicationStatus.FAILED: "refresh publication failed",
+        PublicationStatus.STOPPING: "the resident Refrain runtime is stopping or rejected the refresh",
+        PublicationStatus.INVALID: "the resident Refrain runtime rejected the refresh as invalid",
+        PublicationStatus.UNSUPPORTED: "the resident Refrain runtime does not support refresh",
+        PublicationStatus.WITHDRAWN: "a destination required by the refresh is intentionally withdrawn",
+        PublicationStatus.DESTINATION_NOT_FOUND: "a destination required by the refresh is no longer configured",
+    }
+    message = messages.get(result.status, f"refresh ended with unexpected status {result.status.value!r}")
+    print(f"refrain: {message}.", file=sys.stderr)
+    for identifier, (success, error) in result.destinations.items():
+        if success is not True:
+            detail = error or ("publication failed" if success is False else "no terminal outcome reported")
+            print(f"  {identifier}: {detail}", file=sys.stderr)
+    return 1
+
+
+def _run_refresh(paths: ApplicationPaths) -> int:
+    def report_accepted() -> None:
+        print("Refresh accepted; publication has begun.", flush=True)
+
+    try:
+        result = RuntimeControlClient(Path(paths.control_metadata_file)).refresh(on_accepted=report_accepted)
+    except RuntimeUnconfirmed:
+        print(
+            "refrain: refresh outcome is unconfirmed; publication may have occurred. " "Do not retry automatically.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeUnavailable as error:
+        print(f"refrain: {error}", file=sys.stderr)
+        return 1
+    except RuntimeAuthenticationError as error:
+        print(
+            f"refrain: {error}; restart the resident Refrain runtime for this user and try again.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeUnsupportedProtocol as error:
+        print(
+            f"refrain: {error}; ensure the client and resident runtime versions are compatible.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeProtocolError as error:
+        print(
+            f"refrain: runtime-control protocol error: {error}; restart the resident Refrain runtime.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeControlError as error:
+        print(f"refrain: runtime-control request failed: {error}", file=sys.stderr)
+        return 1
+    return _report_refresh_result(result)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="refrain",
@@ -142,9 +220,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     modes.add_argument(
         "--purge", action="store_true", help="remove the complete standard per-user installation, then exit"
     )
+    modes.add_argument("--refresh", action="store_true", help="ask the running Refrain runtime to refresh its display")
     arguments = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
+        if arguments.refresh:
+            if arguments.config is not None:
+                parser.error("--refresh cannot be combined with --config")
+            paths = resolve_application_paths()
+            return _run_refresh(paths)
+
         if arguments.initialize:
             if arguments.config is not None:
                 parser.error("--initialize cannot be combined with --config")
