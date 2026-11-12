@@ -10,6 +10,7 @@ from typing import Any
 
 from PIL import Image
 
+from ..config import DisplayOutputConfiguration
 from . import (
     DisplayBackendCloseError,
     DisplayBackendError,
@@ -155,6 +156,11 @@ class WaveshareDisplayBackend:
                     driver_image.close()
                 except Exception:
                     pass
+
+    def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
+        """Present the image through this configured single-output destination."""
+        del destination
+        self.update(image)
 
     def _transport_is_poisoned(self) -> bool:
         config = getattr(self._driver_module, "epdconfig", None)

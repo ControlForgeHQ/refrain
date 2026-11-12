@@ -754,6 +754,12 @@ def test_actual_coordinator_healthy_backend_progresses_independently(demo, monke
             assert output_id == "default"
             self._record(image)
 
+        def publish(self, destination, image):
+            if self.name == "image-server":
+                self.update_output(destination.identifier, image)
+            else:
+                self.update(image)
+
         def _record(self, image):
             identity = coordinators[0].desired_identity
             if self.name == "image-server":
@@ -816,6 +822,10 @@ def test_actual_coordinator_all_terminal_backends_stop_selection(demo, monkeypat
             def update(self, image):
                 raise DisplayBackendUpdateError("destination permanently unavailable", recoverable=False)
 
+            def publish(self, destination, image):
+                del destination
+                self.update(image)
+
             def close(self):
                 calls.append("closed")
 
@@ -849,6 +859,10 @@ def test_actual_coordinator_recoverable_backend_error_retries_before_ack(demo, m
                 raise DisplayBackendUpdateError("temporary update failure")
             successful_update_times.append(demo.clock.elapsed)
 
+        def publish(self, destination, image):
+            del destination
+            self.update(image)
+
         def close(self):
             closed.append(True)
 
@@ -864,17 +878,12 @@ def test_actual_coordinator_recoverable_backend_error_retries_before_ack(demo, m
             coordinators.append(self)
             super().__init__(*args, **kwargs)
 
-        def _wait_before_retry(self, delay):
-            delays.append(delay)
-            demo.clock.elapsed += delay
-            return True
-
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", ControlledRetryCoordinator)
     demo.run(5, backend_factory=factory)
-    assert delays == [1]
+    assert delays == []
     assert updates == ([(1, 0), (1, 0), (1, 1), (1, 2)] if phase == "update" else [(1, 0), (1, 1), (1, 2)])
     assert demo.clock.waits == [5, 5, 5]
-    assert successful_update_times == [41, 46, 51]
+    assert successful_update_times == [40, 45, 50]
     assert len(demo.selected) == 1 and len(demo.prepared) == 1
     assert closed == [True]
     assert all(not path.exists() for path in demo.sessions)

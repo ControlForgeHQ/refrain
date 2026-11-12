@@ -108,6 +108,9 @@ class FakeDisplay:
     def update_output(self, _output_id: str, image: Image.Image) -> None:
         self.update(image)
 
+    def publish(self, destination, image: Image.Image) -> None:
+        self.update_output(destination.identifier, image)
+
     def close(self) -> None:
         self.closed += 1
         if self.fail_close:
@@ -951,6 +954,9 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
             assert isinstance(image, Image.Image)
             self.images[output_id] = image.copy()
 
+        def publish(self, destination, image: Image.Image) -> None:
+            self.update_output(destination.identifier, image)
+
         def update(self, image: Image.Image) -> None:
             raise AssertionError("image-server destinations require named output updates")
 
@@ -1660,6 +1666,10 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
             elif len(slow_updates) == 2:
                 slow_updated.set()
 
+        def publish(self, destination, image):
+            del destination
+            self.update(image)
+
         def close(self):
             slow_closed.set()
 
@@ -2121,7 +2131,7 @@ def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, 
         )
     assert stages == [(1, 0)] and display.closed == 1
     assert clock.retry_delays == []
-    assert caplog.text.count("Display destination waveshare-13in3-e:waveshare-13in3-e update failed") == 1
+    assert caplog.text.count("Display destination waveshare-13in3-e update failed") == 1
     assert workspace.load().revision == 1 and png_files(workspace.artifacts)
 
 
@@ -2301,7 +2311,7 @@ def test_continuous_shutdown_during_update_persists_successful_reveal(workspace,
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 2)] and display.closed == 1
     assert len(display.images) == 1
-    assert coordinators[0].acknowledgements == {"waveshare-13in3-e:waveshare-13in3-e": (1, 2)}
+    assert coordinators[0].acknowledgements == {"waveshare-13in3-e": (1, 2)}
     assert workspace.load().highest_reveal_stage == 2
 
 

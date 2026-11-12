@@ -6,13 +6,15 @@ from typing import Protocol, runtime_checkable
 
 from PIL import Image
 
+from ..config import DisplayOutputConfiguration
+
 
 @runtime_checkable
 class DisplayBackend(Protocol):
-    """Present complete caller-owned Pillow images."""
+    """Present complete caller-owned images through configured destinations."""
 
-    def update(self, image: Image.Image) -> None:
-        """Present one complete image without modifying or closing it."""
+    def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
+        """Present one complete image through the selected configured destination."""
         ...
 
     def close(self) -> None:
