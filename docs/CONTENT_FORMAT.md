@@ -129,7 +129,7 @@ Content-entry-specific information must not be stored in application configurati
 
 ```yaml
 general:
-  day_start: "06:00"
+  day_start: "05:00"
 
 content:
   directory: "content"
@@ -166,7 +166,7 @@ layout:
       - "lora"
       - "source-sans-3"
     font_faces:
-      attribution: italic
+      source: italic
 
   backgrounds:
     default:
@@ -182,8 +182,8 @@ layout:
   text:
     colors:
       - "black"
-    min_font_size: 28
-    max_font_size: 100
+    min_font_size: 56
+    max_font_size: 200
 ```
 
 The example illustrates an image-server output, the information view, explicit QR policy, independent literary insets, resource pools, and automatic quotation fitting.
@@ -365,7 +365,7 @@ The backend retains each named output's current image representation in memory a
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `general.day_start` | Time string | No | `"06:00"` |
+| `general.day_start` | Time string | No | `"05:00"` |
 
 The host operating system supplies the local timezone and daylight-saving rules for all configured scheduling times. A `general.timezone` field is unsupported and is reported as an unknown field.
 
@@ -587,7 +587,7 @@ layout:
       - "lora"
       - "my-lora"
     font_faces:
-      attribution: italic
+      source: italic
 ```
 
 The configured default pool defines the user's preferred fonts for automatic selection.
@@ -602,7 +602,7 @@ The effective default pool must contain at least one usable font only when image
 
 The default pool is explicitly configured. Refrain must not automatically add bundled or newly discovered fonts to the pool.
 
-The optional `layout.fonts.font_faces` mapping supplies lowest-priority face preferences and does not affect the pool or bundle-selection randomness. It accepts the same `quotation`, `source`, and `attribution` roles and face-identifier syntax as bundle manifests. Invalid mappings or values are warned about and ignored. The packaged `config.default.yaml` explicitly requests italic attribution; installations whose existing configuration omits this field do not receive an implicit italic preference.
+The optional `layout.fonts.font_faces` mapping supplies lowest-priority face preferences and does not affect the pool or bundle-selection randomness. It accepts the same `quotation`, `source`, and `attribution` roles and face-identifier syntax as bundle manifests. Invalid mappings or values are warned about and ignored. The packaged `config.default.yaml` explicitly requests italic source; installations whose existing configuration omits this field do not receive an implicit italic preference.
 
 A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 

@@ -602,15 +602,15 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     _known_fields(general, {"day_start"}, "general", report)
 
     if "day_start" not in general:
-        use_default("general.day_start", "'06:00'")
+        use_default("general.day_start", "'05:00'")
     day_start = _parse_time(
-        general.get("day_start", "06:00"),
+        general.get("day_start", "05:00"),
         "general.day_start",
         report,
-        fallback="the documented default '06:00'",
+        fallback="the documented default '05:00'",
     )
     if day_start is None:
-        day_start = time(6)
+        day_start = time(5)
 
     content = _mapping(data.get("content", {}), "content", report)
     _known_fields(content, {"directory"}, "content", report)
