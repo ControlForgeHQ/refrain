@@ -1026,6 +1026,8 @@ Use the platform's Tk support and Pillow's `ImageTk` presentation adapter. Impor
 
 The window backend must preserve caller-owned image data, replace the image in its existing window, and report initialization, presentation, and cleanup failures. On Linux, a Tk-capable Python installation and an active graphical session are required; standard Windows Python installations typically include Tk.
 
+Distinguish user-requested window closure from application-driven `close()` and unexpected GUI failure. Notify the publication coordinator promptly of user-requested closure; ordinary application shutdown must not emit a withdrawal notification. Unexpected GUI or backend failure remains failure or unavailability rather than intentional withdrawal.
+
 ### HTTP image-server backend
 
 Implement the `image-server` backend using standard HTTP facilities suitable for the supported Python runtime.

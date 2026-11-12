@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -70,6 +71,104 @@ class SimulatedBackend:
 
 def image(value: int) -> Image.Image:
     return Image.new("RGB", (4, 4), (value, 0, 0))
+
+
+@pytest.mark.parametrize("wait_method", ["wait_for_publication", "wait_for_any_publication"])
+def test_withdrawal_wakes_publication_waiters(wait_method: str) -> None:
+    entered, release, waiting, done = Event(), Event(), Event(), Event()
+    results = []
+
+    def factory(config):
+        entered.set()
+        assert release.wait(5)
+        return SimulatedBackend(config.type, {"window": []})
+
+    coordinator = DisplayPublicationCoordinator((configuration("window"),), factory)
+
+    def wait():
+        waiting.set()
+        results.append(getattr(coordinator, wait_method)((1, 0)))
+        done.set()
+
+    waiter = Thread(target=wait)
+    try:
+        coordinator.publish((1, 0), publication(1))
+        assert entered.wait(2)
+        waiter.start()
+        assert waiting.wait(2)
+        assert coordinator.withdraw_destination("window")
+        assert done.wait(2)
+        assert results == [False]
+    finally:
+        release.set()
+        waiter.join(2)
+        coordinator.close()
+
+
+def test_withdrawal_signals_when_remaining_destinations_are_terminal() -> None:
+    all_unavailable, failed = Event(), Event()
+
+    def factory(config):
+        if config.type == "image-server":
+            failed.set()
+            raise DisplayBackendInitializationError("unavailable", recoverable=False)
+        return SimulatedBackend(config.type, {"window": []})
+
+    coordinator = DisplayPublicationCoordinator(
+        (configuration("window"), configuration("image-server")), factory, all_unavailable_event=all_unavailable
+    )
+    try:
+        coordinator.publish((1, 0), publication(1))
+        assert failed.wait(2)
+        assert wait_until(lambda: not coordinator.destination_statuses[1]["available"])
+        assert not all_unavailable.is_set()
+        assert coordinator.withdraw_destination("window")
+        assert all_unavailable.is_set()
+    finally:
+        coordinator.close()
+
+
+def test_backend_withdraws_all_its_destinations_atomically() -> None:
+    all_unavailable = Event()
+    callbacks = []
+    outputs = (DisplayOutputConfiguration("one", _SPECIFICATION), DisplayOutputConfiguration("two", _SPECIFICATION))
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+
+    class Backend(SimulatedBackend):
+        def set_withdrawal_callback(self, callback):
+            callbacks.append(callback)
+
+    coordinator = DisplayPublicationCoordinator(
+        (config,), lambda config: Backend(config.type, {"image-server": []}), all_unavailable_event=all_unavailable
+    )
+    try:
+        coordinator.publish((1, 0), publication(1))
+        assert coordinator.wait_for_publication((1, 0), timeout=2)
+        with coordinator._condition:
+            coordinator._states["image-server:two"].terminal = True
+        callbacks[0]()
+        assert all(status["withdrawn"] for status in coordinator.destination_statuses)
+        assert not all_unavailable.is_set()
+    finally:
+        coordinator.close()
+
+
+def test_withdrawal_logs_each_transition_once(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="refrain.display.coordinator")
+    outputs = (DisplayOutputConfiguration("one", _SPECIFICATION), DisplayOutputConfiguration("two", _SPECIFICATION))
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    coordinator = DisplayPublicationCoordinator((config,))
+    try:
+        assert coordinator._withdraw_destinations(("image-server:one", "image-server:two"))
+        assert not coordinator.withdraw_destination("image-server:one")
+        assert not coordinator.withdraw_destination("missing")
+        assert [record.getMessage() for record in caplog.records] == [
+            "Display destination image-server:one withdrawn from publication for this runtime",
+            "Display destination image-server:two withdrawn from publication for this runtime",
+        ]
+        assert all(record.levelno == logging.INFO for record in caplog.records)
+    finally:
+        coordinator.close()
 
 
 def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() -> None:

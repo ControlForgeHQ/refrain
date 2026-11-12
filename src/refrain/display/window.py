@@ -34,6 +34,8 @@ class WindowDisplayBackend:
         self._lock = Lock()
         self._ready = Event()
         self._closed = False
+        self._user_closed = False
+        self._withdrawal_callback: Callable[[], None] | None = None
         self._startup_error: BaseException | None = None
         self._worker_error: BaseException | None = None
         self._root: Any = None
@@ -85,9 +87,24 @@ class WindowDisplayBackend:
 
     def _close_from_window_manager(self) -> None:
         with self._lock:
-            if not self._closed:
-                self._root.destroy()
-                self._closed = True
+            if self._closed:
+                return
+            self._root.destroy()
+            self._closed = True
+            self._user_closed = True
+            # Keep updates from observing closure before the coordinator sees withdrawal.
+            if self._withdrawal_callback is not None:
+                self._withdrawal_callback()
+
+    def set_withdrawal_callback(self, callback: Callable[[], None]) -> None:
+        """Notify the owner of a user close, including one before registration."""
+        with self._lock:
+            if self._withdrawal_callback is not None:
+                raise RuntimeError("desktop display withdrawal callback is already registered")
+            self._withdrawal_callback = callback
+            user_closed = self._user_closed
+        if user_closed:
+            callback()
 
     def _process_commands(self) -> None:
         while True:

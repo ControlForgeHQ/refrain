@@ -130,6 +130,7 @@ class DemoWorkspace:
                 self.configurations = configurations
                 self.desired_identity = None
                 self.all_unavailable = False
+                self.has_participating_destinations = True
                 self.acknowledged = {}
                 self.closed = 0
                 self.requested = []
@@ -495,6 +496,49 @@ def test_long_interval_uses_bounded_waits_and_shutdown_stops_progression(demo):
     assert demo.clock.waits == [60, 60, 5]
     assert [identity for identity, *_ in demo.publications] == [(1, 0)]
     demo.assert_clean()
+
+
+def test_demo_stops_when_every_destination_is_withdrawn(demo):
+    demo.entry()
+    attempts = []
+    waits = []
+
+    def withdrawn(coordinator, identity):
+        attempts.append(identity)
+        coordinator.has_participating_destinations = False
+        return False
+
+    demo.on_ack = withdrawn
+    demo.clock.wait = lambda timeout=None: waits.append(timeout)
+    demo.run()
+    assert len(attempts) == 1
+    assert waits == []
+
+
+def test_window_withdrawal_wakes_demo_during_viewing_interval(demo, monkeypatch):
+    demo.entry()
+    callbacks = []
+
+    class Backend:
+        def set_withdrawal_callback(self, callback):
+            callbacks.append(callback)
+
+        def publish(self, destination, image):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", DisplayPublicationCoordinator)
+
+    def close_window(_timeout):
+        callbacks[0]()
+        assert demo.clock.is_set()
+
+    demo.clock.on_wait = close_window
+    demo.run(interval=3600, backend_factory=lambda _config: Backend())
+    assert len(demo.clock.waits) == 1
+    assert all(not path.exists() for path in demo.sessions)
 
 
 def test_unacknowledged_stage_neither_waits_interval_nor_selects_again(demo):

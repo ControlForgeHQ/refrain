@@ -99,7 +99,11 @@ class _InformationPublicationWakeEvent:
         self._shutdown = shutdown
 
     def is_set(self) -> bool:
-        return self._shutdown.is_set() or self._coordinator.has_successful_publication(self._identity)
+        return (
+            self._shutdown.is_set()
+            or not self._coordinator.has_participating_destinations
+            or self._coordinator.has_successful_publication(self._identity)
+        )
 
     def wait(self, timeout: float | None = None) -> bool:
         self._coordinator.wait_for_any_publication(
@@ -711,6 +715,10 @@ def run_application(
                 if not information_view_done:
                     current_monotonic = monotonic_clock()
                     if information_view_requested:
+                        if information_view_started is None and not coordinator.has_participating_destinations:
+                            information_view_done = True
+                            _LOGGER.info("Information view skipped: no participating display destinations")
+                            continue
                         if information_view_started is None:
                             information_view_started = coordinator.first_successful_publication_time(
                                 _INFORMATION_VIEW_IDENTITY
@@ -905,6 +913,7 @@ def run_demo(
             configuration.display_backends,
             backend_factory,
             all_unavailable_event=shutdown,
+            all_withdrawn_event=shutdown,
             monotonic_clock=monotonic_clock,
         )
         state: PersistentState | None = None
@@ -960,9 +969,12 @@ def run_demo(
                         ) from error
                     coordinator.publish(identity, images)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
+                    if not coordinator.has_participating_destinations:
+                        break
                     continue
                 acknowledged_at = coordinator.first_successful_publication_time(identity)
-                assert acknowledged_at is not None
+                if acknowledged_at is None:
+                    continue
                 if last_failure is not None:
                     _LOGGER.info("Demo operation recovered")
                     last_failure = None

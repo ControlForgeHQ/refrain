@@ -18,7 +18,7 @@ from PIL import Image
 
 from ..config import DisplayBackendConfiguration, DisplayOutputConfiguration
 from ..geometry import ResolvedOutputSpecification
-from . import DisplayBackend, DisplayBackendError, create_display_backend
+from . import DisplayBackend, DisplayBackendError, WithdrawableDisplayBackend, create_display_backend
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
@@ -142,6 +142,7 @@ class DisplayPublicationCoordinator:
         *,
         retry: bool = True,
         all_unavailable_event: Event | None = None,
+        all_withdrawn_event: Event | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
         transient_capabilities: Mapping[str, bool] | None = None,
     ) -> None:
@@ -149,6 +150,7 @@ class DisplayPublicationCoordinator:
         self._factory = backend_factory or self._default_factory
         self._retry = retry
         self._all_unavailable_event = all_unavailable_event
+        self._all_withdrawn_event = all_withdrawn_event
         self._monotonic_clock = monotonic_clock
         self._stopping = False
         self._draining = False
@@ -210,6 +212,11 @@ class DisplayPublicationCoordinator:
         with self._condition:
             participating = [state for state in self._states.values() if not state.withdrawn]
             return bool(participating) and all(state.terminal for state in participating)
+
+    @property
+    def has_participating_destinations(self) -> bool:
+        with self._condition:
+            return any(not state.withdrawn for state in self._states.values())
 
     @property
     def acknowledgements(self) -> dict[str, tuple[int, int] | None]:
@@ -277,15 +284,26 @@ class DisplayPublicationCoordinator:
 
     def withdraw_destination(self, identifier: str) -> bool:
         """Withdraw a configured destination for the rest of this runtime."""
+        return self._withdraw_destinations((identifier,))
+
+    def _withdraw_destinations(self, identifiers: Iterable[str]) -> bool:
         with self._condition:
-            state = self._states.get(identifier)
-            if state is None or state.withdrawn:
-                return False
-            state.withdrawn = True
-            self._release(state.pending)
-            state.pending = None
-            self._condition.notify_all()
-            return True
+            changed = False
+            for identifier in identifiers:
+                state = self._states.get(identifier)
+                if state is None or state.withdrawn:
+                    continue
+                state.withdrawn = True
+                self._release(state.pending)
+                state.pending = None
+                changed = True
+                _LOGGER.info("Display destination %s withdrawn from publication for this runtime", identifier)
+            if changed:
+                self._signal_all_unavailable()
+                if self._all_withdrawn_event is not None and all(state.withdrawn for state in self._states.values()):
+                    self._all_withdrawn_event.set()
+                self._condition.notify_all()
+            return changed
 
     def publish_transient(
         self,
@@ -513,7 +531,7 @@ class DisplayPublicationCoordinator:
             if operation.forced and state.desired_identity == operation.identity:
                 state.successful_identity = operation.identity
                 state.successful_at = self._monotonic_clock()
-        else:
+        elif not state.withdrawn:
             state.error = error
         operation.operation._update(
             PublicationResult(
@@ -536,8 +554,10 @@ class DisplayPublicationCoordinator:
         """Wait until every destination succeeds or becomes terminal; return whether any succeeded."""
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
-            participating = tuple(state for state in self._states.values() if not state.withdrawn)
-            while any(state.successful_identity != identity and not state.terminal for state in participating):
+            while True:
+                participating = tuple(state for state in self._states.values() if not state.withdrawn)
+                if not any(state.successful_identity != identity and not state.terminal for state in participating):
+                    break
                 if self._draining or self._stopping:
                     break
                 remaining = None if deadline is None else deadline - time.monotonic()
@@ -583,8 +603,10 @@ class DisplayPublicationCoordinator:
         """Wait for the first successful acknowledgement or for every destination to become terminal."""
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
-            participating = tuple(state for state in self._states.values() if not state.withdrawn)
-            while not any(state.successful_identity == identity for state in participating):
+            while True:
+                participating = tuple(state for state in self._states.values() if not state.withdrawn)
+                if any(state.successful_identity == identity for state in participating):
+                    break
                 if self._draining or self._stopping:
                     break
                 if all(state.terminal for state in participating):
@@ -791,6 +813,17 @@ class DisplayPublicationCoordinator:
                 if initialize_backend:
                     try:
                         backend = self._factory(configuration)
+                        if isinstance(backend, WithdrawableDisplayBackend):
+                            try:
+
+                                def withdraw_backend() -> None:
+                                    self._withdraw_destinations(state.key for state in states)
+
+                                backend.set_withdrawal_callback(withdraw_backend)
+                            except Exception:
+                                self._close_backend(configuration.type, backend)
+                                backend = None
+                                raise
                     except Exception as error:
                         recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                         with self._condition:
@@ -866,8 +899,9 @@ class DisplayPublicationCoordinator:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
                         retry = recoverable and not self._stopping and not self._draining
-                        ready.error = str(error)
-                        ready.terminal = not recoverable
+                        if not ready.withdrawn:
+                            ready.error = str(error)
+                            ready.terminal = not recoverable
                         if one_shot is not None:
                             ready.one_shot_active = False
                             if retry:

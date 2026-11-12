@@ -1413,6 +1413,8 @@ The desktop window backend presents complete images in a graphical window suitab
 
 The window backend owns its GUI event loop and keeps the window responsive between synchronous image updates. It replaces the existing image in one window and releases that window when `close()` returns.
 
+Closing the desktop window through the window manager intentionally withdraws its destination for the remainder of the resident runtime. The window is recreated only when a new runtime starts.
+
 The backend reports initialization, presentation, and cleanup failures through common display-backend errors. It reports an unavailable graphical environment with guidance to install Tk support and use a graphical session.
 
 The Waveshare backend owns model-specific hardware operations, including:
