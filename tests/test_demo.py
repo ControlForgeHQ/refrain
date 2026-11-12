@@ -130,6 +130,7 @@ class DemoWorkspace:
                 self.configurations = configurations
                 self.desired_identity = None
                 self.all_unavailable = False
+                self.has_participating_destinations = True
                 self.acknowledged = {}
                 self.closed = 0
                 self.requested = []
@@ -495,6 +496,28 @@ def test_long_interval_uses_bounded_waits_and_shutdown_stops_progression(demo):
     assert demo.clock.waits == [60, 60, 5]
     assert [identity for identity, *_ in demo.publications] == [(1, 0)]
     demo.assert_clean()
+
+
+def test_demo_waits_for_shutdown_when_every_destination_is_withdrawn(demo):
+    demo.entry()
+    attempts = []
+    waits = []
+
+    def withdrawn(coordinator, identity):
+        attempts.append(identity)
+        coordinator.has_participating_destinations = False
+        return False
+
+    def wait_for_shutdown(timeout=None):
+        waits.append(timeout)
+        demo.clock.set()
+        return True
+
+    demo.on_ack = withdrawn
+    demo.clock.wait = wait_for_shutdown
+    demo.run()
+    assert len(attempts) == 1
+    assert waits == [None]
 
 
 def test_unacknowledged_stage_neither_waits_interval_nor_selects_again(demo):

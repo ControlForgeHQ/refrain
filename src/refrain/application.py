@@ -960,9 +960,12 @@ def run_demo(
                         ) from error
                     coordinator.publish(identity, images)
                 if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
+                    if not coordinator.has_participating_destinations:
+                        shutdown.wait()
                     continue
                 acknowledged_at = coordinator.first_successful_publication_time(identity)
-                assert acknowledged_at is not None
+                if acknowledged_at is None:
+                    continue
                 if last_failure is not None:
                     _LOGGER.info("Demo operation recovered")
                     last_failure = None

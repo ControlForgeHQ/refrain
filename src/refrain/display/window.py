@@ -92,9 +92,9 @@ class WindowDisplayBackend:
             self._root.destroy()
             self._closed = True
             self._user_closed = True
-            callback = self._withdrawal_callback
-        if callback is not None:
-            callback()
+            # Keep updates from observing closure before the coordinator sees withdrawal.
+            if self._withdrawal_callback is not None:
+                self._withdrawal_callback()
 
     def set_withdrawal_callback(self, callback: Callable[[], None]) -> None:
         """Notify the owner of a user close, including one before registration."""

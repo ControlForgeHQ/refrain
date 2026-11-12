@@ -228,6 +228,44 @@ def test_application_close_does_not_notify_withdrawal(monkeypatch: pytest.Monkey
     assert notifications == []
 
 
+def test_update_cannot_observe_user_close_before_notification(monkeypatch: pytest.MonkeyPatch) -> None:
+    roots, _ = install_fake_gui(monkeypatch)
+    backend = WindowDisplayBackend()
+    entered, release, update_done = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+
+    def callback() -> None:
+        entered.set()
+        assert release.wait(5)
+
+    def update() -> None:
+        try:
+            backend.update(Image.new("RGB", (1, 1)))
+        except DisplayBackendUpdateError as error:
+            errors.append(error)
+        finally:
+            update_done.set()
+
+    backend.set_withdrawal_callback(callback)
+    close_thread = threading.Thread(target=roots[0].close_protocol)
+    update_thread = threading.Thread(target=update)
+    try:
+        close_thread.start()
+        assert entered.wait(2)
+        update_thread.start()
+        assert not update_done.wait(0.1)
+        release.set()
+        close_thread.join(2)
+        update_thread.join(2)
+        assert update_done.is_set()
+        assert len(errors) == 1 and not errors[0].recoverable
+    finally:
+        release.set()
+        close_thread.join(2)
+        update_thread.join(2)
+        backend.close()
+
+
 def test_window_manager_destroy_failure_does_not_notify_withdrawal(monkeypatch: pytest.MonkeyPatch) -> None:
     roots, _ = install_fake_gui(monkeypatch, close_error=RuntimeError("destroy failed"))
     backend = WindowDisplayBackend()

@@ -212,6 +212,11 @@ class DisplayPublicationCoordinator:
             return bool(participating) and all(state.terminal for state in participating)
 
     @property
+    def has_participating_destinations(self) -> bool:
+        with self._condition:
+            return any(not state.withdrawn for state in self._states.values())
+
+    @property
     def acknowledgements(self) -> dict[str, tuple[int, int] | None]:
         with self._condition:
             return {key: state.successful_identity for key, state in self._states.items()}
@@ -284,6 +289,7 @@ class DisplayPublicationCoordinator:
             state.withdrawn = True
             self._release(state.pending)
             state.pending = None
+            self._signal_all_unavailable()
             self._condition.notify_all()
             return True
 
@@ -536,8 +542,10 @@ class DisplayPublicationCoordinator:
         """Wait until every destination succeeds or becomes terminal; return whether any succeeded."""
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
-            participating = tuple(state for state in self._states.values() if not state.withdrawn)
-            while any(state.successful_identity != identity and not state.terminal for state in participating):
+            while True:
+                participating = tuple(state for state in self._states.values() if not state.withdrawn)
+                if not any(state.successful_identity != identity and not state.terminal for state in participating):
+                    break
                 if self._draining or self._stopping:
                     break
                 remaining = None if deadline is None else deadline - time.monotonic()
@@ -583,8 +591,10 @@ class DisplayPublicationCoordinator:
         """Wait for the first successful acknowledgement or for every destination to become terminal."""
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
-            participating = tuple(state for state in self._states.values() if not state.withdrawn)
-            while not any(state.successful_identity == identity for state in participating):
+            while True:
+                participating = tuple(state for state in self._states.values() if not state.withdrawn)
+                if any(state.successful_identity == identity for state in participating):
+                    break
                 if self._draining or self._stopping:
                     break
                 if all(state.terminal for state in participating):
