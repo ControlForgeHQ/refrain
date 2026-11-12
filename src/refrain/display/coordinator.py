@@ -23,7 +23,7 @@ _SHUTDOWN_TIMEOUT = 60.0
 class _Presentation:
     identity: tuple[int, int]
     images: Mapping[ResolvedOutputSpecification, Image.Image]
-    references: int = 0
+    references: int = 1
 
 
 @dataclass
@@ -156,8 +156,7 @@ class DisplayPublicationCoordinator:
                 presentation.references += 1
                 state.retry_at = 0.0
                 state.retry_delay = 1.0
-            if presentation.references == 0:
-                self._release(presentation)
+            self._release(presentation)
             self._condition.notify_all()
 
     def clear_desired(self) -> None:

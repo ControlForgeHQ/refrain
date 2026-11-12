@@ -545,6 +545,49 @@ def test_failure_of_one_named_destination_does_not_fail_its_sibling() -> None:
     assert close_called.is_set()
 
 
+def test_images_are_closed_once_when_all_destinations_are_terminal(monkeypatch) -> None:
+    portrait = ResolvedOutputSpecification("4:3", (1600, 1200))
+    configurations = (
+        DisplayBackendConfiguration("window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION),)),
+        DisplayBackendConfiguration(
+            "waveshare-13in3-e",
+            outputs=(DisplayOutputConfiguration("waveshare-13in3-e", portrait),),
+        ),
+    )
+
+    class UnavailableBackend:
+        def publish(self, _destination, _image):
+            raise DisplayBackendUpdateError("destination unavailable", recoverable=False)
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator(configurations, lambda _configuration: UnavailableBackend())
+    images = {
+        _SPECIFICATION: image(51),
+        portrait: image(52),
+    }
+    image_ids = {id(value) for value in images.values()}
+    close_counts = {image_id: 0 for image_id in image_ids}
+    original_close = Image.Image.close
+
+    def close_and_count(closed_image):
+        if id(closed_image) in close_counts:
+            close_counts[id(closed_image)] += 1
+        original_close(closed_image)
+
+    monkeypatch.setattr(Image.Image, "close", close_and_count)
+    try:
+        coordinator.publish((16, 0), {_SPECIFICATION: image(53), portrait: image(54)})
+        assert wait_until(lambda: coordinator.all_unavailable)
+
+        coordinator.publish((16, 1), images)
+
+        assert close_counts == {image_id: 1 for image_id in image_ids}
+    finally:
+        coordinator.close()
+
+
 def test_desired_work_coalesces_during_backend_construction() -> None:
     initialization_entered, release_initialization = Event(), Event()
     first, second, latest = image(31), image(32), image(33)
