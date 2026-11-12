@@ -1024,6 +1024,8 @@ The desktop backend is a development and testing presentation destination, not a
 
 Use the platform's Tk support and Pillow's `ImageTk` presentation adapter. Import them only when constructing the window backend; configuration, rendering, and other hardware-independent imports must not require a graphical environment. Keep the Tk event loop in a backend-owned thread so updates remain synchronous without requiring the caller to run a GUI loop.
 
+Create, operate, and finalize Tk interpreter objects on that GUI thread. Before it exits, destroy the window and release all interpreter-owning references, including widgets and active Tk images. Queued commands and reported errors must not carry Tk owners or GUI traceback frames into caller-thread cleanup. A successful `close()` must join only after GUI-owned cleanup completes.
+
 The window backend must preserve caller-owned image data, replace the image in its existing window, and report initialization, presentation, and cleanup failures. On Linux, a Tk-capable Python installation and an active graphical session are required; standard Windows Python installations typically include Tk.
 
 Distinguish user-requested window closure from application-driven `close()` and unexpected GUI failure. Notify the publication coordinator promptly of user-requested closure; ordinary application shutdown must not emit a withdrawal notification. Unexpected GUI or backend failure remains failure or unavailability rather than intentional withdrawal.
