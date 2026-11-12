@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import time
+from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from threading import Condition, Event, Thread
 from types import MappingProxyType
 from typing import Callable, Iterable, Mapping
@@ -19,6 +23,17 @@ from . import DisplayBackend, DisplayBackendError, create_display_backend
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
 _SHUTDOWN_TIMEOUT = 60.0
+
+
+class StagedTransientImages(dict[ResolvedOutputSpecification, Path]):
+    """Request-owned validated PNG files, decoded only by active workers."""
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__()
+        self.directory = directory
+
+    def close(self) -> None:
+        shutil.rmtree(self.directory, ignore_errors=False)
 
 
 @dataclass
@@ -80,7 +95,7 @@ class PublicationOperation:
 class _OneShotPublication:
     operation: PublicationOperation
     identity: tuple[int, int] | None
-    images: Mapping[ResolvedOutputSpecification, Image.Image]
+    images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages
     destinations: tuple[str, ...]
     outcomes: dict[str, tuple[bool, str | None]]
     retry_at: dict[str, float]
@@ -136,6 +151,7 @@ class DisplayPublicationCoordinator:
         self._all_unavailable_event = all_unavailable_event
         self._monotonic_clock = monotonic_clock
         self._stopping = False
+        self._draining = False
         self._states = {
             identifier: _DestinationState(configuration, destination, identifier)
             for configuration in configurations
@@ -204,17 +220,25 @@ class DisplayPublicationCoordinator:
     def destination_statuses(self) -> tuple[dict[str, object], ...]:
         """Return configured destination capability and participation status."""
         with self._condition:
-            return tuple(
-                {
-                    "identifier": key,
-                    "output_specification": state.destination.output_specification,
-                    "supports_transient": state.transient_supported,
-                    "participating": not state.withdrawn,
-                    "withdrawn": state.withdrawn,
-                    "available": not state.terminal and state.error is None,
-                }
-                for key, state in self._states.items()
-            )
+            return tuple(self._destination_status(key, state) for key, state in self._states.items())
+
+    @staticmethod
+    def _destination_status(key: str, state: _DestinationState) -> dict[str, object]:
+        return {
+            "identifier": key,
+            "output_specification": state.destination.output_specification,
+            "supports_transient": state.transient_supported,
+            "participating": not state.withdrawn,
+            "withdrawn": state.withdrawn,
+            "available": not state.terminal and state.error is None,
+        }
+
+    def iter_destination_statuses(self) -> Iterator[dict[str, object]]:
+        """Snapshot each destination separately without retaining a second full inventory."""
+        for key, state in self._states.items():
+            with self._condition:
+                record = self._destination_status(key, state)
+            yield record
 
     def publish(
         self,
@@ -223,7 +247,7 @@ class DisplayPublicationCoordinator:
     ) -> None:
         """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
-            if self._stopping:
+            if self._stopping or self._draining:
                 self._close_images(images)
                 raise RuntimeError("display publication coordinator is stopping")
             if self._states and all(state.desired_identity == identity for state in self._states.values()):
@@ -267,7 +291,7 @@ class DisplayPublicationCoordinator:
         self,
         destinations: Iterable[str] | str,
         output_specifications: Mapping[str, ResolvedOutputSpecification],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
     ) -> PublicationOperation:
         """Atomically admit complete caller-prepared images to selected destinations.
 
@@ -292,7 +316,7 @@ class DisplayPublicationCoordinator:
             if validation is not None:
                 self._close_images(images)
                 return self._rejected_operation(validation, selected)
-            if self._stopping:
+            if self._stopping or self._draining:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.STOPPING, selected)
             if self._backend_busy(selected):
@@ -332,7 +356,7 @@ class DisplayPublicationCoordinator:
             ):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
-            if self._stopping:
+            if self._stopping or self._draining:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.STOPPING, selected)
             if self._backend_busy(selected):
@@ -367,7 +391,7 @@ class DisplayPublicationCoordinator:
         self,
         destinations: tuple[str, ...],
         output_specifications: Mapping[str, ResolvedOutputSpecification],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
     ) -> PublicationStatus | None:
         if not isinstance(output_specifications, Mapping) or not isinstance(images, Mapping):
             return PublicationStatus.INVALID
@@ -378,9 +402,10 @@ class DisplayPublicationCoordinator:
                 return PublicationStatus.INVALID
             if specification not in images:
                 return PublicationStatus.INVALID
-            image = images[specification]
-            if not isinstance(image, Image.Image) or image.size != specification.requested_output_size:
-                return PublicationStatus.INVALID
+            if not isinstance(images, StagedTransientImages):
+                image = images[specification]
+                if not isinstance(image, Image.Image) or image.size != specification.requested_output_size:
+                    return PublicationStatus.INVALID
         return None
 
     def _backend_busy(self, destinations: tuple[str, ...]) -> bool:
@@ -420,18 +445,21 @@ class DisplayPublicationCoordinator:
     def _admit_one_shot(
         self,
         destinations: tuple[str, ...],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
         *,
         identity: tuple[int, int] | None,
         forced: bool,
     ) -> PublicationOperation:
-        specifications = {self._states[key].destination.output_specification for key in destinations}
-        owned_images = {specification: images[specification] for specification in specifications}
-        used_image_ids = {id(image) for image in owned_images.values()}
-        self._close_images(
-            {specification: image for specification, image in images.items() if id(image) not in used_image_ids}
-        )
-        owned_images = MappingProxyType(owned_images)
+        if isinstance(images, StagedTransientImages):
+            owned_images = images
+        else:
+            specifications = {self._states[key].destination.output_specification for key in destinations}
+            owned_images = {specification: images[specification] for specification in specifications}
+            used_image_ids = {id(image) for image in owned_images.values()}
+            self._close_images(
+                {specification: image for specification, image in images.items() if id(image) not in used_image_ids}
+            )
+            owned_images = MappingProxyType(owned_images)
         operation = PublicationOperation(self._publication_result(PublicationStatus.ACCEPTED, destinations))
         one_shot = _OneShotPublication(
             operation=operation,
@@ -510,6 +538,8 @@ class DisplayPublicationCoordinator:
         with self._condition:
             participating = tuple(state for state in self._states.values() if not state.withdrawn)
             while any(state.successful_identity != identity and not state.terminal for state in participating):
+                if self._draining or self._stopping:
+                    break
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     break
@@ -555,6 +585,8 @@ class DisplayPublicationCoordinator:
         with self._condition:
             participating = tuple(state for state in self._states.values() if not state.withdrawn)
             while not any(state.successful_identity == identity for state in participating):
+                if self._draining or self._stopping:
+                    break
                 if all(state.terminal for state in participating):
                     break
                 if cancellation_event is not None and cancellation_event.is_set():
@@ -566,6 +598,31 @@ class DisplayPublicationCoordinator:
                     remaining = 0.25 if remaining is None else min(remaining, 0.25)
                 self._condition.wait(remaining)
             return any(state.successful_identity == identity for state in participating)
+
+    def begin_draining(self) -> None:
+        """Stop retries and new work while admitted, unattempted destinations finish."""
+        with self._condition:
+            self._draining = True
+            for state in self._states.values():
+                self._release(state.pending)
+                state.pending = None
+                operation = state.one_shot
+                if (
+                    operation is not None
+                    and state.key not in operation.outcomes
+                    and not state.one_shot_active
+                    and operation.retry_at[state.key] > 0
+                ):
+                    self._record_one_shot_result(
+                        state, operation, success=False, error=state.error or "coordinator is draining"
+                    )
+            self._condition.notify_all()
+
+    def wait_for_drain(self) -> None:
+        """Wait for admitted one-shot operations to reach terminal results."""
+        with self._condition:
+            while any(state.one_shot is not None for state in self._states.values()):
+                self._condition.wait()
 
     def close(self) -> tuple[Thread, ...]:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
@@ -616,7 +673,10 @@ class DisplayPublicationCoordinator:
         return active_threads
 
     @staticmethod
-    def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image]) -> None:
+    def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages) -> None:
+        if isinstance(images, StagedTransientImages):
+            # The request handler retains the global slot until staging is deleted.
+            return
         if not isinstance(images, Mapping):
             return
         closed: set[int] = set()
@@ -684,7 +744,11 @@ class DisplayPublicationCoordinator:
                             None,
                         )
                         selected_state = one_shot_ready or eligible
-                        if backend is None and selected_state is not None and now >= backend_retry_at:
+                        if (
+                            backend is None
+                            and selected_state is not None
+                            and (self._draining or now >= backend_retry_at)
+                        ):
                             initialize_backend = True
                             break
                         if backend is not None and selected_state is not None:
@@ -730,20 +794,24 @@ class DisplayPublicationCoordinator:
                     except Exception as error:
                         recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                         with self._condition:
-                            if recoverable:
+                            retry = recoverable and not self._stopping and not self._draining
+                            if retry:
                                 backend_retry_at = time.monotonic() + backend_retry_delay
                                 backend_retry_delay = min(_MAX_RETRY_DELAY, backend_retry_delay * 2)
                             for state in states:
-                                if state.terminal or state.withdrawn:
+                                pending_one_shot = (
+                                    state.one_shot is not None and state.key not in state.one_shot.outcomes
+                                )
+                                if (state.terminal or state.withdrawn) and not pending_one_shot:
                                     continue
                                 state.error = str(error)
                                 state.terminal = not recoverable
                                 if state.terminal:
                                     self._release(state.pending)
                                     state.pending = None
-                                if state.one_shot is not None and state.key not in state.one_shot.outcomes:
+                                if pending_one_shot:
                                     operation = state.one_shot
-                                    if recoverable:
+                                    if retry:
                                         operation.retry_at[state.key] = backend_retry_at
                                         operation.retry_delay[state.key] = min(
                                             _MAX_RETRY_DELAY,
@@ -781,20 +849,28 @@ class DisplayPublicationCoordinator:
 
                 assert ready is not None and backend is not None
                 try:
-                    if one_shot is not None:
+                    if one_shot is not None and isinstance(one_shot.images, StagedTransientImages):
+                        with closing(
+                            Image.open(one_shot.images[ready.destination.output_specification], formats=["PNG"])
+                        ) as image:
+                            image.load()
+                            backend.publish(ready.destination, image)
+                    elif one_shot is not None:
                         image = one_shot.images[ready.destination.output_specification]
+                        backend.publish(ready.destination, image)
                     else:
                         assert presentation is not None
                         image = presentation.images[ready.destination.output_specification]
-                    backend.publish(ready.destination, image)
+                        backend.publish(ready.destination, image)
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
+                        retry = recoverable and not self._stopping and not self._draining
                         ready.error = str(error)
                         ready.terminal = not recoverable
                         if one_shot is not None:
                             ready.one_shot_active = False
-                            if recoverable:
+                            if retry:
                                 one_shot.retry_at[ready.key] = time.monotonic() + one_shot.retry_delay[ready.key]
                                 one_shot.retry_delay[ready.key] = min(
                                     _MAX_RETRY_DELAY,
@@ -811,7 +887,7 @@ class DisplayPublicationCoordinator:
                             ready.active_identity = None
                             assert presentation is not None
                             if (
-                                recoverable
+                                retry
                                 and ready.pending is None
                                 and ready.desired_identity == presentation.identity
                                 and not ready.withdrawn

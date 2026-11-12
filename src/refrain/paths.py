@@ -33,6 +33,11 @@ class ApplicationPaths:
         return self.operational_directory.parent / ".refrain-ownership.lock"
 
     @property
+    def control_metadata_file(self) -> PurePath:
+        """Control metadata outside the standard Refrain installation trees."""
+        return self.operational_directory.parent / ".refrain-control" / "endpoint.json"
+
+    @property
     def assets_directory(self) -> PurePath:
         """Standard user-owned assets beside the per-user configuration."""
         return self.config_directory / "assets"

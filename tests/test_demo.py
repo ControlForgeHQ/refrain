@@ -268,7 +268,8 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(tmp_path, 
     assert calls[0][0].file == config.absolute()
     assert calls[0][1:3] == (state, artifacts)
     assert calls[0][3]["history_path"] == history
-    assert set(calls[0][3]) == {"shutdown_event", "history_path", "pending_shutdown"}
+    assert calls[0][3]["control_metadata_path"] == paths.control_metadata_file
+    assert set(calls[0][3]) == {"shutdown_event", "history_path", "pending_shutdown", "control_metadata_path"}
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])

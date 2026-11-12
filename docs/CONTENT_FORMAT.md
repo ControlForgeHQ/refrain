@@ -329,7 +329,7 @@ Each `outputs` item has the following fields:
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `id` | Stable, nonempty string unique within this image-server backend | Yes | — |
+| `id` | Stable, nonempty string unique within this image-server backend; its canonical runtime destination identifier must not exceed 256 characters | Yes | — |
 | `aspect_ratio` | Supported aspect ratio string | No | `"16:10"` |
 | `resolution` | Two positive integer pixel dimensions, `[width, height]` | No | `[3840, 2400]` |
 

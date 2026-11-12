@@ -11,7 +11,7 @@ from importlib.resources import files
 from io import BytesIO
 from pathlib import Path
 from random import Random
-from threading import Event
+from threading import Event, Lock
 from time import monotonic, sleep
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
@@ -43,7 +43,12 @@ from refrain.display import (
     DisplayBackendUpdateError,
     create_display_backend,
 )
-from refrain.display.coordinator import DisplayPublicationCoordinator
+from refrain.display.coordinator import (
+    DisplayPublicationCoordinator,
+    PublicationOperation,
+    PublicationResult,
+    PublicationStatus,
+)
 from refrain.information_view import InformationViewPreparationError
 
 _ZONE = ZoneInfo("America/Toronto")
@@ -162,6 +167,176 @@ def workspace(tmp_path: Path) -> Workspace:
 
 def ordinary(workspace: Workspace, text: str = "An ordinary quotation.", extra: str = "") -> None:
     workspace.entry("ordinary", f'source: "A Book"\nattribution: "An Author"\n{extra}quotations:\n  - "{text}"\n')
+
+
+def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 13))
+    state_before = workspace.state.read_bytes()
+    history_before = workspace.history.read_bytes()
+    configuration = application.load_application_config(workspace.config)
+
+    class Coordinator:
+        desired_identity = (1, 1)
+
+        def force_scheduled_publication(self, identity, images):
+            assert identity == self.desired_identity
+            assert set(images) == set(configuration.required_output_specifications)
+            for specification, image in images.items():
+                assert image.size == specification.requested_output_size
+                image.close()
+            return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
+
+    result = application._refresh_scheduled(
+        Coordinator(),
+        PersistentStateStore(workspace.state),
+        PreparedImageArtifactStore(workspace.artifacts),
+        configuration,
+        Random(1),
+        lambda: at(10, 13),
+        Event(),
+        Lock(),
+        Coordinator().force_scheduled_publication,
+    )
+    assert result.result.status is PublicationStatus.SUCCEEDED
+    assert workspace.state.read_bytes() == state_before
+    assert workspace.history.read_bytes() == history_before
+
+
+def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 13))
+    configuration = application.load_application_config(workspace.config)
+    store = PersistentStateStore(workspace.state)
+    artifact_store = PreparedImageArtifactStore(workspace.artifacts)
+    old = application._recover_images(store.load(), artifact_store, configuration, Random(1))
+    specification = configuration.required_output_specifications[0]
+    old.variant_for(specification).stage_paths[-1].unlink()
+    remembered = []
+
+    class Coordinator:
+        desired_identity = (1, 1)
+
+    def admit(_identity, images):
+        for image in images.values():
+            image.close()
+        return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
+
+    result = application._refresh_scheduled(
+        Coordinator(),
+        store,
+        artifact_store,
+        configuration,
+        Random(1),
+        lambda: at(10, 13),
+        Event(),
+        Lock(),
+        admit,
+        lambda revision, artifacts: remembered.append((revision, artifacts)),
+    )
+    assert result.result.status is PublicationStatus.SUCCEEDED
+    revision, regenerated = remembered[0]
+    assert revision == 1
+    assert regenerated.variant_for(specification).stage_paths != old.variant_for(specification).stage_paths
+    assert all(path.exists() for path in regenerated.variant_for(specification).stage_paths)
+
+
+def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 11))
+    configuration = application.load_application_config(workspace.config)
+    times = iter((at(10, 11), at(10, 13)))
+
+    class Coordinator:
+        desired_identity = (1, 0)
+
+        def force_scheduled_publication(self, identity, images):
+            pytest.fail("stale refresh must not be admitted")
+
+    result = application._refresh_scheduled(
+        Coordinator(),
+        PersistentStateStore(workspace.state),
+        PreparedImageArtifactStore(workspace.artifacts),
+        configuration,
+        Random(1),
+        lambda: next(times),
+        Event(),
+        Lock(),
+        Coordinator().force_scheduled_publication,
+    )
+    assert result.result.status is PublicationStatus.INVALID
+
+
+@pytest.mark.parametrize(("hour", "expected"), [(11, PublicationStatus.SUCCEEDED), (13, PublicationStatus.BUSY)])
+def test_transient_admission_gives_due_stage_priority(workspace: Workspace, hour: int, expected) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 11))
+    configuration = application.load_application_config(workspace.config)
+    specification = configuration.required_output_specifications[0]
+    image = Image.new("RGB", specification.requested_output_size)
+    calls = []
+
+    class Coordinator:
+        desired_identity = (1, 0)
+
+    def admit(destinations, specifications, images):
+        calls.append(destinations)
+        for value in images.values():
+            value.close()
+        return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
+
+    result = application._admit_transient(
+        Coordinator(),
+        PersistentStateStore(workspace.state),
+        configuration,
+        lambda: at(10, hour),
+        Event(),
+        Lock(),
+        "all",
+        {"display": specification},
+        {specification: image},
+        admit,
+    )
+    assert result.result.status is expected
+    assert calls == (["all"] if expected is PublicationStatus.SUCCEEDED else [])
+    with pytest.raises(ValueError, match="closed"):
+        image.getpixel((0, 0))
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_runtime_control_lifecycle_is_required(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    events = []
+
+    class Listener:
+        def __init__(self, coordinator, metadata_path, refresh, *, shutdown_event, transient_admission):
+            events.append(("created", metadata_path))
+
+        def start(self):
+            events.append("started")
+            if fail:
+                raise OSError("endpoint unavailable")
+
+        def close(self):
+            events.append("closed")
+            return ()
+
+    monkeypatch.setattr(application, "RuntimeControlServer", Listener)
+    shutdown = Event()
+    shutdown.set()
+    metadata_path = workspace.root / "control" / "endpoint.json"
+    kwargs = dict(
+        history_path=workspace.history,
+        shutdown_event=shutdown,
+        control_metadata_path=metadata_path,
+    )
+    if fail:
+        with pytest.raises(ApplicationError, match="cannot start runtime-control listener"):
+            run_application(workspace.config, workspace.state, workspace.artifacts, **kwargs)
+    else:
+        run_application(workspace.config, workspace.state, workspace.artifacts, **kwargs)
+    assert events == [("created", metadata_path), "started", "closed"]
 
 
 @pytest.mark.parametrize(

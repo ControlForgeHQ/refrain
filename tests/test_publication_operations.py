@@ -632,6 +632,31 @@ def test_shutdown_retains_active_one_shot_image_until_backend_returns(monkeypatc
     assert operation.wait(1).status is PublicationStatus.SUCCEEDED
 
 
+def test_shutdown_completes_active_one_shot_after_recoverable_failure(monkeypatch) -> None:
+    monkeypatch.setattr("refrain.display.coordinator._SHUTDOWN_TIMEOUT", 0.02)
+    entered, release = Event(), Event()
+
+    class Backend:
+        def publish(self, _destination, _image):
+            entered.set()
+            assert release.wait(2)
+            raise DisplayBackendUpdateError("temporarily unavailable")
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"),), lambda _config: Backend())
+    operation = coordinator.publish_transient("window", {"window": _WIDE}, _images(_WIDE))
+    try:
+        assert entered.wait(1)
+        assert coordinator.close()
+        release.set()
+        assert operation.wait(1).status is PublicationStatus.FAILED
+    finally:
+        release.set()
+        coordinator.close()
+
+
 def test_scheduled_pending_work_rejects_transient_admission() -> None:
     initialization_attempted = Event()
 

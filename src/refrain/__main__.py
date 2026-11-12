@@ -110,6 +110,7 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
                 shutdown_event=shutdown,
                 history_path=history_path,
                 pending_shutdown=ownership.defer_release_until,
+                control_metadata_path=Path(paths.control_metadata_file),
             )
     finally:
         for termination_signal, handler in previous_handlers.items():
