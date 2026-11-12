@@ -20,7 +20,7 @@ from . import (
 
 @dataclass
 class _Command:
-    action: Callable[[], None]
+    action: Callable[[], None] | None
     shutdown: bool = False
     completed: Event = field(default_factory=Event)
     error: BaseException | None = None
@@ -42,6 +42,7 @@ class WindowDisplayBackend:
         self._label: Any = None
         self._image_tk: Any = None
         self._photo_image: Any = None
+        self._root_destroyed = False
         self._thread = Thread(target=self._run, name="refrain-window-display", daemon=True)
         try:
             self._thread.start()
@@ -57,39 +58,62 @@ class WindowDisplayBackend:
 
     def _run(self) -> None:
         try:
-            import tkinter as tk
+            try:
+                import tkinter as tk
 
-            from PIL import ImageTk
+                from PIL import ImageTk
 
-            root = tk.Tk()
-            root.title("Refrain")
-            label = tk.Label(root)
-            label.pack()
-            root.protocol("WM_DELETE_WINDOW", self._close_from_window_manager)
-            self._root = root
-            self._label = label
-            self._image_tk = ImageTk
-            root.after(10, self._process_commands)
-        except BaseException as error:
-            self._startup_error = error
+                self._root = tk.Tk()
+                self._root.report_callback_exception = self._report_callback_exception
+                self._root.title("Refrain")
+                self._label = tk.Label(self._root)
+                self._label.pack()
+                self._root.protocol("WM_DELETE_WINDOW", self._close_from_window_manager)
+                self._image_tk = ImageTk
+                self._root.after(10, self._process_commands)
+            except BaseException as error:
+                # GUI tracebacks can retain interpreter owners across threads.
+                self._startup_error = RuntimeError(str(error))
+                return
+
             self._ready.set()
-            return
-
-        self._ready.set()
-        try:
-            self._root.mainloop()
-        except BaseException as error:
-            self._worker_error = error
+            try:
+                self._root.mainloop()
+            except BaseException as error:
+                self._worker_error = RuntimeError(str(error))
         finally:
             with self._lock:
                 self._closed = True
+            try:
+                if self._root is not None and not self._root_destroyed:
+                    self._destroy_root()
+            except BaseException as error:
+                self._worker_error = self._worker_error or RuntimeError(str(error))
+            finally:
+                self._photo_image = None
+                self._label = None
+                self._root = None
+                self._image_tk = None
             self._fail_pending(self._worker_error or RuntimeError("the desktop window was closed"))
+            self._ready.set()
+
+    def _destroy_root(self) -> None:
+        self._root.destroy()
+        self._root_destroyed = True
+
+    def _report_callback_exception(self, _type: Any, error: BaseException, _traceback: Any) -> None:
+        # Tk's default handler saves GUI traceback owners in sys.last_*.
+        self._worker_error = RuntimeError(str(error))
+        try:
+            self._root.quit()
+        except BaseException as quit_error:
+            self._worker_error = RuntimeError(f"{error}; could not stop the GUI loop: {quit_error}")
 
     def _close_from_window_manager(self) -> None:
         with self._lock:
             if self._closed:
                 return
-            self._root.destroy()
+            self._destroy_root()
             self._closed = True
             self._user_closed = True
             # Keep updates from observing closure before the coordinator sees withdrawal.
@@ -113,13 +137,16 @@ class WindowDisplayBackend:
             except Empty:
                 break
             try:
-                command.action()
+                if command.action is not None:
+                    command.action()
             except BaseException as error:
-                command.error = error
+                command.error = RuntimeError(str(error))
             finally:
+                command.action = None
                 command.completed.set()
-            if command.shutdown:
+            if command.shutdown or self._root_destroyed:
                 if command.error is not None:
+                    self._worker_error = command.error
                     try:
                         self._root.quit()
                     except BaseException:
@@ -134,6 +161,7 @@ class WindowDisplayBackend:
             except Empty:
                 return
             command.error = error
+            command.action = None
             command.completed.set()
 
     def update(self, image: Image.Image) -> None:
@@ -176,7 +204,7 @@ class WindowDisplayBackend:
                 command = None
             elif self._thread.is_alive():
                 self._closed = True
-                command = _Command(self._root.destroy, shutdown=True)
+                command = _Command(self._destroy_root, shutdown=True)
                 self._commands.put(command)
             else:
                 self._closed = True
@@ -185,6 +213,6 @@ class WindowDisplayBackend:
         if command is not None:
             command.completed.wait()
         self._thread.join()
-        error = command.error if command is not None else self._worker_error
+        error = (command.error if command is not None else None) or self._worker_error
         if error is not None:
             raise DisplayBackendCloseError(f"could not close the desktop display window: {error}") from error

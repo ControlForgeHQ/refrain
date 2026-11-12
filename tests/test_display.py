@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import weakref
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -21,7 +22,7 @@ from refrain.display import (
     create_display_backend,
 )
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
-from refrain.display.window import WindowDisplayBackend
+from refrain.display.window import WindowDisplayBackend, _Command
 
 
 class FakeRoot:
@@ -121,6 +122,227 @@ def install_fake_gui(
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
     monkeypatch.setitem(sys.modules, "PIL.ImageTk", image_tk)
     return roots, presented_images
+
+
+@pytest.fixture
+def lifetime_gui(monkeypatch: pytest.MonkeyPatch):
+    """Observe finalization without keeping the fake interpreter's owners alive."""
+    owners: dict[str, list[Any]] = {"root": [], "label": [], "photo": [], "image": []}
+    events: list[tuple[str, int, bool]] = []
+    destroy_threads: list[int] = []
+
+    def track(name: str, owner: Any) -> None:
+        owners[name].append(weakref.ref(owner))
+        weakref.finalize(
+            owner,
+            lambda: events.append((name, threading.get_ident(), threading.current_thread().is_alive())),
+        )
+
+    class Root(FakeRoot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.children: dict[str, Any] = {}
+            track("root", self)
+
+        def after(self, milliseconds: int, callback: Any) -> None:
+            assert not self.destroyed, "callback registered after Tk destruction"
+            super().after(milliseconds, callback)
+
+        def mainloop(self) -> None:
+            try:
+                super().mainloop()
+            except Exception as error:
+                self.report_callback_exception(type(error), error, error.__traceback__)
+
+        def destroy(self) -> None:
+            destroy_threads.append(threading.get_ident())
+            self.children.clear()
+            self._callbacks.clear()
+            self.close_protocol = None
+            super().destroy()
+
+    class Label(FakeLabel):
+        def __init__(self, root: Root) -> None:
+            super().__init__(root)
+            self.master = root
+            root.children["label"] = self
+            track("label", self)
+
+    class PhotoImage:
+        def __init__(self, *, image: Image.Image) -> None:
+            self.master = owners["root"][-1]()
+            owners["image"].append(weakref.ref(image))
+            track("photo", self)
+
+    tkinter = ModuleType("tkinter")
+    tkinter.Tk = Root  # type: ignore[attr-defined]
+    tkinter.Label = Label  # type: ignore[attr-defined]
+    image_tk = ModuleType("PIL.ImageTk")
+    image_tk.PhotoImage = PhotoImage  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
+    monkeypatch.setitem(sys.modules, "PIL.ImageTk", image_tk)
+    return owners, events, destroy_threads
+
+
+@pytest.mark.parametrize("user_close", [False, True])
+def test_gui_owners_are_finalized_on_the_gui_thread(lifetime_gui, user_close: bool) -> None:
+    owners, events, destroy_threads = lifetime_gui
+    backend = WindowDisplayBackend()
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    backend.update(Image.new("RGB", (2, 2)))
+    assert owners["image"][0]() is None
+    gui_thread = backend._thread.ident
+
+    if user_close:
+        backend._commands.put(_Command(backend._close_from_window_manager))
+        backend._thread.join(2)
+        assert not backend._thread.is_alive()
+    backend.close()
+
+    assert not backend._thread.is_alive()
+    assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
+    assert sorted(name for name, _, _ in events) == ["label", "photo", "root"]
+    assert all(thread == gui_thread and alive for _, thread, alive in events)
+    assert destroy_threads == [gui_thread]
+    assert notifications == (["withdrawn"] if user_close else [])
+    assert backend._root is backend._label is backend._photo_image is backend._image_tk is None
+    backend.close()
+    assert destroy_threads == [gui_thread]
+    with pytest.raises(DisplayBackendUpdateError, match="closed desktop display"):
+        backend.update(Image.new("RGB", (2, 2)))
+    assert len(owners["root"]) == 1
+
+
+@pytest.mark.parametrize("failure_source", ["callback", "mainloop"])
+def test_mainloop_failure_releases_gui_owners_without_withdrawal(
+    lifetime_gui, monkeypatch: pytest.MonkeyPatch, failure_source: str
+) -> None:
+    owners, events, destroy_threads = lifetime_gui
+
+    def fail() -> None:
+        root = owners["root"][0]()
+        photo = owners["photo"][0]()
+        assert root is not None and photo is not None
+        try:
+            raise ValueError("Tk failure")
+        except ValueError as error:
+            raise RuntimeError("mainloop failed") from error
+
+    if failure_source == "mainloop":
+        root_type = sys.modules["tkinter"].Tk
+        mainloop = root_type.mainloop
+
+        def fail_mainloop(root: Any) -> None:
+            mainloop(root)
+            fail()
+
+        monkeypatch.setattr(root_type, "mainloop", fail_mainloop)
+
+    backend = WindowDisplayBackend()
+    backend.update(Image.new("RGB", (2, 2)))
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    gui_thread = backend._thread.ident
+    if failure_source == "callback":
+        backend._root.after(0, fail)
+    else:
+        backend._commands.put(_Command(lambda: backend._root.quit()))
+    backend._thread.join(2)
+    assert not backend._thread.is_alive()
+    with pytest.raises(DisplayBackendCloseError, match="mainloop failed"):
+        backend.close()
+    assert notifications == []
+    assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
+    assert all(thread == gui_thread and alive for _, thread, alive in events)
+    assert destroy_threads == [gui_thread]
+
+
+def test_window_manager_callback_failure_is_not_withdrawal(lifetime_gui, monkeypatch: pytest.MonkeyPatch) -> None:
+    owners, events, destroy_threads = lifetime_gui
+    root_type = sys.modules["tkinter"].Tk
+    destroy = root_type.destroy
+    attempts = 0
+
+    def fail_once(root: Any) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("window-manager destroy failed")
+        destroy(root)
+
+    monkeypatch.setattr(root_type, "destroy", fail_once)
+    backend = WindowDisplayBackend()
+    backend.update(Image.new("RGB", (2, 2)))
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    backend._root.after(0, backend._close_from_window_manager)
+    backend._thread.join(2)
+    assert not backend._thread.is_alive()
+    with pytest.raises(DisplayBackendCloseError, match="window-manager destroy failed"):
+        backend.close()
+    assert notifications == []
+    assert attempts == 2
+    assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
+    assert all(thread == backend._thread.ident and alive for _, thread, alive in events)
+    assert destroy_threads == [backend._thread.ident]
+
+
+def test_partial_gui_initialization_releases_owners(lifetime_gui, monkeypatch: pytest.MonkeyPatch) -> None:
+    owners, events, destroy_threads = lifetime_gui
+
+    def fail_pack(label: Any) -> None:
+        assert label.master is not None
+        raise RuntimeError("pack failed")
+
+    monkeypatch.setattr(sys.modules["tkinter"].Label, "pack", fail_pack)
+    with pytest.raises(DisplayBackendInitializationError, match="pack failed"):
+        WindowDisplayBackend()
+    assert all(reference() is None for name in ("root", "label") for reference in owners[name])
+    assert sorted(name for name, _, _ in events) == ["label", "root"]
+    assert all(thread == destroy_threads[0] and alive for _, thread, alive in events)
+    assert len(destroy_threads) == 1
+
+
+def test_presentation_error_does_not_retain_gui_owners(lifetime_gui, monkeypatch: pytest.MonkeyPatch) -> None:
+    owners, events, _ = lifetime_gui
+
+    def fail_configure(label: Any, *, image: Any) -> None:
+        assert label.master is image.master
+        raise RuntimeError("configure failed")
+
+    monkeypatch.setattr(sys.modules["tkinter"].Label, "configure", fail_configure)
+    backend = WindowDisplayBackend()
+    with pytest.raises(DisplayBackendUpdateError, match="configure failed") as failure:
+        backend.update(Image.new("RGB", (2, 2)))
+    backend.close()
+    assert failure.value.__cause__ is not None
+    assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
+    assert all(thread == backend._thread.ident and alive for _, thread, alive in events)
+
+
+def test_cleanup_error_does_not_retain_gui_owners(lifetime_gui, monkeypatch: pytest.MonkeyPatch) -> None:
+    owners, events, destroy_threads = lifetime_gui
+    root_type = sys.modules["tkinter"].Tk
+    destroy = root_type.destroy
+
+    def fail_destroy(root: Any) -> None:
+        destroy(root)
+        raise RuntimeError("destroy failed")
+
+    monkeypatch.setattr(root_type, "destroy", fail_destroy)
+    backend = WindowDisplayBackend()
+    backend.update(Image.new("RGB", (2, 2)))
+    with pytest.raises(DisplayBackendCloseError, match="destroy failed") as failure:
+        backend.close()
+    assert failure.value.__cause__ is not None
+    assert not backend._thread.is_alive()
+    assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
+    assert all(thread == backend._thread.ident and alive for _, thread, alive in events)
+    calls = len(destroy_threads)
+    with pytest.raises(DisplayBackendCloseError, match="destroy failed"):
+        backend.close()
+    assert len(destroy_threads) == calls
 
 
 def test_factory_constructs_the_explicit_window_backend(monkeypatch: pytest.MonkeyPatch) -> None:
