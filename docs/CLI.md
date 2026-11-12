@@ -22,6 +22,27 @@ refrain-viewer
 
 In ordinary inspection and export modes, the viewer does not use configured display backends or runtime persistence.
 
+### Finished-image input
+
+Use `--image PATH` to inspect a completed output image rather than generating a Refrain presentation:
+
+```text
+refrain-viewer --image candidate.png
+refrain-viewer --image candidate.png --window
+```
+
+Version 0.1 accepts only a valid, single-frame 8-bit RGB PNG with positive dimensions. The local window uses the existing viewer and may fit a private desktop copy to the screen; the supplied file and its pixels are not changed. This mode does not load application configuration, content, assets, runtime destinations, or persistence.
+
+The finished image may also be published through the existing transient push path:
+
+```text
+refrain-viewer --image candidate.png --push TARGET
+```
+
+The PNG must exactly match the requested output dimensions of every selected destination. `--push all` includes every participating destination except intentionally withdrawn destinations, including failed or unavailable destinations, and is rejected as a whole if any selected destination has different dimensions or does not support transient publication. The declared presentation aspect is not inferred from the image. The viewer never converts color modes, resizes, crops, pads, stretches, decorates, or otherwise transforms a finished image for publication.
+
+With `--image`, presentation-generation controls (`--config`, `--entry`, font and face options, font-size bounds, background, decoration, text color, tint, style, QR options, and `--debug-layout`), local geometry controls (`--aspect` and `--resolution`), and `--output` are invalid. `--output` does not copy the supplied file. `--window` may be used for local inspection, but cannot be combined with `--push`. The standalone `--list-destinations` operation cannot be combined with `--image`.
+
 ### Configuration selection
 
 ```text

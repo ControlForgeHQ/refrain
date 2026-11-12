@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import struct
+import zlib
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -323,6 +325,123 @@ def test_desktop_fit_scales_a_copy_without_changing_the_output_image() -> None:
     assert output.getpixel((0, 0)) == (10, 20, 30)
     desktop.close()
     output.close()
+
+
+def test_finished_png_local_inspection_avoids_configuration_and_closes_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "finished.png"
+    source = Image.new("RGB", (32, 24), (10, 20, 30))
+    source.save(source_path)
+    source.close()
+    loaded_images = []
+    load_finished_image = viewer._load_finished_image
+
+    def load_image(path):
+        image = load_finished_image(path)
+        loaded_images.append(image)
+        return image
+
+    def show(image):
+        assert image.size == (32, 24)
+        assert image.mode == "RGB"
+        assert image.getpixel((0, 0)) == (10, 20, 30)
+
+    monkeypatch.setattr(viewer, "_load_finished_image", load_image)
+    monkeypatch.setattr(viewer, "show_preview_window", show)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: pytest.fail("application paths resolved"))
+
+    assert viewer.main(["--image", str(source_path), "--window"]) == 0
+
+    _assert_image_closed(loaded_images[0])
+    with Image.open(source_path) as original:
+        assert original.size == (32, 24)
+        assert original.getpixel((0, 0)) == (10, 20, 30)
+
+
+@pytest.mark.parametrize(
+    ("kind", "diagnostic"),
+    [
+        ("missing", "cannot read finished PNG"),
+        ("jpeg", "must be a PNG"),
+        ("rgba", "must use RGB mode"),
+        ("palette", "must use RGB mode"),
+        ("animated", "exactly one frame"),
+        ("corrupt", "cannot read finished PNG"),
+    ],
+)
+def test_finished_png_validation_rejects_unsupported_inputs(tmp_path: Path, kind: str, diagnostic: str) -> None:
+    path = tmp_path / "source.png"
+    if kind == "missing":
+        path = tmp_path / "missing.png"
+    elif kind == "jpeg":
+        Image.new("RGB", (8, 6)).save(path, format="JPEG")
+    elif kind == "rgba":
+        Image.new("RGBA", (8, 6)).save(path, format="PNG")
+    elif kind == "palette":
+        Image.new("P", (8, 6)).save(path, format="PNG")
+    elif kind == "animated":
+        first = Image.new("RGB", (8, 6), "red")
+        second = Image.new("RGB", (8, 6), "blue")
+        first.save(path, format="PNG", save_all=True, append_images=[second])
+        first.close()
+        second.close()
+    elif kind == "corrupt":
+        valid = Image.new("RGB", (8, 6))
+        valid.save(path, format="PNG")
+        valid.close()
+        path.write_bytes(path.read_bytes()[:-20])
+
+    with pytest.raises(viewer.ViewerError, match=diagnostic):
+        viewer._load_finished_image(path)
+
+
+def test_finished_png_rejects_16_bit_rgb_that_pillow_would_reduce(tmp_path: Path) -> None:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    scanline = b"\x00" + struct.pack(">HHH", 0x1234, 0x5678, 0x9ABC)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 16, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(scanline))
+        + chunk(b"IEND", b"")
+    )
+    path = tmp_path / "16-bit-rgb.png"
+    path.write_bytes(png)
+
+    with Image.open(path) as source:
+        assert source.mode == "RGB"
+        assert source.getpixel((0, 0)) == (18, 86, 154)
+
+    with pytest.raises(viewer.ViewerError, match="8-bit RGB"):
+        viewer._load_finished_image(path)
+
+
+def test_finished_png_window_failure_is_actionable_and_closes_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source_path = tmp_path / "finished.png"
+    Image.new("RGB", (32, 24)).save(source_path)
+    loaded_images = []
+    load_image = viewer._load_finished_image
+
+    def track_image(path):
+        image = load_image(path)
+        loaded_images.append(image)
+        return image
+
+    monkeypatch.setattr(viewer, "_load_finished_image", track_image)
+
+    def unavailable(_image):
+        raise viewer.ViewerError("window display is unavailable")
+
+    monkeypatch.setattr(viewer, "show_preview_window", unavailable)
+
+    assert viewer.main(["--image", str(source_path)]) == 1
+    assert "window display is unavailable" in capsys.readouterr().err
+    _assert_image_closed(loaded_images[0])
 
 
 def test_png_write_failure_returns_actionable_cli_error(
@@ -712,6 +831,70 @@ def _assert_image_closed(image: Image.Image) -> None:
 
 
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--image", "candidate.png"],
+        ["--image", "candidate.png", "--push", "window"],
+        ["--image", "candidate.png", "--push", "all"],
+    ],
+)
+def test_finished_image_arguments_parse(arguments: list[str]) -> None:
+    parsed = viewer._parser().parse_args(arguments)
+
+    assert parsed.image == Path("candidate.png")
+    assert parsed.push == (arguments[-1] if "--push" in arguments else None)
+
+
+@pytest.mark.parametrize(
+    ("extra_arguments", "diagnostic"),
+    [
+        (["--config", "config.yaml"], "--config"),
+        (["--entry", "entry"], "--entry"),
+        (["--font", "font"], "--font"),
+        (["--quotation-face", "face"], "--quotation-face"),
+        (["--source-face", "face"], "--source-face"),
+        (["--attribution-face", "face"], "--attribution-face"),
+        (["--min-font-size", "12"], "--min-font-size"),
+        (["--max-font-size", "20"], "--max-font-size"),
+        (["--background", "paper"], "--background"),
+        (["--decoration", "border"], "--decoration"),
+        (["--text-color", "black"], "--text-color"),
+        (["--tint", "blue"], "--tint"),
+        (["--style", "centered"], "--style"),
+        (["--qr"], "--qr/--no-qr"),
+        (["--no-qr"], "--qr/--no-qr"),
+        (["--aspect", "16:9"], "--aspect"),
+        (["--resolution", "320", "200"], "--resolution"),
+        (["--output", "copy.png"], "--output"),
+        (["--debug-layout"], "--debug-layout"),
+        (["--list-destinations"], "--image"),
+    ],
+)
+def test_finished_image_rejects_presentation_and_geometry_controls(
+    extra_arguments: list[str], diagnostic: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(viewer, "run_image_viewer", lambda *_: pytest.fail("image viewer was started"))
+
+    with pytest.raises(SystemExit) as error:
+        viewer.main(["--image", "candidate.png", *extra_arguments])
+
+    assert error.value.code == 2
+    assert diagnostic in capsys.readouterr().err
+
+
+def test_finished_image_push_rejects_presentation_controls(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(viewer, "_run_push", lambda *_args, **_kwargs: pytest.fail("push was dispatched"))
+
+    with pytest.raises(SystemExit) as error:
+        viewer.main(["--image", "candidate.png", "--push", "window", "--style", "centered"])
+
+    assert error.value.code == 2
+    assert "--style" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
     ("arguments", "diagnostic"),
     [
         (["--push", "window", "--window"], "--window"),
@@ -844,6 +1027,333 @@ def test_push_rejects_invalid_discovered_destinations_before_loading_or_renderin
 
     assert viewer.main(["--push", target]) == 1
     assert diagnostic in capsys.readouterr().err
+
+
+def test_image_push_discovers_before_loading_and_publishes_exact_pixels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    image_path = tmp_path / "finished.png"
+    source = Image.new("RGB", (320, 240), (10, 20, 30))
+    source.save(image_path)
+    source.close()
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    specification = ResolvedOutputSpecification("4:3", (320, 240))
+    destination = _push_destination("screen", specification, available=False)
+    calls = []
+    loaded_images = []
+    load_finished_image = viewer._load_finished_image
+
+    def load_image(path):
+        image = load_finished_image(path)
+        loaded_images.append(image)
+        calls.append("load-image")
+        return image
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            calls.append("discover")
+            return (destination,)
+
+        def publish_transient(self, target, specifications, images, *, on_accepted):
+            calls.append("publish")
+            assert target == "screen"
+            assert specifications == {"screen": specification}
+            assert set(images) == {specification}
+            image = images[specification]
+            assert image.mode == "RGB"
+            assert image.size == (320, 240)
+            assert image.getpixel((0, 0)) == (10, 20, 30)
+            on_accepted()
+            return PublicationResult(PublicationStatus.SUCCEEDED, {"screen": (True, None)})
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", load_image)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
+    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
+
+    assert viewer.main(["--image", str(image_path), "--push", "screen"]) == 0
+    assert calls == ["discover", "load-image", "publish"]
+    output = capsys.readouterr().out
+    assert "Push accepted; publication has begun." in output
+    assert "Push completed successfully." in output
+    _assert_image_closed(loaded_images[0])
+
+
+def test_image_push_rejects_mismatched_dimensions_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    image_path = tmp_path / "finished.png"
+    Image.new("RGB", (640, 480)).save(image_path)
+    specification = ResolvedOutputSpecification("16:9", (320, 180))
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    loaded_images = []
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (_push_destination("display", specification),)
+
+        def publish_transient(self, *_args, **_kwargs):
+            pytest.fail("mismatched image was submitted")
+
+    load_image = viewer._load_finished_image
+
+    def track_image(path):
+        image = load_image(path)
+        loaded_images.append(image)
+        return image
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", track_image)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
+
+    assert viewer.main(["--image", str(image_path), "--push", "display"]) == 1
+    diagnostic = capsys.readouterr().err
+    assert "image is 640x480" in diagnostic
+    assert "destination 'display' requires 320x180" in diagnostic
+    _assert_image_closed(loaded_images[0])
+
+
+def test_image_push_all_preserves_destination_specs_and_reuses_same_raster(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    image_path = tmp_path / "finished.png"
+    Image.new("RGB", (320, 240), (10, 20, 30)).save(image_path)
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    specifications = {
+        "available": ResolvedOutputSpecification("4:3", (320, 240)),
+        "unavailable": ResolvedOutputSpecification("16:10", (320, 240)),
+    }
+    destinations = (
+        _push_destination("available", specifications["available"]),
+        _push_destination("unavailable", specifications["unavailable"], available=False),
+        _push_destination(
+            "withdrawn",
+            ResolvedOutputSpecification("16:9", (320, 180)),
+            participating=False,
+            withdrawn=True,
+        ),
+    )
+    loaded_images = []
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return destinations
+
+        def publish_transient(self, target, destination_specs, images, *, on_accepted):
+            assert target == "all"
+            assert destination_specs == specifications
+            assert set(images) == set(specifications.values())
+            assert images[specifications["available"]] is images[specifications["unavailable"]]
+            assert all(image.size == (320, 240) for image in images.values())
+            assert all(image.getpixel((0, 0)) == (10, 20, 30) for image in images.values())
+            on_accepted()
+            return PublicationResult(
+                PublicationStatus.SUCCEEDED,
+                {identifier: (True, None) for identifier in destination_specs},
+            )
+
+    load_image = viewer._load_finished_image
+
+    def track_image(path):
+        image = load_image(path)
+        loaded_images.append(image)
+        return image
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", track_image)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
+    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
+
+    assert viewer.main(["--image", str(image_path), "--push", "all"]) == 0
+    assert "Push accepted; publication has begun." in capsys.readouterr().out
+    _assert_image_closed(loaded_images[0])
+
+
+def test_image_push_all_mismatch_rejects_every_destination_before_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    image_path = tmp_path / "finished.png"
+    source = Image.new("RGB", (320, 240))
+    source.save(image_path)
+    source.close()
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    destinations = (
+        _push_destination("matching", ResolvedOutputSpecification("4:3", (320, 240))),
+        _push_destination("different", ResolvedOutputSpecification("16:9", (320, 180))),
+    )
+    loaded_images = []
+    load_finished_image = viewer._load_finished_image
+
+    def track_image(path):
+        image = load_finished_image(path)
+        loaded_images.append(image)
+        return image
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return destinations
+
+        def publish_transient(self, *_args, **_kwargs):
+            pytest.fail("partially matching image was submitted")
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", track_image)
+
+    assert viewer.main(["--image", str(image_path), "--push", "all"]) == 1
+    diagnostic = capsys.readouterr().err
+    assert "destination 'different' requires 320x180" in diagnostic
+    _assert_image_closed(loaded_images[0])
+
+
+def test_image_push_rejects_unknown_destination_before_loading_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    destination = _push_destination("screen", ResolvedOutputSpecification("4:3", (320, 240)))
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (destination,)
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", lambda *_: pytest.fail("image was loaded"))
+
+    assert viewer.main(["--image", "missing.png", "--push", "unknown"]) == 1
+    assert "destination 'unknown' is unknown" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("target", "destination", "diagnostic"),
+    [
+        (
+            "withdrawn",
+            _push_destination(
+                "withdrawn",
+                ResolvedOutputSpecification("4:3", (320, 240)),
+                participating=False,
+                withdrawn=True,
+            ),
+            "intentionally withdrawn",
+        ),
+        (
+            "unsupported",
+            _push_destination(
+                "unsupported",
+                ResolvedOutputSpecification("4:3", (320, 240)),
+                supports_transient=False,
+            ),
+            "unsupported",
+        ),
+        (
+            "all",
+            _push_destination(
+                "unsupported",
+                ResolvedOutputSpecification("4:3", (320, 240)),
+                supports_transient=False,
+            ),
+            "unsupported",
+        ),
+    ],
+)
+def test_image_push_rejects_ineligible_destination_before_loading_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+    destination: dict[str, object],
+    diagnostic: str,
+) -> None:
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (destination,)
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", lambda *_: pytest.fail("image was loaded"))
+
+    assert viewer.main(["--image", "missing.png", "--push", target]) == 1
+    assert diagnostic in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("outcome", "diagnostic"),
+    [
+        (PublicationResult(PublicationStatus.BUSY, {}), "busy"),
+        (
+            PublicationResult(PublicationStatus.FAILED, {"screen": (False, "device timed out")}),
+            "push publication failed",
+        ),
+        (RuntimeUnconfirmed("publication outcome is unconfirmed"), "publication may have occurred"),
+        (RuntimeAuthenticationError("runtime-control authentication failed"), "restart the resident Refrain runtime"),
+        (RuntimeProtocolError("invalid publication response"), "runtime-control request failed"),
+        (RuntimeUnavailable("resident runtime connection lost"), "resident runtime connection lost"),
+    ],
+)
+def test_image_push_closes_image_after_terminal_runtime_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcome: PublicationResult | Exception,
+    diagnostic: str,
+) -> None:
+    image_path = tmp_path / "finished.png"
+    Image.new("RGB", (320, 240)).save(image_path)
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    specification = ResolvedOutputSpecification("4:3", (320, 240))
+    loaded_images = []
+    load_finished_image = viewer._load_finished_image
+
+    def track_image(path):
+        image = load_finished_image(path)
+        loaded_images.append(image)
+        return image
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (_push_destination("screen", specification),)
+
+        def publish_transient(self, _target, _specifications, _images, *, on_accepted):
+            if isinstance(outcome, RuntimeUnconfirmed):
+                on_accepted()
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "_load_finished_image", track_image)
+
+    assert viewer.main(["--image", str(image_path), "--push", "screen"]) == 1
+    assert diagnostic in capsys.readouterr().err
+    _assert_image_closed(loaded_images[0])
 
 
 def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admission(
