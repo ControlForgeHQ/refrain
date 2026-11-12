@@ -142,6 +142,7 @@ class DisplayPublicationCoordinator:
         *,
         retry: bool = True,
         all_unavailable_event: Event | None = None,
+        all_withdrawn_event: Event | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
         transient_capabilities: Mapping[str, bool] | None = None,
     ) -> None:
@@ -149,6 +150,7 @@ class DisplayPublicationCoordinator:
         self._factory = backend_factory or self._default_factory
         self._retry = retry
         self._all_unavailable_event = all_unavailable_event
+        self._all_withdrawn_event = all_withdrawn_event
         self._monotonic_clock = monotonic_clock
         self._stopping = False
         self._draining = False
@@ -297,6 +299,8 @@ class DisplayPublicationCoordinator:
                 changed = True
             if changed:
                 self._signal_all_unavailable()
+                if self._all_withdrawn_event is not None and all(state.withdrawn for state in self._states.values()):
+                    self._all_withdrawn_event.set()
                 self._condition.notify_all()
             return changed
 

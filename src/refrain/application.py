@@ -913,6 +913,7 @@ def run_demo(
             configuration.display_backends,
             backend_factory,
             all_unavailable_event=shutdown,
+            all_withdrawn_event=shutdown,
             monotonic_clock=monotonic_clock,
         )
         state: PersistentState | None = None
