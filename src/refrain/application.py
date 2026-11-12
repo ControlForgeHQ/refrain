@@ -831,11 +831,10 @@ def run_application(
         finally:
             if coordinator is not None:
                 if control_workers:
+                    coordinator.begin_draining()
 
                     def finish_control_shutdown() -> None:
-                        deadline = time.monotonic() + _CONTROL_SHUTDOWN_TIMEOUT
-                        for worker in control_workers:
-                            worker.join(max(0.0, deadline - time.monotonic()))
+                        coordinator.wait_for_drain()
                         workers = coordinator.close()
                         for worker in workers:
                             worker.join()

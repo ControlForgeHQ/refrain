@@ -137,6 +137,7 @@ class DisplayPublicationCoordinator:
         self._all_unavailable_event = all_unavailable_event
         self._monotonic_clock = monotonic_clock
         self._stopping = False
+        self._draining = False
         self._states = {
             identifier: _DestinationState(configuration, destination, identifier)
             for configuration in configurations
@@ -232,7 +233,7 @@ class DisplayPublicationCoordinator:
     ) -> None:
         """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
-            if self._stopping:
+            if self._stopping or self._draining:
                 self._close_images(images)
                 raise RuntimeError("display publication coordinator is stopping")
             if self._states and all(state.desired_identity == identity for state in self._states.values()):
@@ -301,7 +302,7 @@ class DisplayPublicationCoordinator:
             if validation is not None:
                 self._close_images(images)
                 return self._rejected_operation(validation, selected)
-            if self._stopping:
+            if self._stopping or self._draining:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.STOPPING, selected)
             if self._backend_busy(selected):
@@ -341,7 +342,7 @@ class DisplayPublicationCoordinator:
             ):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
-            if self._stopping:
+            if self._stopping or self._draining:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.STOPPING, selected)
             if self._backend_busy(selected):
@@ -519,6 +520,8 @@ class DisplayPublicationCoordinator:
         with self._condition:
             participating = tuple(state for state in self._states.values() if not state.withdrawn)
             while any(state.successful_identity != identity and not state.terminal for state in participating):
+                if self._draining or self._stopping:
+                    break
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     break
@@ -564,6 +567,8 @@ class DisplayPublicationCoordinator:
         with self._condition:
             participating = tuple(state for state in self._states.values() if not state.withdrawn)
             while not any(state.successful_identity == identity for state in participating):
+                if self._draining or self._stopping:
+                    break
                 if all(state.terminal for state in participating):
                     break
                 if cancellation_event is not None and cancellation_event.is_set():
@@ -575,6 +580,31 @@ class DisplayPublicationCoordinator:
                     remaining = 0.25 if remaining is None else min(remaining, 0.25)
                 self._condition.wait(remaining)
             return any(state.successful_identity == identity for state in participating)
+
+    def begin_draining(self) -> None:
+        """Stop retries and new work while admitted, unattempted destinations finish."""
+        with self._condition:
+            self._draining = True
+            for state in self._states.values():
+                self._release(state.pending)
+                state.pending = None
+                operation = state.one_shot
+                if (
+                    operation is not None
+                    and state.key not in operation.outcomes
+                    and not state.one_shot_active
+                    and operation.retry_at[state.key] > 0
+                ):
+                    self._record_one_shot_result(
+                        state, operation, success=False, error=state.error or "coordinator is draining"
+                    )
+            self._condition.notify_all()
+
+    def wait_for_drain(self) -> None:
+        """Wait for admitted one-shot operations to reach terminal results."""
+        with self._condition:
+            while any(state.one_shot is not None for state in self._states.values()):
+                self._condition.wait()
 
     def close(self) -> tuple[Thread, ...]:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
@@ -693,7 +723,11 @@ class DisplayPublicationCoordinator:
                             None,
                         )
                         selected_state = one_shot_ready or eligible
-                        if backend is None and selected_state is not None and now >= backend_retry_at:
+                        if (
+                            backend is None
+                            and selected_state is not None
+                            and (self._draining or now >= backend_retry_at)
+                        ):
                             initialize_backend = True
                             break
                         if backend is not None and selected_state is not None:
@@ -739,20 +773,24 @@ class DisplayPublicationCoordinator:
                     except Exception as error:
                         recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                         with self._condition:
-                            if recoverable:
+                            retry = recoverable and not self._stopping and not self._draining
+                            if retry:
                                 backend_retry_at = time.monotonic() + backend_retry_delay
                                 backend_retry_delay = min(_MAX_RETRY_DELAY, backend_retry_delay * 2)
                             for state in states:
-                                if state.terminal or state.withdrawn:
+                                pending_one_shot = (
+                                    state.one_shot is not None and state.key not in state.one_shot.outcomes
+                                )
+                                if (state.terminal or state.withdrawn) and not pending_one_shot:
                                     continue
                                 state.error = str(error)
                                 state.terminal = not recoverable
                                 if state.terminal:
                                     self._release(state.pending)
                                     state.pending = None
-                                if state.one_shot is not None and state.key not in state.one_shot.outcomes:
+                                if pending_one_shot:
                                     operation = state.one_shot
-                                    if recoverable:
+                                    if retry:
                                         operation.retry_at[state.key] = backend_retry_at
                                         operation.retry_delay[state.key] = min(
                                             _MAX_RETRY_DELAY,
@@ -799,12 +837,12 @@ class DisplayPublicationCoordinator:
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
-                        recoverable = recoverable and not self._stopping
+                        retry = recoverable and not self._stopping and not self._draining
                         ready.error = str(error)
                         ready.terminal = not recoverable
                         if one_shot is not None:
                             ready.one_shot_active = False
-                            if recoverable:
+                            if retry:
                                 one_shot.retry_at[ready.key] = time.monotonic() + one_shot.retry_delay[ready.key]
                                 one_shot.retry_delay[ready.key] = min(
                                     _MAX_RETRY_DELAY,
@@ -821,7 +859,7 @@ class DisplayPublicationCoordinator:
                             ready.active_identity = None
                             assert presentation is not None
                             if (
-                                recoverable
+                                retry
                                 and ready.pending is None
                                 and ready.desired_identity == presentation.identity
                                 and not ready.withdrawn

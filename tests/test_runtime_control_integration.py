@@ -350,3 +350,35 @@ def test_real_shutdown_defers_coordinator_until_admitted_refresh_completes(resid
     finally:
         release.set()
         connection.close()
+
+
+def test_shutdown_closes_backend_before_stuck_unadmitted_handler_exits(resident, monkeypatch):
+    metadata, shutdown, published, closed, _, _, _, thread, deferred, errors, *_ = resident
+    entered, release = Event(), Event()
+    original_refresh = application._refresh_scheduled
+
+    def blocked_refresh(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return original_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(application, "_refresh_scheduled", blocked_refresh)
+    connection = _connection(metadata)
+    try:
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        assert entered.wait(5)
+        shutdown.set()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert not errors
+        assert deferred
+        assert closed.wait(5)
+        assert published == ["one", "two"]
+        release.set()
+        for worker in deferred[0][0]:
+            worker.join(5)
+            assert not worker.is_alive()
+        assert published == ["one", "two"]
+    finally:
+        release.set()
+        connection.close()

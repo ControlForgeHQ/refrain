@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from threading import Event, Lock, Thread
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -12,7 +13,8 @@ from refrain import (
     ResolvedOutputSpecification,
 )
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
-from refrain.display.coordinator import DisplayPublicationCoordinator
+from refrain.display import coordinator as coordinator_module
+from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 
 _SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _OUTPUT = DisplayOutputConfiguration("default", _SPECIFICATION)
@@ -312,6 +314,261 @@ def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, capl
 
     release.set()
     assert backend_closed.wait(1)
+
+
+def test_drain_finishes_admitted_destinations_and_rejects_new_work() -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    outputs = tuple(DisplayOutputConfiguration(name, specification) for name in ("one", "two"))
+    entered, release, closed = Event(), Event(), Event()
+    published = []
+
+    class Backend:
+        def publish(self, destination, image):
+            if destination.identifier == "one":
+                entered.set()
+                assert release.wait(5)
+            assert image.getpixel((0, 0)) == (7, 8, 9)
+            assert not closed.is_set()
+            published.append(destination.identifier)
+
+        def close(self):
+            closed.set()
+
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend())
+    image = Image.new("RGB", (8, 4), (7, 8, 9))
+    specs = {f"image-server:{name}": specification for name in ("one", "two")}
+    operation = coordinator.publish_transient("all", specs, {specification: image})
+    try:
+        assert entered.wait(5)
+        scheduled = Image.new("RGB", (8, 4))
+        coordinator.publish((1, 0), {specification: scheduled})
+        coordinator.begin_draining()
+        with pytest.raises(ValueError):
+            scheduled.getpixel((0, 0))
+        rejected = coordinator.publish_transient("all", specs, {specification: Image.new("RGB", (8, 4))})
+        assert rejected.result.status is PublicationStatus.STOPPING
+        refresh = coordinator.force_scheduled_publication((1, 0), {specification: Image.new("RGB", (8, 4))})
+        assert refresh.result.status is PublicationStatus.STOPPING
+        with pytest.raises(RuntimeError, match="stopping"):
+            coordinator.publish((1, 1), {specification: Image.new("RGB", (8, 4))})
+        assert not closed.is_set()
+        release.set()
+        assert operation.wait(5).status is PublicationStatus.SUCCEEDED
+        assert published == ["one", "two"]
+    finally:
+        release.set()
+        coordinator.close()
+    assert closed.is_set()
+
+
+def test_drain_finishes_other_destinations_after_active_recoverable_failure() -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    outputs = tuple(DisplayOutputConfiguration(name, specification) for name in ("one", "two"))
+    entered, release = Event(), Event()
+    attempts = []
+
+    class Backend:
+        def publish(self, destination, image):
+            attempts.append(destination.identifier)
+            if destination.identifier == "one":
+                entered.set()
+                assert release.wait(5)
+                raise DisplayBackendUpdateError("retry later")
+            assert image.getpixel((0, 0)) == (0, 0, 0)
+
+        def close(self):
+            pass
+
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend())
+    specs = {f"image-server:{name}": specification for name in ("one", "two")}
+    operation = coordinator.publish_transient("all", specs, {specification: Image.new("RGB", (8, 4))})
+    try:
+        assert entered.wait(5)
+        coordinator.begin_draining()
+        release.set()
+        result = operation.wait(5)
+        assert result.status is PublicationStatus.FAILED
+        assert not coordinator.all_unavailable
+        assert result.destinations == {
+            "image-server:one": (False, "retry later"),
+            "image-server:two": (True, None),
+        }
+        assert attempts == ["one", "two"]
+    finally:
+        release.set()
+        coordinator.close()
+
+
+@pytest.mark.parametrize("failure_point", ["initialization", "publication"])
+def test_drain_stops_recoverable_one_shot_retries(failure_point) -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("one", specification),))
+    attempts = []
+
+    class Backend:
+        def publish(self, destination, image):
+            attempts.append("publication")
+            raise DisplayBackendUpdateError("retry later")
+
+        def close(self):
+            pass
+
+    def factory(_):
+        if failure_point == "initialization":
+            attempts.append("initialization")
+            raise DisplayBackendInitializationError("retry later")
+        return Backend()
+
+    coordinator = DisplayPublicationCoordinator((config,), factory)
+    operation = coordinator.publish_transient(
+        "image-server:one", {"image-server:one": specification}, {specification: Image.new("RGB", (8, 4))}
+    )
+    try:
+
+        def waiting_for_retry():
+            with coordinator._condition:
+                state = coordinator._states["image-server:one"]
+                return state.one_shot is not None and state.one_shot.retry_at[state.key] > 0
+
+        assert wait_until(waiting_for_retry)
+        coordinator.begin_draining()
+        result = operation.wait(5)
+        assert result.status is PublicationStatus.FAILED
+        assert result.destinations["image-server:one"] == (False, "retry later")
+        assert attempts == [failure_point]
+    finally:
+        coordinator.close()
+
+
+def test_drain_stops_retries_when_factory_fails_after_shutdown() -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("one", specification),))
+    entered, release = Event(), Event()
+    attempts = []
+
+    def factory(_):
+        attempts.append("initialization")
+        entered.set()
+        assert release.wait(5)
+        raise DisplayBackendInitializationError("retry later")
+
+    coordinator = DisplayPublicationCoordinator((config,), factory)
+    operation = coordinator.publish_transient(
+        "image-server:one", {"image-server:one": specification}, {specification: Image.new("RGB", (8, 4))}
+    )
+    try:
+        assert entered.wait(5)
+        coordinator.begin_draining()
+        release.set()
+        result = operation.wait(5)
+        assert result.status is PublicationStatus.FAILED
+        assert not coordinator.all_unavailable
+        assert result.destinations["image-server:one"] == (False, "retry later")
+        assert attempts == ["initialization"]
+    finally:
+        release.set()
+        coordinator.close()
+
+
+def test_drain_completes_withdrawn_one_shot_after_factory_failure() -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("one", specification),))
+    entered, release = Event(), Event()
+    attempts = []
+
+    def factory(_):
+        attempts.append("initialization")
+        entered.set()
+        assert release.wait(5)
+        raise DisplayBackendInitializationError("retry later")
+
+    coordinator = DisplayPublicationCoordinator((config,), factory)
+    operation = coordinator.publish_transient(
+        "image-server:one", {"image-server:one": specification}, {specification: Image.new("RGB", (8, 4))}
+    )
+    try:
+        assert entered.wait(5)
+        assert coordinator.withdraw_destination("image-server:one")
+        coordinator.begin_draining()
+        release.set()
+        result = operation.wait(5)
+        assert result.status is PublicationStatus.FAILED
+        assert result.destinations["image-server:one"] == (False, "retry later")
+        assert attempts == ["initialization"]
+    finally:
+        release.set()
+        coordinator.close()
+
+
+def test_drain_bypasses_earlier_scheduled_factory_backoff(monkeypatch) -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("one", specification),))
+    attempts = []
+    initial_time = time.monotonic()
+    monkeypatch.setattr(coordinator_module, "time", SimpleNamespace(monotonic=lambda: initial_time))
+
+    class Backend:
+        def publish(self, destination, image):
+            assert image.getpixel((0, 0)) == (0, 0, 0)
+
+        def close(self):
+            pass
+
+    def factory(_):
+        attempts.append("initialization")
+        if len(attempts) == 1:
+            raise DisplayBackendInitializationError("retry later")
+        return Backend()
+
+    coordinator = DisplayPublicationCoordinator((config,), factory)
+    try:
+        coordinator.publish((1, 0), {specification: Image.new("RGB", (8, 4))})
+        assert wait_until(lambda: coordinator.destination_statuses[0]["available"] is False)
+        coordinator.clear_desired()
+        operation = coordinator.publish_transient(
+            "image-server:one", {"image-server:one": specification}, {specification: Image.new("RGB", (8, 4))}
+        )
+        assert operation.result.status is PublicationStatus.ACCEPTED
+        coordinator.begin_draining()
+        assert operation.wait(2).status is PublicationStatus.SUCCEEDED
+        assert attempts == ["initialization", "initialization"]
+    finally:
+        coordinator.close()
+
+
+def test_drain_wakes_scheduled_publication_waiters() -> None:
+    entered, release = Event(), Event()
+    results = []
+
+    class Backend:
+        def publish(self, destination, image):
+            entered.set()
+            assert release.wait(5)
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator((configuration("window"),), lambda _: Backend())
+    coordinator.publish((1, 0), publication(1))
+    assert entered.wait(5)
+    coordinator.publish((1, 1), publication(2))
+    waiters = [
+        Thread(target=lambda: results.append(coordinator.wait_for_publication((1, 1)))),
+        Thread(target=lambda: results.append(coordinator.wait_for_any_publication((1, 1)))),
+    ]
+    try:
+        for waiter in waiters:
+            waiter.start()
+        coordinator.begin_draining()
+        for waiter in waiters:
+            waiter.join(2)
+            assert not waiter.is_alive()
+        assert results == [False, False]
+    finally:
+        release.set()
+        coordinator.close()
 
 
 def test_shutdown_waits_for_successful_update_and_backend_cleanup(monkeypatch) -> None:
