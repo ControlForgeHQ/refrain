@@ -643,6 +643,8 @@ class RuntimeControlServer:
 
                 publication = self._refresh(admit_refresh)
             elif operation == "publish":
+                if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
+                    raise RuntimeAdmissionRejected("runtime is stopping or request expired")
                 if not self._transient_slot.acquire(blocking=False):
                     self._send_publication_response(connection, PublicationResult(PublicationStatus.BUSY, {}))
                     return
@@ -675,7 +677,17 @@ class RuntimeControlServer:
                 if self._transient_admission is None:
                     publication = admit_transient(target, specifications, images)
                 else:
-                    publication = self._transient_admission(target, specifications, images, admit_transient)
+                    try:
+                        publication = self._transient_admission(target, specifications, images, admit_transient)
+                    except Exception:
+                        if admitted is None or admitted.result.status not in (
+                            PublicationStatus.ACCEPTED,
+                            PublicationStatus.SUCCEEDED,
+                            PublicationStatus.FAILED,
+                        ):
+                            raise
+                        _LOG.exception("Transient admission callback failed after publication was admitted")
+                        publication = admitted
             else:
                 raise RuntimeProtocolError("invalid control operation")
             guard.finish()
@@ -735,10 +747,21 @@ class RuntimeControlServer:
                 if pending is not None:
                     while pending.wait(0.1).status is PublicationStatus.ACCEPTED:
                         pass
-                try:
-                    DisplayPublicationCoordinator._close_images(images)
-                except OSError:
-                    _LOG.exception("Cannot remove transient staging")
+                cleanup_reported = False
+                while True:
+                    try:
+                        images.close()
+                        break
+                    except FileNotFoundError:
+                        if not images.directory.exists():
+                            break
+                        if not cleanup_reported:
+                            _LOG.warning("Transient staging changed during cleanup; retrying", exc_info=True)
+                    except Exception:
+                        if not cleanup_reported:
+                            _LOG.warning("Cannot remove transient staging; retrying", exc_info=True)
+                    cleanup_reported = True
+                    time.sleep(0.25)
             if transient_owned:
                 self._transient_slot.release()
             connection.close()
@@ -841,9 +864,13 @@ class RuntimeControlServer:
         if preflight:
             _send(connection, {"version": _VERSION, "status": "ready"})
         for index, (spec, length) in enumerate(parsed):
+            if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
+                raise RuntimeAdmissionRejected("runtime is stopping or request expired")
             end = min(time.monotonic() + _IO_TIMEOUT, deadline)
             while not connection.poll(max(0, min(0.1, end - time.monotonic()))):
-                if guard.is_set() or time.monotonic() >= end:
+                if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
+                    raise RuntimeAdmissionRejected("runtime is stopping or request expired")
+                if time.monotonic() >= end:
                     raise RuntimeProtocolError("image transfer timed out")
             data = connection.recv_bytes(length)
             if len(data) != length:
@@ -851,6 +878,8 @@ class RuntimeControlServer:
             path = images.directory / f"{index}.png"
             path.write_bytes(data)
             del data
+            if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
+                raise RuntimeAdmissionRejected("runtime is stopping or request expired")
             with closing(Image.open(path, formats=["PNG"])) as source:
                 if (
                     source.format != "PNG"
@@ -860,6 +889,8 @@ class RuntimeControlServer:
                 ):
                     raise RuntimeProtocolError("image must be a single-frame RGB PNG matching the specification")
                 source.load()
+            if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
+                raise RuntimeAdmissionRejected("runtime is stopping or request expired")
             images[spec] = path
         if _decode(_receive(connection, guard, deadline)) != {"commit": True}:
             raise RuntimeProtocolError("incomplete publication request")
@@ -1020,6 +1051,7 @@ class RuntimeControlClient:
             return PublicationResult(PublicationStatus.UNSUPPORTED, {})
         payloads = []
         descriptors = []
+        total_bytes = 0
         if len(images) > _MAX_IMAGES:
             raise RuntimeProtocolError("too many images")
         for spec, image in images.items():
@@ -1031,10 +1063,11 @@ class RuntimeControlClient:
                 data = buffer.getvalue()
             if len(data) > _MAX_IMAGE_BYTES:
                 raise RuntimeProtocolError("image exceeds transport limit")
+            total_bytes += len(data)
+            if total_bytes > _MAX_TOTAL_BYTES:
+                raise RuntimeProtocolError("images exceed transport limit")
             payloads.append(data)
             descriptors.append({"specification": _spec_to_wire(spec), "encoding": "png", "length": len(data)})
-        if sum(map(len, payloads)) > _MAX_TOTAL_BYTES:
-            raise RuntimeProtocolError("images exceed transport limit")
         request = {
             "version": _VERSION,
             "operation": "publish",

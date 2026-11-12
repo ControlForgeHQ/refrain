@@ -675,10 +675,7 @@ class DisplayPublicationCoordinator:
     @staticmethod
     def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages) -> None:
         if isinstance(images, StagedTransientImages):
-            try:
-                images.close()
-            except FileNotFoundError:
-                pass
+            # The request handler retains the global slot until staging is deleted.
             return
         if not isinstance(images, Mapping):
             return
