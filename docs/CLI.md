@@ -8,7 +8,7 @@ This document is the authoritative public reference for command syntax, argument
 
 The primary `refrain --refresh` command requires an already-running normal Refrain instance. It asks that runtime to republish the presentation currently required by scheduling to every configured destination still participating in publication. Intentionally withdrawn destinations are skipped and are not recreated. It does not restore historical pre-preview pixels: if reveal progression advanced, refresh publishes the current reveal stage.
 
-Refresh uses ordinary scheduled publication and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
+Refresh republishes the runtime's current scheduled presentation and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
 
 Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all participating destinations completes or fails. Exit status zero means every included destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
 
