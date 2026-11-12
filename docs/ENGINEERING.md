@@ -692,7 +692,7 @@ Add hardware-independent tests using fake backends and controlled synchronizatio
 - per-destination scheduled acknowledgement and coalescing, including distinct acknowledgements for named destinations with identical output specifications;
 - scheduled desired state remaining authoritative after an admitted transient push, transient completion remaining separate from scheduled acknowledgement, no replacement of admitted transient work by later scheduling, and no repaint on routine reevaluation of an unchanged scheduled identity;
 - no push mutation of selection, revision, global or repetition history, reveal progression, scheduling state, or prepared artifacts;
-- refresh republication of the currently scheduled presentation to every configured destination, including destinations without transient-publication capability and the current reveal stage rather than pre-push pixels, plus synchronous push/refresh completion and visible CLI progress;
+- refresh republication of the currently scheduled presentation to every participating configured destination, including destinations without transient-publication capability and the current reveal stage rather than pre-push pixels, plus synchronous push/refresh completion and visible CLI progress;
 - client disconnection before and after admission, continued ownership of admitted work, safe loss of terminal-response delivery, unconfirmed outcomes, and no automatic publication replay;
 - generic viewer routing without backend-type conditionals.
 
@@ -984,7 +984,9 @@ Identify each requested presentation using an opaque identity associated with th
 
 Associate each outstanding scheduled destination publication with the identity it was asked to publish. Record scheduled acknowledgement only for that identity, so completion of an older operation cannot incorrectly satisfy a newer pending request.
 
-Transient publication uses separate admission and completion state, not the replaceable scheduled-presentation slot. Once admitted, a transient request must complete or fail for every requested destination and must not be replaced because newer scheduled work appears. It neither changes the scheduled desired identity nor clears or satisfies scheduled acknowledgement. Shared backend serialization, image ownership, resource lifetime, and safe shutdown rules apply to both scheduled and transient operations.
+Transient publication uses separate admission and completion state, not the replaceable scheduled-presentation slot. Once admitted, a transient request must complete or fail for every requested destination and must not be replaced because newer scheduled work appears. It neither changes the scheduled desired identity nor clears or satisfies scheduled acknowledgement. Shared backend serialization, image ownership, resource lifetime, and safe shutdown rules apply to scheduled, transient, and forced refresh operations.
+
+Keep intentional withdrawal distinct from backend failure or unavailability. Ordinary scheduled work, transient `all`, and forced refresh skip an intentionally withdrawn destination; an explicit transient request naming it is rejected. A failed or unavailable destination remains part of transient `all` and forced refresh results rather than being silently reclassified as withdrawn. Do not add general runtime destination enable/disable or configuration mutation.
 
 Avoid unnecessary image duplication. Backend workers must receive images whose lifetime remains valid throughout their publication operation.
 

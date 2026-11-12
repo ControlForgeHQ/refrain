@@ -6,11 +6,11 @@ This document is the authoritative public reference for command syntax, argument
 
 ### Refresh
 
-The primary `refrain --refresh` command requires an already-running normal Refrain instance. It asks that runtime to republish the presentation currently required by scheduling to every configured destination. It does not restore historical pre-preview pixels: if reveal progression advanced, refresh publishes the current reveal stage.
+The primary `refrain --refresh` command requires an already-running normal Refrain instance. It asks that runtime to republish the presentation currently required by scheduling to every configured destination still participating in publication. Intentionally withdrawn destinations are skipped and are not recreated. It does not restore historical pre-preview pixels: if reveal progression advanced, refresh publishes the current reveal stage.
 
-Refresh uses ordinary scheduled publication and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
+Refresh republishes the runtime's current scheduled presentation and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
 
-Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all configured destinations completes or fails. Exit status zero means every configured destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
+Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all participating destinations completes or fails. Exit status zero means every included destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
 
 ## Presentation viewer
 
@@ -38,7 +38,7 @@ Use the standalone control-client operation below to discover canonical destinat
 refrain-viewer --list-destinations
 ```
 
-This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its canonical destination identifier, declared presentation aspect ratio, requested output resolution, and whether externally supplied transient publication is supported. Destination identifiers are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
+This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its canonical destination identifier, declared presentation aspect ratio, requested output resolution, transient-publication capability, and status distinguishing participation, failure/unavailability, and intentional withdrawal. Destination identifiers are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
 
 `--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
 
@@ -115,9 +115,9 @@ The push form is:
 refrain-viewer [presentation selection and overrides...] --push TARGET
 ```
 
-`TARGET` is `all` or one canonical destination identifier returned by `--list-destinations`. Identifiers are supplied by the runtime and are opaque. `all` means every configured destination.
+`TARGET` is `all` or one canonical destination identifier returned by `--list-destinations`. Identifiers are supplied by the runtime and are opaque. `all` means every configured destination still participating in publication; it skips intentionally withdrawn destinations but does not silently omit failed or unavailable destinations.
 
-Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push all` is likewise rejected before rendering if any configured destination does not support it; `all` never silently means “all supported destinations.” The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
+Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected, and an explicitly selected intentionally withdrawn destination is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push all` is likewise rejected before rendering if any participating destination does not support it; it does not omit unsupported or failed destinations, and excludes only those intentionally withdrawn. The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
 
 `--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
 
