@@ -12,9 +12,17 @@ import refrain.display
 import refrain.preparation as preparation
 import refrain.viewer as viewer
 from refrain.config import ApplicationConfiguration, load_application_config
+from refrain.display.coordinator import PublicationResult, PublicationStatus
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.preparation import PresentationOverrides, prepare_daily_images
 from refrain.presentation import build_presentation_snapshot
+from refrain.runtime_control import (
+    RuntimeAuthenticationError,
+    RuntimeProtocolError,
+    RuntimeUnavailable,
+    RuntimeUnconfirmed,
+    RuntimeUnsupportedProtocol,
+)
 from refrain.scheduling import resolve_reveal_stages
 
 _CONFIG = """\
@@ -677,3 +685,442 @@ def test_runtime_and_viewer_share_presentation_construction_and_resolution(
     assert resolutions[0] == PresentationOverrides()
     assert resolutions[1] == PresentationOverrides(style="left-aligned", min_font_size=48, max_font_size=120)
     assert layout_bounds == [(2, 8), (4, 10)]
+
+
+def _push_destination(
+    identifier: str,
+    specification: ResolvedOutputSpecification,
+    *,
+    participating: bool = True,
+    withdrawn: bool = False,
+    available: bool = True,
+    supports_transient: bool = True,
+) -> dict[str, object]:
+    return {
+        "identifier": identifier,
+        "output_specification": specification,
+        "supports_transient": supports_transient,
+        "participating": participating,
+        "withdrawn": withdrawn,
+        "available": available,
+    }
+
+
+def _assert_image_closed(image: Image.Image) -> None:
+    with pytest.raises(ValueError, match="closed"):
+        image.getpixel((0, 0))
+
+
+@pytest.mark.parametrize(
+    ("arguments", "diagnostic"),
+    [
+        (["--push", "window", "--window"], "--window"),
+        (["--push", "window", "--output", "preview.png"], "--output"),
+        (["--push", "window", "--aspect", "16:9"], "--aspect"),
+        (["--push", "window", "--resolution", "320", "200"], "--resolution"),
+        (["--push", "window", "--list-destinations"], "--list-destinations"),
+    ],
+)
+def test_push_rejects_local_output_and_discovery_conflicts(
+    arguments: list[str], diagnostic: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(viewer, "_run_push", lambda *_args, **_kwargs: pytest.fail("push was dispatched"))
+
+    with pytest.raises(SystemExit) as error:
+        viewer.main(arguments)
+
+    assert error.value.code == 2
+    assert diagnostic in capsys.readouterr().err
+
+
+def test_push_arguments_keep_presentation_selection_and_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(viewer, "_run_push", lambda target, **kwargs: captured.update(target=target, **kwargs) or 0)
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                "custom.yaml",
+                "--entry",
+                "johnson-maggie:6",
+                "--font",
+                "lora",
+                "--decoration",
+                "simple-border",
+                "--no-qr",
+                "--push",
+                "image-server:wquxga",
+            ]
+        )
+        == 0
+    )
+    assert captured["target"] == "image-server:wquxga"
+    assert captured["config_file"] == "custom.yaml"
+    assert captured["selector"] == ("johnson-maggie", 6)
+    overrides = captured["overrides"]
+    assert isinstance(overrides, PresentationOverrides)
+    assert overrides.font == "lora"
+    assert overrides.decoration == "simple-border"
+    assert overrides.qr_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("target", "destinations", "diagnostic"),
+    [
+        ("missing", (_push_destination("window", ResolvedOutputSpecification("16:9", (320, 180))),), "unknown"),
+        (
+            "withdrawn",
+            (
+                _push_destination(
+                    "withdrawn",
+                    ResolvedOutputSpecification("16:9", (320, 180)),
+                    participating=False,
+                    withdrawn=True,
+                ),
+            ),
+            "intentionally withdrawn",
+        ),
+        (
+            "unsupported",
+            (
+                _push_destination(
+                    "unsupported",
+                    ResolvedOutputSpecification("16:9", (320, 180)),
+                    supports_transient=False,
+                ),
+            ),
+            "unsupported",
+        ),
+        (
+            "all",
+            (
+                _push_destination(
+                    "unsupported",
+                    ResolvedOutputSpecification("16:9", (320, 180)),
+                    supports_transient=False,
+                ),
+            ),
+            "unsupported",
+        ),
+        ("all", (), "no resident destinations remain participating"),
+        (
+            "all",
+            (
+                _push_destination(
+                    "withdrawn",
+                    ResolvedOutputSpecification("16:9", (320, 180)),
+                    participating=False,
+                    withdrawn=True,
+                ),
+            ),
+            "no resident destinations remain participating",
+        ),
+    ],
+)
+def test_push_rejects_invalid_discovered_destinations_before_loading_or_rendering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+    destinations: tuple[dict[str, object], ...],
+    diagnostic: str,
+) -> None:
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return destinations
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
+    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("rendered"))
+
+    assert viewer.main(["--push", target]) == 1
+    assert diagnostic in capsys.readouterr().err
+
+
+def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    specs = (
+        ResolvedOutputSpecification("4:3", (320, 240)),
+        ResolvedOutputSpecification("5:3", (320, 192)),
+        ResolvedOutputSpecification("16:9", (320, 180)),
+    )
+    destinations = (
+        _push_destination("window", specs[0]),
+        _push_destination("failed:display", specs[1], available=False),
+        _push_destination("image-server:first", specs[2]),
+        _push_destination("image-server:second", specs[0]),
+        _push_destination(
+            "withdrawn",
+            ResolvedOutputSpecification("16:9", (640, 360)),
+            participating=False,
+            withdrawn=True,
+            supports_transient=False,
+        ),
+    )
+    calls: list[str] = []
+    rendered: dict[ResolvedOutputSpecification, Image.Image] = {}
+    captured: dict[str, object] = {}
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            calls.append("discover")
+            return destinations
+
+        def publish_transient(self, target, specifications, images, *, on_accepted):
+            calls.append("publish")
+            captured.update(target=target, specifications=specifications, images=images)
+            assert target == "all"
+            assert specifications == {
+                "window": specs[0],
+                "failed:display": specs[1],
+                "image-server:first": specs[2],
+                "image-server:second": specs[0],
+            }
+            assert set(images) == set(specs)
+            assert all(
+                image.mode == "RGB" and image.size == spec.requested_output_size for spec, image in images.items()
+            )
+            on_accepted()
+            captured["accepted_output"] = capsys.readouterr().out
+            return PublicationResult(
+                PublicationStatus.SUCCEEDED,
+                {identifier: (True, None) for identifier in specifications},
+            )
+
+    def load_configuration(path):
+        calls.append("load")
+        return configuration
+
+    def render(_configuration, selector, output_specifications, **kwargs):
+        calls.append("render")
+        assert selector == ("@preview", 2)
+        assert set(output_specifications) == set(specs)
+        assert kwargs["overrides"].qr_enabled is False
+        rendered.update({spec: Image.new("RGB", spec.requested_output_size, "white") for spec in output_specifications})
+        return rendered
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "load_application_config", load_configuration)
+    monkeypatch.setattr(viewer, "render_preview_variants", render)
+
+    assert viewer.main(["--config", str(config_path), "--no-qr", "--push", "all"]) == 0
+    assert calls == ["discover", "load", "render", "publish"]
+    output = capsys.readouterr().out
+    assert "Push accepted; publication has begun." in captured["accepted_output"]
+    assert "Push completed successfully." in output
+    for image in rendered.values():
+        _assert_image_closed(image)
+    assert captured["images"] == rendered
+
+
+def test_explicit_push_preserves_destination_and_failed_participation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    spec = ResolvedOutputSpecification("16:9", (320, 180))
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    destination = _push_destination("opaque:id", spec, available=False)
+    image = Image.new("RGB", spec.requested_output_size)
+    captured = {}
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (destination,)
+
+        def publish_transient(self, target, specifications, images, *, on_accepted):
+            captured.update(target=target, specifications=specifications, images=images)
+            on_accepted()
+            return PublicationResult(PublicationStatus.SUCCEEDED, {"opaque:id": (True, None)})
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: configuration)
+    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: {spec: image})
+
+    assert viewer.main(["--config", str(config_path), "--push", "opaque:id"]) == 0
+    assert captured["target"] == "opaque:id"
+    assert captured["specifications"] == {"opaque:id": spec}
+    assert captured["images"] == {spec: image}
+    _assert_image_closed(image)
+    assert "Push completed successfully." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("result", "diagnostics"),
+    [
+        (PublicationResult(PublicationStatus.BUSY, {}), ("busy",)),
+        (
+            PublicationResult(PublicationStatus.FAILED, {"screen": (False, "device timed out")}),
+            ("publication failed", "screen", "device timed out"),
+        ),
+        (PublicationResult(PublicationStatus.SUCCEEDED, {}), ("no terminal outcome reported",)),
+    ],
+)
+def test_push_reports_busy_and_per_destination_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    result: PublicationResult,
+    diagnostics: tuple[str, ...],
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    spec = ResolvedOutputSpecification("16:9", (320, 180))
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    rendered = Image.new("RGB", spec.requested_output_size)
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (_push_destination("screen", spec),)
+
+        def publish_transient(self, *_args, **_kwargs):
+            return result
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: configuration)
+    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: {spec: rendered})
+
+    assert viewer.main(["--config", str(config_path), "--push", "screen"]) == 1
+    error = capsys.readouterr().err
+    assert all(diagnostic in error for diagnostic in diagnostics)
+    _assert_image_closed(rendered)
+
+
+@pytest.mark.parametrize(
+    ("error", "diagnostic"),
+    [
+        (RuntimeUnavailable("No resident Refrain runtime is available"), "No resident Refrain"),
+        (RuntimeAuthenticationError("runtime-control authentication failed"), "authentication failed"),
+        (RuntimeUnsupportedProtocol("unsupported runtime-control protocol"), "versions are compatible"),
+        (RuntimeProtocolError("invalid publication response"), "runtime-control protocol error"),
+    ],
+)
+def test_push_control_errors_are_actionable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+    diagnostic: str,
+) -> None:
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            raise error
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
+
+    assert viewer.main(["--push", "screen"]) == 1
+    assert diagnostic in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_diagnostic"),
+    [
+        (RuntimeProtocolError("invalid publication response"), "runtime-control request failed"),
+        (RuntimeUnconfirmed("publication outcome is unconfirmed"), "publication may have occurred"),
+        (RuntimeUnavailable("resident runtime connection lost"), "resident runtime connection lost"),
+    ],
+)
+def test_push_closes_images_when_submission_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcome: Exception,
+    expected_diagnostic: str,
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    spec = ResolvedOutputSpecification("16:9", (320, 180))
+    paths = SimpleNamespace(control_metadata_file=tmp_path / "endpoint.json")
+    rendered = Image.new("RGB", spec.requested_output_size)
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (_push_destination("screen", spec),)
+
+        def publish_transient(self, *_args, **_kwargs):
+            raise outcome
+
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    monkeypatch.setattr(viewer, "load_application_config", lambda *_: configuration)
+    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: {spec: rendered})
+
+    assert viewer.main(["--config", str(config_path), "--push", "screen"]) == 1
+    assert expected_diagnostic in capsys.readouterr().err
+    _assert_image_closed(rendered)
+
+
+def test_render_preview_variants_use_discovered_specs_and_shared_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    specifications = (
+        ResolvedOutputSpecification("4:3", (320, 240)),
+        ResolvedOutputSpecification("5:3", (320, 192)),
+        ResolvedOutputSpecification("16:9", (320, 180)),
+    )
+    choices_seen = []
+    prepare_one = preparation._prepare_daily_images_for_specification
+
+    def capture_choices(*args, **kwargs):
+        choices_seen.append(args[4])
+        return prepare_one(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "_prepare_daily_images_for_specification", capture_choices)
+    images = viewer.render_preview_variants(
+        configuration,
+        ("@preview", 2),
+        (*specifications, specifications[0]),
+        overrides=PresentationOverrides(qr_enabled=False),
+    )
+    try:
+        assert set(images) == set(specifications)
+        assert len(choices_seen) == len(specifications)
+        assert all(choice is choices_seen[0] for choice in choices_seen)
+        for specification, image in images.items():
+            assert image.mode == "RGB"
+            assert image.size == specification.requested_output_size
+    finally:
+        for image in images.values():
+            image.close()
