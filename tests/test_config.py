@@ -967,6 +967,35 @@ def test_image_server_output_ids_must_be_nonempty_strings(tmp_path: Path, output
     assert any(item.field == "display.backends[0].outputs[0].id" for item in error.value.diagnostics)
 
 
+@pytest.mark.parametrize("character", ["a", "é"])
+def test_image_server_canonical_destination_identifier_length_limit(tmp_path: Path, character: str) -> None:
+    prefix = "image-server:"
+    output_id = character * (256 - len(prefix))
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": output_id}]}]}),
+    )
+
+    config = load_application_config(config_path)
+    assert config.display_backends[0].outputs[0].identifier == output_id
+    assert len(prefix + output_id) == 256
+
+    write_config(
+        config_path,
+        configuration_data(
+            display={"backends": [{"type": "image-server", "outputs": [{"id": output_id + character}]}]}
+        ),
+    )
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any(
+        item.field == "display.backends[0].outputs[0].id"
+        and "canonical runtime destination identifier must not exceed 256 characters" in item.message
+        for item in error.value.diagnostics
+    )
+
+
 def test_image_server_rejects_duplicate_output_ids(tmp_path: Path) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",

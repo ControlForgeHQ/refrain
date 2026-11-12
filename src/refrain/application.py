@@ -46,7 +46,7 @@ from .persistence import (
 from .preparation import DailyImagePreparationError
 from .presentation import build_presentation_snapshot
 from .recovery import recover_prepared_daily_images
-from .runtime_control import RuntimeControlServer, TransientAdmissionGuard
+from .runtime_control import RuntimeControlServer, StagedTransientImages, TransientAdmissionGuard
 from .scheduling import (
     SchedulingAction,
     SchedulingEvaluationError,
@@ -337,7 +337,7 @@ def _admit_transient(
     state_lock: Lock,
     destinations: Iterable[str] | str,
     specifications: Mapping[str, ResolvedOutputSpecification],
-    images: Mapping[ResolvedOutputSpecification, Image.Image],
+    images: StagedTransientImages,
     admit: TransientAdmissionGuard,
 ) -> PublicationOperation:
     """Keep already-required scheduled work ahead of a transient request."""

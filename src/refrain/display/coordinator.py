@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import time
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from threading import Condition, Event, Thread
 from types import MappingProxyType
 from typing import Callable, Iterable, Mapping
@@ -20,6 +23,17 @@ from . import DisplayBackend, DisplayBackendError, create_display_backend
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
 _SHUTDOWN_TIMEOUT = 60.0
+
+
+class StagedTransientImages(dict[ResolvedOutputSpecification, Path]):
+    """Request-owned validated PNG files, decoded only by active workers."""
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__()
+        self.directory = directory
+
+    def close(self) -> None:
+        shutil.rmtree(self.directory, ignore_errors=False)
 
 
 @dataclass
@@ -81,7 +95,7 @@ class PublicationOperation:
 class _OneShotPublication:
     operation: PublicationOperation
     identity: tuple[int, int] | None
-    images: Mapping[ResolvedOutputSpecification, Image.Image]
+    images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages
     destinations: tuple[str, ...]
     outcomes: dict[str, tuple[bool, str | None]]
     retry_at: dict[str, float]
@@ -277,7 +291,7 @@ class DisplayPublicationCoordinator:
         self,
         destinations: Iterable[str] | str,
         output_specifications: Mapping[str, ResolvedOutputSpecification],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
     ) -> PublicationOperation:
         """Atomically admit complete caller-prepared images to selected destinations.
 
@@ -377,7 +391,7 @@ class DisplayPublicationCoordinator:
         self,
         destinations: tuple[str, ...],
         output_specifications: Mapping[str, ResolvedOutputSpecification],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
     ) -> PublicationStatus | None:
         if not isinstance(output_specifications, Mapping) or not isinstance(images, Mapping):
             return PublicationStatus.INVALID
@@ -388,9 +402,10 @@ class DisplayPublicationCoordinator:
                 return PublicationStatus.INVALID
             if specification not in images:
                 return PublicationStatus.INVALID
-            image = images[specification]
-            if not isinstance(image, Image.Image) or image.size != specification.requested_output_size:
-                return PublicationStatus.INVALID
+            if not isinstance(images, StagedTransientImages):
+                image = images[specification]
+                if not isinstance(image, Image.Image) or image.size != specification.requested_output_size:
+                    return PublicationStatus.INVALID
         return None
 
     def _backend_busy(self, destinations: tuple[str, ...]) -> bool:
@@ -430,18 +445,21 @@ class DisplayPublicationCoordinator:
     def _admit_one_shot(
         self,
         destinations: tuple[str, ...],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
         *,
         identity: tuple[int, int] | None,
         forced: bool,
     ) -> PublicationOperation:
-        specifications = {self._states[key].destination.output_specification for key in destinations}
-        owned_images = {specification: images[specification] for specification in specifications}
-        used_image_ids = {id(image) for image in owned_images.values()}
-        self._close_images(
-            {specification: image for specification, image in images.items() if id(image) not in used_image_ids}
-        )
-        owned_images = MappingProxyType(owned_images)
+        if isinstance(images, StagedTransientImages):
+            owned_images = images
+        else:
+            specifications = {self._states[key].destination.output_specification for key in destinations}
+            owned_images = {specification: images[specification] for specification in specifications}
+            used_image_ids = {id(image) for image in owned_images.values()}
+            self._close_images(
+                {specification: image for specification, image in images.items() if id(image) not in used_image_ids}
+            )
+            owned_images = MappingProxyType(owned_images)
         operation = PublicationOperation(self._publication_result(PublicationStatus.ACCEPTED, destinations))
         one_shot = _OneShotPublication(
             operation=operation,
@@ -655,7 +673,13 @@ class DisplayPublicationCoordinator:
         return active_threads
 
     @staticmethod
-    def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image]) -> None:
+    def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages) -> None:
+        if isinstance(images, StagedTransientImages):
+            try:
+                images.close()
+            except FileNotFoundError:
+                pass
+            return
         if not isinstance(images, Mapping):
             return
         closed: set[int] = set()
@@ -828,12 +852,19 @@ class DisplayPublicationCoordinator:
 
                 assert ready is not None and backend is not None
                 try:
-                    if one_shot is not None:
+                    if one_shot is not None and isinstance(one_shot.images, StagedTransientImages):
+                        with closing(
+                            Image.open(one_shot.images[ready.destination.output_specification], formats=["PNG"])
+                        ) as image:
+                            image.load()
+                            backend.publish(ready.destination, image)
+                    elif one_shot is not None:
                         image = one_shot.images[ready.destination.output_specification]
+                        backend.publish(ready.destination, image)
                     else:
                         assert presentation is not None
                         image = presentation.images[ready.destination.output_specification]
-                    backend.publish(ready.destination, image)
+                        backend.publish(ready.destination, image)
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:

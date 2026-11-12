@@ -41,6 +41,7 @@ _TOP_LEVEL_FIELDS = {
     "storage",
 }
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
+_MAX_DESTINATION_IDENTIFIER_LENGTH = 256
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
@@ -546,6 +547,13 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                             report(
                                 f"{output_field}.id",
                                 "is required and must be a nonempty string",
+                                logging.ERROR,
+                            )
+                            continue
+                        if len(f"{backend_type}:{output_id}") > _MAX_DESTINATION_IDENTIFIER_LENGTH:
+                            report(
+                                f"{output_field}.id",
+                                "canonical runtime destination identifier must not exceed 256 characters",
                                 logging.ERROR,
                             )
                             continue

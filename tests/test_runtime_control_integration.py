@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from multiprocessing.connection import Client
+from pathlib import Path
 from random import Random
 from threading import Event, Lock, Thread, current_thread
 
@@ -10,9 +12,59 @@ import pytest
 from PIL import Image
 from test_application import Workspace, at, ordinary
 
+import refrain.__main__ as cli
 import refrain.application as application
 import refrain.runtime_control as control_module
+from refrain.display.coordinator import DisplayPublicationCoordinator
+from refrain.ownership import InstallationOwnership, OwnershipError
+from refrain.paths import resolve_application_paths
 from refrain.runtime_control import RuntimeControlClient
+
+
+def test_stale_staging_cleanup_requires_resident_ownership(tmp_path, monkeypatch):
+    for name in (
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ):
+        monkeypatch.setenv(name, str(tmp_path / name))
+    paths = resolve_application_paths()
+    metadata = Path(paths.control_metadata_file)
+    staging = metadata.with_name(metadata.name + ".transient")
+    staging.mkdir(parents=True)
+    if os.name != "nt":
+        metadata.parent.chmod(0o700)
+    (staging / "0.png").write_bytes(b"stale")
+    ownership_path = Path(paths.ownership_file)
+    called = []
+
+    def run(_arguments, _paths, _ownership):
+        called.append(True)
+        assert staging.exists()
+        with pytest.raises(OwnershipError):
+            InstallationOwnership(ownership_path).acquire()
+        coordinator = DisplayPublicationCoordinator(())
+        server = control_module.RuntimeControlServer(coordinator, metadata, lambda _admit: None)
+        try:
+            server.start()
+            assert not staging.exists()
+            assert metadata.exists()
+        finally:
+            server.close()
+            coordinator.close()
+        return 0
+
+    monkeypatch.setattr(cli, "_run_runtime", run)
+    with InstallationOwnership(ownership_path):
+        assert cli.main([]) == 1
+        assert staging.exists()
+        assert not called
+    assert cli.main([]) == 0
+    assert called == [True]
 
 
 @pytest.fixture
