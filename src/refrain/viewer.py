@@ -7,12 +7,13 @@ import re
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from PIL import Image, ImageOps
 
 from .config import ApplicationConfiguration, ApplicationConfigurationError, load_application_config
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library, normalize_quotation
+from .display.coordinator import PublicationResult, PublicationStatus
 from .geometry import (
     SUPPORTED_PRESENTATION_ASPECTS,
     ResolvedOutputSpecification,
@@ -32,6 +33,7 @@ from .runtime_control import (
     RuntimeControlError,
     RuntimeProtocolError,
     RuntimeUnavailable,
+    RuntimeUnconfirmed,
     RuntimeUnsupportedProtocol,
 )
 from .scheduling import resolve_reveal_stages
@@ -142,10 +144,28 @@ def render_preview(
     debug_layout: bool = False,
 ) -> Image.Image:
     """Render one fully revealed output image without runtime persistence or backends."""
+    specification = output_specification or _output_specification("16:10", None)
+    return render_preview_variants(
+        configuration,
+        selector,
+        (specification,),
+        overrides=overrides,
+        debug_layout=debug_layout,
+    )[specification]
+
+
+def render_preview_variants(
+    configuration: ApplicationConfiguration,
+    selector: tuple[str, int],
+    output_specifications: Sequence[ResolvedOutputSpecification],
+    *,
+    overrides: PresentationOverrides | None = None,
+    debug_layout: bool = False,
+) -> Mapping[ResolvedOutputSpecification, Image.Image]:
+    """Render one coherent, fully revealed presentation across output specifications."""
     entry, quotation = _select_entry(configuration, selector)
     try:
         snapshot = build_presentation_snapshot(configuration, entry, quotation, date.today())
-        specification = output_specification or _output_specification("16:10", None)
         stages = resolve_reveal_stages(snapshot)
 
         def annotate_diagnostics(_specification, image, diagnostics) -> None:
@@ -158,13 +178,19 @@ def render_preview(
             snapshot,
             (stages[-1],),
             configuration,
-            (specification,),
+            output_specifications,
             overrides=overrides,
             on_presentation_image=annotate_diagnostics if debug_layout else None,
         )
     except (ValueError, TypeError) as error:
         raise ViewerError(f"cannot prepare preview for entry {entry.id!r}: {error}") from error
-    return prepared[specification][0]
+    try:
+        return {specification: images[0] for specification, images in prepared.items()}
+    except Exception:
+        for images in prepared.values():
+            for image in images:
+                image.close()
+        raise
 
 
 def show_preview_window(image: Image.Image) -> None:
@@ -308,6 +334,196 @@ def _run_destination_discovery() -> int:
     return 0
 
 
+def _select_push_destinations(
+    destinations: Sequence[dict[str, object]],
+    target: str,
+) -> tuple[str, tuple[dict[str, object], ...], dict[str, ResolvedOutputSpecification]]:
+    if target == "all":
+        selected = tuple(
+            destination for destination in destinations if destination["participating"] and not destination["withdrawn"]
+        )
+        if not selected:
+            raise ViewerError(
+                "no resident destinations remain participating in publication; restart Refrain with at least one "
+                "configured participating destination"
+            )
+    else:
+        destination = next((record for record in destinations if record["identifier"] == target), None)
+        if destination is None:
+            raise ViewerError(f"destination {target!r} is unknown to the resident Refrain runtime")
+        if destination["withdrawn"]:
+            raise ViewerError(f"destination {target!r} is intentionally withdrawn and cannot receive a push")
+        if not destination["participating"]:
+            raise ViewerError(f"destination {target!r} is not participating in publication")
+        selected = (destination,)
+
+    unsupported = [str(destination["identifier"]) for destination in selected if not destination["supports_transient"]]
+    if unsupported:
+        raise ViewerError(
+            "transient publication is unsupported by "
+            + ", ".join(repr(identifier) for identifier in unsupported)
+            + "; configure a transient-capable destination or select a supported target"
+        )
+
+    specifications = {str(destination["identifier"]): destination["output_specification"] for destination in selected}
+    return target, selected, specifications
+
+
+def _report_push_result(
+    result: PublicationResult,
+    destinations: Sequence[dict[str, object]],
+) -> int:
+    expected = {str(destination["identifier"]) for destination in destinations}
+    if (
+        result.status is PublicationStatus.SUCCEEDED
+        and set(result.destinations) == expected
+        and all(success is True for success, _error in result.destinations.values())
+    ):
+        print("Push completed successfully.")
+        return 0
+
+    messages = {
+        PublicationStatus.BUSY: (
+            "push was not accepted because publication is busy; wait for the current update to finish"
+        ),
+        PublicationStatus.FAILED: "push publication failed",
+        PublicationStatus.STOPPING: "the resident Refrain runtime is stopping or rejected the push",
+        PublicationStatus.INVALID: (
+            "the resident Refrain runtime rejected the push as invalid; a destination or output specification may "
+            "have changed since discovery"
+        ),
+        PublicationStatus.UNSUPPORTED: "the resident Refrain runtime does not support transient publication",
+        PublicationStatus.WITHDRAWN: "a selected destination is intentionally withdrawn",
+        PublicationStatus.DESTINATION_NOT_FOUND: "a selected destination is no longer configured",
+    }
+    if result.status is PublicationStatus.SUCCEEDED:
+        message = "the runtime did not report successful completion for every selected destination"
+    else:
+        message = messages.get(result.status, f"push ended with unexpected status {result.status.value!r}")
+    print(f"refrain-viewer: {message}.", file=sys.stderr)
+    for identifier in sorted(expected | set(result.destinations)):
+        if identifier not in result.destinations:
+            print(f"  {identifier}: no terminal outcome reported", file=sys.stderr)
+            continue
+        success, error = result.destinations[identifier]
+        if success is not True:
+            detail = error or ("publication failed" if success is False else "no terminal outcome reported")
+            print(f"  {identifier}: {detail}", file=sys.stderr)
+    return 1
+
+
+def _run_push(
+    target: str,
+    *,
+    config_file: str | Path | None,
+    selector: tuple[str, int],
+    overrides: PresentationOverrides,
+    debug_layout: bool,
+) -> int:
+    try:
+        paths = resolve_application_paths()
+        client = RuntimeControlClient(Path(paths.control_metadata_file))
+        destinations = client.discover()
+        runtime_target, selected, specifications = _select_push_destinations(destinations, target)
+    except RuntimeUnavailable as error:
+        print(f"refrain-viewer: {error}", file=sys.stderr)
+        return 1
+    except RuntimeAuthenticationError as error:
+        print(
+            f"refrain-viewer: {error}; restart the resident Refrain runtime for this user and try again.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeUnsupportedProtocol as error:
+        print(
+            f"refrain-viewer: {error}; ensure the client and resident runtime versions are compatible.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeProtocolError as error:
+        print(
+            f"refrain-viewer: runtime-control protocol error: {error}; restart the resident Refrain runtime.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ApplicationPathError, RuntimeControlError, ViewerError) as error:
+        print(f"refrain-viewer: push destination discovery failed: {error}", file=sys.stderr)
+        return 1
+
+    config_path = Path(config_file if config_file is not None else paths.config_file).absolute()
+    if not config_path.is_file():
+        print(
+            f"refrain-viewer: configuration file does not exist: {config_path}; initialize Refrain or provide an "
+            "existing file with --config",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        configuration = load_application_config(config_path)
+    except ApplicationConfigurationError as error:
+        print(f"refrain-viewer: application configuration is invalid: {error}", file=sys.stderr)
+        return 1
+
+    print("Preparing presentation variants for push.", flush=True)
+    try:
+        images = render_preview_variants(
+            configuration,
+            selector,
+            tuple(dict.fromkeys(specifications.values())),
+            overrides=overrides,
+            debug_layout=debug_layout,
+        )
+    except (ViewerError, DailyImagePreparationError) as error:
+        print(f"refrain-viewer: {error}", file=sys.stderr)
+        return 1
+
+    def report_accepted() -> None:
+        print("Push accepted; publication has begun.", flush=True)
+
+    try:
+        result = client.publish_transient(
+            runtime_target,
+            specifications,
+            images,
+            on_accepted=report_accepted,
+        )
+    except RuntimeUnconfirmed:
+        print(
+            "refrain-viewer: push outcome is unconfirmed; publication may have occurred. Do not retry automatically.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeUnavailable as error:
+        print(f"refrain-viewer: {error}", file=sys.stderr)
+        return 1
+    except RuntimeAuthenticationError as error:
+        print(
+            f"refrain-viewer: {error}; restart the resident Refrain runtime for this user and try again.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeUnsupportedProtocol as error:
+        print(
+            f"refrain-viewer: {error}; ensure the client and resident runtime versions are compatible.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeProtocolError as error:
+        print(
+            f"refrain-viewer: runtime-control request failed: {error}; verify the requested destinations and "
+            "configured image limits, then restart the resident Refrain runtime if the error persists.",
+            file=sys.stderr,
+        )
+        return 1
+    except RuntimeControlError as error:
+        print(f"refrain-viewer: runtime-control push failed: {error}", file=sys.stderr)
+        return 1
+    finally:
+        for image in images.values():
+            image.close()
+    return _report_push_result(result, selected)
+
+
 def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
     conflicts = []
     for option, value in (
@@ -330,11 +546,27 @@ def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: ar
         ("--output", arguments.output),
         ("--window", arguments.window),
         ("--debug-layout", arguments.debug_layout),
+        ("--push", arguments.push),
     ):
         if value is not None and value is not False:
             conflicts.append(option)
     if conflicts:
         parser.error("--list-destinations is standalone and cannot be combined with " + ", ".join(conflicts))
+
+
+def _validate_push_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    conflicts = []
+    for option, value in (
+        ("--window", arguments.window),
+        ("--output", arguments.output),
+        ("--aspect", arguments.aspect),
+        ("--resolution", arguments.resolution),
+        ("--list-destinations", arguments.list_destinations),
+    ):
+        if value is not None and value is not False:
+            conflicts.append(option)
+    if conflicts:
+        parser.error("--push is mutually exclusive with " + ", ".join(conflicts))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -379,6 +611,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list destinations exposed by the running Refrain runtime and exit",
     )
+    parser.add_argument(
+        "--push",
+        metavar="TARGET",
+        help="publish a rendered presentation through resident destinations",
+    )
     return parser
 
 
@@ -388,6 +625,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.list_destinations:
         _validate_discovery_arguments(parser, arguments)
         return _run_destination_discovery()
+    if arguments.push is not None:
+        _validate_push_arguments(parser, arguments)
 
     overrides = PresentationOverrides(
         font=arguments.font,
@@ -410,6 +649,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         qr_enabled=arguments.qr_enabled,
     )
     resolution = None if arguments.resolution is None else tuple(arguments.resolution)
+    if arguments.push is not None:
+        return _run_push(
+            arguments.push,
+            config_file=arguments.config,
+            selector=arguments.entry or _DEFAULT_SELECTOR,
+            overrides=overrides,
+            debug_layout=arguments.debug_layout,
+        )
     try:
         run_viewer(
             config_file=arguments.config,
