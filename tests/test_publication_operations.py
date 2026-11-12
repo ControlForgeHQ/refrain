@@ -32,6 +32,19 @@ def _images(*specifications: ResolvedOutputSpecification, value: int = 2) -> dic
     }
 
 
+def _track_image_closes(monkeypatch, images: dict) -> dict[int, int]:
+    close_counts = {id(image): 0 for image in images.values()}
+    original_close = Image.Image.close
+
+    def close(image):
+        if id(image) in close_counts:
+            close_counts[id(image)] += 1
+        original_close(image)
+
+    monkeypatch.setattr(Image.Image, "close", close)
+    return close_counts
+
+
 def _wait_until(predicate, timeout: float = 2.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -270,7 +283,7 @@ def test_transient_blocks_scheduled_work_until_completion_and_coalesces_latest()
         coordinator.publish((2, 0), {_WIDE: Image.new("RGB", (4, 4), (3, 0, 0))})
         coordinator.publish((3, 0), {_WIDE: Image.new("RGB", (4, 4), (4, 0, 0))})
         competing_transient = coordinator.publish_transient("window", {"window": _WIDE}, _images(_WIDE))
-        competing_forced = coordinator.force_scheduled_publication((1, 0), _images(_WIDE))
+        competing_forced = coordinator.force_scheduled_publication((3, 0), _images(_WIDE))
         assert competing_transient.result.status is PublicationStatus.BUSY
         assert competing_forced.result.status is PublicationStatus.BUSY
         assert publications == [1, 2]
@@ -443,6 +456,109 @@ def test_forced_completion_does_not_ack_a_newer_scheduled_identity() -> None:
     finally:
         release_forced.set()
         release_scheduled.set()
+        coordinator.close()
+
+
+def test_stale_forced_identity_is_rejected_without_backend_access(monkeypatch) -> None:
+    publications: list[int] = []
+
+    class Backend:
+        def publish(self, _destination, image):
+            publications.append(image.getpixel((0, 0))[0])
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"),), lambda _config: Backend())
+    try:
+        coordinator.publish((2, 0), {_WIDE: Image.new("RGB", (4, 4), (7, 0, 0))})
+        assert coordinator.wait_for_publication((2, 0), timeout=1)
+        stale_images = _images(_WIDE, value=9)
+        closes = _track_image_closes(monkeypatch, stale_images)
+
+        stale = coordinator.force_scheduled_publication((1, 0), stale_images)
+
+        assert stale.result.status is PublicationStatus.INVALID
+        assert coordinator.desired_identity == (2, 0)
+        assert coordinator.acknowledgements == {"window": (2, 0)}
+        assert publications == [7]
+        assert closes[id(stale_images[_WIDE])] == 1
+    finally:
+        coordinator.close()
+
+
+def test_forced_publication_without_current_scheduled_identity_is_rejected(monkeypatch) -> None:
+    factory_calls: list[bool] = []
+
+    def factory(_configuration):
+        factory_calls.append(True)
+        raise AssertionError("invalid forced publication must not initialize a backend")
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"),), factory)
+    images = _images(_WIDE)
+    closes = _track_image_closes(monkeypatch, images)
+    try:
+        forced = coordinator.force_scheduled_publication((1, 0), images)
+        assert forced.result.status is PublicationStatus.INVALID
+        assert factory_calls == []
+        assert closes[id(images[_WIDE])] == 1
+    finally:
+        coordinator.close()
+
+
+def test_rejected_transient_request_releases_transferred_images_once(monkeypatch) -> None:
+    coordinator = DisplayPublicationCoordinator(
+        (_configuration("window"),),
+        lambda _config: None,
+        transient_capabilities={"window": False},
+    )
+    image = Image.new("RGB", (16, 9), (2, 0, 0))
+    images = {_WIDE: image, _PORTRAIT: image}
+    closes = _track_image_closes(monkeypatch, images)
+    try:
+        rejected = coordinator.publish_transient("window", {"window": _WIDE}, images)
+        assert rejected.result.status is PublicationStatus.UNSUPPORTED
+        assert closes[id(image)] == 1
+    finally:
+        coordinator.close()
+
+
+@pytest.mark.parametrize(("forced", "fail"), [(False, False), (True, False), (False, True), (True, True)])
+def test_one_shot_images_are_closed_exactly_once_on_success_or_failure(monkeypatch, forced: bool, fail: bool) -> None:
+    publications: list[int] = []
+
+    class Backend:
+        def publish(self, _destination, image):
+            value = image.getpixel((0, 0))[0]
+            publications.append(value)
+            if fail and value == 2:
+                raise DisplayBackendUpdateError("one-shot failed", recoverable=False)
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator(
+        (_configuration("window"),),
+        lambda _config: Backend(),
+        retry=False,
+    )
+    if forced:
+        coordinator.publish((1, 0), {_WIDE: Image.new("RGB", (4, 4), (1, 0, 0))})
+        assert coordinator.wait_for_publication((1, 0), timeout=1)
+    images = _images(_WIDE)
+    closes = _track_image_closes(monkeypatch, images)
+    try:
+        if forced:
+            operation = coordinator.force_scheduled_publication((1, 0), images)
+        else:
+            operation = coordinator.publish_transient("window", {"window": _WIDE}, images)
+
+        result = operation.wait(1)
+
+        assert result.status is (PublicationStatus.FAILED if fail else PublicationStatus.SUCCEEDED)
+        assert closes[id(images[_WIDE])] == 1
+        assert publications == ([1, 2] if forced else [2])
+    finally:
         coordinator.close()
 
 

@@ -305,10 +305,17 @@ class DisplayPublicationCoordinator:
         identity: tuple[int, int],
         images: Mapping[ResolvedOutputSpecification, Image.Image],
     ) -> PublicationOperation:
-        """Republish the caller-supplied current scheduled identity to participants."""
+        """Republish the current scheduled identity to participants.
+
+        Ownership of supplied images transfers to the coordinator on entry,
+        including when validation or admission fails.
+        """
         with self._condition:
             selected = tuple(key for key, state in self._states.items() if not state.withdrawn)
             if not selected:
+                self._close_images(images)
+                return self._rejected_operation(PublicationStatus.INVALID, selected)
+            if any(self._states[key].desired_identity != identity for key in selected):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
             if not isinstance(images, Mapping):
