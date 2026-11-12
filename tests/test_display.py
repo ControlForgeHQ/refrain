@@ -148,6 +148,12 @@ def lifetime_gui(monkeypatch: pytest.MonkeyPatch):
             assert not self.destroyed, "callback registered after Tk destruction"
             super().after(milliseconds, callback)
 
+        def mainloop(self) -> None:
+            try:
+                super().mainloop()
+            except Exception as error:
+                self.report_callback_exception(type(error), error, error.__traceback__)
+
         def destroy(self) -> None:
             destroy_threads.append(threading.get_ident())
             self.children.clear()
@@ -208,13 +214,11 @@ def test_gui_owners_are_finalized_on_the_gui_thread(lifetime_gui, user_close: bo
     assert len(owners["root"]) == 1
 
 
-def test_mainloop_failure_releases_gui_owners_without_withdrawal(lifetime_gui) -> None:
+@pytest.mark.parametrize("failure_source", ["callback", "mainloop"])
+def test_mainloop_failure_releases_gui_owners_without_withdrawal(
+    lifetime_gui, monkeypatch: pytest.MonkeyPatch, failure_source: str
+) -> None:
     owners, events, destroy_threads = lifetime_gui
-    backend = WindowDisplayBackend()
-    backend.update(Image.new("RGB", (2, 2)))
-    notifications: list[str] = []
-    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
-    gui_thread = backend._thread.ident
 
     def fail() -> None:
         root = owners["root"][0]()
@@ -225,7 +229,25 @@ def test_mainloop_failure_releases_gui_owners_without_withdrawal(lifetime_gui) -
         except ValueError as error:
             raise RuntimeError("mainloop failed") from error
 
-    backend._root.after(0, fail)
+    if failure_source == "mainloop":
+        root_type = sys.modules["tkinter"].Tk
+        mainloop = root_type.mainloop
+
+        def fail_mainloop(root: Any) -> None:
+            mainloop(root)
+            fail()
+
+        monkeypatch.setattr(root_type, "mainloop", fail_mainloop)
+
+    backend = WindowDisplayBackend()
+    backend.update(Image.new("RGB", (2, 2)))
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    gui_thread = backend._thread.ident
+    if failure_source == "callback":
+        backend._root.after(0, fail)
+    else:
+        backend._commands.put(_Command(lambda: backend._root.quit()))
     backend._thread.join(2)
     assert not backend._thread.is_alive()
     with pytest.raises(DisplayBackendCloseError, match="mainloop failed"):
@@ -234,6 +256,36 @@ def test_mainloop_failure_releases_gui_owners_without_withdrawal(lifetime_gui) -
     assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
     assert all(thread == gui_thread and alive for _, thread, alive in events)
     assert destroy_threads == [gui_thread]
+
+
+def test_window_manager_callback_failure_is_not_withdrawal(lifetime_gui, monkeypatch: pytest.MonkeyPatch) -> None:
+    owners, events, destroy_threads = lifetime_gui
+    root_type = sys.modules["tkinter"].Tk
+    destroy = root_type.destroy
+    attempts = 0
+
+    def fail_once(root: Any) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("window-manager destroy failed")
+        destroy(root)
+
+    monkeypatch.setattr(root_type, "destroy", fail_once)
+    backend = WindowDisplayBackend()
+    backend.update(Image.new("RGB", (2, 2)))
+    notifications: list[str] = []
+    backend.set_withdrawal_callback(lambda: notifications.append("withdrawn"))
+    backend._root.after(0, backend._close_from_window_manager)
+    backend._thread.join(2)
+    assert not backend._thread.is_alive()
+    with pytest.raises(DisplayBackendCloseError, match="window-manager destroy failed"):
+        backend.close()
+    assert notifications == []
+    assert attempts == 2
+    assert all(reference() is None for name in ("root", "label", "photo") for reference in owners[name])
+    assert all(thread == backend._thread.ident and alive for _, thread, alive in events)
+    assert destroy_threads == [backend._thread.ident]
 
 
 def test_partial_gui_initialization_releases_owners(lifetime_gui, monkeypatch: pytest.MonkeyPatch) -> None:

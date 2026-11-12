@@ -64,6 +64,7 @@ class WindowDisplayBackend:
                 from PIL import ImageTk
 
                 self._root = tk.Tk()
+                self._root.report_callback_exception = self._report_callback_exception
                 self._root.title("Refrain")
                 self._label = tk.Label(self._root)
                 self._label.pack()
@@ -99,6 +100,14 @@ class WindowDisplayBackend:
     def _destroy_root(self) -> None:
         self._root.destroy()
         self._root_destroyed = True
+
+    def _report_callback_exception(self, _type: Any, error: BaseException, _traceback: Any) -> None:
+        # Tk's default handler saves GUI traceback owners in sys.last_*.
+        self._worker_error = RuntimeError(str(error))
+        try:
+            self._root.quit()
+        except BaseException as quit_error:
+            self._worker_error = RuntimeError(f"{error}; could not stop the GUI loop: {quit_error}")
 
     def _close_from_window_manager(self) -> None:
         with self._lock:
