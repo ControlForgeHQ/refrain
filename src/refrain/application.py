@@ -7,12 +7,12 @@ import math
 import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 
 from PIL import Image
 
@@ -25,7 +25,12 @@ from .config import (
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
-from .display.coordinator import DisplayPublicationCoordinator
+from .display.coordinator import (
+    DisplayPublicationCoordinator,
+    PublicationOperation,
+    PublicationResult,
+    PublicationStatus,
+)
 from .eligibility import build_eligible_quotation_pool
 from .geometry import ResolvedOutputSpecification
 from .information_view import InformationViewPreparationError, prepare_information_view
@@ -41,6 +46,7 @@ from .persistence import (
 from .preparation import DailyImagePreparationError
 from .presentation import build_presentation_snapshot
 from .recovery import recover_prepared_daily_images
+from .runtime_control import RuntimeControlServer, TransientAdmissionGuard
 from .scheduling import (
     SchedulingAction,
     SchedulingEvaluationError,
@@ -53,6 +59,7 @@ from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
 _LOGGER = logging.getLogger(__name__)
 _INFORMATION_VIEW_IDENTITY = (0, -1)
 _INFORMATION_VIEW_PUBLICATION_TIMEOUT = 60.0
+_CONTROL_SHUTDOWN_TIMEOUT = 60.0
 
 
 class ApplicationError(Exception):
@@ -263,6 +270,84 @@ def _recover_images(
         raise _RetryableApplicationError(f"cannot access prepared image artifacts: {error}") from error
 
 
+def _refresh_scheduled(
+    coordinator: DisplayPublicationCoordinator,
+    store: PersistentStateStore,
+    artifact_store: PreparedImageArtifactStore,
+    configuration: ApplicationConfiguration,
+    chooser: random.Random,
+    wall_clock: Callable[[], datetime],
+    shutdown: Event,
+    state_lock: Lock,
+    admit: Callable[[tuple[int, int], Mapping[ResolvedOutputSpecification, Image.Image]], PublicationOperation],
+) -> PublicationOperation:
+    """Prepare and admit only the scheduled identity still required by the runtime."""
+
+    def rejected(status: PublicationStatus) -> PublicationOperation:
+        return PublicationOperation(PublicationResult(status, {}), done=True)
+
+    with state_lock:
+        if shutdown.is_set():
+            return rejected(PublicationStatus.STOPPING)
+        state = _reload(store)
+        decision = evaluate_scheduling(wall_clock(), configuration, state)
+        if state is None or decision.required_reveal_stage is None:
+            return rejected(PublicationStatus.INVALID)
+        identity = (state.revision, decision.required_reveal_stage)
+        if coordinator.desired_identity != identity:
+            return rejected(PublicationStatus.INVALID)
+        artifacts = _recover_images(state, artifact_store, configuration, chooser)
+        images = _load_stage_variants(artifacts, configuration.required_output_specifications, identity[1])
+        try:
+            decision = evaluate_scheduling(wall_clock(), configuration, state)
+            if (
+                shutdown.is_set()
+                or decision.required_reveal_stage != identity[1]
+                or coordinator.desired_identity != identity
+            ):
+                for image in images.values():
+                    image.close()
+                return rejected(PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.INVALID)
+        except BaseException:
+            for image in images.values():
+                image.close()
+            raise
+        return admit(identity, images)
+
+
+def _admit_transient(
+    coordinator: DisplayPublicationCoordinator,
+    store: PersistentStateStore,
+    configuration: ApplicationConfiguration,
+    wall_clock: Callable[[], datetime],
+    shutdown: Event,
+    state_lock: Lock,
+    destinations: Iterable[str] | str,
+    specifications: Mapping[str, ResolvedOutputSpecification],
+    images: Mapping[ResolvedOutputSpecification, Image.Image],
+    admit: TransientAdmissionGuard,
+) -> PublicationOperation:
+    """Keep already-required scheduled work ahead of a transient request."""
+    transferred = False
+    try:
+        with state_lock:
+            if shutdown.is_set():
+                return PublicationOperation(PublicationResult(PublicationStatus.STOPPING, {}), done=True)
+            state = _reload(store)
+            decision = evaluate_scheduling(wall_clock(), configuration, state)
+            if (
+                state is None
+                or decision.required_reveal_stage is None
+                or coordinator.desired_identity != (state.revision, decision.required_reveal_stage)
+            ):
+                return PublicationOperation(PublicationResult(PublicationStatus.BUSY, {}), done=True)
+            transferred = True
+            return admit(destinations, specifications, images)
+    finally:
+        if not transferred:
+            DisplayPublicationCoordinator._close_images(images)
+
+
 def _create_history_store(
     state_path: Path,
     history_path: str | Path,
@@ -448,6 +533,7 @@ def run_application(
     monotonic_clock: Callable[[], float] = time.monotonic,
     scheduling_wait: Callable[..., bool] = wait_for_scheduling_event,
     pending_shutdown: Callable[[tuple[Thread, ...], Callable[[], object]], None] | None = None,
+    control_metadata_path: Path | None = None,
 ) -> None:
     """Operate until shutdown, retaining independent display workers and authoritative state.
 
@@ -461,6 +547,7 @@ def run_application(
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
     shutdown = shutdown_event if shutdown_event is not None else Event()
     chooser = random_source if random_source is not None else random.Random()
+    refresh_chooser = random.Random()
     coordinator: DisplayPublicationCoordinator | None = None
     artifacts: PreparedImageArtifactSet | None = None
     artifact_revision: int | None = None
@@ -474,8 +561,49 @@ def run_application(
     information_view_attempt_started: float | None = None
     information_view_started: float | None = None
     information_view_acknowledgement_logged = False
+    state_lock = Lock()
+    control: RuntimeControlServer | None = None
     _LOGGER.info("Starting continuous presentation")
     try:
+        if control_metadata_path is not None:
+            coordinator = DisplayPublicationCoordinator(
+                configuration.display_backends,
+                backend_factory,
+                all_unavailable_event=shutdown,
+                monotonic_clock=monotonic_clock,
+            )
+            try:
+                control = RuntimeControlServer(
+                    coordinator,
+                    control_metadata_path,
+                    lambda admit: _refresh_scheduled(
+                        coordinator,
+                        store,
+                        artifact_store,
+                        configuration,
+                        refresh_chooser,
+                        wall_clock,
+                        shutdown,
+                        state_lock,
+                        admit,
+                    ),
+                    shutdown_event=shutdown,
+                    transient_admission=lambda destinations, specifications, images, admit: _admit_transient(
+                        coordinator,
+                        store,
+                        configuration,
+                        wall_clock,
+                        shutdown,
+                        state_lock,
+                        destinations,
+                        specifications,
+                        images,
+                        admit,
+                    ),
+                )
+                control.start()
+            except Exception as error:
+                raise ApplicationError(f"cannot start runtime-control listener: {error}") from error
         while not shutdown.is_set():
             try:
                 if coordinator is not None and information_view_requested and information_view_started is None:
@@ -501,7 +629,8 @@ def run_application(
                         snapshot,
                         proposal.proposed_repetition_history,
                     )
-                    state = _commit_selection(store, proposal, snapshot)
+                    with state_lock:
+                        state = _commit_selection(store, proposal, snapshot)
                     _record_selection_history(history_store, state)
                     pending_history = None
                     _LOGGER.info("Committed selection %s for %s", state.revision, state.snapshot.display_date)
@@ -520,21 +649,24 @@ def run_application(
                             and desired_identity != _INFORMATION_VIEW_IDENTITY
                             and desired_identity[0] != state.revision
                         ):
-                            coordinator.clear_desired()
-                    artifacts = _recover_images(
-                        state,
-                        artifact_store,
-                        configuration,
-                        chooser,
-                    )
-                    artifact_revision = state.revision
-                    try:
-                        artifact_store.cleanup(state.revision)
-                    except ArtifactStoreError as error:
-                        _LOGGER.warning("Cannot clean obsolete prepared images: %s", error)
+                            with state_lock:
+                                coordinator.clear_desired()
+                    with state_lock:
+                        artifacts = _recover_images(
+                            state,
+                            artifact_store,
+                            configuration,
+                            chooser,
+                        )
+                        artifact_revision = state.revision
+                        try:
+                            artifact_store.cleanup(state.revision)
+                        except ArtifactStoreError as error:
+                            _LOGGER.warning("Cannot clean obsolete prepared images: %s", error)
                     continue
                 if stage > state.highest_reveal_stage:
-                    state = _persist_reveal_progress(store, state, stage)
+                    with state_lock:
+                        state = _persist_reveal_progress(store, state, stage)
                 identity = (state.revision, stage)
                 if coordinator is None:
                     coordinator = DisplayPublicationCoordinator(
@@ -587,7 +719,8 @@ def run_application(
                             information_view_done = True
                     if not information_view_done and not information_view_requested:
                         assert information_view_images is not None
-                        coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_view_images)
+                        with state_lock:
+                            coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_view_images)
                         information_view_images = None
                         information_view_requested = True
                         information_view_attempt_started = monotonic_clock()
@@ -620,17 +753,19 @@ def run_application(
                         continue
                 if coordinator.desired_identity != identity:
                     try:
-                        images = _load_stage_variants(
-                            artifacts,
-                            configuration.required_output_specifications,
-                            stage,
-                        )
+                        with state_lock:
+                            images = _load_stage_variants(
+                                artifacts,
+                                configuration.required_output_specifications,
+                                stage,
+                            )
                     except ArtifactStoreError as error:
                         artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
-                    coordinator.publish(identity, images)
+                    with state_lock:
+                        coordinator.publish(identity, images)
                     continue
                 if last_failure is not None:
                     _LOGGER.info("Application operation recovered")
@@ -654,14 +789,36 @@ def run_application(
             except SchedulingEvaluationError as error:
                 raise ApplicationError(f"scheduling evaluation failed: {error}") from error
     finally:
-        if coordinator is not None:
-            workers = coordinator.close()
-            if workers and pending_shutdown is not None:
-                pending_shutdown(workers, coordinator.close)
-        if information_view_images is not None:
-            for image in information_view_images.values():
-                image.close()
-        _LOGGER.info("Continuous presentation stopped")
+        control_workers: tuple[Thread, ...] = ()
+        try:
+            if control is not None:
+                control_workers = control.close()
+        finally:
+            if coordinator is not None:
+                if control_workers:
+
+                    def finish_control_shutdown() -> None:
+                        for worker in control_workers:
+                            worker.join()
+                        workers = coordinator.close()
+                        for worker in workers:
+                            worker.join()
+                        if workers:
+                            coordinator.close()
+
+                    cleanup = Thread(target=finish_control_shutdown, name="refrain-control-cleanup", daemon=True)
+                    cleanup.start()
+                    cleanup.join(_CONTROL_SHUTDOWN_TIMEOUT)
+                    if cleanup.is_alive() and pending_shutdown is not None:
+                        pending_shutdown((cleanup,), lambda: None)
+                else:
+                    workers = coordinator.close()
+                    if workers and pending_shutdown is not None:
+                        pending_shutdown(workers, coordinator.close)
+            if information_view_images is not None:
+                for image in information_view_images.values():
+                    image.close()
+            _LOGGER.info("Continuous presentation stopped")
     if coordinator is not None and coordinator.all_unavailable:
         raise ApplicationError("all configured display destinations are unavailable")
 

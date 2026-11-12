@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import json
+import time
+from multiprocessing.connection import Client
+from random import Random
+from threading import Event, Lock, Thread, current_thread
+
+import pytest
+from PIL import Image
+from test_application import Workspace, at, ordinary
+
+import refrain.application as application
+import refrain.runtime_control as control_module
+from refrain.runtime_control import RuntimeControlClient
+
+
+@pytest.fixture
+def resident(tmp_path, monkeypatch):
+    monkeypatch.setattr(application, "_CONTROL_SHUTDOWN_TIMEOUT", 0.1)
+    workspace = Workspace(tmp_path)
+    ordinary(workspace)
+    workspace.config.write_text(
+        workspace.config.read_text().replace(
+            '- type: "waveshare-13in3-e"',
+            '- type: "image-server"\n'
+            "      outputs:\n"
+            '        - id: "one"\n'
+            '          aspect_ratio: "16:9"\n'
+            "          resolution: [800, 450]\n"
+            '        - id: "two"\n'
+            '          aspect_ratio: "16:9"\n'
+            "          resolution: [800, 450]",
+        )
+    )
+    shutdown = Event()
+    published, pixels, closed, captured = [], [], Event(), []
+    lock = Lock()
+    slow_entered, release_slow = Event(), Event()
+    scheduler_waiting = Event()
+    clock = [at(10, 13)]
+    hold_refresh = Event()
+    errors = []
+    deferred = []
+
+    class Backend:
+        def publish(self, destination, image):
+            with lock:
+                index = len(published)
+            if index >= 2 and hold_refresh.is_set():
+                slow_entered.set()
+                assert release_slow.wait(10)
+            pixel = image.getpixel((0, 0))
+            with lock:
+                published.append(destination.identifier)
+                pixels.append(pixel)
+
+        def close(self):
+            closed.set()
+
+    coordinator_factory = application.DisplayPublicationCoordinator
+
+    class CapturingCoordinator(coordinator_factory):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured.append(self)
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", CapturingCoordinator)
+    metadata = tmp_path / "control" / "endpoint.json"
+
+    def wait_for_schedule(_deadline, event, **_kwargs):
+        scheduler_waiting.set()
+        return event.wait()
+
+    def run():
+        try:
+            application.run_application(
+                workspace.config,
+                workspace.state,
+                workspace.artifacts,
+                history_path=workspace.history,
+                shutdown_event=shutdown,
+                random_source=Random(1),
+                backend_factory=lambda _: Backend(),
+                wall_clock=lambda: clock[0],
+                scheduling_wait=wait_for_schedule,
+                pending_shutdown=lambda threads, finish: deferred.append((threads, finish)),
+                control_metadata_path=metadata,
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    thread = Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if errors:
+                raise errors[0]
+            if captured and captured[0].desired_identity and metadata.exists():
+                identity = captured[0].desired_identity
+                acknowledgements = captured[0].acknowledgements
+                if acknowledgements and all(value == identity for value in acknowledgements.values()):
+                    break
+            time.sleep(0.01)
+        else:
+            pytest.fail("resident runtime did not start and publish")
+        assert scheduler_waiting.wait(5)
+        yield (
+            metadata,
+            shutdown,
+            published,
+            closed,
+            hold_refresh,
+            slow_entered,
+            release_slow,
+            thread,
+            deferred,
+            errors,
+            workspace,
+            captured[0],
+            clock,
+            pixels,
+        )
+    finally:
+        release_slow.set()
+        shutdown.set()
+        thread.join(10)
+        for workers, finish in deferred:
+            for worker in workers:
+                worker.join(10)
+            finish()
+        assert not thread.is_alive()
+        assert not errors
+
+
+def _connection(path):
+    metadata = json.loads(path.read_text())
+    connection = Client(metadata["address"], family=metadata["family"])
+    connection.send_bytes(json.dumps({"credential": metadata["credential"]}).encode())
+    assert json.loads(connection.recv_bytes())["status"] == "authenticated"
+    return connection
+
+
+def test_real_resident_listener_and_refresh(resident):
+    metadata, _, published, *_ = resident
+    client = RuntimeControlClient(metadata)
+    assert [item["identifier"] for item in client.discover()] == ["image-server:one", "image-server:two"]
+    assert client.refresh().status.value == "succeeded"
+    assert published == ["one", "two", "one", "two"]
+
+
+def test_real_transient_preserves_scheduled_state_and_acknowledgements(resident):
+    metadata, _, published, _, _, _, _, _, _, _, workspace, coordinator, _, pixels = resident
+    before_state = workspace.state.read_bytes()
+    before_history = workspace.history.read_bytes()
+    before_artifacts = {path: path.read_bytes() for path in workspace.artifacts.rglob("*") if path.is_file()}
+    before_identity = coordinator.desired_identity
+    before_acknowledgements = coordinator.acknowledgements
+    client = RuntimeControlClient(metadata)
+    records = client.discover()
+    specs = {item["identifier"]: item["output_specification"] for item in records}
+    specification = records[0]["output_specification"]
+    with Image.new("RGB", specification.requested_output_size, (17, 81, 93)) as image:
+        result = client.publish_transient("all", specs, {specification: image})
+    assert result.status.value == "succeeded"
+    assert published == ["one", "two", "one", "two"]
+    assert pixels[-2:] == [(17, 81, 93), (17, 81, 93)]
+    assert coordinator.desired_identity == before_identity
+    assert coordinator.acknowledgements == before_acknowledgements
+    assert workspace.state.read_bytes() == before_state
+    assert workspace.history.read_bytes() == before_history
+    assert {path: path.read_bytes() for path in workspace.artifacts.rglob("*") if path.is_file()} == before_artifacts
+
+
+def test_newly_due_scheduled_stage_rejects_transient_before_publication(resident):
+    metadata, _, published, _, _, _, _, _, _, _, workspace, coordinator, clock, _ = resident
+    before_identity = coordinator.desired_identity
+    before_acknowledgements = coordinator.acknowledgements
+    before_state = workspace.state.read_bytes()
+    client = RuntimeControlClient(metadata)
+    records = client.discover()
+    specs = {item["identifier"]: item["output_specification"] for item in records}
+    specification = records[0]["output_specification"]
+    # The scheduler remains asleep while the control request observes the newly due stage.
+    clock[0] = at(10, 18)
+    with Image.new("RGB", specification.requested_output_size, (17, 81, 93)) as image:
+        result = client.publish_transient("all", specs, {specification: image})
+    assert result.status.value == "busy"
+    assert published == ["one", "two"]
+    assert coordinator.desired_identity == before_identity
+    assert coordinator.acknowledgements == before_acknowledgements
+    assert workspace.state.read_bytes() == before_state
+
+
+def test_disconnect_during_real_refresh_preparation_does_not_publish(resident, monkeypatch):
+    metadata, _, published, *_ = resident
+    entered, release, finished, guard_checked = Event(), Event(), Event(), Event()
+    original_recover = application._recover_images
+    original_refresh = application._refresh_scheduled
+    original_check = control_module._ensure_connected
+    checks = 0
+
+    def slow_recover(*args, **kwargs):
+        if current_thread().name == "refrain-control-request":
+            entered.set()
+            assert release.wait(5)
+        return original_recover(*args, **kwargs)
+
+    def observe_refresh(*args, **kwargs):
+        try:
+            return original_refresh(*args, **kwargs)
+        finally:
+            finished.set()
+
+    def observe_check(connection):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            guard_checked.set()
+        return original_check(connection)
+
+    monkeypatch.setattr(application, "_recover_images", slow_recover)
+    monkeypatch.setattr(application, "_refresh_scheduled", observe_refresh)
+    monkeypatch.setattr(control_module, "_ensure_connected", observe_check)
+    connection = _connection(metadata)
+    try:
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        assert entered.wait(5)
+        connection.close()
+        release.set()
+        assert finished.wait(5)
+        assert guard_checked.is_set()
+        assert published == ["one", "two"]
+    finally:
+        release.set()
+        connection.close()
+
+
+def test_real_shutdown_defers_coordinator_until_admitted_refresh_completes(resident):
+    metadata, shutdown, published, closed, hold, entered, release, thread, deferred, errors, *_ = resident
+    hold.set()
+    connection = _connection(metadata)
+    try:
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        assert json.loads(connection.recv_bytes())["status"] == "accepted"
+        assert entered.wait(5)
+        connection.close()
+        shutdown.set()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert not errors
+        assert deferred and not closed.is_set()
+        release.set()
+        workers, _finish = deferred[0]
+        for worker in workers:
+            worker.join(5)
+            assert not worker.is_alive()
+        assert published == ["one", "two", "one", "two"]
+    finally:
+        release.set()
+        connection.close()
