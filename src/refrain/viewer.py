@@ -231,6 +231,60 @@ def _fit_preview_image(image: Image.Image, available_size: tuple[int, int]) -> I
     return ImageOps.contain(image.copy(), available_size, method=Image.Resampling.LANCZOS)
 
 
+def _finished_png_bit_depth(path: str | Path) -> int:
+    with open(path, "rb") as source:
+        header = source.read(29)
+    if (
+        len(header) != 29
+        or header[:8] != b"\x89PNG\r\n\x1a\n"
+        or header[8:12] != b"\x00\x00\x00\r"
+        or header[12:16] != b"IHDR"
+    ):
+        raise ViewerError(f"finished PNG {str(path)!r} has an invalid PNG header")
+    return header[24]
+
+
+def _load_finished_image(path: str | Path) -> Image.Image:
+    """Load an unchanged, fully validated single-frame RGB PNG."""
+    try:
+        with Image.open(path) as source:
+            if source.format != "PNG":
+                raise ViewerError(f"finished image {str(path)!r} must be a PNG")
+            if getattr(source, "n_frames", 1) != 1:
+                raise ViewerError(f"finished PNG {str(path)!r} must contain exactly one frame")
+            if source.mode != "RGB":
+                raise ViewerError(f"finished PNG {str(path)!r} must use RGB mode; found {source.mode}")
+            if source.width <= 0 or source.height <= 0:
+                raise ViewerError(f"finished PNG {str(path)!r} must have positive dimensions")
+            expected_size = source.size
+            source.verify()
+        if _finished_png_bit_depth(path) != 8:
+            raise ViewerError(f"finished PNG {str(path)!r} must use 8-bit RGB channels")
+        with Image.open(path, formats=["PNG"]) as source:
+            if (
+                source.format != "PNG"
+                or source.mode != "RGB"
+                or source.size != expected_size
+                or getattr(source, "n_frames", 1) != 1
+            ):
+                raise ViewerError(f"finished PNG {str(path)!r} changed while it was being validated")
+            source.load()
+            return source.copy()
+    except ViewerError:
+        raise
+    except (OSError, EOFError, SyntaxError, ValueError, Image.DecompressionBombError) as error:
+        raise ViewerError(f"cannot read finished PNG {str(path)!r}: {error}") from error
+
+
+def run_image_viewer(image_path: str | Path) -> None:
+    """Display a finished PNG without loading Refrain presentation inputs."""
+    image = _load_finished_image(image_path)
+    try:
+        show_preview_window(image)
+    finally:
+        image.close()
+
+
 def run_viewer(
     *,
     config_file: str | Path | None = None,
@@ -419,6 +473,7 @@ def _run_push(
     selector: tuple[str, int],
     overrides: PresentationOverrides,
     debug_layout: bool,
+    image_path: str | Path | None = None,
 ) -> int:
     try:
         paths = resolve_application_paths()
@@ -450,32 +505,52 @@ def _run_push(
         print(f"refrain-viewer: push destination discovery failed: {error}", file=sys.stderr)
         return 1
 
-    config_path = Path(config_file if config_file is not None else paths.config_file).absolute()
-    if not config_path.is_file():
-        print(
-            f"refrain-viewer: configuration file does not exist: {config_path}; initialize Refrain or provide an "
-            "existing file with --config",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        configuration = load_application_config(config_path)
-    except ApplicationConfigurationError as error:
-        print(f"refrain-viewer: application configuration is invalid: {error}", file=sys.stderr)
-        return 1
+    if image_path is not None:
+        try:
+            finished_image = _load_finished_image(image_path)
+        except ViewerError as error:
+            print(f"refrain-viewer: {error}", file=sys.stderr)
+            return 1
+        image_width, image_height = finished_image.size
+        for destination in selected:
+            specification = destination["output_specification"]
+            required_width, required_height = specification.requested_output_size
+            if finished_image.size != specification.requested_output_size:
+                print(
+                    f"refrain-viewer: image is {image_width}x{image_height} but destination "
+                    f"{destination['identifier']!r} requires {required_width}x{required_height}",
+                    file=sys.stderr,
+                )
+                finished_image.close()
+                return 1
+        images = {specification: finished_image for specification in dict.fromkeys(specifications.values())}
+    else:
+        config_path = Path(config_file if config_file is not None else paths.config_file).absolute()
+        if not config_path.is_file():
+            print(
+                f"refrain-viewer: configuration file does not exist: {config_path}; initialize Refrain or provide an "
+                "existing file with --config",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            configuration = load_application_config(config_path)
+        except ApplicationConfigurationError as error:
+            print(f"refrain-viewer: application configuration is invalid: {error}", file=sys.stderr)
+            return 1
 
-    print("Preparing presentation variants for push.", flush=True)
-    try:
-        images = render_preview_variants(
-            configuration,
-            selector,
-            tuple(dict.fromkeys(specifications.values())),
-            overrides=overrides,
-            debug_layout=debug_layout,
-        )
-    except (ViewerError, DailyImagePreparationError) as error:
-        print(f"refrain-viewer: {error}", file=sys.stderr)
-        return 1
+        print("Preparing presentation variants for push.", flush=True)
+        try:
+            images = render_preview_variants(
+                configuration,
+                selector,
+                tuple(dict.fromkeys(specifications.values())),
+                overrides=overrides,
+                debug_layout=debug_layout,
+            )
+        except (ViewerError, DailyImagePreparationError) as error:
+            print(f"refrain-viewer: {error}", file=sys.stderr)
+            return 1
 
     def report_accepted() -> None:
         print("Push accepted; publication has begun.", flush=True)
@@ -519,7 +594,7 @@ def _run_push(
         print(f"refrain-viewer: runtime-control push failed: {error}", file=sys.stderr)
         return 1
     finally:
-        for image in images.values():
+        for image in {id(image): image for image in images.values()}.values():
             image.close()
     return _report_push_result(result, selected)
 
@@ -547,6 +622,7 @@ def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: ar
         ("--window", arguments.window),
         ("--debug-layout", arguments.debug_layout),
         ("--push", arguments.push),
+        ("--image", arguments.image),
     ):
         if value is not None and value is not False:
             conflicts.append(option)
@@ -569,11 +645,40 @@ def _validate_push_arguments(parser: argparse.ArgumentParser, arguments: argpars
         parser.error("--push is mutually exclusive with " + ", ".join(conflicts))
 
 
+def _validate_image_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    conflicts = []
+    for option, value in (
+        ("--config", arguments.config),
+        ("--entry", arguments.entry),
+        ("--font", arguments.font),
+        ("--quotation-face", arguments.quotation_face),
+        ("--source-face", arguments.source_face),
+        ("--attribution-face", arguments.attribution_face),
+        ("--min-font-size", arguments.min_font_size),
+        ("--max-font-size", arguments.max_font_size),
+        ("--background", arguments.background),
+        ("--decoration", arguments.decoration),
+        ("--text-color", arguments.text_color),
+        ("--tint", arguments.tint),
+        ("--style", arguments.style),
+        ("--qr/--no-qr", arguments.qr_enabled is not None),
+        ("--aspect", arguments.aspect),
+        ("--resolution", arguments.resolution),
+        ("--output", arguments.output),
+        ("--debug-layout", arguments.debug_layout),
+    ):
+        if value is not None and value is not False:
+            conflicts.append(option)
+    if conflicts:
+        parser.error("--image is incompatible with " + ", ".join(conflicts))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="refrain-viewer",
-        description="Render one Refrain presentation for local inspection or PNG export.",
+        description="Inspect a Refrain presentation or a supplied finished PNG.",
     )
+    parser.add_argument("--image", type=Path, metavar="PATH", help="inspect or publish a finished RGB PNG unchanged")
     parser.add_argument("--config", help="application configuration YAML file")
     parser.add_argument("--entry", type=parse_entry_selector, metavar="ENTRY_ID[:N]")
     parser.add_argument("--font", type=_identifier, metavar="FONT_ID")
@@ -625,8 +730,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.list_destinations:
         _validate_discovery_arguments(parser, arguments)
         return _run_destination_discovery()
+    if arguments.image is not None:
+        _validate_image_arguments(parser, arguments)
     if arguments.push is not None:
         _validate_push_arguments(parser, arguments)
+
+    if arguments.image is not None:
+        if arguments.push is not None:
+            return _run_push(
+                arguments.push,
+                config_file=None,
+                selector=_DEFAULT_SELECTOR,
+                overrides=PresentationOverrides(),
+                debug_layout=False,
+                image_path=arguments.image,
+            )
+        try:
+            run_image_viewer(arguments.image)
+        except ViewerError as error:
+            print(f"refrain-viewer: {error}", file=sys.stderr)
+            return 1
+        return 0
 
     overrides = PresentationOverrides(
         font=arguments.font,
