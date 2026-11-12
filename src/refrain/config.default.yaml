@@ -1,6 +1,6 @@
 # This is the initial editable configuration installed by --initialize.
 general:
-  day_start: "06:00"
+  day_start: "05:00"
 
 reveal:
   source: "12:00"
@@ -31,10 +31,9 @@ layout:
       - "alegreya"
       - "libre-baskerville"
       - "lora"
-      - "orbitron"
       - "source-sans-3"
     font_faces:
-      attribution: italic
+      source: italic
 
   backgrounds:
     default:
@@ -64,5 +63,5 @@ layout:
   text:
     colors:
       - "black"
-    min_font_size: 28
-    max_font_size: 100
+    min_font_size: 56
+    max_font_size: 200

@@ -129,7 +129,7 @@ Content-entry-specific information must not be stored in application configurati
 
 ```yaml
 general:
-  day_start: "06:00"
+  day_start: "05:00"
 
 content:
   directory: "content"
@@ -166,7 +166,7 @@ layout:
       - "lora"
       - "source-sans-3"
     font_faces:
-      attribution: italic
+      source: italic
 
   backgrounds:
     default:
@@ -182,8 +182,8 @@ layout:
   text:
     colors:
       - "black"
-    min_font_size: 28
-    max_font_size: 100
+    min_font_size: 56
+    max_font_size: 200
 ```
 
 The example illustrates an image-server output, the information view, explicit QR policy, independent literary insets, resource pools, and automatic quotation fitting.
