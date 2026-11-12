@@ -286,17 +286,25 @@ def _run_destination_discovery() -> int:
         print("No destinations are configured in the resident Refrain runtime.")
         return 0
 
-    print("Destination\tAspect\tResolution\tTransient\tParticipation\tAvailability\tWithdrawn")
+    headers = ("Destination", "Aspect", "Resolution", "Transient", "Participation", "Availability", "Withdrawn")
+    rows = []
     for destination in destinations:
         specification = destination["output_specification"]
         width, height = specification.requested_output_size
-        print(
-            f"{destination['identifier']}\t{specification.aspect_ratio}\t{width}x{height}\t"
-            f"{'yes' if destination['supports_transient'] else 'no'}\t"
-            f"{'participating' if destination['participating'] else 'not participating'}\t"
-            f"{'available' if destination['available'] else 'unavailable/failed'}\t"
-            f"{'yes' if destination['withdrawn'] else 'no'}"
+        rows.append(
+            (
+                destination["identifier"],
+                specification.aspect_ratio,
+                f"{width}x{height}",
+                "yes" if destination["supports_transient"] else "no",
+                "participating" if destination["participating"] else "not participating",
+                "available" if destination["available"] else "unavailable/failed",
+                "yes" if destination["withdrawn"] else "no",
+            )
         )
+    table = (headers, *rows)
+    widths = tuple(max(len(row[index]) for row in table) for index in range(len(headers)))
+    print("\n".join("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip() for row in table))
     return 0
 
 

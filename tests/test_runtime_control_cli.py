@@ -146,9 +146,9 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     paths: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     records = (
-        _destination("opaque:screen-A"),
-        _destination("screen-B", participating=False, withdrawn=True),
-        _destination("screen-C", available=False),
+        _destination("window"),
+        _destination("image-server:wquxga", participating=False, withdrawn=True),
+        _destination("epaper-destination-with-a-long-name", available=False),
     )
     seen = {}
 
@@ -167,13 +167,34 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     monkeypatch.setattr(viewer, "render_preview", lambda *_args, **_kwargs: pytest.fail("presentation rendered"))
 
     assert viewer.main(["--list-destinations"]) == 0
-    output = capsys.readouterr().out
+    lines = capsys.readouterr().out.rstrip().splitlines()
     assert seen == {"metadata_path": Path(paths.control_metadata_file), "discovered": True}
-    assert "opaque:screen-A" in output
-    assert "16:9" in output and "1920x1080" in output
-    assert "Transient" in output and "yes" in output
-    assert "participating" in output and "not participating" in output
-    assert "unavailable/failed" in output and "Withdrawn" in output
+    expected_cells = (
+        ("Destination", "Aspect", "Resolution", "Transient", "Participation", "Availability", "Withdrawn"),
+        ("window", "16:9", "1920x1080", "yes", "participating", "available", "no"),
+        ("image-server:wquxga", "16:9", "1920x1080", "yes", "not participating", "available", "yes"),
+        (
+            "epaper-destination-with-a-long-name",
+            "16:9",
+            "1920x1080",
+            "yes",
+            "participating",
+            "unavailable/failed",
+            "no",
+        ),
+    )
+    assert len(lines) == len(expected_cells)
+    column_starts = []
+    for line, cells in zip(lines, expected_cells, strict=True):
+        cursor = 0
+        starts = []
+        for cell in cells:
+            position = line.find(cell, cursor)
+            assert position >= cursor
+            starts.append(position)
+            cursor = position + len(cell)
+        column_starts.append(starts)
+    assert all(starts == column_starts[0] for starts in column_starts[1:])
 
 
 def test_empty_discovery_is_reported_without_failure(
