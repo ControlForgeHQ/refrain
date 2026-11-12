@@ -189,11 +189,11 @@ def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path
         "font_faces": {"quotation": "regular", "source": "italic"},
     }
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
-    assert dict(config.font_faces) == {"quotation": "regular", "attribution": "italic"}
+    assert dict(config.font_faces) == {"quotation": "regular", "source": "italic"}
 
     packaged_config = Path(str(files("refrain").joinpath("config.default.yaml")))
     packaged = load_application_config(packaged_config)
-    assert dict(packaged.font_faces) == {"attribution": "italic"}
+    assert dict(packaged.font_faces) == {"source": "italic"}
     assert packaged.default_decoration_colors == ("black",)
     assert {"regular", "italic"} <= set(packaged.fonts["lora"].faces)
     assert packaged.fonts["lora"].faces["italic"].name == "Lora-Italic.ttf"
@@ -649,7 +649,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
 
     assert not hasattr(config, "timezone")
     assert [backend.type for backend in config.display_backends] == ["window"]
-    assert config.day_start == time(6)
+    assert config.day_start == time(5)
     assert config.content_directory == tmp_path / "content"
     assert config.reveal.source == time(12)
     assert config.reveal.attribution == time(18)
@@ -1144,7 +1144,7 @@ def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Pa
     config = load_application_config(write_config(tmp_path / "nested" / "config.yaml", data))
 
     assert config.content_directory == absolute_content
-    assert config.day_start == time(6)
+    assert config.day_start == time(5)
     assert config.reveal.source == time(8)
     assert config.reveal.attribution == time(18)
     assert config.default_fonts == ("lora",)
@@ -1424,7 +1424,7 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
     with caplog.at_level("INFO"):
         config = load_application_config(config_path)
 
-    assert config.day_start == time(6)
+    assert config.day_start == time(5)
     assert config.reveal.source == time(12)
     assert "using documented defaults" in caplog.text
     assert "general.day_start" in caplog.text
