@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import socket
 import subprocess
 import sys
 import time
-from multiprocessing.connection import Client
+from multiprocessing.connection import Client, Connection
 from threading import Event, Thread
 
 import pytest
@@ -14,6 +15,7 @@ from PIL import Image
 
 from refrain import runtime_control as control_module
 from refrain.config import DisplayBackendConfiguration, DisplayOutputConfiguration
+from refrain.display import DisplayBackendUpdateError
 from refrain.display.coordinator import (
     DisplayPublicationCoordinator,
     PublicationOperation,
@@ -103,6 +105,310 @@ def test_discovery_push_and_refresh(runtime):
         assert sorted(seen) == [("one", (1, 2, 3)), ("two", (1, 2, 3))]
     finally:
         image.close()
+
+
+def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_path, monkeypatch):
+    seen = []
+
+    class Backend:
+        def publish(self, destination, image):
+            seen.append(destination.identifier)
+
+        def close(self):
+            pass
+
+    outputs = tuple(DisplayOutputConfiguration(f"output-{i}", SPEC) for i in range(130))
+    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
+    coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
+    assert coordinator.wait_for_publication((1, 0), 5)
+    seen.clear()
+    server = RuntimeControlServer(
+        coordinator, tmp_path / "runtime.json", lambda admit: admit((1, 0), {SPEC: Image.new("RGB", (16, 9))})
+    )
+    server.start()
+    try:
+        monkeypatch.setattr(
+            DisplayPublicationCoordinator,
+            "destination_statuses",
+            property(lambda self: pytest.fail("discovery must not construct an unbounded status snapshot")),
+        )
+        client = RuntimeControlClient(tmp_path / "runtime.json")
+        records = client.discover()
+        assert [r["identifier"] for r in records] == [f"image-server:output-{i}" for i in range(130)]
+        result = client.refresh()
+        assert result.status is PublicationStatus.SUCCEEDED
+        assert len(result.destinations) == len(seen) == 130
+    finally:
+        server.close()
+        coordinator.close()
+
+
+def test_discovery_streams_long_destination_identifier(tmp_path):
+    identifier = "😀" * 20_000
+
+    class Backend:
+        def publish(self, destination, image):
+            pass
+
+        def close(self):
+            pass
+
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC),))
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
+    coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
+    assert coordinator.wait_for_publication((1, 0), 5)
+    server = RuntimeControlServer(
+        coordinator, tmp_path / "runtime.json", lambda admit: admit((1, 0), {SPEC: Image.new("RGB", (16, 9))})
+    )
+    server.start()
+    try:
+        records = RuntimeControlClient(tmp_path / "runtime.json").discover()
+        assert records[0]["identifier"] == f"image-server:{identifier}"
+        assert records[0]["output_specification"] == SPEC
+        result = RuntimeControlClient(tmp_path / "runtime.json").refresh()
+        assert result.status is PublicationStatus.SUCCEEDED
+        assert list(result.destinations) == [f"image-server:{identifier}"]
+    finally:
+        server.close()
+        coordinator.close()
+
+
+@pytest.mark.parametrize("identifier", ["normal", "😀" * 20_000])
+def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, identifier):
+    failure = Event()
+    release = Event()
+    error = "🚨" * 20_000
+
+    class Backend:
+        def publish(self, destination, image):
+            if failure.is_set():
+                assert release.wait(5)
+                raise DisplayBackendUpdateError(error, recoverable=False)
+
+        def close(self):
+            pass
+
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC),))
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
+    coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
+    assert coordinator.wait_for_publication((1, 0), 5)
+    path = tmp_path / "runtime.json"
+    server = RuntimeControlServer(coordinator, path, lambda admit: admit((1, 0), {SPEC: Image.new("RGB", (16, 9))}))
+    server.start()
+    try:
+        failure.set()
+        accepted = []
+
+        def on_accepted():
+            accepted.append(True)
+            release.set()
+
+        result = RuntimeControlClient(path).refresh(on_accepted=on_accepted)
+        assert accepted == [True]
+        assert result.status is PublicationStatus.FAILED
+        success, message = result.destinations[f"image-server:{identifier}"]
+        assert success is False
+        assert message.endswith(" [truncated]")
+        assert len(message) == control_module._MAX_ERROR_CHARS
+        assert message.startswith(error[:100])
+    finally:
+        release.set()
+        server.close()
+        coordinator.close()
+
+
+@pytest.mark.parametrize("size", [(3841, 1), (3840, 2401)])
+def test_oversized_destination_discovery_and_refresh(tmp_path, size):
+    seen = []
+    oversized = ResolvedOutputSpecification("16:9", size)
+
+    class Backend:
+        def publish(self, destination, image):
+            seen.append(image.size)
+
+        def close(self):
+            pass
+
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("large", oversized),))
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
+    coordinator.publish((1, 0), {oversized: Image.new("RGB", size)})
+    assert coordinator.wait_for_publication((1, 0), 5)
+    seen.clear()
+    path = tmp_path / "runtime.json"
+    server = RuntimeControlServer(coordinator, path, lambda admit: admit((1, 0), {oversized: Image.new("RGB", size)}))
+    server.start()
+    try:
+        client = RuntimeControlClient(path)
+        record = client.discover()[0]
+        assert record["output_specification"] == oversized
+        assert record["supports_transient"] is False
+        with Image.new("RGB", size) as image:
+            result = client.publish_transient(
+                "image-server:large", {"image-server:large": oversized}, {oversized: image}
+            )
+        assert result.status is PublicationStatus.UNSUPPORTED
+        assert not seen
+        specification = {"aspect_ratio": "16:9", "size": list(size)}
+        with _raw(path) as connection:
+            connection.send_bytes(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "operation": "publish",
+                        "target": "all",
+                        "specifications": {"image-server:large": specification},
+                        "images": [{"specification": specification, "encoding": "png", "length": 1}],
+                    }
+                ).encode()
+            )
+            assert json.loads(connection.recv_bytes())["status"] == "unsupported"
+        assert not seen
+        assert client.refresh().status is PublicationStatus.SUCCEEDED
+        assert seen == [size]
+    finally:
+        server.close()
+        coordinator.close()
+
+
+@pytest.mark.parametrize("target", ["all", "image-server:large"])
+def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monkeypatch, target):
+    seen = []
+
+    class Backend:
+        def publish(self, destination, image):
+            seen.append(destination.identifier)
+
+        def close(self):
+            pass
+
+    large = ResolvedOutputSpecification("16:9", (3841, 1))
+    stale = ResolvedOutputSpecification("16:9", (512, 256))
+    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("large", large),))
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
+    path = tmp_path / "runtime.json"
+    server = RuntimeControlServer(coordinator, path, lambda _: None)
+    server.start()
+    sent_images = []
+    send_bytes = Connection.send_bytes
+
+    def observe_send(connection, data, *args, **kwargs):
+        if len(data) > control_module._MAX_METADATA:
+            sent_images.append(len(data))
+        return send_bytes(connection, data, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "send_bytes", observe_send)
+    try:
+        with Image.frombytes("RGB", stale.requested_output_size, os.urandom(512 * 256 * 3)) as image:
+            result = RuntimeControlClient(path).publish_transient(target, {"image-server:large": stale}, {stale: image})
+        assert result.status is PublicationStatus.UNSUPPORTED
+        assert not sent_images
+        assert not seen
+    finally:
+        server.close()
+        coordinator.close()
+
+
+def test_transient_raster_envelope():
+    supports = control_module._supports_transient_spec
+    assert supports(ResolvedOutputSpecification("16:10", (3840, 2400)))
+    assert not supports(ResolvedOutputSpecification("16:10", (3841, 2400)))
+    assert not supports(ResolvedOutputSpecification("16:10", (3840, 2401)))
+
+
+def test_transient_destination_count_remains_bounded(runtime):
+    path, _, seen, _, _, _ = runtime
+    specification = {"aspect_ratio": "16:9", "size": [16, 9]}
+    identifiers = [f"image-server:{i}" for i in range(65)]
+    with _raw(path) as connection:
+        connection.send_bytes(
+            json.dumps(
+                {
+                    "version": 1,
+                    "operation": "publish",
+                    "target": identifiers,
+                    "specifications": {identifier: specification for identifier in identifiers},
+                    "images": [{"specification": specification, "encoding": "png", "length": 1}],
+                }
+            ).encode()
+        )
+        assert json.loads(connection.recv_bytes())["status"] == "invalid"
+    assert not seen
+
+
+def test_transient_aggregate_pixel_limit_is_checked_before_transfer(runtime, monkeypatch):
+    path, _, seen, _, _, _ = runtime
+    monkeypatch.setattr(control_module, "_MAX_TOTAL_PIXELS", 143)
+    with Image.new("RGB", SPEC.requested_output_size) as image:
+        with pytest.raises(RuntimeProtocolError, match="pixel limit"):
+            RuntimeControlClient(path).publish_transient("image-server:one", {"image-server:one": SPEC}, {SPEC: image})
+    assert not seen
+
+
+@pytest.mark.parametrize("limit", ["image-count", "image-bytes", "total-bytes", "total-pixels"])
+def test_server_rejects_resource_limits_before_image_transfer(runtime, limit):
+    path, _, seen, _, _, server = runtime
+    attempts = []
+    server._transient_admission = lambda *args: attempts.append(args)
+    sizes = [[16, 9], [17, 9]]
+    lengths = [1, 1]
+    if limit == "image-count":
+        sizes.append([18, 9])
+        lengths.append(1)
+    elif limit == "image-bytes":
+        lengths[0] = control_module._MAX_IMAGE_BYTES + 1
+    elif limit == "total-bytes":
+        lengths = [21 * 1024 * 1024, 21 * 1024 * 1024]
+    else:
+        sizes = [[3000, 2000], [3200, 2000]]
+    specifications = [{"aspect_ratio": "16:9", "size": size} for size in sizes]
+    identifiers = [f"image-server:{index}" for index in range(len(sizes))]
+    request = {
+        "version": 1,
+        "operation": "publish",
+        "target": identifiers,
+        "specifications": dict(zip(identifiers, specifications, strict=True)),
+        "images": [
+            {"specification": spec, "encoding": "png", "length": length}
+            for spec, length in zip(specifications, lengths, strict=True)
+        ],
+    }
+    with _raw(path) as connection:
+        connection.send_bytes(json.dumps(request).encode())
+        assert json.loads(connection.recv_bytes())["status"] == "invalid"
+    assert not attempts and not seen
+
+
+@pytest.mark.parametrize("mode", ["L", "P", "RGBA"])
+def test_client_rejects_non_rgb_before_transfer(runtime, mode):
+    path, _, seen, _, _, _ = runtime
+    with Image.new(mode, SPEC.requested_output_size) as image:
+        with pytest.raises(RuntimeProtocolError, match="RGB"):
+            RuntimeControlClient(path).publish_transient("image-server:one", {"image-server:one": SPEC}, {SPEC: image})
+    assert not seen
+
+
+@pytest.mark.parametrize("mode", ["L", "P", "RGBA", "1"])
+def test_non_rgb_png_rejected_before_admission(runtime, mode):
+    path, _, seen, _, _, server = runtime
+    attempts = []
+    server._transient_admission = lambda *args: attempts.append(args)
+    with Image.new(mode, SPEC.requested_output_size) as image, io.BytesIO() as data:
+        image.save(data, format="PNG")
+        payload = data.getvalue()
+    specification = {"aspect_ratio": "16:9", "size": [16, 9]}
+    request = {
+        "version": 1,
+        "operation": "publish",
+        "target": ["image-server:one"],
+        "specifications": {"image-server:one": specification},
+        "images": [{"specification": specification, "encoding": "png", "length": len(payload)}],
+    }
+    with _raw(path) as connection:
+        connection.send_bytes(json.dumps(request).encode())
+        connection.send_bytes(payload)
+        assert json.loads(connection.recv_bytes())["status"] == "invalid"
+    assert not attempts and not seen
 
 
 def test_separate_process_can_authenticate_and_discover(runtime):
@@ -573,7 +879,7 @@ def test_invalid_image_descriptor_or_payload_never_publishes(runtime, encoding, 
         connection.send_bytes(json.dumps(message).encode())
         if encoding == "png" and size == [16, 9]:
             connection.send_bytes(payload)
-        assert json.loads(connection.recv_bytes())["status"] == "invalid"
+        assert json.loads(connection.recv_bytes())["status"] == ("unsupported" if size == [9000, 9] else "invalid")
     assert seen == []
 
 

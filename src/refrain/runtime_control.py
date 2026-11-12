@@ -33,13 +33,16 @@ from .geometry import PresentationGeometryError, ResolvedOutputSpecification
 _LOG = logging.getLogger(__name__)
 _VERSION = 1
 _MAX_METADATA = 65536
-_MAX_IMAGE_BYTES = 64 * 1024 * 1024
-_MAX_TOTAL_BYTES = 128 * 1024 * 1024
+_MAX_IMAGE_BYTES = 32 * 1024 * 1024
+_MAX_TOTAL_BYTES = 40 * 1024 * 1024
 _MAX_DESTINATIONS = 64
-_MAX_IMAGES = 8
-_MAX_DIMENSION = 8192
-_MAX_PIXELS = 32_000_000
-_MAX_TOTAL_PIXELS = 48_000_000
+_MAX_IMAGES = 2
+_MAX_WIDTH = 3840
+_MAX_HEIGHT = 2400
+_MAX_PIXELS = 9_216_000
+_MAX_TOTAL_PIXELS = 12_000_000
+_IDENTIFIER_CHUNK = 4096
+_MAX_ERROR_CHARS = 1024
 _MAX_CONNECTIONS = 2
 _AUTH_TIMEOUT = 3.0
 _IO_TIMEOUT = 10.0
@@ -72,6 +75,10 @@ class RuntimeUnconfirmed(RuntimeControlError):
 
 class RuntimeAdmissionRejected(RuntimeControlError):
     """An admission guard rejected the request and released its images."""
+
+
+class _TransientUnsupported(RuntimeControlError):
+    pass
 
 
 AdmissionGuard = Callable[[tuple[int, int], Mapping[ResolvedOutputSpecification, Image.Image]], PublicationOperation]
@@ -130,17 +137,17 @@ def _spec_from_wire(value: object) -> ResolvedOutputSpecification:
     if not isinstance(value, dict) or set(value) != {"aspect_ratio", "size"}:
         raise RuntimeProtocolError("invalid output specification")
     size = value["size"]
-    if (
-        not isinstance(size, list)
-        or len(size) != 2
-        or any(type(n) is not int or n <= 0 or n > _MAX_DIMENSION for n in size)
-        or size[0] * size[1] > _MAX_PIXELS
-    ):
-        raise RuntimeProtocolError("output dimensions exceed control limits")
+    if not isinstance(size, list) or len(size) != 2 or any(type(n) is not int or n <= 0 for n in size):
+        raise RuntimeProtocolError("invalid output dimensions")
     try:
         return ResolvedOutputSpecification(value["aspect_ratio"], tuple(size))
     except (PresentationGeometryError, TypeError) as error:
         raise RuntimeProtocolError("invalid output specification") from error
+
+
+def _supports_transient_spec(specification: ResolvedOutputSpecification) -> bool:
+    width, height = specification.requested_output_size
+    return width <= _MAX_WIDTH and height <= _MAX_HEIGHT and width * height <= _MAX_PIXELS
 
 
 def _send(connection: Connection, value: object) -> None:
@@ -194,6 +201,10 @@ class _RequestDeadline:
     def authenticated(self) -> None:
         self._authenticated.set()
 
+    def progress(self, timeout: float = _MAX_REQUEST_TIME) -> None:
+        with self._lock:
+            self._deadline = time.monotonic() + timeout
+
     def is_set(self) -> bool:
         return self._aborted.is_set()
 
@@ -202,9 +213,9 @@ class _RequestDeadline:
             self._finished.set()
             self._authenticated.set()
 
-    def abort(self) -> None:
+    def abort(self, *, expired_only: bool = False) -> None:
         with self._lock:
-            if self._finished.is_set():
+            if self._finished.is_set() or (expired_only and time.monotonic() < self._deadline):
                 return
             self._aborted.set()
             try:
@@ -224,12 +235,18 @@ class _RequestDeadline:
 
     def _watch(self) -> None:
         if not self._authenticated.wait(_AUTH_TIMEOUT):
-            expired = True
-        else:
-            expired = not self._finished.wait(max(0.0, self._deadline - time.monotonic()))
-        while expired and not self._finished.is_set():
-            self.abort()
-            self._finished.wait(0.1)
+            while not self._finished.is_set():
+                self.abort()
+                self._finished.wait(0.1)
+            return
+        while not self._finished.is_set():
+            with self._lock:
+                remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                self.abort(expired_only=True)
+                self._finished.wait(0.1)
+            else:
+                self._finished.wait(min(remaining, 0.1))
 
 
 def _validated_address(metadata_path: Path, family: str, address: object) -> str:
@@ -347,11 +364,19 @@ def _private_file(path: Path, data: bytes) -> None:
             pass
 
 
+def _bounded_outcome(outcome: tuple[bool | None, str | None]) -> tuple[bool | None, str | None]:
+    success, error = outcome
+    if error is not None and len(error) > _MAX_ERROR_CHARS:
+        suffix = " [truncated]"
+        error = error[: _MAX_ERROR_CHARS - len(suffix)] + suffix
+    return success, error
+
+
 def _result_wire(result: PublicationResult) -> dict:
     return {
         "version": _VERSION,
         "status": result.status.value,
-        "destinations": {key: list(value) for key, value in result.destinations.items()},
+        "destinations": {key: _bounded_outcome(value) for key, value in result.destinations.items()},
     }
 
 
@@ -375,6 +400,68 @@ def _result_from_wire(value: dict) -> PublicationResult:
         return PublicationResult(status, {key: tuple(pair) for key, pair in outcomes.items()})
     except (KeyError, ValueError, TypeError) as error:
         raise RuntimeProtocolError("invalid publication response") from error
+
+
+def _receive_result(
+    connection: Connection, *, terminal: bool = False, initial_response: dict | None = None
+) -> PublicationResult:
+    def receive() -> dict:
+        data = (
+            connection.recv_bytes(_MAX_METADATA) if terminal else _receive(connection, wait_timeout=_MAX_REQUEST_TIME)
+        )
+        return _decode(data)
+
+    response = receive() if initial_response is None else initial_response
+    if response.get("status") != "result-stream":
+        if response.get("status") == "unsupported-protocol":
+            raise RuntimeUnsupportedProtocol("unsupported runtime-control protocol")
+        if response.get("status") == "invalid" and "destinations" not in response:
+            raise RuntimeProtocolError(response.get("message", "invalid request"))
+        return _result_from_wire(response)
+    if set(response) != {"version", "status", "result_status"} or response["version"] != _VERSION:
+        raise RuntimeProtocolError("invalid publication response")
+    try:
+        status = PublicationStatus(response["result_status"])
+    except (ValueError, TypeError) as error:
+        raise RuntimeProtocolError("invalid publication response") from error
+    outcomes = {}
+    while True:
+        record = receive()
+        if record == {"version": _VERSION, "status": "result-end"}:
+            return PublicationResult(status, outcomes)
+        if (
+            set(record) != {"version", "status", "identifier", "outcome"}
+            or record["version"] != _VERSION
+            or record["status"] not in ("result-destination", "result-destination-start")
+        ):
+            raise RuntimeProtocolError("invalid publication response")
+        identifier = record["identifier"]
+        if record["status"] == "result-destination-start":
+            if identifier != "":
+                raise RuntimeProtocolError("invalid publication response")
+            parts = []
+            while True:
+                part = receive()
+                if part == {"version": _VERSION, "status": "destination-end"}:
+                    break
+                if (
+                    set(part) != {"version", "status", "value"}
+                    or part["version"] != _VERSION
+                    or part["status"] != "identifier-part"
+                    or not isinstance(part["value"], str)
+                    or not 1 <= len(part["value"]) <= _IDENTIFIER_CHUNK
+                ):
+                    raise RuntimeProtocolError("invalid publication response")
+                parts.append(part["value"])
+            if not parts:
+                raise RuntimeProtocolError("invalid publication response")
+            identifier = "".join(parts)
+        if not isinstance(identifier, str) or identifier in outcomes:
+            raise RuntimeProtocolError("invalid publication response")
+        part = _result_from_wire(
+            {"version": _VERSION, "status": status.value, "destinations": {identifier: record["outcome"]}}
+        )
+        outcomes[identifier] = part.destinations[identifier]
 
 
 class _BoundedImageBuffer(io.BytesIO):
@@ -529,14 +616,34 @@ class RuntimeControlServer:
                 return
             operation = request.get("operation")
             if operation == "discover" and set(request) == {"version", "operation"}:
-                statuses = self._coordinator.destination_statuses
-                if len(statuses) > _MAX_DESTINATIONS:
-                    raise RuntimeProtocolError("too many destinations")
-                records = [
-                    {**record, "output_specification": _spec_to_wire(record["output_specification"])}
-                    for record in statuses
-                ]
-                _send(connection, {"version": _VERSION, "status": "succeeded", "destinations": records})
+
+                def send_discovery(message):
+                    _send(connection, message)
+                    guard.progress()
+
+                for record in self._coordinator.iter_destination_statuses():
+                    specification = record["output_specification"]
+                    identifier = record["identifier"]
+                    wire_record = {
+                        **record,
+                        "supports_transient": record["supports_transient"] and _supports_transient_spec(specification),
+                        "output_specification": _spec_to_wire(specification),
+                    }
+                    if len(identifier) > _IDENTIFIER_CHUNK:
+                        wire_record["identifier"] = ""
+                        send_discovery({"version": _VERSION, "status": "destination-start", "destination": wire_record})
+                        for offset in range(0, len(identifier), _IDENTIFIER_CHUNK):
+                            send_discovery(
+                                {
+                                    "version": _VERSION,
+                                    "status": "identifier-part",
+                                    "value": identifier[offset : offset + _IDENTIFIER_CHUNK],
+                                },
+                            )
+                        send_discovery({"version": _VERSION, "status": "destination-end"})
+                        continue
+                    send_discovery({"version": _VERSION, "status": "destination", "destination": wire_record})
+                send_discovery({"version": _VERSION, "status": "succeeded"})
                 return
             if operation == "refresh" and set(request) == {"version", "operation"}:
                 if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
@@ -604,6 +711,11 @@ class RuntimeControlServer:
                         return
             else:
                 self._send_publication_response(connection, initial)
+        except _TransientUnsupported:
+            try:
+                _send(connection, _result_wire(PublicationResult(PublicationStatus.UNSUPPORTED, {})))
+            except (OSError, EOFError, RuntimeProtocolError):
+                pass
         except RuntimeAdmissionRejected:
             try:
                 _send(connection, _result_wire(PublicationResult(PublicationStatus.STOPPING, {})))
@@ -647,12 +759,50 @@ class RuntimeControlServer:
         try:
             if deadline.is_set():
                 raise RuntimeProtocolError("control response timed out")
-            _send(connection, _result_wire(result))
+            estimated_size = sum(
+                len(key) * 12 + (min(len(value[1]), _MAX_ERROR_CHARS) * 12 if value[1] else 0) + 32
+                for key, value in result.destinations.items()
+            )
+            if len(result.destinations) <= _MAX_DESTINATIONS and estimated_size < _MAX_METADATA - 128:
+                _send(connection, _result_wire(result))
+            else:
+                _send(
+                    connection, {"version": _VERSION, "status": "result-stream", "result_status": result.status.value}
+                )
+                deadline.progress(_IO_TIMEOUT)
+                for identifier, outcome in result.destinations.items():
+                    long_identifier = len(identifier) > _IDENTIFIER_CHUNK
+                    _send(
+                        connection,
+                        {
+                            "version": _VERSION,
+                            "status": "result-destination-start" if long_identifier else "result-destination",
+                            "identifier": "" if long_identifier else identifier,
+                            "outcome": _bounded_outcome(outcome),
+                        },
+                    )
+                    deadline.progress(_IO_TIMEOUT)
+                    if long_identifier:
+                        for offset in range(0, len(identifier), _IDENTIFIER_CHUNK):
+                            _send(
+                                connection,
+                                {
+                                    "version": _VERSION,
+                                    "status": "identifier-part",
+                                    "value": identifier[offset : offset + _IDENTIFIER_CHUNK],
+                                },
+                            )
+                            deadline.progress(_IO_TIMEOUT)
+                        _send(connection, {"version": _VERSION, "status": "destination-end"})
+                        deadline.progress(_IO_TIMEOUT)
+                _send(connection, {"version": _VERSION, "status": "result-end"})
         finally:
             deadline.finish()
 
     def _read_publication(self, connection: Connection, request: dict, deadline: float, guard: _RequestDeadline):
-        if set(request) != {"version", "operation", "target", "specifications", "images"}:
+        fields = {"version", "operation", "target", "specifications", "images"}
+        preflight = request.get("preflight", False)
+        if set(request) not in (fields, fields | {"preflight"}) or ("preflight" in request and preflight is not True):
             raise RuntimeProtocolError("invalid publication request")
         target = request["target"]
         if target != "all" and (
@@ -670,6 +820,13 @@ class RuntimeControlServer:
         ):
             raise RuntimeProtocolError("invalid destination specifications")
         specifications = {key: _spec_from_wire(value) for key, value in specifications.items()}
+        selected = None if target == "all" else set(target)
+        if any(
+            (selected is None and record["participating"] or selected is not None and record["identifier"] in selected)
+            and not _supports_transient_spec(record["output_specification"])
+            for record in self._coordinator.iter_destination_statuses()
+        ) or any(not _supports_transient_spec(spec) for spec in specifications.values()):
+            raise _TransientUnsupported()
         descriptors = request["images"]
         if not isinstance(descriptors, list) or not 1 <= len(descriptors) <= _MAX_IMAGES:
             raise RuntimeProtocolError("invalid image count")
@@ -679,6 +836,8 @@ class RuntimeControlServer:
             if not isinstance(descriptor, dict) or set(descriptor) != {"specification", "encoding", "length"}:
                 raise RuntimeProtocolError("invalid image descriptor")
             spec = _spec_from_wire(descriptor["specification"])
+            if not _supports_transient_spec(spec):
+                raise _TransientUnsupported()
             length = descriptor["length"]
             if descriptor["encoding"] != "png" or type(length) is not int or not 0 < length <= _MAX_IMAGE_BYTES:
                 raise RuntimeProtocolError("invalid image encoding or size")
@@ -693,6 +852,8 @@ class RuntimeControlServer:
             raise RuntimeProtocolError("inconsistent image specifications")
         if target != "all" and set(target) != set(specifications):
             raise RuntimeProtocolError("inconsistent destinations")
+        if preflight:
+            _send(connection, {"version": _VERSION, "status": "ready"})
         images = {}
         try:
             for spec, length in parsed:
@@ -708,8 +869,9 @@ class RuntimeControlServer:
                         source.format != "PNG"
                         or getattr(source, "n_frames", 1) != 1
                         or source.size != spec.requested_output_size
+                        or source.mode != "RGB"
                     ):
-                        raise RuntimeProtocolError("image dimensions do not match specification")
+                        raise RuntimeProtocolError("image must be a single-frame RGB PNG matching the specification")
                     source.load()
                     images[spec] = source.copy()
             if _decode(_receive(connection, guard, deadline)) != {"commit": True}:
@@ -819,38 +981,63 @@ class RuntimeControlClient:
             raise
 
     def discover(self) -> tuple[dict[str, object], ...]:
+        result = []
         try:
             with self._connect() as connection:
                 _send(connection, {"version": _VERSION, "operation": "discover"})
-                response = _decode(_receive(connection))
+                while True:
+                    response = _decode(_receive(connection))
+                    if response.get("version") != _VERSION:
+                        raise RuntimeUnsupportedProtocol("unsupported runtime-control protocol")
+                    if response == {"version": _VERSION, "status": "succeeded"}:
+                        break
+                    if set(response) != {"version", "status", "destination"} or response["status"] not in (
+                        "destination",
+                        "destination-start",
+                    ):
+                        raise RuntimeProtocolError("invalid discovery response")
+                    record = response["destination"]
+                    if (
+                        not isinstance(record, dict)
+                        or set(record)
+                        != {
+                            "identifier",
+                            "output_specification",
+                            "supports_transient",
+                            "participating",
+                            "withdrawn",
+                            "available",
+                        }
+                        or not isinstance(record["identifier"], str)
+                        or any(
+                            type(record[key]) is not bool
+                            for key in ("supports_transient", "participating", "withdrawn", "available")
+                        )
+                    ):
+                        raise RuntimeProtocolError("invalid destination record")
+                    if response["status"] == "destination-start":
+                        if record["identifier"] != "":
+                            raise RuntimeProtocolError("invalid destination record")
+                        parts = []
+                        while True:
+                            part = _decode(_receive(connection))
+                            if part == {"version": _VERSION, "status": "destination-end"}:
+                                break
+                            if (
+                                set(part) != {"version", "status", "value"}
+                                or part["version"] != _VERSION
+                                or part["status"] != "identifier-part"
+                                or not isinstance(part["value"], str)
+                                or not 1 <= len(part["value"]) <= _IDENTIFIER_CHUNK
+                            ):
+                                raise RuntimeProtocolError("invalid destination identifier")
+                            parts.append(part["value"])
+                        if not parts:
+                            raise RuntimeProtocolError("invalid destination identifier")
+                        record["identifier"] = "".join(parts)
+                    result.append({**record, "output_specification": _spec_from_wire(record["output_specification"])})
         except (OSError, EOFError) as error:
             raise RuntimeUnavailable("resident runtime connection lost") from error
-        if response.get("version") != _VERSION:
-            raise RuntimeUnsupportedProtocol("unsupported runtime-control protocol")
-        records = response.get("destinations")
-        if response.get("status") != "succeeded" or not isinstance(records, list) or len(records) > _MAX_DESTINATIONS:
-            raise RuntimeProtocolError("invalid discovery response")
-        result = []
-        for record in records:
-            if (
-                not isinstance(record, dict)
-                or set(record)
-                != {
-                    "identifier",
-                    "output_specification",
-                    "supports_transient",
-                    "participating",
-                    "withdrawn",
-                    "available",
-                }
-                or not isinstance(record["identifier"], str)
-                or any(
-                    type(record[key]) is not bool
-                    for key in ("supports_transient", "participating", "withdrawn", "available")
-                )
-            ):
-                raise RuntimeProtocolError("invalid destination record")
-            result.append({**record, "output_specification": _spec_from_wire(record["output_specification"])})
         return tuple(result)
 
     def refresh(self, on_accepted: Callable[[], object] | None = None) -> PublicationResult:
@@ -868,6 +1055,8 @@ class RuntimeControlClient:
             if destinations == "all"
             else [destinations] if isinstance(destinations, str) else list(destinations)
         )
+        if any(not _supports_transient_spec(spec) for spec in specifications.values()):
+            return PublicationResult(PublicationStatus.UNSUPPORTED, {})
         payloads = []
         descriptors = []
         if len(images) > _MAX_IMAGES:
@@ -875,8 +1064,8 @@ class RuntimeControlClient:
         total_pixels = 0
         for spec, image in images.items():
             _spec_from_wire(_spec_to_wire(spec))
-            if not isinstance(image, Image.Image) or image.size != spec.requested_output_size:
-                raise RuntimeProtocolError("image dimensions do not match specification")
+            if not isinstance(image, Image.Image) or image.mode != "RGB" or image.size != spec.requested_output_size:
+                raise RuntimeProtocolError("image must be RGB and match the specification")
             total_pixels += image.width * image.height
             if total_pixels > _MAX_TOTAL_PIXELS:
                 raise RuntimeProtocolError("images exceed transport pixel limit")
@@ -892,6 +1081,7 @@ class RuntimeControlClient:
         request = {
             "version": _VERSION,
             "operation": "publish",
+            "preflight": True,
             "target": target,
             "specifications": {key: _spec_to_wire(spec) for key, spec in specifications.items()},
             "images": descriptors,
@@ -905,18 +1095,20 @@ class RuntimeControlClient:
             if request["operation"] == "refresh":
                 submitted = True
             _send(connection, request)
+            if request["operation"] == "publish":
+                response = _decode(_receive(connection, wait_timeout=_MAX_REQUEST_TIME))
+                if response != {"version": _VERSION, "status": "ready"}:
+                    result = _receive_result(connection, initial_response=response)
+                    if result.status is PublicationStatus.ACCEPTED:
+                        raise RuntimeProtocolError("publication accepted before image transfer")
+                    return result
             for payload in payloads:
                 connection.send_bytes(payload)
             # After this point, loss cannot establish whether admission occurred.
             submitted = True
             if request["operation"] == "publish":
                 _send(connection, {"commit": True})
-            response = _decode(_receive(connection, wait_timeout=_MAX_REQUEST_TIME))
-            if response.get("status") == "unsupported-protocol":
-                raise RuntimeUnsupportedProtocol("unsupported runtime-control protocol")
-            if response.get("status") == "invalid" and "destinations" not in response:
-                raise RuntimeProtocolError(response.get("message", "invalid request"))
-            result = _result_from_wire(response)
+            result = _receive_result(connection)
             if result.status is not PublicationStatus.ACCEPTED:
                 return result
             if on_accepted is not None:
@@ -924,7 +1116,7 @@ class RuntimeControlClient:
             # Publication may take arbitrarily long; do not time out an accepted operation.
             _set_socket_timeouts(connection, 0)
             try:
-                terminal = _result_from_wire(_decode(connection.recv_bytes(_MAX_METADATA)))
+                terminal = _receive_result(connection, terminal=True)
                 if terminal.status is PublicationStatus.ACCEPTED:
                     raise RuntimeProtocolError("nonterminal publication response")
             except RuntimeProtocolError as error:

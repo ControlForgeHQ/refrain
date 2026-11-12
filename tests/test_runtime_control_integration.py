@@ -150,6 +150,96 @@ def test_real_resident_listener_and_refresh(resident):
     assert published == ["one", "two", "one", "two"]
 
 
+def test_slow_refresh_preparation_does_not_block_scheduled_reveal(tmp_path, monkeypatch):
+    workspace = Workspace(tmp_path)
+    ordinary(workspace)
+    workspace.config.write_text(
+        workspace.config.read_text().replace(
+            '- type: "waveshare-13in3-e"',
+            '- type: "window"\n      aspect_ratio: "16:9"\n      resolution: [800, 450]',
+        )
+    )
+    shutdown, wake, preparing, release = Event(), Event(), Event(), Event()
+    clock = [at(10, 11)]
+    metadata = tmp_path / "control" / "endpoint.json"
+    coordinators, results, errors = [], [], []
+    factory = application.DisplayPublicationCoordinator
+    recover = application._recover_images
+
+    class Backend:
+        def publish(self, destination, image):
+            image.getpixel((0, 0))
+
+        def close(self):
+            pass
+
+    class Coordinator(factory):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            coordinators.append(self)
+
+    def slow_recover(*args, **kwargs):
+        if current_thread().name == "refrain-control-request":
+            preparing.set()
+            assert release.wait(10)
+        return recover(*args, **kwargs)
+
+    def wait_for_schedule(_deadline, _event, **_kwargs):
+        wake.wait(0.1)
+        wake.clear()
+        return shutdown.is_set()
+
+    def run():
+        try:
+            application.run_application(
+                workspace.config,
+                workspace.state,
+                workspace.artifacts,
+                history_path=workspace.history,
+                shutdown_event=shutdown,
+                backend_factory=lambda _: Backend(),
+                wall_clock=lambda: clock[0],
+                scheduling_wait=wait_for_schedule,
+                control_metadata_path=metadata,
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    monkeypatch.setattr(application, "DisplayPublicationCoordinator", Coordinator)
+    monkeypatch.setattr(application, "_recover_images", slow_recover)
+    thread = Thread(target=run, daemon=True)
+    thread.start()
+    client_thread = None
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if coordinators and coordinators[0].has_successful_publication((1, 0)) and metadata.exists():
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail(f"resident startup did not complete: {errors}")
+        client_thread = Thread(target=lambda: results.append(RuntimeControlClient(metadata).refresh()), daemon=True)
+        client_thread.start()
+        assert preparing.wait(5)
+        clock[0] = at(10, 13)
+        wake.set()
+        assert coordinators[0].wait_for_publication((1, 1), timeout=5)
+        assert workspace.load().highest_reveal_stage == 1
+        release.set()
+        client_thread.join(5)
+        assert not client_thread.is_alive()
+        assert results[0].status.value == "invalid"
+    finally:
+        release.set()
+        shutdown.set()
+        wake.set()
+        if client_thread is not None:
+            client_thread.join(10)
+        thread.join(10)
+        assert not thread.is_alive()
+        assert not errors
+
+
 def test_real_transient_preserves_scheduled_state_and_acknowledgements(resident):
     metadata, _, published, _, _, _, _, _, _, _, workspace, coordinator, _, pixels = resident
     before_state = workspace.state.read_bytes()

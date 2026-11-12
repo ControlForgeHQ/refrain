@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from threading import Condition, Event, Thread
@@ -204,17 +205,25 @@ class DisplayPublicationCoordinator:
     def destination_statuses(self) -> tuple[dict[str, object], ...]:
         """Return configured destination capability and participation status."""
         with self._condition:
-            return tuple(
-                {
-                    "identifier": key,
-                    "output_specification": state.destination.output_specification,
-                    "supports_transient": state.transient_supported,
-                    "participating": not state.withdrawn,
-                    "withdrawn": state.withdrawn,
-                    "available": not state.terminal and state.error is None,
-                }
-                for key, state in self._states.items()
-            )
+            return tuple(self._destination_status(key, state) for key, state in self._states.items())
+
+    @staticmethod
+    def _destination_status(key: str, state: _DestinationState) -> dict[str, object]:
+        return {
+            "identifier": key,
+            "output_specification": state.destination.output_specification,
+            "supports_transient": state.transient_supported,
+            "participating": not state.withdrawn,
+            "withdrawn": state.withdrawn,
+            "available": not state.terminal and state.error is None,
+        }
+
+    def iter_destination_statuses(self) -> Iterator[dict[str, object]]:
+        """Snapshot each destination separately without retaining a second full inventory."""
+        for key, state in self._states.items():
+            with self._condition:
+                record = self._destination_status(key, state)
+            yield record
 
     def publish(
         self,

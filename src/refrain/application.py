@@ -281,6 +281,7 @@ def _refresh_scheduled(
     state_lock: Lock,
     admit: Callable[[tuple[int, int], Mapping[ResolvedOutputSpecification, Image.Image]], PublicationOperation],
     remember_artifacts: Callable[[int, PreparedImageArtifactSet], None] | None = None,
+    artifact_lock: Lock | None = None,
 ) -> PublicationOperation:
     """Prepare and admit only the scheduled identity still required by the runtime."""
 
@@ -297,25 +298,34 @@ def _refresh_scheduled(
         identity = (state.revision, decision.required_reveal_stage)
         if coordinator.desired_identity != identity:
             return rejected(PublicationStatus.INVALID)
+
+    with artifact_lock if artifact_lock is not None else Lock():
         artifacts = _recover_images(state, artifact_store, configuration, chooser)
-        if remember_artifacts is not None:
-            remember_artifacts(state.revision, artifacts)
         images = _load_stage_variants(artifacts, configuration.required_output_specifications, identity[1])
+        transferred = False
         try:
-            decision = evaluate_scheduling(wall_clock(), configuration, state)
-            if (
-                shutdown.is_set()
-                or decision.required_reveal_stage != identity[1]
-                or coordinator.desired_identity != identity
-            ):
+            with state_lock:
+                current = _reload(store)
+                decision = evaluate_scheduling(wall_clock(), configuration, current)
+                if current is not None and current.revision == identity[0] and remember_artifacts is not None:
+                    remember_artifacts(current.revision, artifacts)
+                if (
+                    shutdown.is_set()
+                    or current is None
+                    or current.revision != identity[0]
+                    or decision.required_reveal_stage != identity[1]
+                    or coordinator.desired_identity != identity
+                ):
+                    for image in images.values():
+                        image.close()
+                    return rejected(PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.INVALID)
+                transferred = True
+                return admit(identity, images)
+        except BaseException:
+            if not transferred:
                 for image in images.values():
                     image.close()
-                return rejected(PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.INVALID)
-        except BaseException:
-            for image in images.values():
-                image.close()
             raise
-        return admit(identity, images)
 
 
 def _admit_transient(
@@ -565,6 +575,7 @@ def run_application(
     information_view_started: float | None = None
     information_view_acknowledgement_logged = False
     state_lock = Lock()
+    artifact_lock = Lock()
     control: RuntimeControlServer | None = None
 
     def remember_artifacts(revision: int, recovered: PreparedImageArtifactSet) -> None:
@@ -596,6 +607,7 @@ def run_application(
                         state_lock,
                         admit,
                         remember_artifacts,
+                        artifact_lock,
                     ),
                     shutdown_event=shutdown,
                     transient_admission=lambda destinations, specifications, images, admit: _admit_transient(
@@ -651,7 +663,12 @@ def run_application(
                 if latest_desired is not None and latest_desired[0] == state.revision:
                     stage = max(stage, latest_desired[1])
                 latest_desired = (state.revision, stage)
-                if artifacts is None or artifact_revision != state.revision:
+                if stage > state.highest_reveal_stage:
+                    with state_lock:
+                        state = _persist_reveal_progress(store, state, stage)
+                with state_lock:
+                    current_artifacts = artifacts if artifact_revision == state.revision else None
+                if current_artifacts is None:
                     if coordinator is not None:
                         desired_identity = coordinator.desired_identity
                         if (
@@ -661,22 +678,25 @@ def run_application(
                         ):
                             with state_lock:
                                 coordinator.clear_desired()
-                    with state_lock:
-                        artifacts = _recover_images(
+                    if not artifact_lock.acquire(blocking=False):
+                        shutdown.wait(0.1)
+                        continue
+                    try:
+                        recovered = _recover_images(
                             state,
                             artifact_store,
                             configuration,
                             chooser,
                         )
-                        artifact_revision = state.revision
                         try:
                             artifact_store.cleanup(state.revision)
                         except ArtifactStoreError as error:
                             _LOGGER.warning("Cannot clean obsolete prepared images: %s", error)
+                        with state_lock:
+                            remember_artifacts(state.revision, recovered)
+                    finally:
+                        artifact_lock.release()
                     continue
-                if stage > state.highest_reveal_stage:
-                    with state_lock:
-                        state = _persist_reveal_progress(store, state, stage)
                 identity = (state.revision, stage)
                 if coordinator is None:
                     coordinator = DisplayPublicationCoordinator(
@@ -763,18 +783,23 @@ def run_application(
                         continue
                 if coordinator.desired_identity != identity:
                     try:
-                        with state_lock:
-                            images = _load_stage_variants(
-                                artifacts,
-                                configuration.required_output_specifications,
-                                stage,
-                            )
+                        images = _load_stage_variants(
+                            current_artifacts,
+                            configuration.required_output_specifications,
+                            stage,
+                        )
                     except ArtifactStoreError as error:
-                        artifacts = None
+                        with state_lock:
+                            if artifacts is current_artifacts:
+                                artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
                     with state_lock:
+                        if artifacts is not current_artifacts:
+                            for image in images.values():
+                                image.close()
+                            continue
                         coordinator.publish(identity, images)
                     continue
                 if last_failure is not None:
