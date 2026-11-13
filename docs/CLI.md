@@ -41,7 +41,7 @@ refrain-viewer --image candidate.png --push TARGET
 
 The PNG must exactly match the requested output dimensions of every selected destination. `--push all` includes every participating destination except intentionally withdrawn destinations, including failed or unavailable destinations, and is rejected as a whole if any selected destination has different dimensions or does not support transient publication. The declared presentation aspect is not inferred from the image. The viewer never converts color modes, resizes, crops, pads, stretches, decorates, or otherwise transforms a finished image for publication.
 
-With `--image`, presentation-generation controls (`--config`, `--entry`, font and face options, font-size bounds, background, decoration, text color, tint, style, QR options, and `--debug-layout`), local geometry controls (`--aspect` and `--resolution`), and `--output` are invalid. `--output` does not copy the supplied file. `--window` may be used for local inspection, but cannot be combined with `--push`. The standalone `--list-destinations` operation cannot be combined with `--image`.
+With `--image`, presentation-generation controls (`--config`, `--entry`, font and face options, font-size bounds, background, decoration, text color, tint, style, QR options, and `--debug-layout`), local geometry and destination controls (`--aspect`, `--resolution`, and `--render-as`), and `--output` are invalid. `--output` does not copy the supplied file. `--window` may be used for local inspection, but cannot be combined with `--push`. The standalone `--list-destinations` operation cannot be combined with `--image`.
 
 ### Configuration selection
 
@@ -61,7 +61,7 @@ refrain-viewer --list-destinations
 
 This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its canonical destination identifier, declared presentation aspect ratio, requested output resolution, transient-publication capability, and status distinguishing participation, failure/unavailability, and intentional withdrawal. Destination identifiers are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
 
-`--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
+`--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, `--render-as`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
 
 ### Entry selection
 
@@ -115,10 +115,20 @@ Local inspection and export accept these controls:
 |---|---|
 | `--aspect ASPECT` | Select a supported presentation aspect: `4:3`, `5:3`, `16:9`, or `16:10`. |
 | `--resolution WIDTH HEIGHT` | Set requested output width and height in positive integer pixels. |
+| `--render-as DESTINATION_ID` | Use a destination's configured output specification and apply its visual post-processing. |
 | `--output PATH` | Write the completed output PNG to `PATH`. |
 | `--window` | Open the simple local viewer window. |
 
 When omitted, the aspect defaults to `16:10` and the resolution uses the full design canvas for the selected aspect. The [architecture](ARCHITECTURE.md#image-spaces-and-output-geometry) defines the design-canvas, presentation-canvas, and output-image geometry; the CLI does not redefine that pipeline.
+
+`--render-as` resolves the canonical destination identifier from the viewer's effective configuration, then uses its declared aspect ratio and requested resolution for the normal viewer rendering pipeline. It applies the destination's visual post-processing to the completed output image before local display or PNG export. For example:
+
+```text
+refrain-viewer --render-as waveshare-13in3-e --output panel-preview.png
+refrain-viewer --render-as image-server:portrait --window
+```
+
+This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `image-server` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected.
 
 `--output` writes the PNG without opening a window unless `--window` is also supplied. Without `--output`, the normal default behavior opens the simple local viewer window.
 
@@ -140,6 +150,6 @@ refrain-viewer [presentation selection and overrides...] --push TARGET
 
 Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected, and an explicitly selected intentionally withdrawn destination is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push all` is likewise rejected before rendering if any participating destination does not support it; it does not omit unsupported or failed destinations, and excludes only those intentionally withdrawn. The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
 
-`--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
+`--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, `--render-as`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
 
 Preparation progress may be reported while images are rendered. After runtime admission, the viewer reports that publication has begun before waiting on potentially slow backend work. It remains attached for the terminal result. Exit status zero means every selected destination succeeded. Busy, rejected, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero.

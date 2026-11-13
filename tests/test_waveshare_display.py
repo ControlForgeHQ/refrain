@@ -96,6 +96,30 @@ def test_factory_constructs_waveshare_backend_and_updates_fixed_output_dimension
     assert driver.calls == ["getbuffer", "Init", "display", "sleep"] * 2
 
 
+def test_publication_backend_uses_shared_waveshare_visual_postprocessing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    driver = SimulatedDriver()
+    initial_pixels: list[tuple[int, int, int]] = []
+    original_getbuffer = driver.getbuffer
+
+    def capture_getbuffer(image: Image.Image):
+        initial_pixels.append(image.getpixel((0, 0)))
+        return original_getbuffer(image)
+
+    driver.getbuffer = capture_getbuffer
+    install_simulated_driver(monkeypatch, driver)
+    backend = create_display_backend("waveshare-13in3-e")
+    image = Image.new("RGB", (1600, 1200), (255, 128, 0))
+
+    backend.update(image)
+
+    assert initial_pixels == [(255, 255, 0)]
+    assert image.getpixel((0, 0)) == (255, 128, 0)
+    image.close()
+    backend.close()
+
+
 def test_backend_construction_does_not_require_linux_hardware_modules() -> None:
     backend = create_display_backend("waveshare-13in3-e")
 

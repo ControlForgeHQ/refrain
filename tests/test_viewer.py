@@ -315,6 +315,151 @@ def test_output_flags_select_window_and_png_destinations(
     rendered.close()
 
 
+def test_render_as_uses_configured_geometry_and_exports_without_backend_or_runtime_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _workspace(tmp_path, with_entry=False)
+    sentinels = {
+        tmp_path / "state.json": b"state sentinel",
+        tmp_path / "history.jsonl": b"history sentinel",
+        tmp_path / "artifacts": b"artifact sentinel",
+    }
+    for path, content in sentinels.items():
+        path.write_bytes(content)
+    config.write_text(
+        _CONFIG.replace(
+            "    - type: image-server\n      outputs:\n        - id: configured-output\n",
+            '    - type: window\n      aspect_ratio: "4:3"\n      resolution: [320, 240]\n',
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "destination.png"
+    captured: dict[str, object] = {}
+    windows: list[tuple[tuple[int, int], tuple[int, int, int]]] = []
+
+    def capture_render(_configuration, _selector, specification, **kwargs):
+        captured["specification"] = specification
+        captured["destination_type"] = kwargs["destination_type"]
+        return Image.new("RGB", specification.requested_output_size, (10, 20, 30))
+
+    monkeypatch.setattr(viewer, "render_preview", capture_render)
+    monkeypatch.setattr(
+        viewer,
+        "show_preview_window",
+        lambda image: windows.append((image.size, image.getpixel((0, 0)))),
+    )
+    monkeypatch.setattr(
+        refrain.display,
+        "create_display_backend",
+        lambda *_args, **_kwargs: pytest.fail("configured backends must not be constructed"),
+    )
+    monkeypatch.setattr(viewer, "RuntimeControlClient", lambda *_args, **_kwargs: pytest.fail("runtime was accessed"))
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: pytest.fail("runtime paths were resolved"))
+
+    assert viewer.main(["--config", str(config), "--render-as", "window", "--output", str(output), "--window"]) == 0
+
+    assert captured["specification"] == ResolvedOutputSpecification("4:3", (320, 240))
+    assert captured["destination_type"] == "window"
+    assert windows == [((320, 240), (10, 20, 30))]
+    with Image.open(output) as image:
+        assert image.size == (320, 240)
+        assert image.getpixel((0, 0)) == (10, 20, 30)
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
+
+
+def test_render_destination_lookup_uses_canonical_image_server_identifier(tmp_path: Path) -> None:
+    config, _ = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config)
+
+    backend_type, specification = viewer._resolve_render_destination(configuration, "image-server:configured-output")
+
+    assert backend_type == "image-server"
+    assert specification == ResolvedOutputSpecification("16:10", (3840, 2400))
+
+
+def test_render_as_waveshare_exports_processed_pixels_without_hardware(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _workspace(tmp_path, with_entry=False)
+    config.write_text(
+        _CONFIG.replace(
+            "    - type: image-server\n      outputs:\n        - id: configured-output\n",
+            "    - type: waveshare-13in3-e\n",
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "waveshare.png"
+    windows: list[tuple[int, int, int]] = []
+
+    def render_variants(_configuration, _selector, specifications, **_kwargs):
+        specification = specifications[0]
+        return {specification: Image.new("RGB", specification.requested_output_size, (255, 128, 0))}
+
+    monkeypatch.setattr(viewer, "render_preview_variants", render_variants)
+    monkeypatch.setattr(viewer, "show_preview_window", lambda image: windows.append(image.getpixel((0, 0))))
+    monkeypatch.setattr(
+        refrain.display,
+        "create_display_backend",
+        lambda *_args, **_kwargs: pytest.fail("configured backends must not be constructed"),
+    )
+    monkeypatch.setattr(viewer, "RuntimeControlClient", lambda *_args, **_kwargs: pytest.fail("runtime was accessed"))
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: pytest.fail("runtime paths were resolved"))
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config),
+                "--render-as",
+                "waveshare-13in3-e",
+                "--output",
+                str(output),
+                "--window",
+            ]
+        )
+        == 0
+    )
+
+    with Image.open(output) as image:
+        assert image.mode == "RGB"
+        assert image.size == (1600, 1200)
+        assert image.getpixel((0, 0)) == (255, 255, 0)
+    assert windows == [(255, 255, 0)]
+
+
+def test_render_as_rejects_unknown_configured_destination(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _workspace(tmp_path, with_entry=False)
+    monkeypatch.setattr(viewer, "render_preview", lambda *_args, **_kwargs: pytest.fail("rendering was started"))
+
+    assert viewer.main(["--config", str(config), "--render-as", "missing", "--output", "preview.png"]) == 1
+    assert "destination 'missing' is not configured" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("arguments", "diagnostic"),
+    [
+        (["--render-as", "window", "--aspect", "4:3"], "--render-as cannot be combined with --aspect"),
+        (["--render-as", "window", "--resolution", "320", "240"], "--render-as cannot be combined with --resolution"),
+        (["--render-as", "window", "--push", "window"], "--push is mutually exclusive with --render-as"),
+        (["--render-as", "window", "--image", "finished.png"], "--render-as"),
+        (["--render-as", "window", "--list-destinations"], "--render-as"),
+    ],
+)
+def test_render_as_rejects_geometry_and_standalone_mode_conflicts(
+    arguments: list[str], diagnostic: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(viewer, "_run_push", lambda *_args, **_kwargs: pytest.fail("push was dispatched"))
+    monkeypatch.setattr(viewer, "_run_destination_discovery", lambda: pytest.fail("discovery was dispatched"))
+
+    with pytest.raises(SystemExit) as error:
+        viewer.main(arguments)
+
+    assert error.value.code == 2
+    assert diagnostic in capsys.readouterr().err
+
+
 def test_desktop_fit_scales_a_copy_without_changing_the_output_image() -> None:
     output = Image.new("RGB", (320, 200), (10, 20, 30))
 

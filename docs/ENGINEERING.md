@@ -1381,6 +1381,8 @@ Where practical, test recovery using a newly initialized application instance ra
 
 Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification have identical output dimensions; destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. Verify that each configured destination resolves its own output specification and that the prepared variant set contains exactly the unique required specifications.
 
+Test destination visual post-processing independently of backend construction. Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output. Verify the Waveshare conversion can be imported and exercised without GPIO/SPI dependencies and that the driver and viewer call the same conversion. These tests establish software behavior only, not physical panel validation.
+
 Include an aspect-mismatched output specification with declared aspect 4:3 and requested resolution 1600 × 1190. Assert that the design canvas is 3200 × 2400 and background/decorative composition occurs there; literary geometry and font fitting, QR viability and rasterization, and diagnostic overlays resolve on the 1596 × 1197 presentation canvas; and only the completed image is resized to the 1600 × 1190 output image. This case must not be replaced by tests where presentation-canvas and output-image dimensions happen to match. Also exercise exact-aspect supported configurations. Verify deterministic half-up rounding and rejection of degenerate geometry.
 
 Use representative quotations of different lengths and combinations of optional metadata.
@@ -1456,6 +1458,8 @@ Hardware validation should include:
 Report the exact tested hardware, operating-system environment, and relevant limitations.
 
 A hardware-independent test or mocked driver does not constitute physical display validation.
+
+For Waveshare visual post-processing, physical validation should compare a viewer-exported processed preview with the corresponding image published to the supported panel. Monitor colorimetry may differ from e-paper pigments; compare palette and dither structure, and report when this hardware check was not available.
 
 Do not claim a Raspberry Pi model is supported solely because it uses a compatible GPIO interface.
 

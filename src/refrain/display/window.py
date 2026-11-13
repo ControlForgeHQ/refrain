@@ -16,6 +16,7 @@ from . import (
     DisplayBackendInitializationError,
     DisplayBackendUpdateError,
 )
+from .postprocessing import post_process_destination_image
 
 
 @dataclass
@@ -195,7 +196,7 @@ class WindowDisplayBackend:
     def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
         """Present the image through this configured single-output destination."""
         del destination
-        self.update(image)
+        self.update(post_process_destination_image("window", image))
 
     def close(self) -> None:
         """Close the window and wait for its GUI thread to release resources."""

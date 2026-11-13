@@ -16,7 +16,11 @@ from typing import Callable, Iterable, Mapping
 
 from PIL import Image
 
-from ..config import DisplayBackendConfiguration, DisplayOutputConfiguration
+from ..config import (
+    DisplayBackendConfiguration,
+    DisplayOutputConfiguration,
+    canonical_destination_identifier,
+)
 from ..geometry import ResolvedOutputSpecification
 from . import DisplayBackend, DisplayBackendError, WithdrawableDisplayBackend, create_display_backend
 
@@ -123,15 +127,6 @@ class _DestinationState:
     one_shot_active: bool = False
 
 
-def _destination_identifier(
-    configuration: DisplayBackendConfiguration,
-    destination: DisplayOutputConfiguration,
-) -> str:
-    if configuration.type == "image-server" or len(configuration.outputs) > 1:
-        return f"{configuration.type}:{destination.identifier}"
-    return configuration.type
-
-
 class DisplayPublicationCoordinator:
     """Publish each destination's matching variant on its backend's worker."""
 
@@ -158,7 +153,7 @@ class DisplayPublicationCoordinator:
             identifier: _DestinationState(configuration, destination, identifier)
             for configuration in configurations
             for destination in configuration.outputs
-            for identifier in (_destination_identifier(configuration, destination),)
+            for identifier in (canonical_destination_identifier(configuration, destination),)
         }
         expected_destinations = sum(len(configuration.outputs) for configuration in configurations)
         if len(self._states) != expected_destinations:
