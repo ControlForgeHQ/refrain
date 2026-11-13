@@ -11,9 +11,15 @@ from typing import Mapping, Sequence
 
 from PIL import Image, ImageOps
 
-from .config import ApplicationConfiguration, ApplicationConfigurationError, load_application_config
+from .config import (
+    ApplicationConfiguration,
+    ApplicationConfigurationError,
+    canonical_destination_identifier,
+    load_application_config,
+)
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library, normalize_quotation
 from .display.coordinator import PublicationResult, PublicationStatus
+from .display.postprocessing import post_process_destination_image
 from .geometry import (
     SUPPORTED_PRESENTATION_ASPECTS,
     ResolvedOutputSpecification,
@@ -142,16 +148,29 @@ def render_preview(
     *,
     overrides: PresentationOverrides | None = None,
     debug_layout: bool = False,
+    destination_type: str | None = None,
 ) -> Image.Image:
     """Render one fully revealed output image without runtime persistence or backends."""
     specification = output_specification or _output_specification("16:10", None)
-    return render_preview_variants(
+    image = render_preview_variants(
         configuration,
         selector,
         (specification,),
         overrides=overrides,
         debug_layout=debug_layout,
     )[specification]
+    if destination_type is not None:
+        try:
+            processed_image = post_process_destination_image(destination_type, image)
+        except (TypeError, ValueError) as error:
+            image.close()
+            raise ViewerError(
+                f"cannot post-process preview for destination type {destination_type!r}: {error}"
+            ) from error
+        if processed_image is not image:
+            image.close()
+        return processed_image
+    return image
 
 
 def render_preview_variants(
@@ -228,7 +247,22 @@ def show_preview_window(image: Image.Image) -> None:
 
 def _fit_preview_image(image: Image.Image, available_size: tuple[int, int]) -> Image.Image:
     """Return a proportionally scaled desktop copy without changing the output image."""
-    return ImageOps.contain(image.copy(), available_size, method=Image.Resampling.LANCZOS)
+    desktop_image = image.convert("RGB") if image.mode == "P" else image.copy()
+    return ImageOps.contain(desktop_image, available_size, method=Image.Resampling.LANCZOS)
+
+
+def _resolve_render_destination(
+    configuration: ApplicationConfiguration,
+    identifier: str,
+) -> tuple[str, ResolvedOutputSpecification]:
+    for backend in configuration.display_backends:
+        for destination in backend.outputs:
+            if canonical_destination_identifier(backend, destination) == identifier:
+                return backend.type, destination.output_specification
+    raise ViewerError(
+        f"destination {identifier!r} is not configured in the viewer configuration; "
+        "check --config and the destination ID"
+    )
 
 
 def _finished_png_bit_depth(path: str | Path) -> int:
@@ -289,8 +323,9 @@ def run_viewer(
     *,
     config_file: str | Path | None = None,
     selector: tuple[str, int] = _DEFAULT_SELECTOR,
-    aspect: str = "16:10",
+    aspect: str | None = None,
     resolution: tuple[int, int] | None = None,
+    render_as: str | None = None,
     output: str | Path | None = None,
     window: bool = False,
     overrides: PresentationOverrides | None = None,
@@ -313,13 +348,20 @@ def run_viewer(
     except ApplicationConfigurationError as error:
         raise ViewerError(f"application configuration is invalid: {error}") from error
 
-    specification = _output_specification(aspect, resolution)
+    if render_as is not None:
+        if aspect is not None or resolution is not None:
+            raise ViewerError("--render-as cannot be combined with --aspect or --resolution")
+        destination_type, specification = _resolve_render_destination(configuration, render_as)
+    else:
+        destination_type = None
+        specification = _output_specification("16:10" if aspect is None else aspect, resolution)
     image = render_preview(
         configuration,
         selector,
         specification,
         overrides=PresentationOverrides() if overrides is None else overrides,
         debug_layout=debug_layout,
+        destination_type=destination_type,
     )
     try:
         if output is not None:
@@ -618,6 +660,7 @@ def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: ar
         ("--qr/--no-qr", arguments.qr_enabled is not None),
         ("--aspect", arguments.aspect),
         ("--resolution", arguments.resolution),
+        ("--render-as", arguments.render_as),
         ("--output", arguments.output),
         ("--window", arguments.window),
         ("--debug-layout", arguments.debug_layout),
@@ -637,12 +680,23 @@ def _validate_push_arguments(parser: argparse.ArgumentParser, arguments: argpars
         ("--output", arguments.output),
         ("--aspect", arguments.aspect),
         ("--resolution", arguments.resolution),
+        ("--render-as", arguments.render_as),
         ("--list-destinations", arguments.list_destinations),
     ):
         if value is not None and value is not False:
             conflicts.append(option)
     if conflicts:
         parser.error("--push is mutually exclusive with " + ", ".join(conflicts))
+
+
+def _validate_render_as_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    conflicts = [
+        option
+        for option, value in (("--aspect", arguments.aspect), ("--resolution", arguments.resolution))
+        if value is not None
+    ]
+    if conflicts:
+        parser.error("--render-as cannot be combined with " + " or ".join(conflicts))
 
 
 def _validate_image_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
@@ -664,6 +718,7 @@ def _validate_image_arguments(parser: argparse.ArgumentParser, arguments: argpar
         ("--qr/--no-qr", arguments.qr_enabled is not None),
         ("--aspect", arguments.aspect),
         ("--resolution", arguments.resolution),
+        ("--render-as", arguments.render_as),
         ("--output", arguments.output),
         ("--debug-layout", arguments.debug_layout),
     ):
@@ -708,6 +763,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.set_defaults(qr_enabled=None)
     parser.add_argument("--aspect", choices=tuple(SUPPORTED_PRESENTATION_ASPECTS))
     parser.add_argument("--resolution", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
+    parser.add_argument(
+        "--render-as",
+        metavar="DESTINATION_ID",
+        help="render and post-process as a destination in the selected configuration",
+    )
     parser.add_argument("--output", type=Path, metavar="PATH")
     parser.add_argument("--window", action="store_true", help="also open a simple display-only viewer window")
     parser.add_argument("--debug-layout", action="store_true", help="show presentation geometry diagnostics")
@@ -734,6 +794,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _validate_image_arguments(parser, arguments)
     if arguments.push is not None:
         _validate_push_arguments(parser, arguments)
+    if arguments.render_as is not None:
+        _validate_render_as_arguments(parser, arguments)
 
     if arguments.image is not None:
         if arguments.push is not None:
@@ -785,8 +847,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_viewer(
             config_file=arguments.config,
             selector=arguments.entry or _DEFAULT_SELECTOR,
-            aspect=arguments.aspect or "16:10",
+            aspect=arguments.aspect,
             resolution=resolution,
+            render_as=arguments.render_as,
             output=arguments.output,
             window=arguments.window,
             overrides=overrides,

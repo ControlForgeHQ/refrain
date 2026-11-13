@@ -17,6 +17,7 @@ from . import (
     DisplayBackendInitializationError,
     DisplayBackendUpdateError,
 )
+from .postprocessing import post_process_destination_image
 
 _HARDWARE_LOCK = RLock()
 _LOGGER = logging.getLogger(__name__)
@@ -79,10 +80,10 @@ class WaveshareDisplayBackend:
                     "cannot update a Waveshare display after an unrecoverable hardware failure", recoverable=False
                 )
             try:
-                driver_image = image.copy()
-            except Exception as error:
+                driver_image = post_process_destination_image("waveshare-13in3-e", image)
+            except (TypeError, ValueError) as error:
                 raise DisplayBackendUpdateError(
-                    f"could not copy the 1600 x 1200 Waveshare output image: {error}"
+                    f"could not post-process the 1600 x 1200 Waveshare output image: {error}"
                 ) from error
 
             try:

@@ -20,6 +20,7 @@ from . import (
     DisplayBackendInitializationError,
     DisplayBackendUpdateError,
 )
+from .postprocessing import post_process_destination_image
 
 _LOGGER = logging.getLogger(__name__)
 _REQUEST_LIFETIME = 10
@@ -278,7 +279,7 @@ class ImageServerDisplayBackend:
 
     def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
         """Publish the complete image through the selected named output."""
-        self.update_output(destination.identifier, image)
+        self.update_output(destination.identifier, post_process_destination_image("image-server", image))
 
     def _get_representation(self, output_id: str) -> tuple[bytes, str] | None:
         with self._state_lock:

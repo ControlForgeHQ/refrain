@@ -179,6 +179,16 @@ class DisplayBackendConfiguration:
     outputs: tuple[DisplayOutputConfiguration, ...] = ()
 
 
+def canonical_destination_identifier(
+    backend: DisplayBackendConfiguration,
+    destination: DisplayOutputConfiguration,
+) -> str:
+    """Return the runtime-canonical identifier for one configured destination."""
+    if backend.type == "image-server" or len(backend.outputs) > 1:
+        return f"{backend.type}:{destination.identifier}"
+    return backend.type
+
+
 @dataclass(frozen=True)
 class StorageConfiguration:
     """Optional configuration-relative runtime storage paths."""
