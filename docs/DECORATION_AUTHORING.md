@@ -422,8 +422,6 @@ A decoration is ready for delivery when:
 - the design remains usable at 4:3 @ 1600 × 1200;
 - the final manifest and assets load through Refrain without relying on unsupported behavior.
 
-````markdown
-
 ## Final deliverables
 
 Deliver only the finished decoration package and the required final validation renders.
@@ -491,7 +489,6 @@ decoration/
 Do not include an exhaustive matrix of exploratory renders, intermediate attempts, contact sheets, coverage matrices, or redundant examples unless the assignment explicitly requests them.
 
 Intermediate working files may be retained by the author when useful but are not part of the normal submitted deliverable.
-````
 
 ## AI-assisted graphics assignments
 
