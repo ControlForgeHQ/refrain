@@ -55,7 +55,7 @@ class SimulatedDriver:
 
     def getbuffer(self, image: Image.Image) -> Any:
         self.images.append(image)
-        image.putpixel((0, 0), (0, 0, 0))
+        image.putpixel((0, 0), 0)
         self.image_bytes.append(image.tobytes())
         return self._call("getbuffer", self.buffer)
 
@@ -100,21 +100,31 @@ def test_publication_backend_uses_shared_waveshare_visual_postprocessing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     driver = SimulatedDriver()
-    initial_pixels: list[tuple[int, int, int]] = []
+    initial_pixels: list[tuple[str, int]] = []
     original_getbuffer = driver.getbuffer
 
     def capture_getbuffer(image: Image.Image):
-        initial_pixels.append(image.getpixel((0, 0)))
+        initial_pixels.append((image.mode, image.getpixel((0, 0))))
         return original_getbuffer(image)
 
     driver.getbuffer = capture_getbuffer
     install_simulated_driver(monkeypatch, driver)
     backend = create_display_backend("waveshare-13in3-e")
     image = Image.new("RGB", (1600, 1200), (255, 128, 0))
+    from refrain.display import postprocessing
+
+    quantizations = []
+    quantize = postprocessing.quantize_waveshare_palette
+    monkeypatch.setattr(
+        postprocessing,
+        "quantize_waveshare_palette",
+        lambda source: (quantizations.append(source), quantize(source))[1],
+    )
 
     backend.update(image)
 
-    assert initial_pixels == [(255, 255, 0)]
+    assert initial_pixels == [("P", 2)]
+    assert len(quantizations) == 1
     assert image.getpixel((0, 0)) == (255, 128, 0)
     image.close()
     backend.close()

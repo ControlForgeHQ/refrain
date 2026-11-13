@@ -128,7 +128,7 @@ refrain-viewer --render-as waveshare-13in3-e --output panel-preview.png
 refrain-viewer --render-as image-server:portrait --window
 ```
 
-This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `image-server` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected.
+This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `image-server` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. The Waveshare PNG retains the resolved palette indices; the viewer creates an RGB copy only for local-window display. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected.
 
 `--output` writes the PNG without opening a window unless `--window` is also supplied. Without `--output`, the normal default behavior opens the simple local viewer window.
 

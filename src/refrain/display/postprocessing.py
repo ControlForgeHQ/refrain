@@ -19,6 +19,5 @@ def post_process_destination_image(destination_type: str, image: Image.Image) ->
     if destination_type == "waveshare-13in3-e":
         if image.mode != "RGB" or image.size != _WAVESHARE_SIZE:
             raise ValueError("Waveshare post-processing requires an RGB image of 1600 x 1200 pixels")
-        with quantize_waveshare_palette(image) as indexed_image:
-            return indexed_image.convert("RGB")
+        return quantize_waveshare_palette(image)
     raise ValueError(f"unsupported destination type for visual post-processing: {destination_type!r}")

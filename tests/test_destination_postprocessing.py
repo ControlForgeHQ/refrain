@@ -29,13 +29,14 @@ def test_waveshare_postprocessing_returns_active_palette_pixels_without_mutation
 
     processed = post_process_destination_image("waveshare-13in3-e", image)
 
-    assert processed.mode == "RGB"
+    assert processed.mode == "P"
     assert processed.size == image.size
-    assert processed.getpixel((0, 0)) == (255, 255, 0)
+    assert processed.getpixel((0, 0)) == 2
+    with processed.convert("RGB") as visual_image:
+        assert visual_image.getpixel((0, 0)) == (255, 255, 0)
     assert image.getpixel((0, 0)) == (255, 128, 0)
-    with quantize_waveshare_palette(image) as preview_indices:
-        with quantize_waveshare_palette(processed) as transport_indices:
-            assert transport_indices.tobytes() == preview_indices.tobytes()
+    with quantize_waveshare_palette(image) as reference_indices:
+        assert processed.tobytes() == reference_indices.tobytes()
     processed.close()
     image.close()
 
@@ -81,10 +82,36 @@ def test_waveshare_conversion_is_hardware_independent_and_shared_with_vendor_dri
         importlib.reload(postprocessing)
         image = Image.new("RGB", (1600, 1200), (255, 128, 0))
         processed = post_process_destination_image("waveshare-13in3-e", image)
-        assert processed.getpixel((0, 0)) == (255, 255, 0)
+        with processed.convert("RGB") as visual_image:
+            assert visual_image.getpixel((0, 0)) == (255, 255, 0)
         processed.close()
         image.close()
 
     from refrain.display.vendor.waveshare import epd13in3E
 
     assert epd13in3E.quantize_waveshare_palette is quantize_waveshare_palette
+
+
+def test_vendor_transport_rotates_and_packs_existing_palette_indices_without_requantizing(monkeypatch) -> None:
+    from refrain.display.vendor.waveshare import epd13in3E
+
+    epd = epd13in3E.EPD()
+    epd.width = 4
+    epd.height = 2
+    image = Image.new("P", (2, 4))
+    image.putpalette([channel for color in WAVESHARE_ACTIVE_PALETTE for channel in color] + [0] * (768 - 21))
+    image.putdata(range(8))
+    original_indices = image.tobytes()
+    monkeypatch.setattr(
+        epd13in3E,
+        "quantize_waveshare_palette",
+        lambda _image: (_ for _ in ()).throw(AssertionError("palette indices must not be quantized again")),
+    )
+
+    buffer = epd.getbuffer(image)
+
+    with image.rotate(90, expand=True) as rotated:
+        indices = rotated.tobytes()
+    assert buffer == [(indices[offset] << 4) + indices[offset + 1] for offset in range(0, len(indices), 2)]
+    assert image.tobytes() == original_indices
+    image.close()

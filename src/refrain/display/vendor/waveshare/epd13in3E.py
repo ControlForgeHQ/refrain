@@ -233,19 +233,23 @@ class EPD():
         # Check if we need to rotate the image
         imwidth, imheight = image.size
         if(imwidth == self.width and imheight == self.height):
-            image_temp = image
+            image_temp = None
         elif(imwidth == self.height and imheight == self.width):
             image_temp = image.rotate(90, expand=True)
         else:
-            print("Invalid image dimensions: %d x %d, expected %d x %d" % (imwidth, imheight, self.width, self.height))
+            raise ValueError(
+                "Invalid image dimensions: %d x %d, expected %d x %d" % (imwidth, imheight, self.width, self.height)
+            )
 
-        # Convert the soruce image to the 7 colors, dithering if needed
-        image_7color = quantize_waveshare_palette(image_temp)
+        # Preserve resolved palette indices; quantize only callers that supply RGB pixels.
+        source_image = image if image_temp is None else image_temp
+        image_7color = source_image if source_image.mode == "P" else quantize_waveshare_palette(source_image)
         try:
             buf_7color = bytearray(image_7color.tobytes('raw'))
         finally:
-            image_7color.close()
-            if image_temp is not image:
+            if image_7color is not source_image:
+                image_7color.close()
+            if image_temp is not None:
                 image_temp.close()
 
         # PIL does not support 4 bit color, so pack the 4 bits of color

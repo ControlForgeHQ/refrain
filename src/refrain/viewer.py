@@ -247,7 +247,8 @@ def show_preview_window(image: Image.Image) -> None:
 
 def _fit_preview_image(image: Image.Image, available_size: tuple[int, int]) -> Image.Image:
     """Return a proportionally scaled desktop copy without changing the output image."""
-    return ImageOps.contain(image.copy(), available_size, method=Image.Resampling.LANCZOS)
+    desktop_image = image.convert("RGB") if image.mode == "P" else image.copy()
+    return ImageOps.contain(desktop_image, available_size, method=Image.Resampling.LANCZOS)
 
 
 def _resolve_render_destination(

@@ -421,10 +421,11 @@ def test_render_as_waveshare_exports_processed_pixels_without_hardware(
     )
 
     with Image.open(output) as image:
-        assert image.mode == "RGB"
+        assert image.mode == "P"
         assert image.size == (1600, 1200)
-        assert image.getpixel((0, 0)) == (255, 255, 0)
-    assert windows == [(255, 255, 0)]
+        with image.convert("RGB") as visual_image:
+            assert visual_image.getpixel((0, 0)) == (255, 255, 0)
+    assert windows == [2]
 
 
 def test_render_as_rejects_unknown_configured_destination(
@@ -468,6 +469,21 @@ def test_desktop_fit_scales_a_copy_without_changing_the_output_image() -> None:
     assert desktop.size == (100, 62)
     assert output.size == (320, 200)
     assert output.getpixel((0, 0)) == (10, 20, 30)
+    desktop.close()
+    output.close()
+
+
+def test_desktop_fit_converts_palette_preview_to_rgb_without_changing_indexed_output() -> None:
+    output = Image.new("P", (4, 2))
+    output.putpalette([0, 0, 0, 255, 255, 0] + [0] * 762)
+    output.putdata([1] * 8)
+
+    desktop = viewer._fit_preview_image(output, (2, 2))
+
+    assert desktop.mode == "RGB"
+    assert desktop.getpixel((0, 0)) == (255, 255, 0)
+    assert output.mode == "P"
+    assert output.getpixel((0, 0)) == 1
     desktop.close()
     output.close()
 
