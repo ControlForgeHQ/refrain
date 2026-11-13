@@ -12,6 +12,7 @@ Before making substantive changes, read the relevant project documents:
 2. `docs/ARCHITECTURE.md`
 3. `docs/ENGINEERING.md`
 4. `docs/CONTENT_FORMAT.md`, when working with content, configuration, validation, or public YAML interfaces
+5. `docs/DECORATION_AUTHORING.md`, when designing, generating, validating, or reviewing decoration artwork
 
 These documents have distinct responsibilities:
 
@@ -20,8 +21,9 @@ These documents have distinct responsibilities:
 - `docs/ENGINEERING.md` defines implementation standards, dependency practices, testing, deployment, and review requirements.
 - `docs/CLI.md` defines public command syntax, argument behavior, command-mode conflicts, exit/result semantics, and user-facing CLI diagnostics.
 - `docs/CONTENT_FORMAT.md` defines the public YAML configuration and content-entry schemas.
+- `docs/DECORATION_AUTHORING.md` defines the visual-design, authoring, validation, and delivery guidance for Refrain decoration assets.
 
-The architecture owns the runtime semantics behind commands documented in `docs/CLI.md`; Engineering owns their implementation and testing guidance.
+The architecture owns the runtime semantics behind commands documented in `docs/CLI.md`; Engineering owns their implementation and testing guidance. Decoration Authoring owns design-process guidance and does not redefine decoration schema or rendering behavior.
 
 Do not treat instructions in this file as a substitute for those documents.
 
@@ -81,6 +83,8 @@ Do not:
 Prefer the smallest maintainable change that satisfies the stated requirements.
 
 When requirements are ambiguous, consult the relevant authoritative documentation before making assumptions.
+
+For graphics-only decoration assignments, follow `docs/DECORATION_AUTHORING.md` and do not modify Refrain runtime, source code, tests, or project documentation unless the assignment explicitly includes those changes.
 
 ## Preserve architectural boundaries
 
