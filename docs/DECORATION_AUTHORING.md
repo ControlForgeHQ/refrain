@@ -111,11 +111,46 @@ The quality of the final raster assets matters more than the authoring technique
 
 Do not constrain the design to SVG, line art, or another medium unless the individual assignment requires it.
 
+## Composition boundaries
+
+Decorations are intended primarily to occupy the visual perimeter of the presentation rather than the central literary field.
+
+Suitable composition regions include:
+
+- borders;
+- corners;
+- edges;
+- narrow side structures;
+- upper or lower thirds;
+- localized edge-connected elements occupying less than roughly one third of the canvas.
+
+Artwork may extend inward where the composition requires it, but should preserve a substantial uninterrupted central region for the quotation, source, and attribution.
+
+Avoid designs whose primary visual mass crosses through the middle of the canvas or divides the literary field into multiple competing regions.
+
+A decoration should normally read as something surrounding, framing, supporting, or entering from the perimeter of the presentation rather than as a full-canvas illustration placed behind or around the text.
+
+The exact literary bounds are controlled separately by presentation insets. Decoration authors are still responsible for composing artwork that leaves appropriate visual space around those bounds and does not rely on Refrain to detect graphical overlap.
+
 ## QR-aware design
+
+QR placement is part of the decoration design.
+
+Do not assume Refrain's default bottom-right QR position is fixed or preferred. Decoration manifests can position the fixed QR allocation from the left, right, top, or bottom edges, or center it on one supported axis.
+
+The authoritative placement fields and constraints are defined under [`Decoration manifests`](CONTENT_FORMAT.md#decoration-manifests), particularly `qr_from_left`, `qr_from_right`, `qr_from_top`, `qr_from_bottom`, and `qr_centered`.
+
+Choose the QR position deliberately as part of the composition.
+
+Moving the QR is not an escape from integrating it with the artwork. If a different position produces a stronger structural relationship between the QR and the decoration, use it. Do not retain the default position and deform otherwise coherent artwork merely because that is where Refrain places the QR when no decoration-specific placement is supplied.
+
+Conversely, do not move the QR into an empty corner merely to avoid solving its relationship with the artwork. The QR should normally participate in the composition rather than sit beside it as an unrelated element.
 
 A decoration may need to work both when Refrain presents a QR code and when QR is unavailable or suppressed.
 
-These are two states of one decoration, not two separate decorations with a shared theme.
+QR/no-QR conditional artwork is available when the presence of the QR genuinely changes a local structural region, but conditional variants are not inherently required. A composition that integrates the QR successfully without changing its decoration layers should remain a single shared composition.
+
+When conditional artwork is used, the QR and no-QR states are two states of one decoration, not two separate decorations with a shared theme.
 
 ### Shared composition
 
@@ -165,7 +200,15 @@ Refer to `docs/CONTENT_FORMAT.md` for the supported conditional-layer and nine-s
 
 The QR code should look like it belongs to the decoration rather than appearing as an unrelated white square cut through it.
 
-Where QR placement requires visual support, the decoration should provide an integrated structural region around the QR allocation.
+Prefer compositions that give the QR a structurally meaningful place within the artwork. A naturally geometric surface or object can be particularly effective: for example, a panel, plaque, architectural element, sign, book, birdhouse, or another form whose geometry plausibly accommodates the QR allocation.
+
+The surrounding artwork must still make visual sense independently of the square QR geometry.
+
+Do not create a dedicated frame, pocket, socket, cartouche, or outlined enclosure whose primary purpose is simply to surround the QR. Likewise, do not bend or interrupt otherwise coherent artwork around the QR allocation when moving the QR or redesigning the local composition would produce a more natural result.
+
+QR placement is flexible, but relocation should improve integration rather than merely move the code out of the artwork's way.
+
+Where QR placement requires visual support, the decoration should provide an integrated structural region around or containing the QR allocation.
 
 Suitable treatments may include:
 
