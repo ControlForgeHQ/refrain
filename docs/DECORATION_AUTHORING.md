@@ -210,14 +210,7 @@ QR placement is flexible, but relocation should improve integration rather than 
 
 Where QR placement requires visual support, the decoration should provide an integrated structural region around or containing the QR allocation.
 
-Suitable treatments may include:
-
-- a solid corner mass;
-- a panel;
-- a ribbon;
-- a bordered structural element;
-- a botanical or geometric corner;
-- another visually integrated form.
+The supporting form should have a visual purpose within the composition beyond containing the QR. It may be part of a larger object, architectural feature, botanical structure, edge treatment, or other compositional element whose shape remains plausible independently of the QR allocation.
 
 The supporting region should normally be tintable with the rest of the decoration.
 
@@ -429,9 +422,37 @@ A decoration is ready for delivery when:
 - the design remains usable at 4:3 @ 1600 × 1200;
 - the final manifest and assets load through Refrain without relying on unsupported behavior.
 
+````markdown
+
 ## Final deliverables
 
 Deliver only the finished decoration package and the required final validation renders.
+
+Each submitted version must be stored in its own numbered revision directory.
+
+The first submitted deliverable is:
+
+```text
+rev1/
+```
+
+If revisions are requested, place each subsequent submitted version in a new directory with the next revision number:
+
+```text
+rev2/
+rev3/
+rev4/
+```
+
+Once a revision has been submitted, its contents are immutable.
+
+Never erase, overwrite, rename, replace, or otherwise remove previously submitted deliverables when producing a revision.
+
+A requested revision must preserve every earlier submitted revision exactly as delivered and create a new revision directory containing the updated result.
+
+Working files may be changed or replaced freely while developing the current revision before it is submitted.
+
+Each revision directory must contain the complete deliverable for that revision and must not depend on files stored in an earlier revision directory.
 
 The decoration package must include:
 
@@ -440,7 +461,7 @@ The decoration package must include:
 - any QR/no-QR conditional assets;
 - any layered or nine-slice assets required by the final design.
 
-The final validation renders are:
+The required validation renders for each submitted revision are:
 
 ```text
 final-qr-16x10-3840x2400.png
@@ -449,9 +470,28 @@ final-debug-qr-16x10-3840x2400.png
 final-qr-4x3-1600x1200.png
 ```
 
+For example:
+
+```text
+decoration/
+├── rev1/
+│   ├── <decoration-package>/
+│   ├── final-qr-16x10-3840x2400.png
+│   ├── final-noqr-16x10-3840x2400.png
+│   ├── final-debug-qr-16x10-3840x2400.png
+│   └── final-qr-4x3-1600x1200.png
+└── rev2/
+    ├── <decoration-package>/
+    ├── final-qr-16x10-3840x2400.png
+    ├── final-noqr-16x10-3840x2400.png
+    ├── final-debug-qr-16x10-3840x2400.png
+    └── final-qr-4x3-1600x1200.png
+```
+
 Do not include an exhaustive matrix of exploratory renders, intermediate attempts, contact sheets, coverage matrices, or redundant examples unless the assignment explicitly requests them.
 
-Intermediate working files may be retained by the author when useful but are not part of the normal deliverable.
+Intermediate working files may be retained by the author when useful but are not part of the normal submitted deliverable.
+````
 
 ## AI-assisted graphics assignments
 
