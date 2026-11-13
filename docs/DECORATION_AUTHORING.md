@@ -226,9 +226,14 @@ Physical e-paper validation of a decoration is intentionally performed without a
 
 Use a deterministic presentation when judging decoration artwork.
 
+Create or select a temporary working Refrain configuration for the graphics assignment. Its adjacent user-assets tree must contain the decoration package being developed so that Refrain discovers it through the normal public asset interface.
+
+The working configuration is part of the authoring environment, not a final decoration deliverable.
+
 The standard presentation controls are:
 
 ```text
+--config <working-config>
 --entry @preview:2
 --font lora
 --text-color black
@@ -245,12 +250,13 @@ They do not imply that a completed decoration should recommend these same presen
 
 The normal decoration workflow requires four final validation renders.
 
-Replace `<decoration-id>` and output paths as appropriate.
+Use the same working configuration for all four renders. Replace `<working-config>`, `<decoration-id>`, and output paths as appropriate.
 
 ### Full-resolution QR render
 
 ```sh
 refrain-viewer \
+  --config <working-config> \
   --entry @preview:2 \
   --font lora \
   --text-color black \
@@ -269,6 +275,7 @@ refrain-viewer \
 
 ```sh
 refrain-viewer \
+  --config <working-config> \
   --entry @preview:2 \
   --font lora \
   --text-color black \
@@ -287,6 +294,7 @@ refrain-viewer \
 
 ```sh
 refrain-viewer \
+  --config <working-config> \
   --entry @preview:2 \
   --font lora \
   --text-color black \
@@ -306,6 +314,7 @@ refrain-viewer \
 
 ```sh
 refrain-viewer \
+  --config <working-config> \
   --entry @preview:2 \
   --font lora \
   --text-color black \
