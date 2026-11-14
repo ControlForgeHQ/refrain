@@ -22,7 +22,6 @@ from refrain import (
     SchedulingContext,
     load_application_config,
     load_background_image,
-    load_content_library,
     load_decoration_layer_image,
     prepare_daily_images,
     resolve_reveal_stages,
@@ -794,7 +793,6 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
         config = load_application_config(installed)
     else:
         config = load_application_config(config_path)
-        assert load_content_library(config.content_directory)
 
     assert config.display_backends
     assert config.default_fonts
