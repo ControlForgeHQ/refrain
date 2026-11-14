@@ -1489,6 +1489,10 @@ Record validation limitations honestly.
 
 ### Installation approach
 
+For the supported artifact-based Linux installation, systemd operations, and manual
+validation procedure, see [LINUX_SERVICE.md](LINUX_SERVICE.md). Hardware setup
+and permissions are specified in the packaged Waveshare backend guide.
+
 The installed package includes a complete default configuration and sample content library as package resources. Explicit initialization copies these resources to standard per-user locations, but ordinary startup never performs installation or repairs missing user configuration.
 
 A package repository, installer framework, or container runtime is not required.

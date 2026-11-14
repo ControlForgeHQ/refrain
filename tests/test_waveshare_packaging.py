@@ -128,6 +128,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     assert any(name.endswith("assets/fonts/orbitron/Orbitron-Regular.ttf") for name in sdist_names)
     assert any(name.endswith("assets/fonts/orbitron/OFL.txt") for name in sdist_names)
     for package in (wheel_names, sdist_names):
+        assert any(name.endswith("systemd/refrain.service") for name in package)
         assert any(name.endswith("config.default.yaml") for name in package)
         assert any(name.endswith("sample_content/shakespeare-hamlet.yaml") for name in package)
         assert any(name.endswith("sample_content/shakespeare-as-you-like-it.yaml") for name in package)
@@ -180,6 +181,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "from refrain.installation import initialize_installation; "
                 "from refrain.paths import ApplicationPaths; "
                 "root=files('refrain'); "
+                "assert root.joinpath('systemd','refrain.service').is_file(); "
                 "assert root.joinpath('assets','branding','controlforge-logo.png').is_file(); "
                 "assert root.joinpath('config.default.yaml').is_file(); "
                 "assert root.joinpath('sample_content','shakespeare-hamlet.yaml').is_file(); "

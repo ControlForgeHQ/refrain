@@ -44,6 +44,7 @@ refrain = [
     "assets/backgrounds/**/*",
     "assets/decorations/**/*",
     "display/vendor/waveshare/*.md",
+    "systemd/*.service",
 ]
 
 [tool.setuptools.exclude-package-data]

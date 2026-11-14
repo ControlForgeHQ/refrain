@@ -113,6 +113,7 @@ The first release should be useful in normal household operation without dependi
 - Avoid unnecessary physical refreshes.
 - Preserve existing displayed content when practical during application failures or restarts.
 - Support normal unattended operation and graceful shutdown.
+- Provide artifact-based Linux installation and system-level service operation; validate unattended boot and recovery on the supported Raspberry Pi and display hardware.
 
 ### Development and validation
 
