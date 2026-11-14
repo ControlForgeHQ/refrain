@@ -4,11 +4,11 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import date, time
-from importlib.resources import files
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageFont
+from resource_helpers import bundled_font_paths
 
 import refrain.recovery as recovery
 from refrain import (
@@ -52,7 +52,7 @@ _OUTPUT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _FONT_REGISTRY = {
     "committed-font": FontResource(
         "committed-font",
-        files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf"),
+        bundled_font_paths()[0],
         bundled=True,
     )
 }
@@ -292,9 +292,10 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
     state, state_path = committed_state
     state_bytes_before = state_path.read_bytes()
     font_path = tmp_path / "registered.ttf"
-    first_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-    changed_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
-    font_path.write_bytes(first_font.read_bytes())
+    first_font = bundled_font_paths()[0].read_bytes()
+    changed_font = ImageFont.load_default(size=20).font_bytes
+    assert first_font != changed_font
+    font_path.write_bytes(first_font)
     configured = replace(
         _CONFIGURATION,
         fonts={"committed-font": FontResource("committed-font", font_path, bundled=False)},
@@ -302,7 +303,7 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
     )
 
     original = _recover(state, artifact_store, _STAGES, configured)
-    font_path.write_bytes(changed_font.read_bytes())
+    font_path.write_bytes(changed_font)
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args: pytest.fail("unexpected regeneration"))
     recovered = _recover(state, artifact_store, _STAGES, configured)
 

@@ -6,16 +6,15 @@ from pathlib import Path
 import pytest
 import yaml
 from PIL import Image, ImageFont
+from resource_helpers import write_font_bundle
 
 from refrain import PresentationInsets, load_application_config
-
-_BUNDLED_LORA = Path(__file__).parents[1] / "src" / "refrain" / "assets" / "fonts" / "lora" / "Lora-Regular.ttf"
 
 
 def _config_data(**layout_sections: object) -> dict[str, object]:
     layout: dict[str, object] = {
         "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
-        "fonts": {"default": ["lora"]},
+        "fonts": {"default": ["test-font"]},
         "backgrounds": {"default": ["none"]},
         "decorations": {"default": ["none"]},
         "text": {"min_font_size": 12, "max_font_size": 32},
@@ -26,6 +25,7 @@ def _config_data(**layout_sections: object) -> dict[str, object]:
 
 def _write_config(path: Path, data: dict[str, object] | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    write_font_bundle(path.parent / "assets" / "fonts" / "test-font")
     path.write_text(yaml.safe_dump(data or _config_data(), sort_keys=False), encoding="utf-8")
     return path
 
@@ -172,15 +172,18 @@ def test_bundled_font_manifests_register_every_usable_static_face(tmp_path: Path
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
     font_root = Path(__file__).parents[1] / "src" / "refrain" / "assets" / "fonts"
 
-    for package in sorted(font_root.iterdir()):
-        if not package.is_dir():
-            continue
-        manifest = yaml.safe_load((package / "font.yaml").read_text(encoding="utf-8"))
+    for manifest_path in sorted(font_root.rglob("font.yaml")):
+        package = manifest_path.parent
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
         identifier = manifest["id"]
         expected_faces = {name: package / path for name, path in manifest["faces"].items()}
         resource = config.fonts[identifier]
 
         assert resource.bundled
+        assert any(
+            path.is_file() and ("license" in path.name.lower() or path.stem.upper() in {"OFL", "COPYING"})
+            for path in package.rglob("*")
+        )
         assert dict(resource.faces) == expected_faces
         assert "regular" in resource.faces
         for font_path in resource.faces.values():
@@ -193,7 +196,7 @@ def test_bundled_resources_are_discovered_and_not_added_to_default_pools(tmp_pat
     background = _write_png(assets / "backgrounds" / "future-paper.png")
     font_package = assets / "fonts" / "future-font"
     font_package.mkdir(parents=True)
-    shutil.copyfile(_BUNDLED_LORA, font_package / "Regular.ttf")
+    write_font_bundle(font_package, "future-font")
     _write_manifest(
         font_package,
         "font.yaml",
@@ -280,7 +283,7 @@ def test_none_remains_reserved_for_visual_resource_registries(tmp_path: Path, ca
     _write_png(root / "backgrounds" / "none.png")
     font_package = root / "fonts" / "none"
     font_package.mkdir(parents=True)
-    shutil.copyfile(_BUNDLED_LORA, font_package / "Regular.ttf")
+    write_font_bundle(font_package, "none")
     _write_manifest(font_package, "font.yaml", {"format": 1, "id": "none", "faces": {"regular": "Regular.ttf"}})
     decoration_package = root / "decorations" / "none"
     _write_png(decoration_package / "overlay.png", "RGBA")
@@ -347,8 +350,8 @@ def test_image_loaders_do_not_copy_decoded_source_images(tmp_path: Path, monkeyp
 def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) -> None:
     font_dir = tmp_path / "assets" / "fonts" / "literary"
     font_dir.mkdir(parents=True)
-    shutil.copyfile(_BUNDLED_LORA, font_dir / "Regular.ttf")
-    shutil.copyfile(_BUNDLED_LORA, font_dir / "Script.otf")
+    regular = write_font_bundle(font_dir, "literary")
+    (font_dir / "Script.otf").write_bytes(regular.read_bytes())
     _write_manifest(
         font_dir,
         "font.yaml",
@@ -387,7 +390,7 @@ def test_discovers_font_bundles_and_decoration_metadata(tmp_path: Path, caplog) 
     assert dict(decoration.font_faces) == {"source": "handwritten"}
     assert decoration.tintable is True
     assert decoration.decoration_color is None
-    assert config.default_fonts == ("lora",)
+    assert config.default_fonts == ("test-font",)
     assert config.default_decorations == ("none",)
     assert "font preference 'missing-font' is unavailable" in caplog.text
     assert "background preference 'missing-background' is unavailable" in caplog.text
@@ -841,7 +844,7 @@ def test_invalid_role_face_preferences_do_not_exclude_font_or_decoration(
 ) -> None:
     font_dir = tmp_path / "assets" / "fonts" / "literary"
     font_dir.mkdir(parents=True)
-    shutil.copyfile(_BUNDLED_LORA, font_dir / "Regular.ttf")
+    write_font_bundle(font_dir, "literary")
     _write_manifest(
         font_dir,
         "font.yaml",
@@ -877,7 +880,7 @@ def test_invalid_role_face_preferences_do_not_exclude_font_or_decoration(
 def test_invalid_optional_font_faces_do_not_exclude_a_bundle(tmp_path: Path, caplog) -> None:
     package = tmp_path / "assets" / "fonts" / "literary"
     package.mkdir(parents=True)
-    shutil.copyfile(_BUNDLED_LORA, package / "Regular.ttf")
+    write_font_bundle(package, "literary")
     (package / "Broken.ttf").write_bytes(b"not a font")
     _write_manifest(
         package,
@@ -1010,26 +1013,27 @@ def test_asset_symlinks_are_not_followed_during_discovery(tmp_path: Path) -> Non
 def test_invalid_font_bundles_are_excluded_independently(tmp_path: Path, manifest: dict[str, object], caplog) -> None:
     package = tmp_path / "assets" / "fonts" / str(manifest["id"])
     package.mkdir(parents=True)
-    shutil.copyfile(_BUNDLED_LORA, package / "Regular.ttf")
+    write_font_bundle(package, str(manifest["id"]))
     _write_manifest(package, "font.yaml", manifest)
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
 
     assert manifest["id"] not in config.fonts
-    assert "lora" in config.fonts
+    assert "test-font" in config.fonts
     assert str(manifest["id"]) in caplog.text
 
 
 def test_legacy_available_mappings_are_ignored_with_migration_diagnostics(tmp_path: Path, caplog) -> None:
+    baseline = load_application_config(_write_config(tmp_path / "baseline.yaml"))
     data = _config_data(
-        fonts={"default": ["lora"], "available": {"legacy": "font.ttf"}},
+        fonts={"default": ["test-font"], "available": {"legacy": "font.ttf"}},
         backgrounds={"default": ["none"], "available": {"legacy": "paper.png"}},
         decorations={"default": ["none"], "available": {"legacy": {"image": "border.png"}}},
     )
 
     config = load_application_config(_write_config(tmp_path / "config.yaml", data))
 
-    assert set(config.fonts) == {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
-    assert not ({"legacy"} & set(config.backgrounds))
-    assert not ({"legacy"} & set(config.decorations))
+    assert dict(config.fonts) == dict(baseline.fonts)
+    assert dict(config.backgrounds) == dict(baseline.backgrounds)
+    assert dict(config.decorations) == dict(baseline.decorations)
     assert caplog.text.count("is no longer supported") == 3

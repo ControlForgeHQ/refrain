@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, time
-from importlib.resources import files
 from pathlib import Path
 from random import Random
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageFont
 
 import refrain.preparation as preparation
 from refrain import (
@@ -32,15 +31,17 @@ from refrain.config import BackgroundLayerResource, BackgroundResource, Decorati
 
 _DEFAULT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _IMAGE_SIZE = _DEFAULT_SPECIFICATION.requested_output_size
-_LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-_LORA_ITALIC = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
-_FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
+# These licensed, test-owned copies are independent of the bundled font inventory.
+_FONT_DIRECTORY = Path(__file__).parent / "fixtures" / "fonts"
+_REGULAR_FONT = _FONT_DIRECTORY / "Lora-Regular.ttf"
+_ITALIC_FONT = _FONT_DIRECTORY / "Lora-Italic.ttf"
+_FONT_REGISTRY = {"lora": FontResource("lora", _REGULAR_FONT, bundled=True)}
 _MULTI_FACE_REGISTRY = {
     "lora": FontResource(
         "lora",
-        _LORA,
+        _REGULAR_FONT,
         bundled=True,
-        faces={"regular": _LORA, "italic": _LORA_ITALIC},
+        faces={"regular": _REGULAR_FONT, "italic": _ITALIC_FONT},
     )
 }
 
@@ -48,6 +49,16 @@ _MULTI_FACE_REGISTRY = {
 @pytest.fixture
 def embedded_font() -> str:
     return "lora"
+
+
+def test_multi_face_fixture_provides_distinct_regular_and_italic_faces() -> None:
+    regular = ImageFont.truetype(_REGULAR_FONT, size=32)
+    italic = ImageFont.truetype(_ITALIC_FONT, size=32)
+
+    assert regular.getname()[0] == italic.getname()[0]
+    assert regular.getname()[1] == "Regular"
+    assert italic.getname()[1] == "Italic"
+    assert regular.getlength("A Sample Collection") != italic.getlength("A Sample Collection")
 
 
 def make_snapshot(
@@ -293,7 +304,7 @@ def test_presentation_choices_are_shared_across_output_specifications(
 
     fonts = {
         "lora": _FONT_REGISTRY["lora"],
-        "lora-alt": FontResource("lora-alt", _LORA, bundled=True),
+        "lora-alt": FontResource("lora-alt", _REGULAR_FONT, bundled=True),
     }
     backgrounds = {
         "paper-a": BackgroundResource("paper-a", background_a, False),
@@ -602,7 +613,7 @@ def test_explicit_presentation_overrides_precede_entry_and_decoration_preference
         qr_ready=False,
     )
     configuration = _configuration(
-        {**_MULTI_FACE_REGISTRY, "lora-alt": FontResource("lora-alt", _LORA, bundled=True)},
+        {**_MULTI_FACE_REGISTRY, "lora-alt": FontResource("lora-alt", _REGULAR_FONT, bundled=True)},
         backgrounds={"paper": BackgroundResource("paper", Path("/unused-paper.png"), False)},
         decorations={"frame": decoration},
         qr_enabled=False,
@@ -635,6 +646,8 @@ def test_explicit_presentation_overrides_precede_entry_and_decoration_preference
 
     assert choices.fonts["quotation"].identifier == "lora"
     assert choices.fonts["attribution"].identifier == "lora:italic"
+    assert choices.fonts["quotation"].data == _REGULAR_FONT.read_bytes()
+    assert choices.fonts["attribution"].data == _ITALIC_FONT.read_bytes()
     assert choices.background_identifier == "paper"
     assert choices.decoration_identifier == "frame"
     assert choices.text_color == (198, 90, 32)
@@ -1439,6 +1452,9 @@ def test_preparation_uses_committed_faces_for_each_role_and_all_stages(monkeypat
     layouts = []
 
     def capture_layout(*args: object, **kwargs: object):
+        assert args[1].data == _REGULAR_FONT.read_bytes()
+        assert kwargs["source_font"].data == _ITALIC_FONT.read_bytes()
+        assert kwargs["attribution_font"].data == _ITALIC_FONT.read_bytes()
         layout = original_layout(*args, **kwargs)
         layouts.append(layout)
         return layout
@@ -1572,8 +1588,8 @@ def test_unusable_explicit_font_uses_configured_default_pool(tmp_path, caplog, m
     snapshot = make_snapshot("broken")
     registry = {
         "broken": FontResource("broken", broken_path, bundled=False),
-        "a-fallback": FontResource("a-fallback", _LORA, bundled=True),
-        "z-fallback": FontResource("z-fallback", _LORA, bundled=True),
+        "a-fallback": FontResource("a-fallback", _REGULAR_FONT, bundled=True),
+        "z-fallback": FontResource("z-fallback", _REGULAR_FONT, bundled=True),
     }
     original_layout = preparation.layout_composition
     layouts = []

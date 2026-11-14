@@ -134,9 +134,6 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     for package in (wheel_names, sdist_names):
         assert any(name.endswith("systemd/refrain.service") for name in package)
         assert any(name.endswith("config.default.yaml") for name in package)
-        assert any(name.endswith("sample_content/shakespeare-hamlet.yaml") for name in package)
-        assert any(name.endswith("sample_content/shakespeare-as-you-like-it.yaml") for name in package)
-        assert any(name.endswith("sample_content/shakespeare-king-lear.yaml") for name in package)
     for names, package_root in (
         (wheel_names, "refrain"),
         (sdist_names, f"controlforge_refrain-{version}/src/refrain"),
@@ -144,18 +141,18 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
         prefix = f"{package_root}/"
         packaged_files = {name[len(prefix) :] for name in names if name.startswith(prefix)}
         assert "assets/README.md" in packaged_files
-        for category in ("fonts", "backgrounds", "decorations"):
+        for directory in ("assets/fonts", "assets/backgrounds", "assets/decorations", "sample_content"):
             expected_files = {
                 path.relative_to(source / "src" / "refrain").as_posix()
-                for path in (source / "src" / "refrain" / "assets" / category).rglob("*")
+                for path in (source / "src" / "refrain" / directory).rglob("*")
                 if path.is_file()
             }
             assert expected_files <= packaged_files
         font_root = source / "src" / "refrain" / "assets" / "fonts"
-        for font_package in sorted(font_root.iterdir()):
-            manifest = yaml.safe_load((font_package / "font.yaml").read_text(encoding="utf-8"))
-            package_path = Path("assets/fonts") / font_package.name
-            for filename in (*manifest["faces"].values(), "font.yaml", "OFL.txt"):
+        for manifest_path in sorted(font_root.rglob("font.yaml")):
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            package_path = manifest_path.parent.relative_to(source / "src" / "refrain")
+            for filename in (*manifest["faces"].values(), "font.yaml"):
                 assert (package_path / filename).as_posix() in packaged_files
 
     installed = tmp_path / "installed"
@@ -202,7 +199,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 assert root.joinpath("systemd", "refrain.service").is_file()
                 assert root.joinpath("assets", "branding", "controlforge-logo.png").is_file()
                 assert root.joinpath("config.default.yaml").is_file()
-                assert root.joinpath("sample_content", "shakespeare-hamlet.yaml").is_file()
+                assert root.joinpath("sample_content").is_dir()
                 assert root.joinpath("assets", "README.md").read_text(encoding="utf-8")
                 with TemporaryDirectory() as temporary:
                     base = Path(temporary)
@@ -217,10 +214,9 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                     loaded = load_application_config(paths.config_file)
                     assert loaded.content_directory == paths.content_directory
                     assert set(loaded.default_backgrounds) <= set(loaded.backgrounds) | {"none"}
-                    assert len(load_content_library(paths.content_directory)) >= 3
+                    assert load_content_library(paths.content_directory)
                     for resource in loaded.fonts.values():
                         assert resource.bundled
-                        assert resource.path.parent.joinpath("OFL.txt").is_file()
                         for face in resource.faces.values():
                             with face.open("rb") as stream:
                                 ImageFont.truetype(stream, size=12)

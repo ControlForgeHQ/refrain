@@ -1,26 +1,30 @@
 from __future__ import annotations
 
-import shutil
 from dataclasses import replace
-from datetime import time
-from importlib.resources import files
+from datetime import date, time
 from pathlib import Path
+from random import Random
 from zipfile import Path as ZipPath
 from zipfile import ZipFile
 
 import pytest
 import yaml
 from PIL import Image
+from resource_helpers import write_font_bundle
 
 from refrain import (
     ApplicationConfigurationError,
     BackgroundResource,
+    DailySnapshot,
     DecorationLayerResource,
     DecorationResource,
     PresentationInsets,
+    SchedulingContext,
     load_application_config,
     load_background_image,
     load_decoration_layer_image,
+    prepare_daily_images,
+    resolve_reveal_stages,
 )
 
 
@@ -30,7 +34,7 @@ def configuration_data(**overrides: object) -> dict[str, object]:
         "content": {"directory": "content"},
         "display": {"backends": [{"type": "window"}]},
         "layout": {
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         },
     }
@@ -40,6 +44,7 @@ def configuration_data(**overrides: object) -> dict[str, object]:
 
 def write_config(path: Path, data: dict[str, object]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    write_font_bundle(path.parent / "assets" / "fonts" / "test-font")
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
 
@@ -169,20 +174,14 @@ def test_unusable_text_color_pool_falls_back_to_black(tmp_path: Path, caplog, po
     assert "using ['black']" in caplog.text
 
 
-def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path) -> None:
+def test_global_role_face_preferences(tmp_path: Path) -> None:
     data = configuration_data()
     data["layout"]["fonts"] = {
-        "default": ["lora"],
+        "default": ["test-font"],
         "font_faces": {"quotation": "regular", "source": "italic"},
     }
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
     assert dict(config.font_faces) == {"quotation": "regular", "source": "italic"}
-
-    packaged_config = Path(str(files("refrain").joinpath("config.default.yaml")))
-    packaged = load_application_config(packaged_config)
-    assert dict(packaged.font_faces) == {"source": "italic"}
-    assert packaged.default_decoration_colors == ("black",)
-    assert any("italic" in packaged.fonts[identifier].faces for identifier in packaged.default_fonts)
 
 
 @pytest.mark.parametrize(
@@ -193,7 +192,7 @@ def test_invalid_global_role_face_preferences_are_warned_and_ignored(
     tmp_path: Path, preferences: object, caplog
 ) -> None:
     data = configuration_data()
-    data["layout"]["fonts"] = {"default": ["lora"], "font_faces": preferences}
+    data["layout"]["fonts"] = {"default": ["test-font"], "font_faces": preferences}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -417,7 +416,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
             "id": "custom-flourish",
             "layers": [{"image": "flourish.png", "method": "contain"}],
             "presentation_insets": {"left": 384, "right": 768, "top": 432, "bottom": 432},
-            "font": "lora",
+            "font": "test-font",
             "text_color": ["black", "burnt-orange"],
             "background": "none",
         },
@@ -433,7 +432,7 @@ def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
         (DecorationLayerResource(path, "contain"),),
         False,
         PresentationInsets(384, 768, 432, 432),
-        "lora",
+        "test-font",
         "none",
         text_color=("black", "burnt-orange"),
     )
@@ -601,7 +600,7 @@ def test_configuration_background_defaults_support_legacy_direct_construction(tm
     assert replace(legacy).default_backgrounds == ("none",)
 
 
-def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
+def test_loads_documented_defaults_with_explicit_required_settings(tmp_path: Path) -> None:
     config_path = write_config(tmp_path / "config.yaml", configuration_data())
 
     config = load_application_config(config_path)
@@ -615,15 +614,14 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.required_output_specifications[0].aspect_ratio == "16:9"
     assert config.required_output_specifications[0].requested_output_size == (1920, 1080)
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
-    assert config.default_fonts == ("lora",)
+    assert config.default_fonts == ("test-font",)
     assert config.min_font_size == 28
     assert config.max_font_size == 100
     assert config.information_view_duration == 60
-    assert config.default_fonts == ("lora",)
-    assert all(font.bundled for font in config.fonts.values())
-    assert all(font.path.is_file() for font in config.fonts.values())
-    assert all(font.path.parent.joinpath("OFL.txt").is_file() for font in config.fonts.values())
-    assert config.fonts["orbitron"].path.name == "Orbitron-Regular.ttf"
+    assert config.font_faces == {}
+    assert config.qr_enabled is True
+    assert config.default_backgrounds == config.default_decorations == ("none",)
+    assert config.default_text_colors == config.default_decoration_colors == ("black",)
 
 
 def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
@@ -780,21 +778,65 @@ def test_unknown_storage_fields_follow_configuration_warning_policy(tmp_path: Pa
     assert "is not a supported configuration field; it is ignored" in caplog.text
 
 
-def test_representative_configuration_example_loads() -> None:
-    example_path = Path(__file__).parent.parent / "examples" / "config.yaml"
-    example_data = yaml.safe_load(example_path.read_text(encoding="utf-8"))
-    config = load_application_config(example_path)
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        Path(__file__).parent.parent / "src" / "refrain" / "config.default.yaml",
+        Path(__file__).parent.parent / "examples" / "config.yaml",
+    ],
+    ids=["installed-default", "development-example"],
+)
+def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path: Path, tmp_path: Path, caplog) -> None:
+    if config_path.name == "config.default.yaml":
+        installed = tmp_path / config_path.name
+        installed.write_bytes(config_path.read_bytes())
+        config = load_application_config(installed)
+    else:
+        config = load_application_config(config_path)
 
-    assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
-    assert config.default_fonts == tuple(example_data["layout"]["fonts"]["default"])
-    assert config.default_backgrounds == tuple(example_data["layout"]["backgrounds"]["default"])
-    assert config.default_decorations == tuple(example_data["layout"]["decorations"]["default"])
-    assert [(spec.aspect_ratio, spec.requested_output_size) for spec in config.required_output_specifications] == [
-        ("16:10", (3840, 2400)),
-        ("16:9", (1920, 1080)),
-    ]
-    assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
-    assert config.information_view_duration == 5
+    assert config.display_backends
+    assert config.default_fonts
+    assert set(config.default_fonts) <= config.fonts.keys()
+    assert set(config.default_backgrounds) <= config.backgrounds.keys() | {"none"}
+    assert set(config.default_decorations) <= config.decorations.keys() | {"none"}
+    assert set(config.default_text_colors) <= config.palette.keys()
+    assert set(config.default_decoration_colors) <= config.palette.keys()
+    assert config.day_start <= min(config.reveal.source, config.reveal.attribution)
+    assert 0 <= config.information_view_duration <= 300
+    assert 0 < config.min_font_size <= config.max_font_size
+
+    snapshot = DailySnapshot(
+        entry_id="shipped-config",
+        quotation_text="A quiet moment.",
+        quotation_identity="A quiet moment.",
+        source="A collection",
+        attribution="An author",
+        presentation_style="centered",
+        font=None,
+        font_faces={},
+        background=None,
+        decoration=None,
+        text_color=None,
+        decoration_color=None,
+        reveal_schedule={
+            "quotation": config.day_start.strftime("%H:%M"),
+            "source": config.reveal.source.strftime("%H:%M"),
+            "attribution": config.reveal.attribution.strftime("%H:%M"),
+        },
+        scheduling=SchedulingContext(date(2026, 11, 14), config.day_start.strftime("%H:%M")),
+    )
+    stages = resolve_reveal_stages(snapshot)
+    images = prepare_daily_images(snapshot, stages, config, config.required_output_specifications, chooser=Random(0))
+    try:
+        assert set(images) == set(config.required_output_specifications)
+        for specification, variants in images.items():
+            assert len(variants) == len(stages)
+            assert all(image.mode == "RGB" and image.size == specification.requested_output_size for image in variants)
+    finally:
+        for variants in images.values():
+            for image in variants:
+                image.close()
+    assert not [record.message for record in caplog.records if record.levelno >= 30]
 
 
 @pytest.mark.parametrize("duration", [0, 1, 60, 300])
@@ -1088,7 +1130,7 @@ def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Pa
     assert config.day_start == time(5)
     assert config.reveal.source == time(8)
     assert config.reveal.attribution == time(18)
-    assert config.default_fonts == ("lora",)
+    assert config.default_fonts == ("test-font",)
 
 
 def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> None:
@@ -1105,17 +1147,12 @@ def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> Non
 
 
 def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path) -> None:
-    source_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
     package = tmp_path / "assets" / "fonts" / "extra"
-    user_font = package / "Regular.ttf"
-    user_font.parent.mkdir(parents=True)
-    with source_font.open("rb") as source, user_font.open("wb") as destination:
-        shutil.copyfileobj(source, destination)
-    write_asset_manifest(package, "font.yaml", {"format": 1, "id": "extra", "faces": {"regular": "Regular.ttf"}})
+    user_font = write_font_bundle(package, "extra")
     data = configuration_data(
         layout={
             "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )
@@ -1124,7 +1161,7 @@ def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path)
 
     assert config.fonts["extra"].path == user_font
     assert not config.fonts["extra"].bundled
-    assert config.default_fonts == ("lora",)
+    assert config.default_fonts == ("test-font",)
 
 
 def test_category_relative_resources_use_the_effective_config_directory_and_nested_paths(
@@ -1137,7 +1174,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
     font.parent.mkdir(parents=True)
     background.parent.mkdir(parents=True)
     decoration.parent.mkdir(parents=True)
-    font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
+    write_font_bundle(font.parent, "family")
     Image.new("RGB", (1600, 1200)).save(background)
     Image.new("RGBA", (1600, 1200)).save(decoration)
     write_asset_manifest(font.parent, "font.yaml", {"format": 1, "id": "family", "faces": {"regular": "Regular.ttf"}})
@@ -1151,7 +1188,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
         content={"directory": "entries"},
         layout={
             "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "backgrounds": {"default": ["none"]},
             "decorations": {"default": ["none"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
@@ -1175,7 +1212,7 @@ def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog, absolut
     data = configuration_data(
         layout={
             "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )
@@ -1193,11 +1230,8 @@ def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog, absolut
 
 
 def test_mixed_discovered_font_bundles_keep_only_usable_fonts(tmp_path: Path, caplog) -> None:
-    source_font = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
     valid_package = tmp_path / "assets" / "fonts" / "valid-user-font"
-    valid_font = valid_package / "Regular.ttf"
-    valid_package.mkdir(parents=True)
-    valid_font.write_bytes(source_font.read_bytes())
+    write_font_bundle(valid_package, "valid-user-font")
     write_asset_manifest(
         valid_package, "font.yaml", {"format": 1, "id": "valid-user-font", "faces": {"regular": "Regular.ttf"}}
     )
@@ -1232,13 +1266,13 @@ def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, ca
         general={"timezone": "UTC", 1: "ignored", "unknown": "ignored"},
         layout={
             "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["lora"], "available": {1: "ignored.ttf"}},
+            "fonts": {"default": ["test-font"], "available": {1: "ignored.ttf"}},
             "text": {"min_font_size": 28, "max_font_size": 100},
         },
     )
     config = load_application_config(write_config(tmp_path / "config.yaml", config_data))
 
-    assert config.default_fonts == ("lora",)
+    assert config.default_fonts == ("test-font",)
     assert 1 not in config.fonts
     assert "general[1]" in caplog.text
     assert "general.timezone" in caplog.text
@@ -1263,7 +1297,7 @@ def test_invalid_presentation_insets_are_rejected(
     data = configuration_data(
         layout={
             "presentation_insets": insets,
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
     )
@@ -1275,7 +1309,7 @@ def test_presentation_insets_accept_zero_edges(tmp_path: Path) -> None:
     data = configuration_data(
         layout={
             "presentation_insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
     )
@@ -1289,7 +1323,7 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
     data = configuration_data(
         layout={
             "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 1, "max_font_size": 2},
         }
     )
@@ -1310,7 +1344,7 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
             configuration_data(
                 layout={
                     "presentation_insets": {"left": 3840, "right": 0, "top": 0, "bottom": 0},
-                    "fonts": {"default": ["lora"]},
+                    "fonts": {"default": ["test-font"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
             ),
@@ -1320,7 +1354,7 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
             configuration_data(
                 layout={
                     "presentation_insets": {"left": True, "right": 384, "top": 324, "bottom": 324},
-                    "fonts": {"default": ["lora"]},
+                    "fonts": {"default": ["test-font"]},
                     "text": {"min_font_size": 1, "max_font_size": 2},
                 }
             ),
@@ -1329,7 +1363,7 @@ def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog
         (
             configuration_data(
                 layout={
-                    "fonts": {"default": ["lora"]},
+                    "fonts": {"default": ["test-font"]},
                     "text": {"min_font_size": 10, "max_font_size": 9},
                 }
             ),
@@ -1381,14 +1415,16 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
 @pytest.mark.parametrize(
     ("default_fonts", "expected"),
     [
-        (["lora", "lora"], ("lora",)),
-        (["lora", "unavailable"], ("lora",)),
+        (["test-font", "test-font"], ("test-font",)),
+        (["test-font", "unavailable"], ("test-font",)),
+        (["second-font", "test-font", "second-font"], ("second-font", "test-font")),
         (["unavailable"], ()),
     ],
 )
 def test_default_font_pool_filters_unavailable_and_duplicates(
     tmp_path: Path, default_fonts: list[str], expected: tuple[str, ...], caplog
 ) -> None:
+    write_font_bundle(tmp_path / "assets" / "fonts" / "second-font", "second-font")
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
@@ -1445,11 +1481,10 @@ def test_unreadable_config_is_rejected(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_font_collisions_and_invalid_bundles_are_excluded(tmp_path: Path, caplog) -> None:
-    font_root = files("refrain").joinpath("assets", "fonts")
-    font_package = sorted(font_root.iterdir(), key=lambda package: package.name)[0]
-    font_manifest = yaml.safe_load(font_package.joinpath("font.yaml").read_text())
-    bundled_font_identifier = font_manifest["id"]
-    font_bytes = font_package.joinpath(font_manifest["faces"]["regular"]).read_bytes()
+    baseline = load_application_config(write_config(tmp_path / "baseline.yaml", configuration_data()))
+    bundled_font = next(font for font in baseline.fonts.values() if font.bundled)
+    bundled_font_identifier = bundled_font.identifier
+    font_bytes = bundled_font.path.read_bytes()
     for package in (
         tmp_path / "assets" / "fonts" / "reserved",
         tmp_path / "assets" / "fonts" / "duplicate-a",
@@ -1491,11 +1526,11 @@ def test_unreadable_user_font_is_excluded(tmp_path: Path, monkeypatch: pytest.Mo
     package = tmp_path / "assets" / "fonts" / "extra"
     package.mkdir(parents=True)
     user_font = package / "font.ttf"
-    user_font.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
+    user_font.write_bytes(write_font_bundle(package, "extra").read_bytes())
     data = configuration_data(
         layout={
             "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["lora"]},
+            "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
         }
     )

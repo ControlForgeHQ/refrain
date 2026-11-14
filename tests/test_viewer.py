@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from resource_helpers import write_font_bundle
 
 import refrain.application as application
 import refrain.display
@@ -42,7 +43,7 @@ information_view:
 layout:
   presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
-    default: ["lora"]
+    default: ["test-font"]
   text: {min_font_size: 28, max_font_size: 100}
 storage:
   state: state.json
@@ -68,6 +69,7 @@ quotations:
 def _workspace(root: Path, *, with_entry: bool = True) -> tuple[Path, Path]:
     config = root / "config.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
+    write_font_bundle(root / "assets" / "fonts" / "test-font")
     content = root / "content"
     content.mkdir()
     if with_entry:
@@ -648,7 +650,7 @@ def test_invalid_configuration_returns_nonzero_cli_error(tmp_path: Path, capsys:
 def test_viewer_passes_typed_overrides_to_shared_preparation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config, _ = _workspace(tmp_path, with_entry=False)
     configuration = load_application_config(config)
-    overrides = PresentationOverrides(font="lora", style="left-aligned", qr_enabled=False)
+    overrides = PresentationOverrides(font="test-font", style="left-aligned", qr_enabled=False)
     captured: dict[str, object] = {}
 
     def capture_preparation(_snapshot, _stages, _configuration, specifications, **kwargs):
@@ -1091,7 +1093,7 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
                 "--entry",
                 "johnson-maggie:6",
                 "--font",
-                "lora",
+                "test-font",
                 "--decoration",
                 "test-frame",
                 "--no-qr",
@@ -1106,7 +1108,7 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
     assert captured["selector"] == ("johnson-maggie", 6)
     overrides = captured["overrides"]
     assert isinstance(overrides, PresentationOverrides)
-    assert overrides.font == "lora"
+    assert overrides.font == "test-font"
     assert overrides.decoration == "test-frame"
     assert overrides.qr_enabled is False
 

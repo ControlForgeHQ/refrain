@@ -7,7 +7,6 @@ import shutil
 import socket
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
-from importlib.resources import files
 from io import BytesIO
 from pathlib import Path
 from random import Random
@@ -19,6 +18,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import yaml
 from PIL import Image
+from resource_helpers import write_font_bundle
 
 import refrain.application as application
 from refrain import (
@@ -68,7 +68,7 @@ information_view:
 layout:
   presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
-    default: ["lora"]
+    default: ["test-font"]
   text: {min_font_size: 28, max_font_size: 100}
 """
 
@@ -132,6 +132,8 @@ class Workspace:
         self.history = self.state.with_name("global-history.jsonl")
         self.artifacts = root / "artifacts"
         self.config.write_text(_CONFIG, encoding="utf-8")
+        for identifier in ("test-font", "test-font-alt"):
+            write_font_bundle(root / "assets" / "fonts" / identifier, identifier)
         self.content.mkdir()
 
     def entry(self, name: str, body: str) -> None:
@@ -384,7 +386,7 @@ def test_decoration_preferences_remain_semantic_content(workspace: Workspace) ->
     write_decoration_manifest(
         package,
         "custom",
-        font="source-sans-3",
+        font="test-font-alt",
         background="paper-a",
         presentation_insets={"left": 461, "right": 691, "top": 389, "bottom": 475},
     )
@@ -439,7 +441,7 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
     write_decoration_manifest(
         package,
         "custom",
-        font="source-sans-3",
+        font="test-font-alt",
         background="paper-a",
         presentation_insets={"left": 461, "right": 691, "top": 389, "bottom": 475},
     )
@@ -449,20 +451,20 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
             '  backgrounds: {default: ["paper-a"]}\n' '  decorations: {default: ["custom"]}\n' "  fonts:",
         )
     )
-    ordinary(workspace, extra='decoration: "none"\nfont: "lora"\nbackground: "none"\n')
+    ordinary(workspace, extra='decoration: "none"\nfont: "test-font"\nbackground: "none"\n')
     configuration = application.load_application_config(workspace.config)
 
     _, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
 
     assert snapshot.decoration == "none"
-    assert snapshot.font == "lora"
+    assert snapshot.font == "test-font"
     assert snapshot.background == "none"
 
 
 def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bundle(
     workspace: Workspace, caplog
 ) -> None:
-    source_font = Path(str(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")))
+    source_font = workspace.root / "assets" / "fonts" / "test-font" / "Regular.ttf"
     font_dir = workspace.root / "assets" / "fonts" / "literary"
     font_dir.mkdir(parents=True)
     shutil.copyfile(source_font, font_dir / "Regular.ttf")
@@ -485,12 +487,12 @@ def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bund
     write_decoration_manifest(
         decoration_dir,
         "mixed",
-        font="lora",
+        font="test-font",
         font_faces={"quotation": "italic", "source": "italic", "attribution": "italic"},
     )
     workspace.config.write_text(
         _CONFIG.replace(
-            'default: ["lora"]',
+            'default: ["test-font"]',
             'default: ["literary"]\n    font_faces: {quotation: italic, source: italic, attribution: italic}',
         )
     )
@@ -513,7 +515,7 @@ def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bund
 
 
 def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoration(workspace: Workspace) -> None:
-    source_font = Path(str(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")))
+    source_font = workspace.root / "assets" / "fonts" / "test-font" / "Regular.ttf"
     font_dir = workspace.root / "assets" / "fonts" / "literary"
     font_dir.mkdir(parents=True)
     shutil.copyfile(source_font, font_dir / "Regular.ttf")
@@ -536,7 +538,7 @@ def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoratio
     write_decoration_manifest(decoration_dir, "plain")
     workspace.config.write_text(
         _CONFIG.replace(
-            'default: ["lora"]',
+            'default: ["test-font"]',
             'default: ["literary"]\n    font_faces: {source: italic, attribution: italic}',
         )
     )
@@ -889,14 +891,14 @@ def test_multiple_quotations_select_one_and_record_history(workspace: Workspace)
 
 
 def test_entry_font_preference_is_preserved(workspace: Workspace) -> None:
-    ordinary(workspace, extra='font: "source-sans-3"\n')
+    ordinary(workspace, extra='font: "test-font-alt"\n')
     workspace.run(at(10, 8))
-    assert workspace.load().snapshot.font == "source-sans-3"
+    assert workspace.load().snapshot.font == "test-font-alt"
 
 
 def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspace) -> None:
     config = workspace.config.read_text(encoding="utf-8").replace(
-        'default: ["lora"]',
+        'default: ["test-font"]',
         'default: ["missing-font"]',
     )
     workspace.config.write_text(config, encoding="utf-8")
@@ -913,12 +915,14 @@ def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bu
     package = workspace.root / "assets" / "fonts" / "custom-font"
     custom_font = package / "custom.ttf"
     custom_font.parent.mkdir(parents=True)
-    bundled_font = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-    custom_font.write_bytes(bundled_font.read_bytes())
+    source_font = workspace.root / "assets" / "fonts" / "test-font" / "Regular.ttf"
+    custom_font.write_bytes(source_font.read_bytes())
     write_font_manifest(package, "custom-font", "custom.ttf")
+    configuration = application.load_application_config(workspace.config)
+    fallback = next(identifier for identifier, resource in configuration.fonts.items() if resource.bundled)
     config = workspace.config.read_text(encoding="utf-8").replace(
-        'default: ["lora"]',
-        'default: ["custom-font", "lora"]',
+        'default: ["test-font"]',
+        f'default: ["custom-font", "{fallback}"]',
     )
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace, extra='font: "custom-font"\n')

@@ -1311,6 +1311,14 @@ Tests should verify observable behavior and documented contracts rather than rel
 
 Tests of application behavior must use explicit test inputs rather than depending on incidental values from the shipped default configuration or the current bundled resource inventory. Tests may assert exact shipped values only when those values are themselves contractual requirements. Bundled-resource integrity tests must validate the current package contents without requiring test modifications whenever valid resources are added, removed, or replaced.
 
+Keep three configuration-testing responsibilities separate:
+
+- Application-default tests omit optional settings and verify documented fallback values, required settings, and effective constraints. Exercise operation when its actual prerequisites are satisfied.
+- Configuration-processing tests supply controlled inputs for parsing, validation, precedence, ordering, and diagnostics. Prefer small synthetic resources where resource characteristics matter; avoid fixtures that inherit unrelated shipped settings.
+- Shipped-configuration tests load the actual `config.default.yaml` and `examples/config.yaml`, validate their effective settings and resource availability, and exercise representative preparation or rendering without freezing incidental choices.
+
+Exact-value assertions remain appropriate for documented contracts, deliberately supplied fixture values, deterministic rendering or selection scenarios, and persistent-state or protocol compatibility. A valid change to shipped configuration or bundled resources must not unnecessarily invalidate unrelated behavioral tests. Comparing parsed pools with their source YAML alone is insufficient: also verify usability and retain rejection or diagnostic coverage for invalid configuration and unavailable resources.
+
 Every substantive behavior change should include focused regression coverage where practical.
 
 The ability to import and test core components without Raspberry Pi hardware is a project requirement.

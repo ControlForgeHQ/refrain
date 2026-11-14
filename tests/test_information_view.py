@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import replace
+from datetime import time
 from io import BytesIO
 from pathlib import Path
 
@@ -10,7 +11,35 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 import refrain.information_view as information_view
-from refrain import ResolvedOutputSpecification, load_application_config
+from refrain import (
+    ApplicationConfiguration,
+    DisplayBackendConfiguration,
+    DisplayOutputConfiguration,
+    PresentationInsets,
+    ResolvedOutputSpecification,
+    RevealSchedule,
+)
+
+
+@pytest.fixture
+def configuration(tmp_path: Path) -> ApplicationConfiguration:
+    return ApplicationConfiguration(
+        file=tmp_path / "config.yaml",
+        display_backends=(
+            DisplayBackendConfiguration(
+                "window",
+                outputs=(DisplayOutputConfiguration("window", ResolvedOutputSpecification("16:9", (1920, 1080))),),
+            ),
+        ),
+        day_start=time(7),
+        content_directory=tmp_path / "missing-content",
+        reveal=RevealSchedule(time(13), time(19)),
+        presentation_insets=PresentationInsets(384, 384, 324, 324),
+        fonts={},
+        default_fonts=(),
+        min_font_size=28,
+        max_font_size=100,
+    )
 
 
 def prepare_default_information_image(configuration):
@@ -18,13 +47,7 @@ def prepare_default_information_image(configuration):
     return information_view.prepare_information_view(configuration, (specification,))[specification][0]
 
 
-def test_prepares_complete_application_owned_image_without_user_content(tmp_path: Path, monkeypatch) -> None:
-    configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
-    configuration = replace(
-        configuration,
-        content_directory=tmp_path / "missing-content",
-    )
-
+def test_prepares_complete_application_owned_image_without_user_content(configuration, monkeypatch) -> None:
     compositions = []
     fitted_text = []
     direct_text = []
@@ -101,16 +124,10 @@ def test_prepares_complete_application_owned_image_without_user_content(tmp_path
     ],
 )
 def test_missing_logo_does_not_prevent_information_view_rendering(
-    tmp_path: Path,
+    configuration,
     monkeypatch,
     missing_filename: str,
 ) -> None:
-    configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
-    configuration = replace(
-        configuration,
-        content_directory=tmp_path / "unused",
-    )
-
     original_read_logo = information_view._read_logo
 
     def read_logo_with_missing_resource(filename: str):
@@ -132,11 +149,9 @@ def test_missing_logo_does_not_prevent_information_view_rendering(
         image.close()
 
 
-def test_omits_unavailable_optional_runtime_details(tmp_path: Path, monkeypatch) -> None:
-    configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
+def test_omits_unavailable_optional_runtime_details(configuration, monkeypatch) -> None:
     configuration = replace(
         configuration,
-        content_directory=tmp_path / "unavailable-library",
         display_backends=(),
     )
 
@@ -200,7 +215,7 @@ def test_optional_build_metadata_requires_a_bounded_release_or_commit_identifier
 
 
 def test_fitted_technical_text_wraps_long_network_values_without_overflow() -> None:
-    font_data = information_view._read_font("source-sans-3").data
+    font_data = ImageFont.load_default(size=20).font_bytes
     image = Image.new("RGB", (560, 140), "white")
     try:
         fitted_size, lines = information_view._draw_fitted_text(
@@ -229,12 +244,12 @@ def test_fitted_technical_text_wraps_long_network_values_without_overflow() -> N
 
 
 def test_fitted_text_can_align_an_identity_block_to_its_right_edge() -> None:
-    font_data = information_view._read_font("source-sans-3").data
+    font_data = ImageFont.load_default(size=20).font_bytes
     image = Image.new("RGB", (520, 80), "white")
     try:
         information_view._draw_fitted_text(
             ImageDraw.Draw(image),
-            "Short\nA considerably longer second line",
+            "Short\nA considerably longer second line.",
             font_data,
             (10, 10, 500, 70),
             preferred_size=18,
@@ -278,8 +293,7 @@ def test_preview_example_writes_complete_png_without_application_state(tmp_path:
         assert image.size == (1920, 1080)
 
 
-def test_information_view_prepares_the_requested_destination_variant(tmp_path: Path) -> None:
-    configuration = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
+def test_information_view_prepares_the_requested_destination_variant(configuration) -> None:
     specification = ResolvedOutputSpecification("4:3", (1600, 1200))
 
     images = information_view.prepare_information_view(configuration, (specification,))
