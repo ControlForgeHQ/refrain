@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Event, Thread
 
 import pytest
+from resource_helpers import write_configuration
 
 import refrain.__main__ as cli
 import refrain.ownership as ownership_module
@@ -65,14 +66,14 @@ def _stop_holder(process: subprocess.Popen) -> None:
 
 
 def _config(path: Path, storage: Path) -> Path:
-    path.write_text(
-        Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8")
-        + f"\nstorage:\n  state: '{(storage / 'state.json').as_posix()}'\n"
-        + f"  history: '{(storage / 'history.jsonl').as_posix()}'\n"
-        + f"  artifacts: '{(storage / 'artifacts').as_posix()}'\n",
-        encoding="utf-8",
+    return write_configuration(
+        path,
+        storage={
+            "state": str(storage / "state.json"),
+            "history": str(storage / "history.jsonl"),
+            "artifacts": str(storage / "artifacts"),
+        },
     )
-    return path
 
 
 def test_cross_process_exclusion_and_crash_recovery(user_environment: dict[str, str], tmp_path: Path) -> None:
@@ -299,11 +300,7 @@ def test_runtime_rejects_storage_that_can_replace_ownership_lock(
     lock = Path(resolve_application_paths().ownership_file)
     destination = lock.parent if storage == "artifacts" else lock
     config = tmp_path / "config.yaml"
-    config.write_text(
-        Path(cli.__file__).with_name("config.default.yaml").read_text(encoding="utf-8")
-        + f"\nstorage:\n  {storage}: '{destination.as_posix()}'\n",
-        encoding="utf-8",
-    )
+    write_configuration(config, storage={storage: str(destination)})
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("runtime started"))
     assert cli.main(["--config", str(config)]) == 1
     assert "ownership lock" in capsys.readouterr().err

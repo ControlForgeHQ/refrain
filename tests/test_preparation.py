@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, time
-from importlib.resources import files
 from pathlib import Path
 from random import Random
 
 import pytest
 from PIL import Image
+from resource_helpers import bundled_font_paths
 
 import refrain.preparation as preparation
 from refrain import (
@@ -32,8 +32,10 @@ from refrain.config import BackgroundLayerResource, BackgroundResource, Decorati
 
 _DEFAULT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _IMAGE_SIZE = _DEFAULT_SPECIFICATION.requested_output_size
-_LORA = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-_LORA_ITALIC = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
+# The registries below use test-owned identifiers, independent of bundled IDs.
+_FONT_PATHS = bundled_font_paths()
+_LORA = _FONT_PATHS[0]
+_LORA_ITALIC = _FONT_PATHS[1] if len(_FONT_PATHS) > 1 else _LORA
 _FONT_REGISTRY = {"lora": FontResource("lora", _LORA, bundled=True)}
 _MULTI_FACE_REGISTRY = {
     "lora": FontResource(

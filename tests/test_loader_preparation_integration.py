@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import random
 from datetime import date
-from importlib.resources import files
 from pathlib import Path
 
+import pytest
 import yaml
 from PIL import Image
+from resource_helpers import write_font_bundle
 
 from refrain import (
     CompositionVisibility,
@@ -16,26 +17,42 @@ from refrain import (
     load_application_config,
     load_content_library,
     prepare_daily_images,
+    resolve_reveal_stages,
     select_quotation,
 )
 
 
-def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("font_identifier", "settings", "stage_count"),
+    [
+        ("test-font", {}, 3),
+        (
+            "alternate-font",
+            {"general": {"day_start": "08:15"}, "reveal": {"source": "09:20", "attribution": "09:20"}},
+            2,
+        ),
+    ],
+    ids=["omitted-optional-settings", "alternate-font-and-schedule"],
+)
+def test_loaded_configuration_and_content_prepare_self_contained_snapshot(
+    tmp_path: Path, font_identifier: str, settings: dict[str, object], stage_count: int
+) -> None:
     content_directory = tmp_path / "content"
     content_directory.mkdir()
     config_path = tmp_path / "config.yaml"
+    write_font_bundle(tmp_path / "assets" / "fonts" / font_identifier, font_identifier)
     content_path = content_directory / "entry.yaml"
     config_path.write_text(
         yaml.safe_dump(
             {
-                "general": {"day_start": "06:00"},
                 "content": {"directory": "content"},
                 "display": {"backends": [{"type": "window"}]},
                 "layout": {
                     "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
-                    "fonts": {"default": ["lora"]},
+                    "fonts": {"default": [font_identifier]},
                     "text": {"min_font_size": 12, "max_font_size": 24},
                 },
+                **settings,
             },
             sort_keys=False,
         ),
@@ -90,11 +107,8 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
 
     config_path.unlink()
     content_path.unlink()
-    stages = (
-        CompositionVisibility(),
-        CompositionVisibility(source=True),
-        CompositionVisibility(source=True, attribution=True),
-    )
+    stages = resolve_reveal_stages(snapshot)
+    assert len(stages) == stage_count
     images = prepare_daily_images(snapshot, stages, config, config.required_output_specifications)
 
     assert not config_path.exists()
@@ -102,24 +116,26 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(tmp_pa
     assert len(images[config.required_output_specifications[0]]) == len(stages)
     images = images[config.required_output_specifications[0]]
     assert all(image.mode == "RGB" and image.size == (1920, 1080) for image in images)
+    for image in images:
+        image.close()
 
 
 def test_category_registered_resources_load_through_rendering_pipeline(tmp_path: Path) -> None:
     assets = tmp_path / "assets"
-    font_path = assets / "fonts" / "custom" / "Serif.ttf"
+    font_path = assets / "fonts" / "custom" / "Regular.ttf"
     background_path = assets / "backgrounds" / "paper" / "Paper.png"
     decoration_path = assets / "decorations" / "borders" / "Border.png"
     font_path.parent.mkdir(parents=True)
     background_path.parent.mkdir(parents=True)
     decoration_path.parent.mkdir(parents=True)
-    font_path.write_bytes(files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes())
+    write_font_bundle(font_path.parent, "family-serif")
     Image.new("RGB", (1600, 1200), (255, 0, 0)).save(background_path)
     decoration = Image.new("RGBA", (1600, 1200), (0, 0, 0, 0))
     decoration.paste((0, 0, 255, 255), (100, 50, 201, 151))
     decoration.save(decoration_path)
     (font_path.parent / "font.yaml").write_text(
         yaml.safe_dump(
-            {"format": 1, "id": "family-serif", "faces": {"regular": "Serif.ttf"}},
+            {"format": 1, "id": "family-serif", "faces": {"regular": "Regular.ttf"}},
             sort_keys=False,
         ),
         encoding="utf-8",

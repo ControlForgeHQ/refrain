@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import math
-from importlib.resources import files
 from io import BytesIO
 
 import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
+from resource_helpers import bundled_font_paths
 
 from refrain import (
     CompositionVisibility,
@@ -20,16 +20,12 @@ from refrain.renderer import QuotationRenderError, annotate_literary_region
 
 @pytest.fixture
 def resolved_font() -> ResolvedFont:
-    font_path = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf")
-    with font_path.open("rb") as font_file:
-        return ResolvedFont("lora", font_file.read())
+    return ResolvedFont("test-font", ImageFont.load_default(size=20).font_bytes)
 
 
 @pytest.fixture
 def resolved_italic_font() -> ResolvedFont:
-    font_path = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Italic.ttf")
-    with font_path.open("rb") as font_file:
-        return ResolvedFont("lora:italic", font_file.read())
+    return ResolvedFont("alternate-face", bundled_font_paths()[0].read_bytes())
 
 
 def make_layout(
@@ -279,8 +275,8 @@ def test_mixed_face_byline_uses_independent_fonts_and_stable_geometry(
     )
     regular_image = render_reveal_stages(background, resolved_font, regular, (stages[-1],))[0]
 
-    assert mixed.source_font_identifier == "lora:italic"
-    assert mixed.attribution_font_identifier == "lora"
+    assert mixed.source_font_identifier == "alternate-face"
+    assert mixed.attribution_font_identifier == "test-font"
     assert mixed.quotation.font_size == regular.quotation.font_size
     assert mixed.byline is not None and regular.byline is not None
     assert mixed.byline.bounds[0] >= mixed.region[0]

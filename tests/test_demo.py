@@ -11,6 +11,7 @@ from threading import Event
 
 import pytest
 from PIL import Image
+from resource_helpers import write_font_bundle
 
 import refrain.__main__ as cli
 import refrain.application as application
@@ -36,7 +37,7 @@ information_view:
 layout:
   presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
   fonts:
-    default: ["lora", "libre-baskerville"]
+    default: ["test-font", "test-font-alt"]
   backgrounds:
     default: ["none"]
   text: {min_font_size: 28, max_font_size: 100}
@@ -79,6 +80,8 @@ class DemoWorkspace:
         self.root = root
         self.config = root / "config.yaml"
         self.config.write_text(_CONFIG, encoding="utf-8")
+        for identifier in ("test-font", "test-font-alt"):
+            write_font_bundle(root / "assets" / "fonts" / identifier, identifier)
         self.content = root / "content"
         self.content.mkdir()
         self.sessions: list[Path] = []
@@ -356,7 +359,7 @@ def test_fixed_timezone_date_selection_rules_repetition_and_resources(demo):
     demo.entry(
         "special",
         quotations=["Special one.", "Special two."],
-        extra='priority: 10\neligibility:\n  - {year: 2026, month: 3, day: 9}\nfont: "lora"\nbackground: "none"\n',
+        extra='priority: 10\neligibility:\n  - {year: 2026, month: 3, day: 9}\nfont: "test-font"\nbackground: "none"\n',
     )
     demo.entry(
         "lower-priority",
@@ -399,7 +402,7 @@ def test_fixed_timezone_date_selection_rules_repetition_and_resources(demo):
     assert history_records[-1][-1]["revision"] == 4
     assert snapshots[2].font is None
     assert snapshots[2].background is None
-    assert snapshots[3].font == "lora"
+    assert snapshots[3].font == "test-font"
     assert snapshots[3].background == "none"
     demo.assert_clean()
 
