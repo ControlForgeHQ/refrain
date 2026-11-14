@@ -1,0 +1,19 @@
+[Unit]
+Description=Refrain quotation display
+After=time-set.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=REPLACE_WITH_OWNER
+Environment="HOME=/REPLACE/WITH/OWNER/HOME"
+ExecStart=/REPLACE/WITH/VENV/bin/refrain
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

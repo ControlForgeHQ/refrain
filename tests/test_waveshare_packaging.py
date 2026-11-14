@@ -5,6 +5,9 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
+from configparser import ConfigParser
+from email.parser import BytesParser
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -106,10 +109,31 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
 
     wheel = next(wheel_dir.glob("*.whl"))
     sdist = next(sdist_dir.glob("*.tar.gz"))
+    version = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    assert wheel.name == f"controlforge_refrain-{version}-py3-none-any.whl"
+    assert sdist.name == f"controlforge_refrain-{version}.tar.gz"
     with ZipFile(wheel) as archive:
         wheel_names = archive.namelist()
+        wheel_metadata = archive.read(f"controlforge_refrain-{version}.dist-info/METADATA")
+        wheel_entry_points = archive.read(f"controlforge_refrain-{version}.dist-info/entry_points.txt")
     with tarfile.open(sdist) as archive:
         sdist_names = archive.getnames()
+        sdist_metadata = archive.extractfile(f"controlforge_refrain-{version}/PKG-INFO").read()
+        sdist_entry_points = archive.extractfile(
+            f"controlforge_refrain-{version}/src/controlforge_refrain.egg-info/entry_points.txt"
+        ).read()
+
+    for metadata in (wheel_metadata, sdist_metadata):
+        headers = BytesParser().parsebytes(metadata)
+        assert headers["Name"] == "controlforge-refrain"
+        assert headers["Version"] == version
+    for entry_points in (wheel_entry_points, sdist_entry_points):
+        entries = ConfigParser()
+        entries.read_string(entry_points.decode("utf-8"))
+        assert dict(entries["console_scripts"]) == {
+            "refrain": "refrain.__main__:main",
+            "refrain-viewer": "refrain.viewer:main",
+        }
 
     assert not any(Path(name).name in _LIBRARIES for name in wheel_names)
     assert not any(Path(name).name in _LIBRARIES for name in sdist_names)
@@ -128,6 +152,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     assert any(name.endswith("assets/fonts/orbitron/Orbitron-Regular.ttf") for name in sdist_names)
     assert any(name.endswith("assets/fonts/orbitron/OFL.txt") for name in sdist_names)
     for package in (wheel_names, sdist_names):
+        assert any(name.endswith("systemd/refrain.service") for name in package)
         assert any(name.endswith("config.default.yaml") for name in package)
         assert any(name.endswith("sample_content/shakespeare-hamlet.yaml") for name in package)
         assert any(name.endswith("sample_content/shakespeare-as-you-like-it.yaml") for name in package)
@@ -171,6 +196,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
             "-c",
             (
                 "from importlib.resources import files; "
+                "from importlib.metadata import version; "
                 "from pathlib import Path; "
                 "from PIL import Image; "
                 "from tempfile import TemporaryDirectory; "
@@ -179,7 +205,10 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 "from refrain.content import load_content_library; "
                 "from refrain.installation import initialize_installation; "
                 "from refrain.paths import ApplicationPaths; "
+                "from refrain.information_view import _application_version; "
+                "assert _application_version() == version('controlforge-refrain'); "
                 "root=files('refrain'); "
+                "assert root.joinpath('systemd','refrain.service').is_file(); "
                 "assert root.joinpath('assets','branding','controlforge-logo.png').is_file(); "
                 "assert root.joinpath('config.default.yaml').is_file(); "
                 "assert root.joinpath('sample_content','shakespeare-hamlet.yaml').is_file(); "
