@@ -27,7 +27,7 @@ STABILITY_SECONDS = 1.0
 
 RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
-SECRETS_TEMPLATE = '''\
+SECRETS_TEMPLATE = """\
 # Local-only settings for tools/backgrounds/watch_backgrounds.py.
 #
 # This file contains machine-specific connection settings and must not be
@@ -46,7 +46,7 @@ PI_VENV_PATH = "refrain/.venv"
 
 # Refrain runtime destination to receive the transient preview.
 PI_DESTINATION = "waveshare-13in3-e"
-'''
+"""
 
 
 @dataclass(frozen=True)
@@ -199,9 +199,7 @@ def validate_remote_relative_path(name: str, value: str) -> str:
     path = PurePosixPath(value)
 
     if path.is_absolute():
-        raise ValueError(
-            f"{name} must be relative to the remote user's home directory"
-        )
+        raise ValueError(f"{name} must be relative to the remote user's home directory")
 
     if not path.parts:
         raise ValueError(f"{name} must not be empty")
@@ -265,9 +263,7 @@ def load_push_config() -> PushConfig:
         identity_file = expand_local_path(identity_value)
 
         if not identity_file.is_file():
-            raise ValueError(
-                f"PI_IDENTITY_FILE does not exist: {identity_file}"
-            )
+            raise ValueError(f"PI_IDENTITY_FILE does not exist: {identity_file}")
 
     return PushConfig(
         host=host,
@@ -304,25 +300,18 @@ def push_background(source: Path) -> None:
 
     if not RESOURCE_ID_PATTERN.fullmatch(background_id):
         raise ValueError(
-            f"{source.name} cannot be pushed because {background_id!r} "
-            "is not a valid Refrain resource ID"
+            f"{source.name} cannot be pushed because {background_id!r} " "is not a valid Refrain resource ID"
         )
 
     config = load_push_config()
 
     remote_target = f"{config.user}@{config.host}"
-    remote_file = (
-        f"{remote_target}:"
-        f"{config.remote_background_dir}/{source.name}"
-    )
+    remote_file = f"{remote_target}:" f"{config.remote_background_dir}/{source.name}"
 
     print(f"\nPushing {source.name} to {remote_target}")
 
     # Ensure the remote background directory exists.
-    remote_directory_command = (
-        "mkdir -p "
-        f"$HOME/{shlex.quote(config.remote_background_dir)}"
-    )
+    remote_directory_command = "mkdir -p " f"$HOME/{shlex.quote(config.remote_background_dir)}"
 
     run_command(
         [
@@ -355,10 +344,7 @@ def push_background(source: Path) -> None:
 
     # Activate the configured remote Refrain virtual environment before
     # invoking refrain-viewer.
-    viewer_command = (
-        f". $HOME/{shlex.quote(config.venv_path)}/bin/activate && "
-        f"{viewer_arguments}"
-    )
+    viewer_command = f". $HOME/{shlex.quote(config.venv_path)}/bin/activate && " f"{viewer_arguments}"
 
     run_command(
         [
@@ -367,10 +353,7 @@ def push_background(source: Path) -> None:
         ]
     )
 
-    print(
-        f"Pushed {background_id!r} to Refrain destination "
-        f"{config.destination!r}"
-    )
+    print(f"Pushed {background_id!r} to Refrain destination " f"{config.destination!r}")
 
 
 def main() -> int:
@@ -415,10 +398,7 @@ def main() -> int:
     push_observed: dict[
         Path,
         tuple[tuple[int, int], float],
-    ] = {
-        path: (state, time.monotonic())
-        for path, state in initial_push_files.items()
-    }
+    ] = {path: (state, time.monotonic()) for path, state in initial_push_files.items()}
 
     push_attempted: dict[
         Path,
@@ -446,10 +426,7 @@ def main() -> int:
 
             preview_current = snapshot_pngs(SCRIPT_DIR)
 
-            known_preview_paths = (
-                set(preview_observed)
-                | set(preview_processed)
-            )
+            known_preview_paths = set(preview_observed) | set(preview_processed)
 
             for path in known_preview_paths:
                 if path in preview_current:
@@ -478,16 +455,10 @@ def main() -> int:
                     generate_previews(path)
 
                 except subprocess.CalledProcessError as error:
-                    print(
-                        f"Preview generation failed for {path.name} "
-                        f"with exit code {error.returncode}"
-                    )
+                    print(f"Preview generation failed for {path.name} " f"with exit code {error.returncode}")
 
                 except Exception as error:
-                    print(
-                        f"Preview generation failed for "
-                        f"{path.name}: {error}"
-                    )
+                    print(f"Preview generation failed for " f"{path.name}: {error}")
 
                 else:
                     preview_processed[path] = state
@@ -498,10 +469,7 @@ def main() -> int:
 
             push_current = snapshot_pngs(PUSH_DIR)
 
-            known_push_paths = (
-                set(push_observed)
-                | set(push_attempted)
-            )
+            known_push_paths = set(push_observed) | set(push_attempted)
 
             for path in known_push_paths:
                 if path in push_current:
@@ -536,17 +504,11 @@ def main() -> int:
                     push_background(path)
 
                 except subprocess.CalledProcessError as error:
-                    print(
-                        f"Remote push failed for {path.name} "
-                        f"with exit code {error.returncode}"
-                    )
+                    print(f"Remote push failed for {path.name} " f"with exit code {error.returncode}")
                     print("Modify or replace the file to retry.")
 
                 except Exception as error:
-                    print(
-                        f"Remote push failed for "
-                        f"{path.name}: {error}"
-                    )
+                    print(f"Remote push failed for " f"{path.name}: {error}")
                     print("Modify or replace the file to retry.")
 
             time.sleep(POLL_INTERVAL_SECONDS)
