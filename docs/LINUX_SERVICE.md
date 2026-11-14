@@ -113,6 +113,10 @@ according to the normal backend contract. Bind only to the intended interface:
 image-server exposes unauthenticated HTTP to clients able to reach it. Interface
 and firewall policy remain the operator's responsibility.
 
+On Windows, socket error 10013 can mean either an occupied port or a genuine
+access restriction; the backend retries it because the OS does not distinguish
+these cases. Check the diagnostic if the listener remains unavailable.
+
 ## Maintenance and removal
 
 Stop the service before changing the venv. As the installation owner, install

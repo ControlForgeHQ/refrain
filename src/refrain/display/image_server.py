@@ -210,7 +210,7 @@ class ImageServerDisplayBackend:
         except OSError as error:
             raise DisplayBackendInitializationError(
                 f"could not resolve image-server listening address {host!r}: {error}",
-                recoverable=error.errno in (socket.EAI_AGAIN, socket.EAI_NONAME),
+                recoverable=error.errno == socket.EAI_AGAIN,
             ) from error
 
         server: _ImageHTTPServer | None = None
@@ -229,12 +229,16 @@ class ImageServerDisplayBackend:
                     except OSError:
                         _LOGGER.exception("failed to release an unusable image-server listener")
                 bind_error = error
-                retry_bind |= error.errno in (
-                    errno.EADDRNOTAVAIL,
-                    errno.EADDRINUSE,
-                    errno.ENETDOWN,
-                    errno.ENETUNREACH,
-                    errno.ENODEV,
+                retry_bind |= (
+                    error.errno
+                    in (
+                        errno.EADDRNOTAVAIL,
+                        errno.EADDRINUSE,
+                        errno.ENETDOWN,
+                        errno.ENETUNREACH,
+                        errno.ENODEV,
+                    )
+                    or getattr(error, "winerror", None) == 10013
                 )
                 continue
             server = candidate

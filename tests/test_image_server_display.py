@@ -435,7 +435,21 @@ def test_bind_failures_distinguish_temporary_resources_from_configuration(
     assert failure.value.recoverable is recoverable
 
 
-@pytest.mark.parametrize(("error_number", "recoverable"), [(socket.EAI_AGAIN, True), (socket.EAI_FAIL, False)])
+def test_windows_access_denied_socket_error_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_bind(_server):
+        error = OSError(errno.EACCES, "simulated Windows socket access error")
+        error.winerror = 10013
+        raise error
+
+    monkeypatch.setattr("refrain.display.image_server._ImageHTTPServer.server_bind", fail_bind)
+    with pytest.raises(DisplayBackendInitializationError) as failure:
+        ImageServerDisplayBackend(port=available_port())
+    assert failure.value.recoverable
+
+
+@pytest.mark.parametrize(
+    ("error_number", "recoverable"), [(socket.EAI_AGAIN, True), (socket.EAI_NONAME, False), (socket.EAI_FAIL, False)]
+)
 def test_address_resolution_failure_classification(
     monkeypatch: pytest.MonkeyPatch, error_number: int, recoverable: bool
 ) -> None:
