@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import logging
@@ -176,16 +177,22 @@ class ImageServerDisplayBackend:
         output_ids: tuple[str, ...] = ("default",),
     ) -> None:
         if not isinstance(host, str) or not host:
-            raise DisplayBackendInitializationError("image-server host must be a nonempty address or hostname")
+            raise DisplayBackendInitializationError(
+                "image-server host must be a nonempty address or hostname", recoverable=False
+            )
         if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
-            raise DisplayBackendInitializationError("image-server port must be an integer between 1 and 65535")
+            raise DisplayBackendInitializationError(
+                "image-server port must be an integer between 1 and 65535", recoverable=False
+            )
         if (
             not isinstance(output_ids, tuple)
             or not output_ids
             or any(not isinstance(output_id, str) or not output_id.strip() for output_id in output_ids)
             or len(set(output_ids)) != len(output_ids)
         ):
-            raise DisplayBackendInitializationError("image-server output IDs must be unique nonempty strings")
+            raise DisplayBackendInitializationError(
+                "image-server output IDs must be unique nonempty strings", recoverable=False
+            )
 
         self._state_lock = Lock()
         self._close_lock = Lock()
@@ -202,11 +209,13 @@ class ImageServerDisplayBackend:
             addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
         except OSError as error:
             raise DisplayBackendInitializationError(
-                f"could not resolve image-server listening address {host!r}: {error}"
+                f"could not resolve image-server listening address {host!r}: {error}",
+                recoverable=error.errno in (socket.EAI_AGAIN, socket.EAI_NONAME),
             ) from error
 
         server: _ImageHTTPServer | None = None
         bind_error: OSError | None = None
+        retry_bind = False
         for family, _socket_type, _protocol, _canonical_name, address in addresses:
             candidate: _ImageHTTPServer | None = None
             try:
@@ -220,12 +229,20 @@ class ImageServerDisplayBackend:
                     except OSError:
                         _LOGGER.exception("failed to release an unusable image-server listener")
                 bind_error = error
+                retry_bind |= error.errno in (
+                    errno.EADDRNOTAVAIL,
+                    errno.EADDRINUSE,
+                    errno.ENETDOWN,
+                    errno.ENETUNREACH,
+                    errno.ENODEV,
+                )
                 continue
             server = candidate
             break
         if server is None:
             raise DisplayBackendInitializationError(
-                f"could not bind image-server to {host}:{port}: {bind_error or 'no usable listening address'}"
+                f"could not bind image-server to {host}:{port}: {bind_error or 'no usable listening address'}",
+                recoverable=retry_bind,
             ) from bind_error
 
         self._server = server
@@ -242,7 +259,9 @@ class ImageServerDisplayBackend:
                 server.server_close()
             except OSError:
                 _LOGGER.exception("failed to release image-server listener after thread startup failure")
-            raise DisplayBackendInitializationError(f"could not start the image-server thread: {error}") from error
+            raise DisplayBackendInitializationError(
+                f"could not start the image-server thread: {error}", recoverable=False
+            ) from error
 
     def update(self, image: Image.Image) -> None:
         """Publish the image when this service has exactly one named output."""

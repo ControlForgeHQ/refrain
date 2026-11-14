@@ -7,7 +7,7 @@ def test_systemd_template_uses_explicit_owner_and_bounded_supervision() -> None:
     unit.read_string(files("refrain").joinpath("systemd", "refrain.service").read_text(encoding="utf-8"))
 
     assert unit["Unit"]["After"] == "time-set.target"
-    assert "network-online.target" not in unit["Unit"]
+    assert "network-online.target" not in str(dict(unit["Unit"]))
     assert unit["Unit"]["StartLimitIntervalSec"] == "300"
     assert unit["Unit"]["StartLimitBurst"] == "5"
     assert unit["Service"]["User"] == "REPLACE_WITH_OWNER"

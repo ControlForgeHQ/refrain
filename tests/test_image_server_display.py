@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import http.client
 import io
@@ -413,8 +414,45 @@ def test_occupied_port_is_reported_as_initialization_failure() -> None:
         listener.listen()
         port = listener.getsockname()[1]
 
-        with pytest.raises(DisplayBackendInitializationError, match="could not bind image-server"):
+        with pytest.raises(DisplayBackendInitializationError, match="could not bind image-server") as failure:
             ImageServerDisplayBackend(port=port)
+        assert failure.value.recoverable
+
+
+@pytest.mark.parametrize(
+    ("error_number", "recoverable"),
+    [(errno.EADDRNOTAVAIL, True), (errno.EADDRINUSE, True), (errno.EACCES, False), (errno.EINVAL, False)],
+)
+def test_bind_failures_distinguish_temporary_resources_from_configuration(
+    monkeypatch: pytest.MonkeyPatch, error_number: int, recoverable: bool
+) -> None:
+    def fail_bind(_server):
+        raise OSError(error_number, "simulated bind failure")
+
+    monkeypatch.setattr("refrain.display.image_server._ImageHTTPServer.server_bind", fail_bind)
+    with pytest.raises(DisplayBackendInitializationError) as failure:
+        ImageServerDisplayBackend(port=available_port())
+    assert failure.value.recoverable is recoverable
+
+
+@pytest.mark.parametrize(("error_number", "recoverable"), [(socket.EAI_AGAIN, True), (socket.EAI_FAIL, False)])
+def test_address_resolution_failure_classification(
+    monkeypatch: pytest.MonkeyPatch, error_number: int, recoverable: bool
+) -> None:
+    def fail_resolution(*_args, **_kwargs):
+        raise socket.gaierror(error_number, "simulated resolution failure")
+
+    monkeypatch.setattr("refrain.display.image_server.socket.getaddrinfo", fail_resolution)
+    with pytest.raises(DisplayBackendInitializationError) as failure:
+        ImageServerDisplayBackend(host="example.invalid", port=8080)
+    assert failure.value.recoverable is recoverable
+
+
+@pytest.mark.parametrize("kwargs", [{"host": ""}, {"port": 0}, {"output_ids": ()}])
+def test_invalid_backend_arguments_are_not_retried(kwargs: dict[str, object]) -> None:
+    with pytest.raises(DisplayBackendInitializationError) as failure:
+        ImageServerDisplayBackend(**kwargs)
+    assert not failure.value.recoverable
 
 
 def test_thread_start_failure_releases_bound_listener(monkeypatch: pytest.MonkeyPatch) -> None:

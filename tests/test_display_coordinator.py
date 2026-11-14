@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import logging
+import socket
 import time
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -15,6 +17,7 @@ from refrain import (
 )
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
 from refrain.display import coordinator as coordinator_module
+from refrain.display import image_server as image_server_module
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 
 _SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
@@ -212,6 +215,48 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
         coordinator.close()
 
     assert all(backend.closed for backend in backends.values())
+
+
+def test_unavailable_image_server_retries_without_blocking_local_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    available = Event()
+    attempts: list[object] = []
+    original_bind = image_server_module._ImageHTTPServer.server_bind
+
+    def bind(server):
+        attempts.append(server.server_address)
+        if not available.is_set():
+            raise OSError(errno.EADDRNOTAVAIL, "address unavailable")
+        original_bind(server)
+
+    monkeypatch.setattr(image_server_module._ImageHTTPServer, "server_bind", bind)
+    updates = {"window": []}
+    local = SimulatedBackend("window", updates)
+    network = DisplayBackendConfiguration("image-server", host="127.0.0.1", port=port, outputs=(_OUTPUT,))
+
+    def factory(config):
+        if config.type == "window":
+            return local
+        return DisplayPublicationCoordinator._default_factory(config)
+
+    coordinator = DisplayPublicationCoordinator((configuration("window"), network), factory)
+    try:
+        coordinator.publish((1, 0), publication(1))
+        assert wait_until(lambda: bool(attempts))
+        assert wait_until(lambda: updates["window"] == [1])
+        assert not coordinator.destination_statuses[1]["available"]
+        coordinator.publish((1, 1), publication(2))
+        assert wait_until(lambda: updates["window"] == [1, 2])
+        available.set()
+        assert coordinator.wait_for_publication((1, 1), timeout=4)
+        assert coordinator.acknowledgements["image-server:default"] == (1, 1)
+        assert coordinator.destination_statuses[1]["available"]
+        assert len(attempts) >= 2
+        assert all(address == ("127.0.0.1", port) for address in attempts)
+    finally:
+        coordinator.close()
 
 
 def test_identical_desired_presentation_is_not_published_twice() -> None:
