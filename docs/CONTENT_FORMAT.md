@@ -547,7 +547,7 @@ A content entry cannot directly specify presentation insets.
 
 Refrain maintains an effective registry of bundled font bundles and valid bundles discovered recursively under `<configuration directory>/assets/fonts/`. Each bundle has a stable, case-sensitive identifier; content entries and the default pool refer to the identifier, not a path.
 
-Bundled font identifiers are `alegreya`, `libre-baskerville`, `lora`, `orbitron`, and `source-sans-3`. These identifiers are reserved and stable. `orbitron` is available for explicit selection but is not in the default pool unless configured there.
+Bundled font bundles are discovered from package resources, and their identifiers are derived from their manifests. A readable bundled manifest with a valid identifier claims that identifier even when another part of the bundle is unusable, preventing a custom bundle from silently replacing it. An identifier is not reserved after no bundled resource claims it.
 
 #### Font bundle manifests
 
@@ -573,7 +573,7 @@ The `faces` mapping registers font resources; `font_faces` expresses role prefer
 
 Use safe YAML loading. Unknown manifest fields produce warnings and are ignored. Invalid manifest data, unsupported versions/formats, missing or unreadable resources, absolute paths, parent traversal, and references escaping the package (including symlink escapes) exclude the affected bundle without affecting unrelated resources. Bundled font directories retain their license and copyright files.
 
-All usable bundled and discovered fonts are available for explicit content-entry selection independently of default-pool membership. A custom identifier conflicting with a bundled identifier is excluded. All custom bundles sharing an identifier are excluded with deterministic diagnostics listing their locations.
+All usable bundled and discovered fonts are available for explicit content-entry selection independently of default-pool membership. A custom identifier conflicting with an identifier claimed by a bundled manifest is excluded. All custom bundles sharing an identifier are excluded with deterministic diagnostics listing their locations.
 
 ### Default font pool
 
@@ -1261,7 +1261,7 @@ For example:
 
 ```yaml
 id: "quiet-morning"
-background: "handmade-paper"
+background: "aged-paper"
 
 quotations:
   - "An example quotation."

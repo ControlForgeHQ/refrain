@@ -1283,7 +1283,7 @@ Refrain maintains an effective font registry containing usable bundled and disco
 
 Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool and may be empty when none of its configured identifiers is usable.
 
-Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Bundled font identifiers remain reserved and cannot be overridden.
+Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Custom font identifiers cannot override identifiers claimed by readable bundled manifests.
 
 A content entry may specify a preferred font, inherited by every quotation in that entry.
 
