@@ -28,7 +28,7 @@ from refrain import (
 from refrain import (
     prepare_daily_images as _prepare_daily_image_variants,
 )
-from refrain.config import BackgroundResource, DecorationLayerResource, DecorationResource
+from refrain.config import BackgroundLayerResource, BackgroundResource, DecorationLayerResource, DecorationResource
 
 _DEFAULT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _IMAGE_SIZE = _DEFAULT_SPECIFICATION.requested_output_size
@@ -695,6 +695,119 @@ def test_explicit_tint_does_not_make_non_tintable_decoration_tintable() -> None:
     assert choices.decoration_tint is None
 
 
+def test_background_preferences_precede_decoration_preferences_for_both_colors() -> None:
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        text_color=("blue",),
+        decoration_color=("blue",),
+        tintable=True,
+    )
+    background = BackgroundResource(
+        "paper",
+        None,
+        False,
+        text_color=("burnt-orange",),
+        decoration_color=("burnt-orange",),
+    )
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        backgrounds={"paper": background},
+        decorations={"frame": decoration},
+    )
+
+    text_color = preparation._resolve_text_color(
+        configuration, make_snapshot("lora"), decoration, background, Random(1)
+    )
+    decoration_color = preparation._resolve_decoration_tint(
+        configuration,
+        make_snapshot("lora"),
+        decoration,
+        Random(1),
+        decoration.layers,
+        background=background,
+    )
+
+    assert text_color == (198, 90, 32)
+    assert decoration_color == (198, 90, 32)
+
+
+def test_content_color_preferences_override_background_and_decoration() -> None:
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        text_color=("blue",),
+        decoration_color=("blue",),
+        tintable=True,
+    )
+    background = BackgroundResource(
+        "paper",
+        None,
+        False,
+        text_color=("burnt-orange",),
+        decoration_color=("burnt-orange",),
+    )
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        backgrounds={"paper": background},
+        decorations={"frame": decoration},
+    )
+    snapshot = replace(make_snapshot("lora"), text_color=("black",), decoration_color=("blue",))
+
+    assert preparation._resolve_text_color(configuration, snapshot, decoration, background, Random(1)) == (0, 0, 0)
+    assert preparation._resolve_decoration_tint(
+        configuration,
+        snapshot,
+        decoration,
+        Random(1),
+        decoration.layers,
+        background=background,
+    ) == (0, 0, 255)
+
+
+def test_unusable_background_color_preferences_fall_through_to_decoration_or_global_pool(caplog) -> None:
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        text_color=("blue",),
+        tintable=True,
+    )
+    background = BackgroundResource(
+        "paper",
+        None,
+        False,
+        text_color=("not-in-palette",),
+        decoration_color=("not-in-palette",),
+    )
+    configuration = replace(
+        _configuration(
+            _FONT_REGISTRY,
+            backgrounds={"paper": background},
+            decorations={"frame": decoration},
+        ),
+        default_text_colors=("burnt-orange",),
+        default_decoration_colors=("blue",),
+    )
+    snapshot = make_snapshot("lora")
+
+    text_color = preparation._resolve_text_color(configuration, snapshot, decoration, background, Random(1))
+    decoration_color = preparation._resolve_decoration_tint(
+        configuration,
+        snapshot,
+        decoration,
+        Random(1),
+        decoration.layers,
+        background=background,
+    )
+
+    assert text_color == (0, 0, 255)
+    assert decoration_color == (0, 0, 255)
+    assert "selected background" in caplog.text
+
+
 def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
     layer_path = tmp_path / "frame.png"
     with Image.new("RGBA", (8, 8), (0, 0, 0, 0)) as layer:
@@ -1025,6 +1138,84 @@ def test_background_cover_scaling_preserves_alpha(tmp_path: Path) -> None:
         assert background.getpixel((4, 2)) == (132, 137, 247)
     finally:
         background.close()
+
+
+def test_packaged_background_layers_composite_in_declaration_order_with_alpha(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.png"
+    overlay_path = tmp_path / "overlay.png"
+    with Image.new("RGB", (4, 2), (240, 20, 10)) as base:
+        base.save(base_path)
+    with Image.new("RGBA", (4, 2), (0, 0, 0, 0)) as overlay:
+        overlay.putpixel((1, 0), (0, 0, 255, 128))
+        overlay.save(overlay_path)
+    resource = BackgroundResource(
+        "layered",
+        None,
+        False,
+        (
+            BackgroundLayerResource(base_path, "cover"),
+            BackgroundLayerResource(overlay_path, "cover"),
+        ),
+    )
+
+    background = preparation._generate_daily_background((4, 2), "layered", {"layered": resource})
+    try:
+        assert background.getpixel((0, 0)) == (240, 20, 10)
+        assert all(
+            abs(actual - expected) <= 1
+            for actual, expected in zip(background.getpixel((1, 0)), (120, 10, 133), strict=True)
+        )
+    finally:
+        background.close()
+
+
+def test_packaged_background_contain_centres_artwork_on_paper_white(tmp_path: Path) -> None:
+    image_path = tmp_path / "portrait.png"
+    with Image.new("RGBA", (2, 1), (10, 20, 240, 255)) as source:
+        source.save(image_path)
+    resource = BackgroundResource(
+        "contained",
+        None,
+        False,
+        (BackgroundLayerResource(image_path, "contain"),),
+    )
+
+    background = preparation._generate_daily_background((4, 4), "contained", {"contained": resource})
+    try:
+        assert background.getpixel((0, 0)) == (255, 255, 255)
+        assert background.getpixel((1, 1)) == (10, 20, 240)
+        assert background.getpixel((1, 2)) == (10, 20, 240)
+        assert background.getpixel((0, 3)) == (255, 255, 255)
+    finally:
+        background.close()
+
+
+def test_background_layer_cover_uses_the_same_transform_as_decoration(tmp_path: Path) -> None:
+    path = tmp_path / "wide.png"
+    with Image.new("RGBA", (8, 2), (0, 0, 0, 255)) as source:
+        source.putpixel((3, 0), (255, 0, 0, 255))
+        source.putpixel((4, 1), (0, 0, 255, 255))
+        source.save(path)
+    background_resource = BackgroundResource(
+        "cover",
+        None,
+        False,
+        (BackgroundLayerResource(path, "cover"),),
+    )
+    decoration_resource = DecorationResource(
+        "cover",
+        (DecorationLayerResource(path, "cover", tintable=False),),
+        False,
+    )
+
+    background = preparation._generate_daily_background((4, 4), "cover", {"cover": background_resource})
+    decoration_background = Image.new("RGB", (4, 4), "white")
+    try:
+        preparation._apply_daily_decoration(decoration_background, "cover", {"cover": decoration_resource})
+        assert background.tobytes() == decoration_background.tobytes()
+    finally:
+        background.close()
+        decoration_background.close()
 
 
 def test_decoration_contain_scaling_centres_transparent_portrait(tmp_path: Path) -> None:

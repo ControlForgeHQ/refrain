@@ -15,10 +15,12 @@ from PIL import Image, ImageFont, ImageOps
 from .config import (
     ApplicationConfiguration,
     BackgroundResource,
+    CompositionLayerResource,
     DecorationLayerResource,
     DecorationResource,
     FontResource,
     load_background_image,
+    load_composition_layer_image,
     load_decoration_layer_image,
 )
 from .geometry import (
@@ -131,7 +133,8 @@ def _resolve_presentation_choices(
         if force_white_background
         else _resolve_background(snapshot, decoration, configuration, chooser, overrides.background)
     )
-    text_color = _resolve_text_color(configuration, snapshot, decoration, chooser, overrides.text_color)
+    background = configuration.backgrounds.get(background_identifier)
+    text_color = _resolve_text_color(configuration, snapshot, decoration, background, chooser, overrides.text_color)
     if overrides.tint is not None and overrides.tint not in configuration.palette:
         raise DailyImagePreparationError(f"explicit decoration tint color {overrides.tint!r} is not in the palette")
     decoration_tint = _resolve_decoration_tint(
@@ -141,6 +144,7 @@ def _resolve_presentation_choices(
         chooser,
         () if decoration is None else decoration.layers,
         (_palette_color(configuration, overrides.tint) if overrides.tint is not None else forced_decoration_tint),
+        background,
     )
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, overrides)
     style = snapshot.presentation_style if overrides.style is None else overrides.style
@@ -237,6 +241,7 @@ def _resolve_text_color(
     configuration: ApplicationConfiguration,
     snapshot: DailySnapshot,
     decoration: DecorationResource | None,
+    background: BackgroundResource | None,
     chooser: random.Random,
     override: str | None = None,
 ) -> tuple[int, int, int]:
@@ -248,6 +253,7 @@ def _resolve_text_color(
         configuration,
         (
             ("content entry", snapshot.text_color),
+            ("selected background", None if background is None else background.text_color),
             ("selected decoration", None if decoration is None else decoration.text_color),
             ("layout.text.colors", configuration.default_text_colors),
         ),
@@ -264,6 +270,7 @@ def _resolve_decoration_tint(
     chooser: random.Random,
     layers: Sequence[DecorationLayerResource],
     forced_tint: tuple[int, int, int] | None = None,
+    background: BackgroundResource | None = None,
 ) -> tuple[int, int, int] | None:
     if decoration is None or not any(decoration.tintable and layer.tintable for layer in layers):
         return None
@@ -274,6 +281,7 @@ def _resolve_decoration_tint(
         configuration,
         (
             ("content entry", snapshot.decoration_color),
+            ("selected background", None if background is None else background.decoration_color),
             ("selected decoration", decoration.decoration_color),
             ("layout.decorations.colors", configuration.default_decoration_colors),
         ),
@@ -300,23 +308,31 @@ def _generate_daily_background(
         _LOGGER.warning("Committed background %r is unavailable; using the paper-white base", identifier)
         return base
     try:
-        with load_background_image(resource) as image:
-            fitted = ImageOps.fit(image, design_canvas_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-            try:
-                base.paste(fitted, (0, 0), fitted if fitted.mode == "RGBA" else None)
-            finally:
-                fitted.close()
+        if resource.layers:
+            for index, layer in enumerate(resource.layers, start=1):
+                try:
+                    with load_composition_layer_image(layer) as image:
+                        _compose_layer(base, image, layer)
+                except Exception as error:
+                    raise ValueError(f"layer {index} ({layer.image}) is unavailable or unusable: {error}") from error
+        elif resource.path is not None:
+            with load_background_image(resource) as image:
+                _compose_layer(base, image, CompositionLayerResource(resource.path, "cover"))
+        else:
+            raise ValueError("background has neither a standalone image nor any layers")
     except Exception as error:
         if strict:
             base.close()
             raise DailyImagePreparationError(
                 f"explicit background {identifier!r} is unavailable or unusable: {error}"
             ) from error
+        base.close()
         _LOGGER.warning(
             "Committed background %r is unavailable or unusable; using the paper-white base: %s",
             identifier,
             error,
         )
+        return Image.new("RGB", design_canvas_size, _BACKGROUND_COLOR)
     return base
 
 
@@ -358,22 +374,9 @@ def _apply_daily_decoration(
                         else:
                             tinted = Image.new("RGB", image.size, tint_rgb)
                         source = tinted
-                    if layer.method == "contain":
-                        contained = ImageOps.contain(source, background.size, method=Image.Resampling.LANCZOS)
-                        try:
-                            position = (
-                                (background.width - contained.width) // 2,
-                                (background.height - contained.height) // 2,
-                            )
-                            _paste_decoration_region(background, contained, position)
-                        finally:
-                            contained.close()
-                    elif layer.method == "cover":
-                        _compose_cover(background, source)
-                    else:
-                        x_bounds, y_bounds = _compose_nine_slice(background, source, layer)
-                        if on_nine_slice_guide is not None:
-                            on_nine_slice_guide(layer, x_bounds, y_bounds)
+                    bounds = _compose_layer(background, source, layer)
+                    if bounds is not None and on_nine_slice_guide is not None:
+                        on_nine_slice_guide(layer, *bounds)
                 finally:
                     if tinted is not None:
                         tinted.close()
@@ -407,11 +410,33 @@ def _decoration_layer_is_tintable(decoration: DecorationResource, layer: Decorat
     return decoration.tintable and layer.tintable
 
 
-def _paste_decoration_region(background: Image.Image, region: Image.Image, position: tuple[int, int]) -> None:
+def _paste_layer_region(background: Image.Image, region: Image.Image, position: tuple[int, int]) -> None:
     if region.mode == "RGBA":
         background.paste(region, position, region)
     else:
         background.paste(region, position)
+
+
+def _compose_layer(
+    background: Image.Image,
+    source: Image.Image,
+    layer: CompositionLayerResource,
+) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+    if layer.method == "contain":
+        contained = ImageOps.contain(source, background.size, method=Image.Resampling.LANCZOS)
+        try:
+            position = (
+                (background.width - contained.width) // 2,
+                (background.height - contained.height) // 2,
+            )
+            _paste_layer_region(background, contained, position)
+        finally:
+            contained.close()
+        return None
+    if layer.method == "cover":
+        _compose_cover(background, source)
+        return None
+    return _compose_nine_slice(background, source, layer)
 
 
 def _rounded_fraction(value: Fraction) -> int:
@@ -420,7 +445,7 @@ def _rounded_fraction(value: Fraction) -> int:
 
 def _compose_cover(background: Image.Image, source: Image.Image) -> None:
     if source.size == background.size:
-        _paste_decoration_region(background, source, (0, 0))
+        _paste_layer_region(background, source, (0, 0))
         return
 
     scale = max(Fraction(background.width, source.width), Fraction(background.height, source.height))
@@ -435,11 +460,11 @@ def _compose_cover(background: Image.Image, source: Image.Image) -> None:
         if left or top:
             covered = scaled.crop((left, top, left + background.width, top + background.height))
             try:
-                _paste_decoration_region(background, covered, (0, 0))
+                _paste_layer_region(background, covered, (0, 0))
             finally:
                 covered.close()
         else:
-            _paste_decoration_region(background, scaled, (0, 0))
+            _paste_layer_region(background, scaled, (0, 0))
     finally:
         if scaled is not source:
             scaled.close()
@@ -472,7 +497,7 @@ def _resize_source_region(
 def _compose_nine_slice(
     background: Image.Image,
     source: Image.Image,
-    layer: DecorationLayerResource,
+    layer: CompositionLayerResource,
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
     parameters = layer.nine_slice
     if parameters is None:
@@ -601,7 +626,7 @@ def _compose_nine_slice(
         if transformed is None:
             continue
         try:
-            _paste_decoration_region(background, transformed, (dest_x, dest_y))
+            _paste_layer_region(background, transformed, (dest_x, dest_y))
         finally:
             transformed.close()
     return (

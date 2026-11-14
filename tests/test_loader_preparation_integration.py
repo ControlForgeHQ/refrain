@@ -125,7 +125,10 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
         encoding="utf-8",
     )
     (background_path.parent / "background.yaml").write_text(
-        yaml.safe_dump({"format": 1, "id": "paper", "image": "Paper.png"}, sort_keys=False),
+        yaml.safe_dump(
+            {"format": 1, "id": "paper", "layers": [{"image": "Paper.png"}]},
+            sort_keys=False,
+        ),
         encoding="utf-8",
     )
     (decoration_path.parent / "decoration.yaml").write_text(
@@ -202,7 +205,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     image = images[config.required_output_specifications[0]][0]
 
     assert config.fonts["family-serif"].path == font_path
-    assert config.backgrounds["paper"].path == background_path
+    assert config.backgrounds["paper"].layers[0].image == background_path
     assert config.decorations["border"].layers[0].image == decoration_path
     assert image.size == (1920, 1080)
     assert image.getpixel((0, 0)) == (255, 0, 0)

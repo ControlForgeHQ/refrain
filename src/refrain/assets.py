@@ -54,7 +54,7 @@ def parse_font_faces(value: object, field: str, report: Report) -> Mapping[str, 
     return MappingProxyType(result if valid else {})
 
 
-def _parse_decoration_color(value: object, field: str, report: Report) -> tuple[str, ...] | None:
+def _parse_palette_preference(value: object, field: str, report: Report) -> tuple[str, ...] | None:
     if isinstance(value, str):
         if value:
             return (value,)
@@ -285,7 +285,7 @@ def discover_backgrounds(
     reserved: set[str],
     report: Report,
 ) -> dict[str, object]:
-    from .config import BackgroundResource
+    from .config import BackgroundLayerResource, BackgroundResource
 
     candidates: list[tuple[str, BackgroundResource, bool, str]] = []
 
@@ -295,21 +295,123 @@ def discover_backgrounds(
                 return
             manifest = directory.joinpath("background.yaml")
             if not _is_link(manifest) and _exists(manifest):
-                parsed = _parse_manifest(manifest, "background", {"format", "id", "image"}, report)
-                if parsed is not None:
-                    image_path, data = parsed
-                    identifier = data["id"]
-                    resource = BackgroundResource(identifier, image_path, is_bundled)
-                    _validate_image_candidate(
-                        resource,
-                        identifier,
-                        is_bundled,
-                        reserved,
-                        candidates,
-                        str(manifest),
-                        report,
-                        "background",
+                field = str(manifest)
+                try:
+                    data = _read_manifest(manifest)
+                except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
+                    report(field, f"manifest is invalid and the background is excluded: {error}", logging.WARNING)
+                    return
+                _unknown_fields(data, {"format", "id", "layers", "text_color", "decoration_color"}, field, report)
+                invalid = False
+                if "image" in data:
+                    report(
+                        f"{field}.image",
+                        "is obsolete; packaged backgrounds require a nonempty layers sequence",
+                        logging.WARNING,
                     )
+                    invalid = True
+                if type(data.get("format")) is not int or data.get("format") != 1:
+                    report(
+                        f"{field}.format",
+                        "must be the supported integer manifest version 1; background excluded",
+                        logging.WARNING,
+                    )
+                    invalid = True
+                identifier = data.get("id")
+                if not valid_identifier(identifier):
+                    report(f"{field}.id", "must be a nonempty ASCII identifier; background excluded", logging.WARNING)
+                    invalid = True
+                definitions = data.get("layers")
+                if not isinstance(definitions, list) or not definitions:
+                    report(
+                        f"{field}.layers", "must be a nonempty ordered sequence; background excluded", logging.WARNING
+                    )
+                    invalid = True
+                    definitions = []
+
+                layers: list[BackgroundLayerResource] = []
+                for index, definition in enumerate(definitions):
+                    layer_field = f"{field}.layers[{index}]"
+                    if not isinstance(definition, dict):
+                        report(layer_field, "must be a mapping; background excluded", logging.WARNING)
+                        invalid = True
+                        continue
+                    _unknown_fields(definition, {"image", "method", "slices"}, layer_field, report)
+                    method = definition.get("method", "cover")
+                    if not isinstance(method, str) or method not in {"contain", "cover", "nine-slice"}:
+                        report(
+                            f"{layer_field}.method",
+                            "must be 'contain', 'cover', or 'nine-slice'; background excluded",
+                            logging.WARNING,
+                        )
+                        invalid = True
+                        continue
+                    if method in {"contain", "cover"} and "slices" in definition:
+                        report(
+                            f"{layer_field}.slices",
+                            f"is not supported with method {method!r}; background excluded",
+                            logging.WARNING,
+                        )
+                        invalid = True
+                        continue
+                    nine_slice = None
+                    if method == "nine-slice":
+                        nine_slice, valid = _parse_nine_slice(
+                            definition.get("slices"), f"{layer_field}.slices", "background", report
+                        )
+                        if not valid:
+                            invalid = True
+                            continue
+                    try:
+                        image_path = _manifest_path(directory, definition.get("image"), {".png"})
+                        image_size = _validate_image_metadata(image_path, "background")
+                    except Exception as error:
+                        report(f"{layer_field}.image", f"is invalid; background excluded: {error}", logging.WARNING)
+                        invalid = True
+                        continue
+                    if nine_slice is not None and (
+                        nine_slice.left + nine_slice.right > image_size[0]
+                        or nine_slice.top + nine_slice.bottom > image_size[1]
+                    ):
+                        report(
+                            f"{layer_field}.slices",
+                            f"boundaries overlap or exceed the {image_size[0]} x {image_size[1]} image; "
+                            "background excluded",
+                            logging.WARNING,
+                        )
+                        invalid = True
+                        continue
+                    layers.append(BackgroundLayerResource(image_path, method, nine_slice))
+
+                if invalid or len(layers) != len(definitions):
+                    return
+                text_color = (
+                    _parse_palette_preference(data["text_color"], f"{field}.text_color", report)
+                    if "text_color" in data
+                    else None
+                )
+                decoration_color = (
+                    _parse_palette_preference(data["decoration_color"], f"{field}.decoration_color", report)
+                    if "decoration_color" in data
+                    else None
+                )
+                resource = BackgroundResource(
+                    identifier,
+                    None,
+                    is_bundled,
+                    tuple(layers),
+                    text_color,
+                    decoration_color,
+                    manifest,
+                )
+                if identifier == "none":
+                    report(
+                        f"{field}.id",
+                        "reserved identifier 'none' cannot be registered; background excluded",
+                        logging.WARNING,
+                    )
+                    return
+                _validate_candidate(resource, identifier, is_bundled, reserved, candidates, field, report, field)
                 return
             for child in _children(directory, report, "backgrounds"):
                 if _is_link(child):
@@ -336,6 +438,47 @@ def discover_backgrounds(
     scan(bundled_root, True)
     scan(custom_root, False)
     return _register_candidates(candidates, reserved, "backgrounds", report)
+
+
+def _parse_nine_slice(
+    value: object,
+    field: str,
+    category: str,
+    report: Report,
+) -> tuple[object, bool]:
+    from .config import NineSliceParameters
+
+    if not isinstance(value, dict):
+        report(f"{field}", f"is required and must be a mapping; {category} excluded", logging.WARNING)
+        return None, False
+    allowed = {"left", "right", "top", "bottom", "horizontal", "vertical"}
+    invalid = False
+    for key in sorted(value.keys() - allowed, key=str):
+        report(f"{field}.{key}", f"is not a supported parameter; {category} excluded", logging.WARNING)
+        invalid = True
+    measurements: dict[str, int] = {}
+    for key in ("left", "right", "top", "bottom"):
+        measurement = value.get(key)
+        if type(measurement) is not int or measurement < 0:
+            report(
+                f"{field}.{key}",
+                f"must be a nonnegative source-pixel integer; {category} excluded",
+                logging.WARNING,
+            )
+            invalid = True
+        else:
+            measurements[key] = measurement
+    horizontal = value.get("horizontal", "stretch")
+    vertical = value.get("vertical", "stretch")
+    if not isinstance(horizontal, str) or horizontal not in {"stretch", "crop"}:
+        report(f"{field}.horizontal", f"must be 'stretch' or 'crop'; {category} excluded", logging.WARNING)
+        invalid = True
+    if not isinstance(vertical, str) or vertical not in {"stretch", "crop"}:
+        report(f"{field}.vertical", f"must be 'stretch' or 'crop'; {category} excluded", logging.WARNING)
+        invalid = True
+    if invalid:
+        return None, False
+    return NineSliceParameters(**measurements, horizontal=horizontal, vertical=vertical), True
 
 
 def _validate_image_candidate(
@@ -469,60 +612,12 @@ def discover_decorations(
                     invalid_layers = True
                     continue
                 if method == "nine-slice":
-                    parameters = definition.get("slices")
-                    if not isinstance(parameters, dict):
-                        report(
-                            f"{layer_field}.slices",
-                            "is required and must be a mapping; decoration excluded",
-                            logging.WARNING,
-                        )
-                        invalid_layers = True
-                        continue
-                    allowed_parameters = {"left", "right", "top", "bottom", "horizontal", "vertical"}
-                    invalid_parameter = False
-                    for key in sorted(parameters.keys() - allowed_parameters, key=str):
-                        report(
-                            f"{layer_field}.slices.{key}",
-                            "is not a supported parameter; decoration excluded",
-                            logging.WARNING,
-                        )
-                        invalid_parameter = True
-                    measurements = {}
-                    for key in ("left", "right", "top", "bottom"):
-                        value = parameters.get(key)
-                        if type(value) is not int or value < 0:
-                            report(
-                                f"{layer_field}.slices.{key}",
-                                "must be a nonnegative source-pixel integer; decoration excluded",
-                                logging.WARNING,
-                            )
-                            invalid_parameter = True
-                        else:
-                            measurements[key] = value
-                    horizontal = parameters.get("horizontal", "stretch")
-                    vertical = parameters.get("vertical", "stretch")
-                    if not isinstance(horizontal, str) or horizontal not in {"stretch", "crop"}:
-                        report(
-                            f"{layer_field}.slices.horizontal",
-                            "must be 'stretch' or 'crop'; decoration excluded",
-                            logging.WARNING,
-                        )
-                        invalid_parameter = True
-                    if not isinstance(vertical, str) or vertical not in {"stretch", "crop"}:
-                        report(
-                            f"{layer_field}.slices.vertical",
-                            "must be 'stretch' or 'crop'; decoration excluded",
-                            logging.WARNING,
-                        )
-                        invalid_parameter = True
-                    if invalid_parameter:
-                        invalid_layers = True
-                        continue
-                    nine_slice = NineSliceParameters(
-                        **measurements,
-                        horizontal=horizontal,
-                        vertical=vertical,
+                    nine_slice, valid = _parse_nine_slice(
+                        definition.get("slices"), f"{layer_field}.slices", "decoration", report
                     )
+                    if not valid:
+                        invalid_layers = True
+                        continue
                 try:
                     image_path = _manifest_path(package, definition.get("image"), {".png"})
                     image_size = _validate_image_metadata(image_path, "decorations")
@@ -587,12 +682,12 @@ def discover_decorations(
                 )
                 preferred_background = None
             preferred_text_color = (
-                _parse_decoration_color(data["text_color"], f"{field}.text_color", report)
+                _parse_palette_preference(data["text_color"], f"{field}.text_color", report)
                 if "text_color" in data
                 else None
             )
             preferred_decoration_color = (
-                _parse_decoration_color(data["decoration_color"], f"{field}.decoration_color", report)
+                _parse_palette_preference(data["decoration_color"], f"{field}.decoration_color", report)
                 if "decoration_color" in data
                 else None
             )
