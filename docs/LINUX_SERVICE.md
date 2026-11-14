@@ -121,7 +121,16 @@ these cases. Check the diagnostic if the listener remains unavailable.
 
 Stop the service before changing the venv. As the installation owner, install
 the new trusted wheel into the same environment (include the hardware extra if
-used), then start the service only after installation succeeds:
+used), then start the service only after installation succeeds. If this venv
+contains an earlier Refrain distribution installed as `refrain`, first stop the
+service and uninstall that old distribution:
+
+```sh
+"$HOME/refrain-venv/bin/python" -m pip uninstall refrain
+```
+
+Do not uninstall the old distribution after installing the new one: both own
+files in the same `refrain` import package. To update:
 
 ```sh
 sudo systemctl stop refrain.service
