@@ -1044,9 +1044,10 @@ For example, applying 20-pixel slices to a 1920 × 1200 source on a 3840 × 2400
 Decoration-wide and per-layer `tintable` values both default to `true`. A layer is effectively tintable only when `decoration.tintable AND layer.tintable` is true. If at least one layer is effectively tintable, select one decoration color for the complete preparation using the first level with usable candidates:
 
 1. The content entry's `decoration_color`.
-2. The selected decoration's `decoration_color`.
-3. The effective global `layout.decorations.colors` pool.
-4. The built-in `black` fallback.
+2. The selected background's `decoration_color`.
+3. The selected decoration's `decoration_color`.
+4. The effective global `layout.decorations.colors` pool.
+5. The built-in `black` fallback.
 
 Select uniformly among distinct usable identifiers at the first applicable level; do not combine candidates from different levels. A successful color selection activates tinting; there is no separate activation state or configuration field. Apply the selected color to every effectively tintable layer, replacing RGB while preserving authored alpha, including antialiasing and transparency. When no layer is effectively tintable, do not resolve a decoration color. Artwork intended to retain authored RGB must set `tintable: false` at the decoration or layer level.
 
