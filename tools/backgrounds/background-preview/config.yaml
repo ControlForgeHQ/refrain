@@ -1,0 +1,61 @@
+# This is the initial editable configuration installed by --initialize.
+general:
+  day_start: "05:00"
+
+reveal:
+  source: "12:00"
+  attribution: "18:00"
+
+information_view:
+  duration: 60
+
+display:
+  backends:
+    - type: "waveshare-13in3-e"
+
+layout:
+  presentation_insets:
+    left: 384
+    right: 384
+    top: 324
+    bottom: 324
+
+  fonts:
+    default:
+      - "alegreya"
+      - "libre-baskerville"
+      - "lora"
+      - "source-sans-3"
+    font_faces:
+      source: italic
+
+  backgrounds:
+    default:
+      - "none"
+      - "aged-paper"
+      - "canvas"
+      - "cloth"
+      - "drafting-grid"
+      - "handmade-paper"
+      - "hex"
+      - "isometric-grid"
+      - "limestone"
+      - "recursive-squares"
+      - "vellum"
+
+  decorations:
+    default:
+      - "none"
+      - "ethereal"
+      - "hex"
+      - "lower-flourish"
+      - "simple-border"
+      - "top-bottom-borders"
+    colors:
+      - "black"
+
+  text:
+    colors:
+      - "black"
+    min_font_size: 56
+    max_font_size: 200
