@@ -48,14 +48,7 @@ layout:
       - "none"
       - "aged-paper"
       - "canvas"
-      - "cloth"
-      - "drafting-grid"
-      - "handmade-paper"
-      - "hex"
-      - "isometric-grid"
-      - "limestone"
-      - "recursive-squares"
-      - "vellum"
+      - "marble"
 
   decorations:
     default:

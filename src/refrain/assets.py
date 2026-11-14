@@ -223,23 +223,15 @@ def _validate_candidate(
     resource: _T,
     identifier: str,
     bundled: bool,
-    reserved: set[str],
     candidates: list[tuple[str, _T, bool, str]],
     location: str,
-    report: Report,
-    field: str,
 ) -> None:
-    if bundled and identifier not in reserved:
-        report(
-            field, f"bundled identifier {identifier!r} is not a reserved public identifier; excluded", logging.WARNING
-        )
-        return
     candidates.append((identifier, resource, bundled, location))
 
 
 def _register_candidates(
     candidates: list[tuple[str, _T, bool, str]],
-    reserved: set[str],
+    bundled_identifiers: set[str],
     category: str,
     report: Report,
 ) -> dict[str, _T]:
@@ -260,11 +252,11 @@ def _register_candidates(
     result = dict(bundled)
     for identifier in sorted(custom):
         entries = custom[identifier]
-        if identifier in reserved or identifier in bundled:
+        if identifier in bundled_identifiers or identifier in bundled:
             for _, location in entries:
                 report(
                     f"assets.{category}.{identifier}",
-                    f"custom asset at {location} conflicts with reserved bundled identifier {identifier!r}; excluded",
+                    f"custom asset at {location} conflicts with bundled identifier {identifier!r}; excluded",
                     logging.WARNING,
                 )
         elif len(entries) > 1:
@@ -282,12 +274,12 @@ def _register_candidates(
 def discover_backgrounds(
     bundled_root: AssetPath,
     custom_root: Path,
-    reserved: set[str],
     report: Report,
 ) -> dict[str, object]:
     from .config import BackgroundLayerResource, BackgroundResource
 
     candidates: list[tuple[str, BackgroundResource, bool, str]] = []
+    bundled_identifiers: set[str] = set()
 
     def scan(root: AssetPath, is_bundled: bool) -> None:
         def visit(directory: AssetPath) -> None:
@@ -301,6 +293,9 @@ def discover_backgrounds(
                 except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
                     report(field, f"manifest is invalid and the background is excluded: {error}", logging.WARNING)
                     return
+                identifier = data.get("id")
+                if is_bundled and valid_identifier(identifier) and identifier != "none":
+                    bundled_identifiers.add(identifier)
                 _unknown_fields(data, {"format", "id", "layers", "text_color", "decoration_color"}, field, report)
                 invalid = False
                 if "image" in data:
@@ -317,7 +312,6 @@ def discover_backgrounds(
                         logging.WARNING,
                     )
                     invalid = True
-                identifier = data.get("id")
                 if not valid_identifier(identifier):
                     report(f"{field}.id", "must be a nonempty ASCII identifier; background excluded", logging.WARNING)
                     invalid = True
@@ -401,7 +395,7 @@ def discover_backgrounds(
                         logging.WARNING,
                     )
                     return
-                _validate_candidate(resource, identifier, is_bundled, reserved, candidates, field, report, field)
+                _validate_candidate(resource, identifier, is_bundled, candidates, field)
                 return
             for child in _children(directory, report, "backgrounds"):
                 if _is_link(child):
@@ -410,12 +404,13 @@ def discover_backgrounds(
                     visit(child)
                 elif child.name.lower().endswith(".png"):
                     identifier = Path(child.name).stem
+                    if is_bundled and valid_identifier(identifier) and identifier != "none":
+                        bundled_identifiers.add(identifier)
                     resource = BackgroundResource(identifier, child, is_bundled)
                     _validate_image_candidate(
                         resource,
                         identifier,
                         is_bundled,
-                        reserved,
                         candidates,
                         str(child),
                         report,
@@ -427,7 +422,7 @@ def discover_backgrounds(
 
     scan(bundled_root, True)
     scan(custom_root, False)
-    return _register_candidates(candidates, reserved, "backgrounds", report)
+    return _register_candidates(candidates, bundled_identifiers, "backgrounds", report)
 
 
 def _parse_nine_slice(
@@ -562,7 +557,6 @@ def _validate_image_candidate(
     resource: _T,
     identifier: object,
     is_bundled: bool,
-    reserved: set[str],
     candidates: list[tuple[str, _T, bool, str]],
     location: str,
     report: Report,
@@ -582,13 +576,12 @@ def _validate_image_candidate(
     except Exception as error:
         report(field, f"asset at {location} is unreadable or invalid and is excluded: {error}", logging.WARNING)
         return
-    _validate_candidate(resource, identifier, is_bundled, reserved, candidates, location, report, field)
+    _validate_candidate(resource, identifier, is_bundled, candidates, location)
 
 
 def discover_decorations(
     bundled_root: AssetPath,
     custom_root: Path,
-    reserved: set[str],
     font_ids: set[str],
     background_ids: set[str],
     report: Report,
@@ -597,6 +590,7 @@ def discover_decorations(
     from .config import DecorationLayerResource, DecorationResource
 
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
+    bundled_identifiers: set[str] = set()
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
         for package, manifest in _walk_packages(root, "decoration.yaml", report, "decorations"):
             field = str(manifest)
@@ -605,6 +599,9 @@ def discover_decorations(
             except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
                 report(field, f"manifest is invalid and the decoration is excluded: {error}", logging.WARNING)
                 continue
+            identifier = data.get("id")
+            if is_bundled and valid_identifier(identifier) and identifier != "none":
+                bundled_identifiers.add(identifier)
             _unknown_fields(
                 data,
                 {
@@ -635,7 +632,6 @@ def discover_decorations(
                     logging.WARNING,
                 )
                 continue
-            identifier = data.get("id")
             if not valid_identifier(identifier):
                 report(f"{field}.id", "must be a nonempty ASCII identifier; decoration excluded", logging.WARNING)
                 continue
@@ -797,19 +793,19 @@ def discover_decorations(
                     logging.WARNING,
                 )
                 continue
-            _validate_candidate(resource, identifier, is_bundled, reserved, candidates, field, report, field)
-    return _register_candidates(candidates, reserved, "decorations", report)
+            _validate_candidate(resource, identifier, is_bundled, candidates, field)
+    return _register_candidates(candidates, bundled_identifiers, "decorations", report)
 
 
 def discover_fonts(
     bundled_root: AssetPath,
     custom_root: Path,
-    reserved: set[str],
     report: Report,
 ) -> dict[str, object]:
     from .config import FontResource
 
     candidates: list[tuple[str, FontResource, bool, str]] = []
+    bundled_identifiers: set[str] = set()
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
         for package, manifest in _walk_packages(root, "font.yaml", report, "fonts"):
             field = str(manifest)
@@ -818,6 +814,9 @@ def discover_fonts(
             except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
                 report(field, f"manifest is invalid and the font bundle is excluded: {error}", logging.WARNING)
                 continue
+            identifier = data.get("id")
+            if is_bundled and valid_identifier(identifier) and identifier != "none":
+                bundled_identifiers.add(identifier)
             _unknown_fields(data, {"format", "id", "faces", "font_faces"}, field, report)
             if type(data.get("format")) is not int or data.get("format") != 1:
                 report(
@@ -826,7 +825,6 @@ def discover_fonts(
                     logging.WARNING,
                 )
                 continue
-            identifier = data.get("id")
             if not valid_identifier(identifier):
                 report(f"{field}.id", "must be a nonempty ASCII identifier; bundle excluded", logging.WARNING)
                 continue
@@ -891,8 +889,8 @@ def discover_fonts(
                     f"{field}.id", "reserved identifier 'none' cannot be registered; bundle excluded", logging.WARNING
                 )
                 continue
-            _validate_candidate(resource, identifier, is_bundled, reserved, candidates, field, report, field)
-    return _register_candidates(candidates, reserved, "fonts", report)
+            _validate_candidate(resource, identifier, is_bundled, candidates, field)
+    return _register_candidates(candidates, bundled_identifiers, "fonts", report)
 
 
 __all__ = ["discover_backgrounds", "discover_decorations", "discover_fonts", "parse_font_faces", "valid_identifier"]

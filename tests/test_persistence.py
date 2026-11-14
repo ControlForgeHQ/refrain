@@ -438,17 +438,17 @@ def test_semantic_preferences_persist_without_resolved_region(tmp_path: Path) ->
     snapshot = replace(
         make_snapshot("Persisted."),
         background="custom-paper",
-        decoration="lower-flourish",
+        decoration="custom-decoration",
         text_color=("burnt-orange",),
         decoration_color=("blue",),
     )
     committed = store.commit(make_proposal("Persisted."), snapshot)
     assert store.load() == committed
     assert store.load().snapshot.background == "custom-paper"
-    assert store.load().snapshot.decoration == "lower-flourish"
+    assert store.load().snapshot.decoration == "custom-decoration"
     document = json.loads(store.path.read_text())
     assert document["state"]["snapshot"]["background"] == "custom-paper"
-    assert document["state"]["snapshot"]["decoration"] == "lower-flourish"
+    assert document["state"]["snapshot"]["decoration"] == "custom-decoration"
     assert "layout" not in document["state"]["snapshot"]
     assert document["state"]["snapshot"]["text_color"] == ["burnt-orange"]
 

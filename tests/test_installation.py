@@ -170,23 +170,9 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
         "none",
         "aged-paper",
         "canvas",
-        "cloth",
-        "drafting-grid",
-        "handmade-paper",
-        "hex",
-        "isometric-grid",
-        "limestone",
-        "recursive-squares",
-        "vellum",
+        "marble",
     )
-    assert config.default_decorations == (
-        "none",
-        "ethereal",
-        "hex",
-        "lower-flourish",
-        "simple-border",
-        "top-bottom-borders",
-    )
+    assert set(config.default_decorations) <= set(config.decorations) | {"none"}
     assert "timezone" not in paths.config_file.read_text(encoding="utf-8")
     entries = load_content_library(paths.content_directory)
     assert len(entries) >= 3

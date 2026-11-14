@@ -1099,7 +1099,7 @@ Configuration loading owns asset discovery, validation, collision handling, and 
 
 Discovery establishes availability by stable identifier only. It never adds resources to selection pools. The configured default pools remain the sole source of automatic-selection eligibility; any available resource may still be selected explicitly by content or decoration metadata.
 
-Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow reserved bundled identifiers, and every custom resource in an intra-category collision is excluded deterministically.
+Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow identifiers claimed by packaged resources, and every custom resource in an intra-category collision is excluded deterministically.
 
 Application configuration defines a default selection pool for each resource type. Each pool may contain the reserved value `"none"`, representing the intentional absence of that resource.
 

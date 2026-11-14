@@ -46,20 +46,6 @@ _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 _LOGGER = logging.getLogger(__name__)
-_BUNDLED_FONT_IDS = {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
-_BUNDLED_BACKGROUND_IDS = {
-    "aged-paper",
-    "canvas",
-    "cloth",
-    "drafting-grid",
-    "handmade-paper",
-    "hex",
-    "isometric-grid",
-    "limestone",
-    "recursive-squares",
-    "vellum",
-}
-_BUNDLED_DECORATION_IDS = {"ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"}
 _BUILTIN_PALETTE = {
     "black": "#000000",
     "white": "#FFFFFF",
@@ -770,7 +756,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     font_registry = discover_fonts(
         package_root.joinpath("assets", "fonts"),
         file.parent / "assets" / "fonts",
-        _BUNDLED_FONT_IDS,
         report,
     )
     font_faces = (
@@ -808,7 +793,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     background_registry = discover_backgrounds(
         package_root.joinpath("assets", "backgrounds"),
         file.parent / "assets" / "backgrounds",
-        _BUNDLED_BACKGROUND_IDS,
         report,
     )
 
@@ -851,7 +835,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     decoration_registry = discover_decorations(
         package_root.joinpath("assets", "decorations"),
         file.parent / "assets" / "decorations",
-        _BUNDLED_DECORATION_IDS,
         set(font_registry),
         set(background_registry),
         report,

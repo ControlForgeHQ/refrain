@@ -1309,6 +1309,8 @@ Use pytest for hardware-independent automated tests.
 
 Tests should verify observable behavior and documented contracts rather than relying unnecessarily on private implementation details.
 
+Tests of application behavior must use explicit test inputs rather than depending on incidental values from the shipped default configuration or the current bundled resource inventory. Tests may assert exact shipped values only when those values are themselves contractual requirements. Bundled-resource integrity tests must validate the current package contents without requiring test modifications whenever valid resources are added, removed, or replaced.
+
 Every substantive behavior change should include focused regression coverage where practical.
 
 The ability to import and test core components without Raspberry Pi hardware is a project requirement.
