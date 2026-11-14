@@ -11,6 +11,7 @@ from refrain.config import (
     BackgroundResource,
     DecorationLayerResource,
     DecorationResource,
+    LayerAnchor,
     NineSliceParameters,
 )
 
@@ -156,6 +157,252 @@ def test_background_nine_slice_matches_decoration_geometry_across_design_canvase
     finally:
         background.close()
         decoration_background.close()
+
+
+@pytest.mark.parametrize(
+    ("scale", "source_size", "canvas", "expected_size"),
+    [
+        ("horizontal", (4, 2), (8, 6), (8, 4)),
+        ("vertical", (4, 2), (8, 6), (12, 6)),
+        ("none", (4, 2), (8, 6), (4, 2)),
+        ("horizontal", (8, 4), (4, 6), (4, 2)),
+        ("vertical", (8, 4), (4, 2), (4, 2)),
+    ],
+)
+def test_anchor_scaling_preserves_aspect_ratio_and_design_canvas_geometry(
+    scale: str,
+    source_size: tuple[int, int],
+    canvas: tuple[int, int],
+    expected_size: tuple[int, int],
+) -> None:
+    source = Image.new("RGBA", source_size, (240, 20, 10, 255))
+    background = Image.new("RGB", canvas, "white")
+    layer = DecorationLayerResource(
+        Path("/unused.png"),
+        "anchor",
+        scale=scale,
+        anchor=LayerAnchor("left", "top"),
+        tintable=False,
+    )
+    try:
+        preparation._compose_layer(background, source, layer)
+
+        assert background.getpixel((0, 0)) == (240, 20, 10)
+        assert background.getpixel((min(expected_size[0], canvas[0]) - 1, min(expected_size[1], canvas[1]) - 1)) == (
+            240,
+            20,
+            10,
+        )
+        if expected_size[0] < canvas[0]:
+            assert background.getpixel((expected_size[0], 0)) == (255, 255, 255)
+        if expected_size[1] < canvas[1]:
+            assert background.getpixel((0, expected_size[1])) == (255, 255, 255)
+    finally:
+        source.close()
+        background.close()
+
+
+@pytest.mark.parametrize("horizontal,expected_x", [("left", 0), ("center", 2), ("right", 4)])
+@pytest.mark.parametrize("vertical,expected_y", [("top", 0), ("center", 2), ("bottom", 4)])
+def test_anchor_positions_small_artwork_at_each_nine_canvas_position(
+    horizontal: str,
+    expected_x: int,
+    vertical: str,
+    expected_y: int,
+) -> None:
+    source = Image.new("RGBA", (2, 2), (210, 30, 20, 255))
+    background = Image.new("RGB", (6, 6), "white")
+    layer = DecorationLayerResource(
+        Path("/unused.png"),
+        "anchor",
+        scale="none",
+        anchor=LayerAnchor(horizontal, vertical),
+        tintable=False,
+    )
+    try:
+        preparation._compose_layer(background, source, layer)
+
+        assert background.getpixel((expected_x, expected_y)) == (210, 30, 20)
+        assert background.getpixel((expected_x + 1, expected_y + 1)) == (210, 30, 20)
+        assert any(
+            background.getpixel((x, y)) == (255, 255, 255)
+            for y in range(background.height)
+            for x in range(background.width)
+            if not (expected_x <= x < expected_x + 2 and expected_y <= y < expected_y + 2)
+        )
+    finally:
+        source.close()
+        background.close()
+
+
+@pytest.mark.parametrize(
+    ("horizontal", "vertical", "source_box"),
+    [
+        ("left", "top", (0, 0, 4, 4)),
+        ("center", "center", (1, 1, 5, 5)),
+        ("right", "bottom", (2, 2, 6, 6)),
+        ("right", "top", (2, 0, 6, 4)),
+        ("left", "bottom", (0, 2, 4, 6)),
+    ],
+)
+def test_anchor_clips_oversized_artwork_at_canvas_edges(
+    horizontal: str,
+    vertical: str,
+    source_box: tuple[int, int, int, int],
+) -> None:
+    source = Image.new("RGBA", (6, 6))
+    for y in range(source.height):
+        for x in range(source.width):
+            source.putpixel((x, y), (x * 30, y * 30, 10, 255))
+    background = Image.new("RGB", (4, 4), "white")
+    layer = DecorationLayerResource(
+        Path("/unused.png"),
+        "anchor",
+        scale="none",
+        anchor=LayerAnchor(horizontal, vertical),
+        tintable=False,
+    )
+    expected = source.crop(source_box)
+    try:
+        preparation._compose_layer(background, source, layer)
+
+        assert background.tobytes() == expected.convert("RGB").tobytes()
+    finally:
+        expected.close()
+        source.close()
+        background.close()
+
+
+def test_anchor_alpha_composites_after_alignment_and_clipping() -> None:
+    source = Image.new("RGBA", (3, 3), (0, 0, 255, 128))
+    background = Image.new("RGB", (2, 2), (240, 20, 10))
+    layer = DecorationLayerResource(
+        Path("/unused.png"),
+        "anchor",
+        scale="none",
+        anchor=LayerAnchor("right", "bottom"),
+        tintable=False,
+    )
+    try:
+        preparation._compose_layer(background, source, layer)
+
+        assert background.getpixel((0, 0)) == (120, 10, 133)
+        assert background.getpixel((1, 1)) == (120, 10, 133)
+    finally:
+        source.close()
+        background.close()
+
+
+def test_redundant_anchor_axes_remain_valid_for_fitted_dimensions() -> None:
+    source = Image.new("RGBA", (4, 2), (20, 180, 90, 255))
+    results = []
+    try:
+        for horizontal in ("left", "center", "right"):
+            background = Image.new("RGB", (8, 6), "white")
+            layer = DecorationLayerResource(
+                Path("/unused.png"),
+                "anchor",
+                scale="horizontal",
+                anchor=LayerAnchor(horizontal, "top"),
+                tintable=False,
+            )
+            try:
+                preparation._compose_layer(background, source, layer)
+                results.append(background.tobytes())
+            finally:
+                background.close()
+
+        assert results[0] == results[1] == results[2]
+    finally:
+        source.close()
+
+
+@pytest.mark.parametrize("canvas", [(3200, 2400), (3840, 2160), (3840, 2400)])
+def test_anchor_geometry_is_shared_by_background_and_decoration_layers(
+    tmp_path: Path,
+    canvas: tuple[int, int],
+) -> None:
+    source_path = tmp_path / "anchor.png"
+    with Image.new("RGBA", (40, 24), (10, 140, 220, 180)) as source:
+        source.save(source_path)
+    anchor = LayerAnchor("right", "top")
+    background_resource = BackgroundResource(
+        "shared-anchor",
+        None,
+        False,
+        (BackgroundLayerResource(source_path, "anchor", scale="vertical", anchor=anchor),),
+    )
+    decoration_resource = DecorationResource(
+        "shared-anchor",
+        (
+            DecorationLayerResource(
+                source_path,
+                "anchor",
+                scale="vertical",
+                anchor=anchor,
+                condition="qr",
+                tintable=False,
+            ),
+        ),
+        False,
+    )
+
+    background = preparation._generate_daily_background(canvas, "shared-anchor", {"shared-anchor": background_resource})
+    decoration_background = Image.new("RGB", canvas, "white")
+    try:
+        preparation._apply_daily_decoration(
+            decoration_background,
+            "shared-anchor",
+            {"shared-anchor": decoration_resource},
+            qr_available=True,
+        )
+        assert background.tobytes() == decoration_background.tobytes()
+
+        no_qr = Image.new("RGB", canvas, "white")
+        try:
+            preparation._apply_daily_decoration(
+                no_qr,
+                "shared-anchor",
+                {"shared-anchor": decoration_resource},
+                qr_available=False,
+            )
+            assert no_qr.getpixel((canvas[0] - 1, 0)) == (255, 255, 255)
+        finally:
+            no_qr.close()
+    finally:
+        background.close()
+        decoration_background.close()
+
+
+def test_anchor_decoration_condition_and_tinting_preserve_alpha(tmp_path: Path) -> None:
+    path = tmp_path / "tinted-anchor.png"
+    with Image.new("RGBA", (2, 1), (200, 30, 40, 0)) as source:
+        source.putpixel((0, 0), (200, 30, 40, 128))
+        source.putpixel((1, 0), (200, 30, 40, 255))
+        source.save(path)
+    layer = DecorationLayerResource(
+        path,
+        "anchor",
+        scale="none",
+        anchor=LayerAnchor("right", "bottom"),
+        condition="no-qr",
+    )
+    decoration = DecorationResource("tinted-anchor", (layer,), False)
+    background = Image.new("RGB", (4, 2), "black")
+    try:
+        preparation._apply_daily_decoration(
+            background,
+            "tinted-anchor",
+            {"tinted-anchor": decoration},
+            (0, 0, 255),
+            qr_available=False,
+        )
+
+        assert background.getpixel((2, 1)) == (0, 0, 128)
+        assert background.getpixel((3, 1)) == (0, 0, 255)
+        assert background.getpixel((0, 1)) == (0, 0, 0)
+    finally:
+        background.close()
 
 
 def test_nine_slice_crop_trims_each_edge_segment_symmetrically() -> None:

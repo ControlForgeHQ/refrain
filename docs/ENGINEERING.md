@@ -1333,7 +1333,7 @@ Automated testing should cover:
 - unavailable or invalid registered fonts and effective font-pool construction;
 - built-in and custom palette values, invalid palette definitions, and effective text-color pool construction;
 - bundled and custom standalone and packaged background registration, layer validation, independent rejection of invalid PNGs, reserved identifiers, and default-pool construction;
-- ordered background-layer composition, centered-cover standalone behavior, and shared `contain`, `cover`, and `nine-slice` geometry across background and decoration layers;
+- ordered background-layer composition, centered-cover standalone behavior, and shared `contain`, `cover`, `nine-slice`, and `anchor` transformations across background and decoration layers;
 - explicit background preferences, `"none"` suppression, and unavailable-preference fallback;
 - content, background, and decoration text-color and decoration-color preferences, exact precedence, unavailable members, and duplicate-free selection;
 - content-file parsing failures and independent rejection of invalid entries;
@@ -1430,7 +1430,7 @@ Use deterministic random sources where required.
 
 Test ordered multi-layer decoration composition, all QR conditions, RGBA transparency, decoration-wide AND per-layer tintability, color-precedence selection and automatic tint activation, the untinted-accent case, consistent composition across reveal stages, and plain output for `"none"`. Verify diagnostics and established resource fallbacks, and that a valid cached set is reused without checking resource changes. Do not test or implement QR/text collision detection or automatic overlap correction.
 
-Test background cover scaling and centered cropping and decoration `contain` scaling for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results. Test nine-slice corners, preservation of resolved corner dimensions across 4:3, 16:9, and 16:10 canvases, edge stretching, centered edge cropping, center stretching, source-pixel bounds, destinations too small for preserved corners, crop destinations longer than available source segments, and deterministic rounding without gaps or overlaps.
+Test background cover scaling and centered cropping and decoration `contain` scaling for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results. Test anchor scaling in both directions and at native size, aspect-ratio preservation, every horizontal and vertical alignment including center/center, clipping on each and multiple canvas edges, alpha composition, and shared geometry for backgrounds and decorations across 4:3, 16:9, and 16:10 canvases. Test nine-slice corners, preservation of resolved corner dimensions across 4:3, 16:9, and 16:10 canvases, edge stretching, centered edge cropping, center stretching, source-pixel bounds, destinations too small for preserved corners, crop destinations longer than available source segments, and deterministic rounding without gaps or overlaps.
 
 Automated image comparisons may be used where they provide stable, meaningful regression coverage.
 
