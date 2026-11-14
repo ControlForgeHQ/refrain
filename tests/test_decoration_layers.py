@@ -317,7 +317,7 @@ def test_redundant_anchor_axes_remain_valid_for_fitted_dimensions() -> None:
         source.close()
 
 
-@pytest.mark.parametrize("canvas", [(3200, 2400), (3840, 2160), (3840, 2400)])
+@pytest.mark.parametrize("canvas", [(3200, 2400), (3840, 2304), (3840, 2160), (3840, 2400)])
 def test_anchor_geometry_is_shared_by_background_and_decoration_layers(
     tmp_path: Path,
     canvas: tuple[int, int],
