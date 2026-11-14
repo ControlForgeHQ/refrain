@@ -22,6 +22,7 @@ from .artifacts import (
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
+    BackgroundLayerResource,
     BackgroundResource,
     ConfigurationDiagnostic,
     DecorationLayerResource,
@@ -123,6 +124,7 @@ __all__ = [
     "PreparedImageArtifactStore",
     "ApplicationConfiguration",
     "ApplicationConfigurationError",
+    "BackgroundLayerResource",
     "BackgroundResource",
     "DecorationLayerResource",
     "DecorationResource",

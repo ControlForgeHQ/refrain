@@ -65,16 +65,125 @@ def test_discovers_standalone_and_packaged_backgrounds_without_changing_pool(tmp
     asset_root = tmp_path / "assets" / "backgrounds"
     _write_png(asset_root / "paper" / "handmade-paper.png", size=(13, 27))
     package = asset_root / "forest"
-    _write_png(package / "forest.png", size=(41, 23))
+    _write_png(package / "layers" / "forest.png", size=(41, 23))
     _write_png(package / "inside.png")
-    _write_manifest(package, "background.yaml", {"format": 1, "id": "forest", "image": "forest.png"})
+    _write_manifest(
+        package,
+        "background.yaml",
+        {"format": 1, "id": "forest", "layers": [{"image": "layers/forest.png"}]},
+    )
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
 
     assert {"handmade-paper", "forest"} <= set(config.backgrounds)
     assert "inside" not in config.backgrounds
     assert config.default_backgrounds == ("none",)
-    assert config.backgrounds["forest"].path == package / "forest.png"
+    assert config.backgrounds["forest"].path is None
+    assert config.backgrounds["forest"].layers[0].image == package / "layers" / "forest.png"
+    assert config.backgrounds["forest"].layers[0].method == "cover"
+
+
+@pytest.mark.parametrize(
+    ("manifest", "diagnostic"),
+    [
+        ({"format": 1, "id": "invalid", "image": "background.png"}, ".image"),
+        ({"format": 1, "id": "invalid", "layers": []}, ".layers"),
+        ({"format": 1, "id": "invalid", "layers": [None]}, ".layers[0]"),
+        (
+            {"format": 1, "id": "invalid", "layers": [{"image": "background.png", "method": "stretch"}]},
+            ".method",
+        ),
+        (
+            {"format": 1, "id": "invalid", "layers": [{"image": "background.png", "method": "contain", "slices": {}}]},
+            ".slices",
+        ),
+        (
+            {"format": 1, "id": "invalid", "layers": [{"image": "background.png", "method": "nine-slice"}]},
+            ".slices",
+        ),
+        (
+            {"format": 1, "id": "invalid", "layers": [{"image": "../outside.png", "method": "cover"}]},
+            ".image",
+        ),
+    ],
+)
+def test_invalid_background_packages_are_excluded_independently(
+    tmp_path: Path,
+    caplog,
+    manifest: dict[str, object],
+    diagnostic: str,
+) -> None:
+    root = tmp_path / "assets" / "backgrounds"
+    bad = root / "bad"
+    good = root / "good"
+    _write_png(bad / "background.png")
+    _write_manifest(bad, "background.yaml", manifest)
+    _write_png(good / "background.png")
+    _write_manifest(
+        good,
+        "background.yaml",
+        {"format": 1, "id": "good", "layers": [{"image": "background.png", "method": "contain"}]},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "good" in config.backgrounds
+    assert "bad" not in config.backgrounds
+    assert diagnostic in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("field", "preference", "expected"),
+    [
+        ("text_color", "black", ("black",)),
+        ("text_color", ["black", "red"], ("black", "red")),
+        ("decoration_color", "red", ("red",)),
+        ("decoration_color", ["red", "black"], ("red", "black")),
+    ],
+)
+def test_background_color_preferences_accept_scalar_and_list_forms(
+    tmp_path: Path,
+    field: str,
+    preference: object,
+    expected: tuple[str, ...],
+) -> None:
+    package = tmp_path / "assets" / "backgrounds" / "paper"
+    _write_png(package / "paper.png")
+    _write_manifest(
+        package,
+        "background.yaml",
+        {"format": 1, "id": "paper", "layers": [{"image": "paper.png"}], field: preference},
+    )
+
+    resource = load_application_config(_write_config(tmp_path / "config.yaml")).backgrounds["paper"]
+
+    assert getattr(resource, field) == expected
+
+
+def test_invalid_background_color_preferences_are_ignored_without_excluding_package(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    package = tmp_path / "assets" / "backgrounds" / "paper"
+    _write_png(package / "paper.png")
+    _write_manifest(
+        package,
+        "background.yaml",
+        {
+            "format": 1,
+            "id": "paper",
+            "layers": [{"image": "paper.png"}],
+            "text_color": [],
+            "decoration_color": ["red", 1],
+        },
+    )
+
+    resource = load_application_config(_write_config(tmp_path / "config.yaml")).backgrounds["paper"]
+
+    assert resource.text_color is None
+    assert resource.decoration_color == ("red",)
+    assert ".text_color" in caplog.text
+    assert ".decoration_color[1]" in caplog.text
 
 
 def test_bundled_font_manifests_register_every_usable_static_face(tmp_path: Path) -> None:
@@ -625,7 +734,7 @@ def test_invalid_background_manifests_are_isolated(
     _write_manifest(
         package,
         "background.yaml",
-        {"format": 2 if identifier == "future" else 1, "id": identifier, "image": image},
+        {"format": 2 if identifier == "future" else 1, "id": identifier, "layers": [{"image": image}]},
     )
     _write_png(tmp_path / "assets" / "backgrounds" / "good.png")
 
@@ -644,7 +753,11 @@ def test_manifest_symlink_cannot_escape_its_package(tmp_path: Path, caplog) -> N
         (package / "escape.png").symlink_to(outside)
     except OSError as error:
         pytest.skip(f"symlink creation is unavailable: {error}")
-    _write_manifest(package, "background.yaml", {"format": 1, "id": "linked", "image": "escape.png"})
+    _write_manifest(
+        package,
+        "background.yaml",
+        {"format": 1, "id": "linked", "layers": [{"image": "escape.png"}]},
+    )
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
 
@@ -655,7 +768,11 @@ def test_manifest_symlink_cannot_escape_its_package(tmp_path: Path, caplog) -> N
 def test_asset_symlinks_are_not_followed_during_discovery(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     _write_png(outside / "linked.png")
-    _write_manifest(outside / "package", "background.yaml", {"format": 1, "id": "linked-package", "image": "image.png"})
+    _write_manifest(
+        outside / "package",
+        "background.yaml",
+        {"format": 1, "id": "linked-package", "layers": [{"image": "image.png"}]},
+    )
     _write_png(outside / "package" / "image.png")
     asset_root = tmp_path / "assets" / "backgrounds"
     asset_root.mkdir(parents=True)

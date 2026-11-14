@@ -1332,9 +1332,10 @@ Automated testing should cover:
 - unrecognized application-configuration fields;
 - unavailable or invalid registered fonts and effective font-pool construction;
 - built-in and custom palette values, invalid palette definitions, and effective text-color pool construction;
-- bundled and custom background registration, independent rejection of invalid PNGs, reserved identifiers, and default-pool construction;
+- bundled and custom standalone and packaged background registration, layer validation, independent rejection of invalid PNGs, reserved identifiers, and default-pool construction;
+- ordered background-layer composition, centered-cover standalone behavior, and shared `contain`, `cover`, and `nine-slice` geometry across background and decoration layers;
 - explicit background preferences, `"none"` suppression, and unavailable-preference fallback;
-- content and decoration text-color preferences, precedence, unavailable members, and duplicate-free selection;
+- content, background, and decoration text-color and decoration-color preferences, exact precedence, unavailable members, and duplicate-free selection;
 - content-file parsing failures and independent rejection of invalid entries;
 - partial content-library acceptance with valid entries preserved;
 - duplicate entry identifiers and deterministic conflict handling;

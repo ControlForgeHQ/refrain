@@ -627,14 +627,46 @@ Directories containing `background.yaml` define packaged backgrounds:
 ```yaml
 format: 1
 id: forest
-image: forest.png
+text_color:
+  - black
+decoration_color:
+  - dark-red
+  - black
+layers:
+  - image: paper.png
+    method: cover
+  - image: vignette.png
+    method: nine-slice
+    slices:
+      left: 300
+      right: 300
+      top: 240
+      bottom: 240
 ```
 
-`format` must be the integer `1`, and `image` is a relative PNG path resolved from the manifest directory. A recognized package is a discovery boundary, so internal images are not also registered as standalone backgrounds.
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `format` | Integer version (`1`) | Yes | — |
+| `id` | Asset identifier | Yes | — |
+| `layers` | Nonempty ordered sequence of layer mappings | Yes | — |
+| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
+| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
 
-Manifests use safe YAML loading; unknown fields produce warnings. Absolute references, parent traversal, paths escaping the package (including symlink escapes), unsupported formats, and unreadable manifests or images exclude only the affected resource. Backgrounds must be readable, single-frame RGB or RGBA PNGs. Source dimensions and aspect ratios may differ from the configured output.
+`format` must be the integer `1`. Each layer is a mapping with the following fields:
 
-Background composition preserves aspect ratio with centred cover scaling: scale uniformly until the canvas is covered, then crop overflow evenly from opposing sides. The result is composited over paper-white, preserving RGBA transparency; it is never stretched or letterboxed.
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `image` | Relative single-frame RGB or RGBA PNG path | Yes | — |
+| `method` | `"contain"`, `"cover"`, or `"nine-slice"` | No | `"cover"` |
+| `slices` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
+
+`contain` preserves aspect ratio, fits the source within the design canvas, and centers it. `cover` preserves aspect ratio, scales the source until it covers the design canvas, then crops excess artwork symmetrically around its center. `nine-slice` preserves the four configured source-pixel edge thicknesses and adapts the edge lengths and center region; it requires `slices` with the same fields and geometry rules as decoration nine-slice layers. The three methods use the same transformations as decoration layers. Background layers do not support decoration conditions or tinting.
+
+Layers are composited in declaration order over paper-white on the design canvas using RGBA alpha composition. A recognized package is a discovery boundary, so internal images are not also registered as standalone backgrounds. Manifests use safe YAML loading; unknown fields produce warnings. The obsolete top-level `image` field is invalid. Absolute references, parent traversal, paths escaping the package (including symlink escapes), unsupported formats, invalid layers, and unreadable manifests or images exclude only the affected resource.
+
+Background color fields are optional preferences and do not recolor the background artwork. They accept the same scalar-or-nonempty-list palette syntax as content entries. Invalid or unavailable candidates are diagnosed and ignored without invalidating an otherwise usable background.
+
+Standalone PNG files remain supported unchanged and use their filename stem as the identifier. For example, `assets/backgrounds/aged-paper.png` registers `aged-paper`. A standalone PNG is a simple centered-cover background and supplies no background-level color preferences.
 
 All usable discovered backgrounds are available for explicit entry or decoration preferences whether or not included in the default pool. Custom resources cannot shadow bundled identifiers. If custom resources share an identifier, all are excluded and their locations are reported deterministically.
 
@@ -996,8 +1028,8 @@ Each quotation is a separate selection candidate.
 | `priority` | Integer | No | `0` |
 | `font` | String | No | Selected decoration preference, then automatic selection from default font pool |
 | `font_faces` | Mapping of literary roles to face identifiers | No | No role preferences |
-| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | Decoration preference, then global text-color pool |
-| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | Selected decoration preference, then global pool, then built-in black |
+| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | Background preference, decoration preference, global text-color pool, then built-in black |
+| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | Background preference, selected decoration preference, global pool, then built-in black |
 | `background` | String | No | Decoration preference, then default background pool |
 | `decoration` | String | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
@@ -1024,7 +1056,7 @@ text_color:
   - burnt-orange
 ```
 
-List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Unknown, malformed, or unavailable members are diagnosed during preparation and excluded; a preference with no usable members falls through to the next selection level without invalidating the content entry. RGB values are not accepted here.
+List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Resolve the first level containing one or more usable identifiers: content entry, selected background, selected decoration, effective `layout.text.colors` pool, then built-in `black`. Candidates from different levels are never combined. Unknown, malformed, or unavailable members are diagnosed and excluded; a preference with no usable members falls through to the next level without invalidating its resource or content entry. RGB values are not accepted here.
 
 ### Decoration-color preference
 
@@ -1041,7 +1073,7 @@ decoration_color:
   - burnt-orange
 ```
 
-This preference affects only a selected decoration whose manifest sets `tintable: true`. It uses the same validation, equal-probability, and fallback rules as other palette preferences; invalid or unavailable identifiers do not invalidate the content entry. Direct RGB values are not accepted.
+When effective decoration tinting is required, resolve the first level containing usable identifiers: content entry, selected background, selected decoration, effective `layout.decorations.colors` pool, then built-in `black`. Candidates from different levels are never combined, and selection within a level is uniform among distinct usable identifiers. This preference affects only a selected decoration whose layers are effectively tintable; it never recolors the background. Invalid or unavailable identifiers do not invalidate their resource or the content entry. Direct RGB values are not accepted.
 
 ### Entry identifiers
 

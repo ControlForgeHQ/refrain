@@ -104,11 +104,15 @@ class FontResource:
 
 @dataclass(frozen=True)
 class BackgroundResource:
-    """A validated bundled or discovered background PNG."""
+    """A validated standalone PNG or packaged background composition."""
 
     identifier: str
-    path: Union[Path, Traversable]
+    path: Union[Path, Traversable, None]
     bundled: bool
+    layers: tuple[BackgroundLayerResource, ...] = ()
+    text_color: tuple[str, ...] | None = None
+    decoration_color: tuple[str, ...] | None = None
+    manifest: Union[Path, Traversable, None] = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -124,12 +128,23 @@ class NineSliceParameters:
 
 
 @dataclass(frozen=True)
-class DecorationLayerResource:
-    """A validated image layer in a decoration manifest."""
+class CompositionLayerResource:
+    """A validated image layer with shared raster-composition behavior."""
 
     image: Union[Path, Traversable]
     method: str
     nine_slice: NineSliceParameters | None = None
+
+
+@dataclass(frozen=True)
+class BackgroundLayerResource(CompositionLayerResource):
+    """A validated image layer in a background manifest."""
+
+
+@dataclass(frozen=True)
+class DecorationLayerResource(CompositionLayerResource):
+    """A validated image layer in a decoration manifest."""
+
     condition: str = "always"
     tintable: bool = True
 
@@ -379,33 +394,32 @@ def load_background_image(resource: BackgroundResource) -> Image.Image:
     ``ValueError``. No image is cached, so regeneration checks the current resource.
     The decoded image is returned directly to avoid a second full-resolution copy.
     """
-    with resource.path.open("rb") as background_file:
-        image = Image.open(background_file)
-        try:
-            if image.format != "PNG":
-                raise ValueError("background must be a PNG image")
-            if getattr(image, "n_frames", 1) != 1:
-                raise ValueError("background must be a single-frame PNG image")
-            if image.mode not in {"RGB", "RGBA"}:
-                raise ValueError("background mode must be RGB or RGBA")
-            image.load()
-        except Exception:
-            image.close()
-            raise
-        return image
+    if resource.path is None:
+        raise ValueError("packaged background images are loaded from their layers")
+    return _load_layer_image(resource.path, "background")
 
 
 def load_decoration_layer_image(resource: DecorationLayerResource) -> Image.Image:
     """Revalidate and return a fully decoded RGB or RGBA layer owned by the caller."""
-    with resource.image.open("rb") as decoration_file:
-        image = Image.open(decoration_file)
+    return _load_layer_image(resource.image, "decoration")
+
+
+def load_composition_layer_image(resource: CompositionLayerResource) -> Image.Image:
+    """Revalidate and return a fully decoded RGB or RGBA composition layer."""
+    category = "background" if isinstance(resource, BackgroundLayerResource) else "decoration"
+    return _load_layer_image(resource.image, category)
+
+
+def _load_layer_image(path: Union[Path, Traversable], category: str) -> Image.Image:
+    with path.open("rb") as image_file:
+        image = Image.open(image_file)
         try:
             if image.format != "PNG":
-                raise ValueError("decoration must be a PNG image")
+                raise ValueError(f"{category} must be a PNG image")
             if getattr(image, "n_frames", 1) != 1:
-                raise ValueError("decoration must be a single-frame PNG image")
+                raise ValueError(f"{category} must be a single-frame PNG image")
             if image.mode not in {"RGB", "RGBA"}:
-                raise ValueError("decoration mode must be RGB or RGBA")
+                raise ValueError(f"{category} mode must be RGB or RGBA")
             image.load()
         except Exception:
             image.close()

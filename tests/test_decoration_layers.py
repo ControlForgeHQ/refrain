@@ -6,7 +6,13 @@ import pytest
 from PIL import Image, ImageDraw
 
 import refrain.preparation as preparation
-from refrain.config import DecorationLayerResource, DecorationResource, NineSliceParameters
+from refrain.config import (
+    BackgroundLayerResource,
+    BackgroundResource,
+    DecorationLayerResource,
+    DecorationResource,
+    NineSliceParameters,
+)
 
 
 def _nine_slice_layer(
@@ -107,6 +113,49 @@ def test_nine_slice_preserves_source_pixel_corner_thickness_across_design_canvas
     finally:
         source.close()
         background.close()
+
+
+@pytest.mark.parametrize("canvas", [(3200, 2400), (3840, 2160), (3840, 2400)])
+def test_background_nine_slice_matches_decoration_geometry_across_design_canvases(
+    tmp_path: Path,
+    canvas: tuple[int, int],
+) -> None:
+    source_path = tmp_path / "nine-slice.png"
+    with _nine_region_image() as source:
+        source.save(source_path)
+    background_resource = BackgroundResource(
+        "shared-nine-slice",
+        None,
+        False,
+        (BackgroundLayerResource(source_path, "nine-slice", NineSliceParameters(24, 24, 18, 18)),),
+    )
+    decoration_resource = DecorationResource(
+        "shared-nine-slice",
+        (
+            DecorationLayerResource(
+                source_path,
+                "nine-slice",
+                NineSliceParameters(24, 24, 18, 18),
+                tintable=False,
+            ),
+        ),
+        False,
+    )
+
+    background = preparation._generate_daily_background(
+        canvas, "shared-nine-slice", {"shared-nine-slice": background_resource}
+    )
+    decoration_background = Image.new("RGB", canvas, "white")
+    try:
+        preparation._apply_daily_decoration(
+            decoration_background,
+            "shared-nine-slice",
+            {"shared-nine-slice": decoration_resource},
+        )
+        assert background.tobytes() == decoration_background.tobytes()
+    finally:
+        background.close()
+        decoration_background.close()
 
 
 def test_nine_slice_crop_trims_each_edge_segment_symmetrically() -> None:
