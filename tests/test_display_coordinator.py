@@ -246,7 +246,7 @@ def test_unavailable_image_server_retries_without_blocking_local_backend(monkeyp
         coordinator.publish((1, 0), publication(1))
         assert wait_until(lambda: bool(attempts))
         assert wait_until(lambda: updates["window"] == [1])
-        assert not coordinator.destination_statuses[1]["available"]
+        assert wait_until(lambda: not coordinator.destination_statuses[1]["available"])
         coordinator.publish((1, 1), publication(2))
         assert wait_until(lambda: updates["window"] == [1, 2])
         available.set()
