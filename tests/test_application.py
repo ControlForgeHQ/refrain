@@ -918,9 +918,11 @@ def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bu
     source_font = workspace.root / "assets" / "fonts" / "test-font" / "Regular.ttf"
     custom_font.write_bytes(source_font.read_bytes())
     write_font_manifest(package, "custom-font", "custom.ttf")
+    configuration = application.load_application_config(workspace.config)
+    fallback = next(identifier for identifier, resource in configuration.fonts.items() if resource.bundled)
     config = workspace.config.read_text(encoding="utf-8").replace(
         'default: ["test-font"]',
-        'default: ["custom-font", "test-font"]',
+        f'default: ["custom-font", "{fallback}"]',
     )
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace, extra='font: "custom-font"\n')
