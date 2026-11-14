@@ -396,6 +396,128 @@ def test_decoration_manifests_discover_ordered_contain_and_nine_slice_layers(tmp
 
 
 @pytest.mark.parametrize(
+    ("category", "manifest_name"),
+    [("backgrounds", "background.yaml"), ("decorations", "decoration.yaml")],
+)
+def test_anchor_layer_manifests_accept_scale_anchor_and_decoration_properties(
+    tmp_path: Path,
+    category: str,
+    manifest_name: str,
+) -> None:
+    package = tmp_path / "assets" / category / "anchored"
+    _write_png(package / "corner.png", "RGBA")
+    layer = {
+        "image": "corner.png",
+        "method": "anchor",
+        "scale": "horizontal",
+        "anchor": {"horizontal": "right", "vertical": "top"},
+    }
+    if category == "decorations":
+        layer.update(condition="qr", tintable=False)
+    _write_manifest(package, manifest_name, {"format": 1, "id": "anchored", "layers": [layer]})
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    if category == "backgrounds":
+        layers = config.backgrounds["anchored"].layers
+    else:
+        layers = config.decorations["anchored"].layers
+    anchored = layers[0]
+    assert anchored.method == "anchor"
+    assert anchored.scale == "horizontal"
+    assert (anchored.anchor.horizontal, anchored.anchor.vertical) == ("right", "top")
+    if category == "decorations":
+        assert anchored.condition == "qr"
+        assert anchored.tintable is False
+
+
+@pytest.mark.parametrize(
+    ("definition", "diagnostic"),
+    [
+        ({"method": "anchor", "anchor": {"horizontal": "left", "vertical": "top"}}, ".scale"),
+        (
+            {
+                "method": "anchor",
+                "scale": "diagonal",
+                "anchor": {"horizontal": "left", "vertical": "top"},
+            },
+            ".scale",
+        ),
+        ({"method": "anchor", "scale": "none"}, ".anchor"),
+        (
+            {"method": "anchor", "scale": "none", "anchor": {"horizontal": "left"}},
+            ".anchor.vertical",
+        ),
+        (
+            {"method": "anchor", "scale": "none", "anchor": {"vertical": "top"}},
+            ".anchor.horizontal",
+        ),
+        (
+            {"method": "anchor", "scale": "none", "anchor": {"horizontal": "middle", "vertical": "top"}},
+            ".anchor.horizontal",
+        ),
+        (
+            {"method": "anchor", "scale": "none", "anchor": {"horizontal": "left", "vertical": "middle"}},
+            ".anchor.vertical",
+        ),
+        (
+            {
+                "method": "anchor",
+                "scale": "none",
+                "anchor": {"horizontal": "left", "vertical": "top"},
+                "slices": {},
+            },
+            ".slices",
+        ),
+        (
+            {
+                "method": "anchor",
+                "scale": "none",
+                "anchor": {"horizontal": "left", "vertical": "top", "depth": "near"},
+            },
+            ".anchor.depth",
+        ),
+        ({"method": "contain", "scale": "none"}, ".scale"),
+        ({"method": "contain", "anchor": {"horizontal": "left", "vertical": "top"}}, ".anchor"),
+        ({"method": "cover", "anchor": {"horizontal": "right", "vertical": "bottom"}}, ".anchor"),
+        (
+            {
+                "method": "nine-slice",
+                "slices": {"left": 1, "right": 1, "top": 1, "bottom": 1},
+                "scale": "none",
+            },
+            ".scale",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("category", "manifest_name"),
+    [("backgrounds", "background.yaml"), ("decorations", "decoration.yaml")],
+)
+def test_invalid_layer_transformations_exclude_backgrounds_and_decorations(
+    tmp_path: Path,
+    caplog,
+    definition: dict[str, object],
+    diagnostic: str,
+    category: str,
+    manifest_name: str,
+) -> None:
+    package = tmp_path / "assets" / category / "invalid"
+    _write_png(package / "image.png")
+    _write_manifest(
+        package,
+        manifest_name,
+        {"format": 1, "id": "invalid", "layers": [{"image": "image.png", **definition}]},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    registry = config.backgrounds if category == "backgrounds" else config.decorations
+    assert "invalid" not in registry
+    assert diagnostic in caplog.text
+
+
+@pytest.mark.parametrize(
     ("layers", "diagnostic"),
     [
         (None, ".layers"),

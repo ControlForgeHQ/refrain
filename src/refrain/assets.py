@@ -336,32 +336,22 @@ def discover_backgrounds(
                         report(layer_field, "must be a mapping; background excluded", logging.WARNING)
                         invalid = True
                         continue
-                    _unknown_fields(definition, {"image", "method", "slices"}, layer_field, report)
+                    _unknown_fields(definition, {"image", "method", "slices", "scale", "anchor"}, layer_field, report)
                     method = definition.get("method", "cover")
-                    if not isinstance(method, str) or method not in {"contain", "cover", "nine-slice"}:
+                    if not isinstance(method, str) or method not in {"contain", "cover", "nine-slice", "anchor"}:
                         report(
                             f"{layer_field}.method",
-                            "must be 'contain', 'cover', or 'nine-slice'; background excluded",
+                            "must be 'contain', 'cover', 'nine-slice', or 'anchor'; background excluded",
                             logging.WARNING,
                         )
                         invalid = True
                         continue
-                    if method in {"contain", "cover"} and "slices" in definition:
-                        report(
-                            f"{layer_field}.slices",
-                            f"is not supported with method {method!r}; background excluded",
-                            logging.WARNING,
-                        )
+                    nine_slice, scale, anchor, valid = _parse_layer_transformation(
+                        definition, method, layer_field, "background", report
+                    )
+                    if not valid:
                         invalid = True
                         continue
-                    nine_slice = None
-                    if method == "nine-slice":
-                        nine_slice, valid = _parse_nine_slice(
-                            definition.get("slices"), f"{layer_field}.slices", "background", report
-                        )
-                        if not valid:
-                            invalid = True
-                            continue
                     try:
                         image_path = _manifest_path(directory, definition.get("image"), {".png"})
                         image_size = _validate_image_metadata(image_path, "background")
@@ -381,7 +371,7 @@ def discover_backgrounds(
                         )
                         invalid = True
                         continue
-                    layers.append(BackgroundLayerResource(image_path, method, nine_slice))
+                    layers.append(BackgroundLayerResource(image_path, method, nine_slice, scale, anchor))
 
                 if invalid or len(layers) != len(definitions):
                     return
@@ -481,6 +471,93 @@ def _parse_nine_slice(
     return NineSliceParameters(**measurements, horizontal=horizontal, vertical=vertical), True
 
 
+def _parse_layer_anchor(
+    value: object,
+    field: str,
+    category: str,
+    report: Report,
+) -> tuple[object, bool]:
+    from .config import LayerAnchor
+
+    if not isinstance(value, dict):
+        report(f"{field}", f"is required and must be a mapping; {category} excluded", logging.WARNING)
+        return None, False
+    invalid = False
+    for key in sorted(value.keys() - {"horizontal", "vertical"}, key=str):
+        report(f"{field}.{key}", f"is not a supported anchor; {category} excluded", logging.WARNING)
+        invalid = True
+    horizontal = value.get("horizontal")
+    vertical = value.get("vertical")
+    if not isinstance(horizontal, str) or horizontal not in {"left", "center", "right"}:
+        report(
+            f"{field}.horizontal",
+            f"must be 'left', 'center', or 'right'; {category} excluded",
+            logging.WARNING,
+        )
+        invalid = True
+    if not isinstance(vertical, str) or vertical not in {"top", "center", "bottom"}:
+        report(
+            f"{field}.vertical",
+            f"must be 'top', 'center', or 'bottom'; {category} excluded",
+            logging.WARNING,
+        )
+        invalid = True
+    if invalid:
+        return None, False
+    return LayerAnchor(horizontal, vertical), True
+
+
+def _parse_layer_transformation(
+    definition: dict[str, object],
+    method: str,
+    field: str,
+    category: str,
+    report: Report,
+) -> tuple[object, str | None, object, bool]:
+    if method == "anchor":
+        invalid = False
+        scale = definition.get("scale")
+        if not isinstance(scale, str) or scale not in {"horizontal", "vertical", "none"}:
+            report(
+                f"{field}.scale",
+                f"is required and must be 'horizontal', 'vertical', or 'none'; {category} excluded",
+                logging.WARNING,
+            )
+            invalid = True
+        anchor, valid = _parse_layer_anchor(definition.get("anchor"), f"{field}.anchor", category, report)
+        if "slices" in definition:
+            report(f"{field}.slices", f"is not supported with method 'anchor'; {category} excluded", logging.WARNING)
+            invalid = True
+        return None, scale if isinstance(scale, str) else None, anchor, not invalid and valid
+
+    invalid = False
+    if "scale" in definition:
+        report(
+            f"{field}.scale",
+            f"is not supported with method {method!r}; {category} excluded",
+            logging.WARNING,
+        )
+        invalid = True
+    if "anchor" in definition:
+        report(
+            f"{field}.anchor",
+            f"is not supported with method {method!r}; {category} excluded",
+            logging.WARNING,
+        )
+        invalid = True
+    if method in {"contain", "cover"} and "slices" in definition:
+        report(
+            f"{field}.slices",
+            f"is not supported with method {method!r}; {category} excluded",
+            logging.WARNING,
+        )
+        invalid = True
+    if method == "nine-slice":
+        nine_slice, valid = _parse_nine_slice(definition.get("slices"), f"{field}.slices", category, report)
+        return nine_slice, None, None, not invalid and valid
+    return None, None, None, not invalid
+
+
 def _validate_image_candidate(
     resource: _T,
     identifier: object,
@@ -517,7 +594,7 @@ def discover_decorations(
     report: Report,
     parse_insets: Callable[..., object],
 ) -> dict[str, object]:
-    from .config import DecorationLayerResource, DecorationResource, NineSliceParameters
+    from .config import DecorationLayerResource, DecorationResource
 
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
@@ -576,15 +653,15 @@ def discover_decorations(
                     continue
                 _unknown_fields(
                     definition,
-                    {"image", "method", "slices", "condition", "tintable"},
+                    {"image", "method", "slices", "scale", "anchor", "condition", "tintable"},
                     layer_field,
                     report,
                 )
                 method = definition.get("method", "contain")
-                if not isinstance(method, str) or method not in {"contain", "cover", "nine-slice"}:
+                if not isinstance(method, str) or method not in {"contain", "cover", "nine-slice", "anchor"}:
                     report(
                         f"{layer_field}.method",
-                        "must be 'contain', 'cover', or 'nine-slice'; decoration excluded",
+                        "must be 'contain', 'cover', 'nine-slice', or 'anchor'; decoration excluded",
                         logging.WARNING,
                     )
                     invalid_layers = True
@@ -602,22 +679,12 @@ def discover_decorations(
                 if "tintable" in definition and type(layer_tintable) is not bool:
                     report(f"{layer_field}.tintable", "must be a YAML boolean; using true", logging.WARNING)
                     layer_tintable = True
-                nine_slice: NineSliceParameters | None = None
-                if method in {"contain", "cover"} and "slices" in definition:
-                    report(
-                        f"{layer_field}.slices",
-                        f"is not supported with method {method!r}; decoration excluded",
-                        logging.WARNING,
-                    )
+                nine_slice, scale, anchor, valid = _parse_layer_transformation(
+                    definition, method, layer_field, "decoration", report
+                )
+                if not valid:
                     invalid_layers = True
                     continue
-                if method == "nine-slice":
-                    nine_slice, valid = _parse_nine_slice(
-                        definition.get("slices"), f"{layer_field}.slices", "decoration", report
-                    )
-                    if not valid:
-                        invalid_layers = True
-                        continue
                 try:
                     image_path = _manifest_path(package, definition.get("image"), {".png"})
                     image_size = _validate_image_metadata(image_path, "decorations")
@@ -642,6 +709,8 @@ def discover_decorations(
                         image=image_path,
                         method=method,
                         nine_slice=nine_slice,
+                        scale=scale,
+                        anchor=anchor,
                         condition=condition,
                         tintable=layer_tintable,
                     )

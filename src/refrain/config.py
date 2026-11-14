@@ -128,12 +128,22 @@ class NineSliceParameters:
 
 
 @dataclass(frozen=True)
+class LayerAnchor:
+    """Validated horizontal and vertical alignment for a visual layer."""
+
+    horizontal: str
+    vertical: str
+
+
+@dataclass(frozen=True)
 class CompositionLayerResource:
     """A validated image layer with shared raster-composition behavior."""
 
     image: Union[Path, Traversable]
     method: str
     nine_slice: NineSliceParameters | None = None
+    scale: str | None = None
+    anchor: LayerAnchor | None = None
 
 
 @dataclass(frozen=True)

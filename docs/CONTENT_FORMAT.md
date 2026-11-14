@@ -642,6 +642,12 @@ layers:
       right: 300
       top: 240
       bottom: 240
+  - image: corner-art.png
+    method: anchor
+    scale: vertical
+    anchor:
+      horizontal: right
+      vertical: top
 ```
 
 | Field | Type | Required | Default |
@@ -657,10 +663,23 @@ layers:
 | Field | Type | Required | Default |
 |---|---|---|---|
 | `image` | Relative single-frame RGB or RGBA PNG path | Yes | — |
-| `method` | `"contain"`, `"cover"`, or `"nine-slice"` | No | `"cover"` |
+| `method` | `"contain"`, `"cover"`, `"nine-slice"`, or `"anchor"` | No | `"cover"` |
 | `slices` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
+| `scale` | `"horizontal"`, `"vertical"`, or `"none"` | Only for `"anchor"` | — |
+| `anchor` | Complete horizontal and vertical anchor mapping | Only for `"anchor"` | — |
 
-`contain` preserves aspect ratio, fits the source within the design canvas, and centers it. `cover` preserves aspect ratio, scales the source until it covers the design canvas, then crops excess artwork symmetrically around its center. `nine-slice` preserves the four configured source-pixel edge thicknesses and adapts the edge lengths and center region; it requires `slices` with the same fields and geometry rules as decoration nine-slice layers. The three methods use the same transformations as decoration layers. Background layers do not support decoration conditions or tinting.
+`contain` preserves aspect ratio, fits the source within the design canvas, and centers it. `cover` preserves aspect ratio, scales the source until it covers the design canvas, then crops excess artwork symmetrically around its center. `nine-slice` preserves the four configured source-pixel edge thicknesses and adapts the edge lengths and center region; it requires `slices` with the same fields and geometry rules as decoration nine-slice layers.
+
+`anchor` requires both `scale` and `anchor`, and accepts no `slices`. Its scale is uniform and preserves the source aspect ratio: `horizontal` sets the scaled width to the design-canvas width, `vertical` sets the scaled height to the design-canvas height, and `none` preserves source pixels at 1:1 size. The other scaled dimension is rounded deterministically to the nearest pixel, with half-pixel values rounded upward. After scaling, `anchor.horizontal` aligns the source's left edge, center, or right edge with the corresponding canvas position; `anchor.vertical` aligns its top edge, center, or bottom edge. Both axes are required, even when one is geometrically redundant for the selected scale. The complete scaled source is alpha-composited in this position, and any artwork outside the design-canvas bounds is clipped normally without warning.
+
+The anchor mapping accepts exactly these two fields:
+
+| Field | Type | Accepted values |
+|---|---|---|
+| `anchor.horizontal` | String | `"left"`, `"center"`, or `"right"` |
+| `anchor.vertical` | String | `"top"`, `"center"`, or `"bottom"` |
+
+`contain` and `cover` accept no `slices`, `scale`, or `anchor`; `nine-slice` requires `slices` and accepts no `scale` or `anchor`; `anchor` requires `scale` and `anchor` and accepts no `slices`. The four methods use the same transformations as decoration layers. Background layers do not support decoration conditions or tinting.
 
 Layers are composited in declaration order over paper-white on the design canvas using RGBA alpha composition. A recognized package is a discovery boundary, so internal images are not also registered as standalone backgrounds. Manifests use safe YAML loading; unknown fields produce warnings. The obsolete top-level `image` field is invalid. Absolute references, parent traversal, paths escaping the package (including symlink escapes), unsupported formats, invalid layers, and unreadable manifests or images exclude only the affected resource.
 
@@ -746,6 +765,12 @@ layers:
     tintable: false
   - image: centered-flourish.png
     method: cover
+  - image: botanical-corner.png
+    method: anchor
+    scale: vertical
+    anchor:
+      horizontal: right
+      vertical: top
   - image: qr-corner.png
     method: contain
     condition: qr
@@ -796,12 +821,14 @@ Each `layers` item is a mapping with the following fields:
 | Field | Type | Required | Default |
 |---|---|---|---|
 | `image` | Relative single-frame RGB or RGBA PNG path | Yes | — |
-| `method` | `"contain"`, `"cover"`, or `"nine-slice"` | No | `"contain"` |
+| `method` | `"contain"`, `"cover"`, `"nine-slice"`, or `"anchor"` | No | `"contain"` |
 | `slices` | Nine-slice parameter mapping | Only for `"nine-slice"` | — |
+| `scale` | `"horizontal"`, `"vertical"`, or `"none"` | Only for `"anchor"` | — |
+| `anchor` | Complete horizontal and vertical anchor mapping | Only for `"anchor"` | — |
 | `condition` | `"always"`, `"qr"`, or `"no-qr"` | No | `"always"` |
 | `tintable` | Boolean | No | `true` |
 
-For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the design canvas with transparent margins as needed. `cover` preserves aspect ratio, uniformly scales the source until it covers the selected design canvas, then crops excess artwork symmetrically around its center. For example, a 3840 × 2400 image used with `cover` on the 3200 × 2400 design canvas is cropped by 320 pixels from each horizontal edge. Cover uses the source dimensions directly for this transform, not an intermediate reference-envelope scale. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `contain` and `cover` accept no `slices` mapping. `nine-slice` requires a `slices` mapping:
+For full-canvas artwork, 3840 × 2400 pixels is the reference-quality authoring size. `method` defaults to `contain`; omitting it is equivalent to explicitly setting `method: contain`. `contain` preserves aspect ratio, scales the source image to fit, and centers it on the design canvas with transparent margins as needed. `cover` preserves aspect ratio, uniformly scales the source until it covers the selected design canvas, then crops excess artwork symmetrically around its center. For example, a 3840 × 2400 image used with `cover` on the 3200 × 2400 design canvas is cropped by 320 pixels from each horizontal edge. Cover uses the source dimensions directly for this transform, not an intermediate reference-envelope scale. A smaller custom PNG may be enlarged, but that cannot restore image detail and may reduce sharpness; the source dimensions do not establish an alternate reference coordinate system. `anchor` uses the same scale, required two-axis anchor mapping, deterministic rounding, and normal design-canvas clipping documented for background layers above. These transformations operate on the design canvas; oversized anchored artwork is valid. `contain` and `cover` accept no `slices`, `scale`, or `anchor`; `nine-slice` requires a `slices` mapping and accepts no `scale` or `anchor`; `anchor` requires `scale` and `anchor` and accepts no `slices`. `nine-slice` requires a `slices` mapping:
 
 | Field | Type | Required | Default |
 |---|---|---|---|

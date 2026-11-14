@@ -436,7 +436,43 @@ def _compose_layer(
     if layer.method == "cover":
         _compose_cover(background, source)
         return None
+    if layer.method == "anchor":
+        _compose_anchor(background, source, layer)
+        return None
     return _compose_nine_slice(background, source, layer)
+
+
+def _compose_anchor(background: Image.Image, source: Image.Image, layer: CompositionLayerResource) -> None:
+    if layer.scale not in {"horizontal", "vertical", "none"} or layer.anchor is None:
+        raise ValueError("anchor parameters are missing or invalid")
+
+    if layer.scale == "horizontal":
+        scale = Fraction(background.width, source.width)
+        size = (background.width, max(1, _rounded_fraction(source.height * scale)))
+    elif layer.scale == "vertical":
+        scale = Fraction(background.height, source.height)
+        size = (max(1, _rounded_fraction(source.width * scale)), background.height)
+    else:
+        size = source.size
+
+    scaled = source if size == source.size else source.resize(size, Image.Resampling.LANCZOS)
+    horizontal_position = {
+        "left": 0,
+        "center": (background.width - scaled.width) // 2,
+        "right": background.width - scaled.width,
+    }.get(layer.anchor.horizontal)
+    vertical_position = {
+        "top": 0,
+        "center": (background.height - scaled.height) // 2,
+        "bottom": background.height - scaled.height,
+    }.get(layer.anchor.vertical)
+    try:
+        if horizontal_position is None or vertical_position is None:
+            raise ValueError("anchor position is invalid")
+        _paste_layer_region(background, scaled, (horizontal_position, vertical_position))
+    finally:
+        if scaled is not source:
+            scaled.close()
 
 
 def _rounded_fraction(value: Fraction) -> int:
