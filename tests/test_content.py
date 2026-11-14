@@ -156,7 +156,7 @@ def test_invalid_role_face_preferences_reject_only_the_affected_entry(
     assert any("invalid.yaml: font_faces" in record.message for record in caplog.records)
 
 
-@pytest.mark.parametrize("background", ["canvas", "none", "unknown-resource", "Custom background", "Canvas"])
+@pytest.mark.parametrize("background", ["paper-a", "none", "unknown-resource", "Custom background", "Paper-a"])
 def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path, background: str, caplog) -> None:
     write_entry(
         tmp_path / "entry.yaml",
@@ -172,7 +172,7 @@ def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path
     assert "background" not in caplog.text
 
 
-@pytest.mark.parametrize("decoration", ["lower-flourish", "none", "unknown-decoration", "Custom Decoration"])
+@pytest.mark.parametrize("decoration", ["frame-a", "none", "unknown-decoration", "Custom Decoration"])
 def test_decoration_preferences_are_preserved_for_every_quotation(tmp_path: Path, decoration: str) -> None:
     write_entry(
         tmp_path / "entry.yaml",

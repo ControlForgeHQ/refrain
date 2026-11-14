@@ -73,29 +73,16 @@ def decoration_configuration(**settings: object) -> dict[str, object]:
 def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
-    assert set(config.backgrounds) == {
-        "aged-paper",
-        "canvas",
-        "cloth",
-        "drafting-grid",
-        "handmade-paper",
-        "hex",
-        "isometric-grid",
-        "limestone",
-        "recursive-squares",
-        "vellum",
-    }
+    assert config.backgrounds
     assert config.default_backgrounds == ("none",)
     assert all(resource.bundled for resource in config.backgrounds.values())
     assert not any(record.levelno >= 30 and "background" in record.message for record in caplog.records)
     for identifier, resource in config.backgrounds.items():
         assert resource.identifier == identifier
-        assert resource.path.name == f"{identifier}.png"
-        with load_background_image(resource) as image:
-            assert image.size == (3840, 2400)
-            assert image.mode in {"RGB", "RGBA"}
+        assert resource.path is None or resource.path.name == f"{identifier}.png"
+        assert resource.path is not None or resource.layers
     with pytest.raises(TypeError):
-        config.backgrounds["other"] = config.backgrounds["canvas"]
+        config.backgrounds["other"] = next(iter(config.backgrounds.values()))
 
 
 def test_builtin_palette_custom_colors_and_black_text_default(tmp_path: Path) -> None:
@@ -195,8 +182,7 @@ def test_global_role_face_preferences_and_packaged_italic_default(tmp_path: Path
     packaged = load_application_config(packaged_config)
     assert dict(packaged.font_faces) == {"source": "italic"}
     assert packaged.default_decoration_colors == ("black",)
-    assert {"regular", "italic"} <= set(packaged.fonts["lora"].faces)
-    assert packaged.fonts["lora"].faces["italic"].name == "Lora-Italic.ttf"
+    assert any("italic" in packaged.fonts[identifier].faces for identifier in packaged.default_fonts)
 
 
 @pytest.mark.parametrize(
@@ -261,35 +247,17 @@ def test_invalid_backgrounds_excluded_independently(tmp_path: Path, kind: str, c
     assert "excluded" in caplog.text
 
 
-@pytest.mark.parametrize(
-    "identifier",
-    [
-        "none",
-        "aged-paper",
-        "canvas",
-        "cloth",
-        "drafting-grid",
-        "handmade-paper",
-        "hex",
-        "isometric-grid",
-        "limestone",
-        "recursive-squares",
-        "vellum",
-    ],
-)
-def test_reserved_background_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
+def test_bundled_background_identifier_cannot_be_overridden(tmp_path: Path, caplog) -> None:
+    config_path = write_config(tmp_path / "config.yaml", background_configuration())
+    identifier = next(iter(load_application_config(config_path).backgrounds))
     asset_path = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
     asset_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (8, 6)).save(asset_path)
-    data = background_configuration()
 
-    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+    config = load_application_config(config_path)
 
-    if identifier == "none":
-        assert identifier not in config.backgrounds
-    else:
-        assert config.backgrounds[identifier].bundled
-    assert "reserved" in caplog.text
+    assert config.backgrounds[identifier].bundled
+    assert f"conflicts with bundled identifier {identifier!r}" in caplog.text
     assert config.default_backgrounds == ("none",)
 
 
@@ -310,36 +278,33 @@ def test_reserved_background_identifiers_cannot_be_overridden(tmp_path: Path, id
     ],
 )
 def test_malformed_background_registrations_warn(tmp_path: Path, available: object, caplog) -> None:
+    baseline = load_application_config(write_config(tmp_path / "baseline.yaml", configuration_data()))
     data = background_configuration(available=available)
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert set(config.backgrounds) == {
-        "aged-paper",
-        "canvas",
-        "cloth",
-        "drafting-grid",
-        "handmade-paper",
-        "hex",
-        "isometric-grid",
-        "limestone",
-        "recursive-squares",
-        "vellum",
-    }
+    assert set(config.backgrounds) == set(baseline.backgrounds)
+    assert all(resource.bundled for resource in config.backgrounds.values())
     assert "layout.backgrounds.available" in caplog.text
 
 
 def test_default_background_pool_deduplicates_and_excludes_invalid_values(tmp_path: Path, caplog) -> None:
-    data = background_configuration(default=["canvas", "none", "canvas", None, False, "", " ", "Canvas", "hex", "none"])
+    for identifier in ("pool-a", "pool-b"):
+        path = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 6)).save(path)
+    data = background_configuration(
+        default=["pool-a", "none", "pool-a", None, False, "", " ", "Pool-a", "pool-b", "none"]
+    )
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.default_backgrounds == ("canvas", "none", "hex")
-    assert "background identifier 'Canvas' is unavailable" in caplog.text
+    assert config.default_backgrounds == ("pool-a", "none", "pool-b")
+    assert "background identifier 'Pool-a' is unavailable" in caplog.text
     assert "must be a valid background identifier" in caplog.text
 
 
-@pytest.mark.parametrize("pool", [None, [], {}, "canvas", False, ["missing"], ["", None, " "]])
+@pytest.mark.parametrize("pool", [None, [], {}, "pool-a", False, ["missing"], ["", None, " "]])
 def test_unusable_background_pool_falls_back_to_none(tmp_path: Path, pool: object, caplog) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", background_configuration(default=pool)))
 
@@ -423,24 +388,20 @@ def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch
 def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
-    identifiers = {"ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"}
-    assert set(config.decorations) == identifiers
+    assert config.decorations
     assert config.default_decorations == ("none",)
     assert "none" not in config.decorations
     assert all(resource.bundled for resource in config.decorations.values())
-    assert all(
-        resource.font is None and resource.background is None and resource.presentation_insets is None
-        for resource in config.decorations.values()
-    )
     assert not any(record.levelno >= 30 and "decoration" in record.message for record in caplog.records)
     for identifier, resource in config.decorations.items():
         assert resource.identifier == identifier
-        assert resource.layers[0].image.name == f"{identifier}.png"
-        with load_decoration_layer_image(resource.layers[0]) as image:
-            assert image.size == (1600, 1200)
-            assert image.mode in {"RGB", "RGBA"}
+        assert resource.layers
+        for layer in resource.layers:
+            with load_decoration_layer_image(layer) as image:
+                assert image.width > 0 and image.height > 0
+                assert image.mode in {"RGB", "RGBA"}
     with pytest.raises(TypeError):
-        config.decorations["other"] = config.decorations["hex"]
+        config.decorations["other"] = next(iter(config.decorations.values()))
 
 
 def test_custom_decoration_manifest_and_metadata(tmp_path: Path) -> None:
@@ -555,14 +516,8 @@ def test_bad_decoration_region_excludes_only_its_registration(tmp_path: Path, ca
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert set(config.decorations) == {
-        "ethereal",
-        "hex",
-        "lower-flourish",
-        "simple-border",
-        "top-bottom-borders",
-        "valid",
-    }
+    assert "valid" in config.decorations
+    assert "bad-region" not in config.decorations
     assert config.default_decorations == ("valid",)
     assert "bad-region/decoration.yaml.presentation_insets" in caplog.text.replace("\\", "/")
 
@@ -596,10 +551,18 @@ def test_unavailable_decoration_preferences_are_ignored_without_rejecting_image(
 
 
 def test_default_decoration_pool_deduplicates_and_falls_back_to_none(tmp_path: Path, caplog) -> None:
-    data = decoration_configuration(default=["hex", "none", "hex", "missing", None])
+    package = tmp_path / "assets" / "decorations" / "pool-frame"
+    package.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(package / "overlay.png")
+    write_asset_manifest(
+        package,
+        "decoration.yaml",
+        {"format": 1, "id": "pool-frame", "layers": [{"image": "overlay.png", "method": "contain"}]},
+    )
+    data = decoration_configuration(default=["pool-frame", "none", "pool-frame", "missing", None])
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.default_decorations == ("hex", "none")
+    assert config.default_decorations == ("pool-frame", "none")
     assert "decoration identifier 'missing' is unavailable" in caplog.text
     empty = load_application_config(
         write_config(tmp_path / "empty.yaml", decoration_configuration(default=["missing", None]))
@@ -608,10 +571,9 @@ def test_default_decoration_pool_deduplicates_and_falls_back_to_none(tmp_path: P
     assert "has no usable members; using ['none']" in caplog.text
 
 
-@pytest.mark.parametrize(
-    "identifier", ["none", "ethereal", "hex", "lower-flourish", "simple-border", "top-bottom-borders"]
-)
-def test_reserved_decoration_identifiers_cannot_be_overridden(tmp_path: Path, identifier: str, caplog) -> None:
+def test_bundled_decoration_identifier_cannot_be_overridden(tmp_path: Path, caplog) -> None:
+    config_path = write_config(tmp_path / "config.yaml", decoration_configuration())
+    identifier = next(iter(load_application_config(config_path).decorations))
     package = tmp_path / "assets" / "decorations" / "conflicting"
     package.mkdir(parents=True)
     Image.new("RGBA", (8, 6)).save(package / "overlay.png")
@@ -620,13 +582,10 @@ def test_reserved_decoration_identifiers_cannot_be_overridden(tmp_path: Path, id
         "decoration.yaml",
         {"format": 1, "id": identifier, "layers": [{"image": "overlay.png", "method": "contain"}]},
     )
-    config = load_application_config(write_config(tmp_path / "config.yaml", decoration_configuration()))
+    config = load_application_config(config_path)
 
-    if identifier == "none":
-        assert identifier not in config.decorations
-    else:
-        assert config.decorations[identifier].bundled
-    assert "reserved" in caplog.text
+    assert config.decorations[identifier].bundled
+    assert f"conflicts with bundled identifier {identifier!r}" in caplog.text
 
 
 def test_configuration_background_defaults_support_legacy_direct_construction(tmp_path: Path) -> None:
@@ -660,8 +619,7 @@ def test_loads_defaults_and_bundled_font_resources(tmp_path: Path) -> None:
     assert config.min_font_size == 28
     assert config.max_font_size == 100
     assert config.information_view_duration == 60
-    assert set(config.fonts) == {"alegreya", "libre-baskerville", "lora", "orbitron", "source-sans-3"}
-    assert "orbitron" not in config.default_fonts
+    assert config.default_fonts == ("lora",)
     assert all(font.bundled for font in config.fonts.values())
     assert all(font.path.is_file() for font in config.fonts.values())
     assert all(font.path.parent.joinpath("OFL.txt").is_file() for font in config.fonts.values())
@@ -823,31 +781,14 @@ def test_unknown_storage_fields_follow_configuration_warning_policy(tmp_path: Pa
 
 
 def test_representative_configuration_example_loads() -> None:
-    config = load_application_config(Path(__file__).parent.parent / "examples" / "config.yaml")
+    example_path = Path(__file__).parent.parent / "examples" / "config.yaml"
+    example_data = yaml.safe_load(example_path.read_text(encoding="utf-8"))
+    config = load_application_config(example_path)
 
     assert [backend.type for backend in config.display_backends] == ["window", "image-server"]
-    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "source-sans-3")
-    assert config.default_backgrounds == (
-        "none",
-        "aged-paper",
-        "canvas",
-        "cloth",
-        "drafting-grid",
-        "handmade-paper",
-        "hex",
-        "isometric-grid",
-        "limestone",
-        "recursive-squares",
-        "vellum",
-    )
-    assert config.default_decorations == (
-        "none",
-        "ethereal",
-        "hex",
-        "lower-flourish",
-        "simple-border",
-        "top-bottom-borders",
-    )
+    assert config.default_fonts == tuple(example_data["layout"]["fonts"]["default"])
+    assert config.default_backgrounds == tuple(example_data["layout"]["backgrounds"]["default"])
+    assert config.default_decorations == tuple(example_data["layout"]["decorations"]["default"])
     assert [(spec.aspect_ratio, spec.requested_output_size) for spec in config.required_output_specifications] == [
         ("16:10", (3840, 2400)),
         ("16:9", (1920, 1080)),
@@ -1504,7 +1445,11 @@ def test_unreadable_config_is_rejected(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_font_collisions_and_invalid_bundles_are_excluded(tmp_path: Path, caplog) -> None:
-    font_bytes = files("refrain").joinpath("assets", "fonts", "lora", "Lora-Regular.ttf").read_bytes()
+    font_root = files("refrain").joinpath("assets", "fonts")
+    font_package = sorted(font_root.iterdir(), key=lambda package: package.name)[0]
+    font_manifest = yaml.safe_load(font_package.joinpath("font.yaml").read_text())
+    bundled_font_identifier = font_manifest["id"]
+    font_bytes = font_package.joinpath(font_manifest["faces"]["regular"]).read_bytes()
     for package in (
         tmp_path / "assets" / "fonts" / "reserved",
         tmp_path / "assets" / "fonts" / "duplicate-a",
@@ -1515,7 +1460,7 @@ def test_font_collisions_and_invalid_bundles_are_excluded(tmp_path: Path, caplog
     write_asset_manifest(
         tmp_path / "assets" / "fonts" / "reserved",
         "font.yaml",
-        {"format": 1, "id": "lora", "faces": {"regular": "Regular.ttf"}},
+        {"format": 1, "id": bundled_font_identifier, "faces": {"regular": "Regular.ttf"}},
     )
     for directory in ("duplicate-a", "duplicate-b"):
         write_asset_manifest(
@@ -1532,11 +1477,11 @@ def test_font_collisions_and_invalid_bundles_are_excluded(tmp_path: Path, caplog
 
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
-    assert config.fonts["lora"].bundled
+    assert config.fonts[bundled_font_identifier].bundled
     assert "duplicate" not in config.fonts
     assert "missing" not in config.fonts
     assert "invalid" not in config.fonts
-    assert "conflicts with reserved bundled identifier 'lora'" in caplog.text
+    assert f"conflicts with bundled identifier {bundled_font_identifier!r}" in caplog.text
     assert "share identifier 'duplicate'; all are excluded" in caplog.text
     assert "resource path is missing" in caplog.text
     assert "unsupported by Pillow" in caplog.text

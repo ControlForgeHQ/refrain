@@ -137,6 +137,12 @@ class Workspace:
     def entry(self, name: str, body: str) -> None:
         (self.content / f"{name}.yaml").write_text(f'id: "{name}"\n{body}', encoding="utf-8")
 
+    def background(self, identifier: str, color: tuple[int, int, int] = (120, 140, 160)) -> Path:
+        path = self.root / "assets" / "backgrounds" / f"{identifier}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1600, 1200), color).save(path)
+        return path
+
     def run(self, now: datetime, display: FakeDisplay | None = None, **kwargs):
         display = display or FakeDisplay()
         result = run_startup(
@@ -341,10 +347,11 @@ def test_runtime_control_lifecycle_is_required(
 
 @pytest.mark.parametrize(
     "preference",
-    [None, "cloth", "none", "unavailable-paper"],
+    [None, "paper-a", "none", "unavailable-paper"],
 )
 def test_background_preferences_are_preserved_without_resolution(workspace: Workspace, preference, caplog) -> None:
-    workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
+    workspace.background("paper-a")
+    workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["paper-a"]\n  fonts:'))
     ordinary(workspace, extra="" if preference is None else f'background: "{preference}"\n')
     configuration = application.load_application_config(workspace.config)
     proposal, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
@@ -356,8 +363,10 @@ def test_background_preferences_are_preserved_without_resolution(workspace: Work
 
 
 def test_background_pool_is_not_resolved_before_commit(workspace: Workspace) -> None:
+    workspace.background("pool-a")
+    workspace.background("pool-b")
     workspace.config.write_text(
-        _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas", "none", "canvas", "cloth"]\n  fonts:')
+        _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["pool-a", "none", "pool-a", "pool-b"]\n  fonts:')
     )
     configuration = application.load_application_config(workspace.config)
 
@@ -367,6 +376,7 @@ def test_background_pool_is_not_resolved_before_commit(workspace: Workspace) -> 
 
 
 def test_decoration_preferences_remain_semantic_content(workspace: Workspace) -> None:
+    workspace.background("paper-a")
     package = workspace.root / "assets" / "decorations" / "custom"
     overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
@@ -375,13 +385,13 @@ def test_decoration_preferences_remain_semantic_content(workspace: Workspace) ->
         package,
         "custom",
         font="source-sans-3",
-        background="hex",
+        background="paper-a",
         presentation_insets={"left": 461, "right": 691, "top": 389, "bottom": 475},
     )
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
-            '  backgrounds: {default: ["canvas"]}\n' '  decorations: {default: ["none"]}\n' "  fonts:",
+            '  backgrounds: {default: ["paper-a"]}\n' '  decorations: {default: ["none"]}\n' "  fonts:",
         )
     )
     ordinary(workspace, extra='decoration: "custom"\n')
@@ -421,6 +431,7 @@ def test_committed_color_preferences_are_not_resolved_palette_values(workspace: 
 
 
 def test_explicit_none_and_entry_resource_preferences_override_decoration(workspace: Workspace) -> None:
+    workspace.background("paper-a")
     package = workspace.root / "assets" / "decorations" / "custom"
     overlay = package / "overlay.png"
     overlay.parent.mkdir(parents=True)
@@ -429,13 +440,13 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
         package,
         "custom",
         font="source-sans-3",
-        background="hex",
+        background="paper-a",
         presentation_insets={"left": 461, "right": 691, "top": 389, "bottom": 475},
     )
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
-            '  backgrounds: {default: ["canvas"]}\n' '  decorations: {default: ["custom"]}\n' "  fonts:",
+            '  backgrounds: {default: ["paper-a"]}\n' '  decorations: {default: ["custom"]}\n' "  fonts:",
         )
     )
     ordinary(workspace, extra='decoration: "none"\nfont: "lora"\nbackground: "none"\n')
@@ -542,7 +553,11 @@ def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoratio
 
 
 def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace, caplog) -> None:
-    workspace.config.write_text(_CONFIG.replace("  fonts:", '  decorations: {default: ["hex"]}\n  fonts:'))
+    package = workspace.root / "assets" / "decorations" / "test-frame"
+    package.mkdir(parents=True)
+    Image.new("RGBA", (16, 12)).save(package / "overlay.png")
+    write_decoration_manifest(package, "test-frame")
+    workspace.config.write_text(_CONFIG.replace("  fonts:", '  decorations: {default: ["test-frame"]}\n  fonts:'))
     ordinary(workspace, extra='decoration: "not-registered"\n')
 
     configuration = application.load_application_config(workspace.config)
@@ -586,10 +601,7 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
 
 
 def test_committed_background_survives_restart_config_changes_and_resource_loss(workspace: Workspace, caplog) -> None:
-    path = workspace.root / "assets" / "backgrounds" / "paper.png"
-    path.parent.mkdir(parents=True)
-    with Image.new("RGB", (1600, 1200), (100, 140, 180)) as image:
-        image.save(path)
+    path = workspace.background("paper", (100, 140, 180))
     workspace.config.write_text(
         _CONFIG.replace(
             "  fonts:",
@@ -601,7 +613,10 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     assert first.state.snapshot.background is None
     assert first_display.images[-1].getpixel((0, 0)) == (100, 140, 180)
     path.unlink()
-    workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["canvas"]\n  fonts:'))
+    workspace.background("fallback-paper")
+    workspace.config.write_text(
+        _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["fallback-paper"]\n  fonts:')
+    )
     second, second_display = workspace.run(at(10, 7))
     assert second.state == first.state
     assert second_display.images[-1].tobytes() == first_display.images[-1].tobytes()

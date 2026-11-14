@@ -1099,7 +1099,7 @@ Configuration loading owns asset discovery, validation, collision handling, and 
 
 Discovery establishes availability by stable identifier only. It never adds resources to selection pools. The configured default pools remain the sole source of automatic-selection eligibility; any available resource may still be selected explicitly by content or decoration metadata.
 
-Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow reserved bundled identifiers, and every custom resource in an intra-category collision is excluded deterministically.
+Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow identifiers claimed by packaged resources, and every custom resource in an intra-category collision is excluded deterministically.
 
 Application configuration defines a default selection pool for each resource type. Each pool may contain the reserved value `"none"`, representing the intentional absence of that resource.
 
@@ -1283,7 +1283,7 @@ Refrain maintains an effective font registry containing usable bundled and disco
 
 Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool and may be empty when none of its configured identifiers is usable.
 
-Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Bundled font identifiers remain reserved and cannot be overridden.
+Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Custom font identifiers cannot override identifiers claimed by readable bundled manifests.
 
 A content entry may specify a preferred font, inherited by every quotation in that entry.
 

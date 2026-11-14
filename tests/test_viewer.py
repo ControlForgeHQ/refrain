@@ -1093,7 +1093,7 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
                 "--font",
                 "lora",
                 "--decoration",
-                "simple-border",
+                "test-frame",
                 "--no-qr",
                 "--push",
                 "image-server:wquxga",
@@ -1107,7 +1107,7 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
     overrides = captured["overrides"]
     assert isinstance(overrides, PresentationOverrides)
     assert overrides.font == "lora"
-    assert overrides.decoration == "simple-border"
+    assert overrides.decoration == "test-frame"
     assert overrides.qr_enabled is False
 
 

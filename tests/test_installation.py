@@ -5,6 +5,7 @@ import signal
 from pathlib import Path, PureWindowsPath
 
 import pytest
+import yaml
 
 import refrain.__main__ as cli
 import refrain.installation as installation
@@ -158,36 +159,27 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     reports: list[str] = []
     created = initialize_installation(paths, progress=reports.append)
 
-    assert paths.config_file.read_bytes() == (Path(installation.__file__).parent / "config.default.yaml").read_bytes()
-    assert "\ncontent:\n" not in paths.config_file.read_text(encoding="utf-8")
+    packaged_config_path = Path(installation.__file__).parent / "config.default.yaml"
+    packaged_config = yaml.safe_load(packaged_config_path.read_text(encoding="utf-8"))
+    installed_config_text = paths.config_file.read_text(encoding="utf-8")
+    assert paths.config_file.read_bytes() == packaged_config_path.read_bytes()
+    assert "\ncontent:\n" not in installed_config_text
     config = load_application_config(paths.config_file)
     assert config.content_directory == paths.content_directory
     assert [(backend.type, backend.host, backend.port) for backend in config.display_backends] == [
         ("image-server", "127.0.0.1", 8080)
     ]
-    assert config.default_fonts == ("alegreya", "libre-baskerville", "lora", "source-sans-3")
-    assert config.default_backgrounds == (
-        "none",
-        "aged-paper",
-        "canvas",
-        "cloth",
-        "drafting-grid",
-        "handmade-paper",
-        "hex",
-        "isometric-grid",
-        "limestone",
-        "recursive-squares",
-        "vellum",
-    )
-    assert config.default_decorations == (
-        "none",
-        "ethereal",
-        "hex",
-        "lower-flourish",
-        "simple-border",
-        "top-bottom-borders",
-    )
-    assert "timezone" not in paths.config_file.read_text(encoding="utf-8")
+    configured_pools = packaged_config["layout"]
+    expected_fonts = tuple(configured_pools["fonts"]["default"])
+    expected_backgrounds = tuple(configured_pools["backgrounds"]["default"])
+    expected_decorations = tuple(configured_pools["decorations"]["default"])
+    assert config.default_fonts == expected_fonts
+    assert set(expected_fonts) <= set(config.fonts)
+    assert config.default_backgrounds == expected_backgrounds
+    assert {identifier for identifier in expected_backgrounds if identifier != "none"} <= set(config.backgrounds)
+    assert config.default_decorations == expected_decorations
+    assert {identifier for identifier in expected_decorations if identifier != "none"} <= set(config.decorations)
+    assert "timezone" not in installed_config_text
     entries = load_content_library(paths.content_directory)
     assert len(entries) >= 3
     assert sum(len(entry.quotations) for entry in entries) >= 4

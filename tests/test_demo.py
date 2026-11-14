@@ -38,7 +38,7 @@ layout:
   fonts:
     default: ["lora", "libre-baskerville"]
   backgrounds:
-    default: ["none", "canvas"]
+    default: ["none"]
   text: {min_font_size: 28, max_font_size: 100}
 """
 _START = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
@@ -324,7 +324,7 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
     )
     demo.config.write_text(
         _CONFIG.replace(
-            '  backgrounds:\n    default: ["none", "canvas"]',
+            '  backgrounds:\n    default: ["none"]',
             '  backgrounds:\n    default: ["none"]\n' '  decorations: {default: ["demo-overlay"]}',
         ),
         encoding="utf-8",

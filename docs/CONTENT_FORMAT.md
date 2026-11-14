@@ -192,6 +192,8 @@ The installed distribution includes `config.default.yaml` as an editable startin
 
 Refrain discovers bundled resources through package resources and user resources recursively beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Each discovered resource is available by stable identifier without adding it to a default pool.
 
+The bundled registries are derived from packaged font and decoration manifests and from packaged background manifests or standalone PNG filenames. Adding or removing a bundled resource does not require an application-code inventory change. A syntactically valid identifier in a readable bundled manifest remains owned by that package even when another manifest field makes the resource unusable; a custom resource cannot claim an identifier established by a bundle.
+
 Fonts, packaged backgrounds, and decorations use YAML manifests whose referenced files are relative to the manifest directory and confined to that package. Standalone background PNGs use their filename stem as the identifier. See the [asset registries](#font-registry) for manifest schemas and validation.
 
 Custom visual resources are selected by registered identifier; there is no arbitrary absolute-path resource registration interface. The configuration-file, content-directory, and operational-path rules above remain separate.
@@ -545,7 +547,7 @@ A content entry cannot directly specify presentation insets.
 
 Refrain maintains an effective registry of bundled font bundles and valid bundles discovered recursively under `<configuration directory>/assets/fonts/`. Each bundle has a stable, case-sensitive identifier; content entries and the default pool refer to the identifier, not a path.
 
-Bundled font identifiers are `alegreya`, `libre-baskerville`, `lora`, `orbitron`, and `source-sans-3`. These identifiers are reserved and stable. `orbitron` is available for explicit selection but is not in the default pool unless configured there.
+Bundled font bundles are discovered from package resources, and their identifiers are derived from their manifests. A readable bundled manifest with a valid identifier claims that identifier even when another part of the bundle is unusable, preventing a custom bundle from silently replacing it. An identifier is not reserved after no bundled resource claims it.
 
 #### Font bundle manifests
 
@@ -571,7 +573,7 @@ The `faces` mapping registers font resources; `font_faces` expresses role prefer
 
 Use safe YAML loading. Unknown manifest fields produce warnings and are ignored. Invalid manifest data, unsupported versions/formats, missing or unreadable resources, absolute paths, parent traversal, and references escaping the package (including symlink escapes) exclude the affected bundle without affecting unrelated resources. Bundled font directories retain their license and copyright files.
 
-All usable bundled and discovered fonts are available for explicit content-entry selection independently of default-pool membership. A custom identifier conflicting with a bundled identifier is excluded. All custom bundles sharing an identifier are excluded with deterministic diagnostics listing their locations.
+All usable bundled and discovered fonts are available for explicit content-entry selection independently of default-pool membership. A custom identifier conflicting with an identifier claimed by a bundled manifest is excluded. All custom bundles sharing an identifier are excluded with deterministic diagnostics listing their locations.
 
 ### Default font pool
 
@@ -616,11 +618,9 @@ Font-selection precedence, cache reuse, face fallback, and preparation failures 
 
 Refrain maintains an effective registry containing bundled and recursively discovered backgrounds. Identifiers are case-sensitive ASCII names beginning with a letter or digit and containing only letters, digits, hyphens, and underscores. The reserved identifier `"none"` represents no background and cannot be registered.
 
-Bundled identifiers are `aged-paper`, `canvas`, `cloth`, `drafting-grid`, `handmade-paper`, `hex`, `isometric-grid`, `limestone`, `recursive-squares`, and `vellum`; they remain stable and are available without being added to the default pool.
-
 #### Discovered backgrounds
 
-Standalone PNG files use their filename stem as the identifier. For example, `assets/backgrounds/aged-paper.png` registers `aged-paper`.
+Standalone PNG files use their filename stem as the identifier. For example, `assets/backgrounds/paper.png` registers `paper`.
 
 Directories containing `background.yaml` define packaged backgrounds:
 
@@ -685,7 +685,7 @@ Layers are composited in declaration order over paper-white on the design canvas
 
 Background color fields are optional preferences and do not recolor the background artwork. They accept the same scalar-or-nonempty-list palette syntax as content entries. Invalid or unavailable candidates are diagnosed and ignored without invalidating an otherwise usable background.
 
-Standalone PNG files remain supported unchanged and use their filename stem as the identifier. For example, `assets/backgrounds/aged-paper.png` registers `aged-paper`. A standalone PNG is a simple centered-cover background and supplies no background-level color preferences.
+Standalone PNG files remain supported unchanged and use their filename stem as the identifier. A standalone PNG is a simple centered-cover background and supplies no background-level color preferences.
 
 All usable discovered backgrounds are available for explicit entry or decoration preferences whether or not included in the default pool. Custom resources cannot shadow bundled identifiers. If custom resources share an identifier, all are excluded and their locations are reported deterministically.
 
@@ -700,7 +700,7 @@ layout:
   backgrounds:
     default:
       - "none"
-      - "handmade-paper"
+      - "paper"
       - "parchment"
 ```
 
@@ -719,8 +719,6 @@ Backgrounds have no repetition history or selection weights.
 ### Decoration registry
 
 Refrain maintains an effective registry containing bundled and recursively discovered decorations. A decoration is a transparent overlay with optional presentation metadata. The reserved identifier `"none"` means no decoration and cannot be registered.
-
-Bundled identifiers are `ethereal`, `hex`, `lower-flourish`, `simple-border`, and `top-bottom-borders`. They remain stable and are available independently of the default pool.
 
 #### Decoration manifests
 
@@ -741,7 +739,7 @@ font_faces:
 text_color:
   - black
   - burnt-orange
-background: aged-paper
+background: forest
 qr_ready: true
 qr_from_right: 20
 qr_from_bottom: 20
@@ -1263,7 +1261,7 @@ For example:
 
 ```yaml
 id: "quiet-morning"
-background: "handmade-paper"
+background: "aged-paper"
 
 quotations:
   - "An example quotation."

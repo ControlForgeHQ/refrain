@@ -10,24 +10,6 @@ from PIL import Image, ImageFont
 from refrain import PresentationInsets, load_application_config
 
 _BUNDLED_LORA = Path(__file__).parents[1] / "src" / "refrain" / "assets" / "fonts" / "lora" / "Lora-Regular.ttf"
-_FONT_STYLE_FACES = {
-    "Black": "black",
-    "BlackItalic": "black-italic",
-    "Bold": "bold",
-    "BoldItalic": "bold-italic",
-    "ExtraBold": "extra-bold",
-    "ExtraBoldItalic": "extra-bold-italic",
-    "ExtraLight": "extra-light",
-    "ExtraLightItalic": "extra-light-italic",
-    "Italic": "italic",
-    "Light": "light",
-    "LightItalic": "light-italic",
-    "Medium": "medium",
-    "MediumItalic": "medium-italic",
-    "Regular": "regular",
-    "SemiBold": "semi-bold",
-    "SemiBoldItalic": "semi-bold-italic",
-}
 
 
 def _config_data(**layout_sections: object) -> dict[str, object]:
@@ -193,18 +175,127 @@ def test_bundled_font_manifests_register_every_usable_static_face(tmp_path: Path
     for package in sorted(font_root.iterdir()):
         if not package.is_dir():
             continue
-        expected_faces = {
-            _FONT_STYLE_FACES[font_path.stem.rsplit("-", 1)[-1]]: font_path
-            for font_path in package.iterdir()
-            if font_path.suffix.lower() in {".ttf", ".otf"}
-        }
-        resource = config.fonts[package.name]
+        manifest = yaml.safe_load((package / "font.yaml").read_text(encoding="utf-8"))
+        identifier = manifest["id"]
+        expected_faces = {name: package / path for name, path in manifest["faces"].items()}
+        resource = config.fonts[identifier]
 
         assert resource.bundled
         assert dict(resource.faces) == expected_faces
         assert "regular" in resource.faces
         for font_path in resource.faces.values():
             ImageFont.truetype(font_path, size=12)
+
+
+def test_bundled_resources_are_discovered_and_not_added_to_default_pools(tmp_path: Path, monkeypatch) -> None:
+    package_root = tmp_path / "package"
+    assets = package_root / "assets"
+    background = _write_png(assets / "backgrounds" / "future-paper.png")
+    font_package = assets / "fonts" / "future-font"
+    font_package.mkdir(parents=True)
+    shutil.copyfile(_BUNDLED_LORA, font_package / "Regular.ttf")
+    _write_manifest(
+        font_package,
+        "font.yaml",
+        {"format": 1, "id": "future-font", "faces": {"regular": "Regular.ttf"}},
+    )
+    decoration_package = assets / "decorations" / "future-frame"
+    _write_png(decoration_package / "overlay.png", "RGBA")
+    _write_manifest(
+        decoration_package,
+        "decoration.yaml",
+        {"format": 1, "id": "future-frame", "layers": [{"image": "overlay.png"}]},
+    )
+    monkeypatch.setattr("refrain.config.files", lambda _package: package_root)
+    config_path = _write_config(
+        tmp_path / "config.yaml",
+        _config_data(
+            fonts={"default": ["future-font"]},
+            backgrounds={"default": ["none"]},
+            decorations={"default": ["none"]},
+        ),
+    )
+
+    config = load_application_config(config_path)
+
+    assert config.fonts["future-font"].bundled
+    assert config.default_fonts == ("future-font",)
+    assert config.backgrounds["future-paper"].bundled
+    assert config.default_backgrounds == ("none",)
+    assert config.decorations["future-frame"].bundled
+    assert config.default_decorations == ("none",)
+
+    background.unlink()
+    shutil.rmtree(font_package)
+    shutil.rmtree(decoration_package)
+    reloaded = load_application_config(config_path)
+    assert "future-paper" not in reloaded.backgrounds
+    assert "future-font" not in reloaded.fonts
+    assert "future-frame" not in reloaded.decorations
+    assert reloaded.default_backgrounds == ("none",)
+
+
+def test_invalid_bundled_identity_blocks_custom_substitution(tmp_path: Path) -> None:
+    bundled_root = tmp_path / "package" / "assets" / "backgrounds"
+    _write_manifest(
+        bundled_root / "broken",
+        "background.yaml",
+        {"format": 1, "id": "claimed-paper", "layers": [{"image": "missing.png"}]},
+    )
+    custom_root = tmp_path / "user-assets" / "backgrounds"
+    _write_png(custom_root / "claimed-paper.png")
+    diagnostics: list[str] = []
+
+    def report(_field: str, message: str, _severity: int) -> None:
+        diagnostics.append(message)
+
+    from refrain.assets import discover_backgrounds
+
+    registry = discover_backgrounds(bundled_root, custom_root, report)
+
+    assert "claimed-paper" not in registry
+    assert any("conflicts with bundled identifier 'claimed-paper'" in message for message in diagnostics)
+    assert any("is invalid; background excluded" in message for message in diagnostics)
+
+
+def test_duplicate_bundled_backgrounds_choose_sorted_location(tmp_path: Path) -> None:
+    bundled_root = tmp_path / "package" / "assets" / "backgrounds"
+    _write_png(bundled_root / "a" / "shared-paper.png")
+    _write_png(bundled_root / "b" / "shared-paper.png")
+    diagnostics: list[str] = []
+
+    def report(_field: str, message: str, _severity: int) -> None:
+        diagnostics.append(message)
+
+    from refrain.assets import discover_backgrounds
+
+    registry = discover_backgrounds(bundled_root, tmp_path / "user-assets" / "backgrounds", report)
+
+    assert registry["shared-paper"].path == bundled_root / "a" / "shared-paper.png"
+    assert any("duplicate bundled identifier" in message for message in diagnostics)
+
+
+def test_none_remains_reserved_for_visual_resource_registries(tmp_path: Path, caplog) -> None:
+    root = tmp_path / "assets"
+    _write_png(root / "backgrounds" / "none.png")
+    font_package = root / "fonts" / "none"
+    font_package.mkdir(parents=True)
+    shutil.copyfile(_BUNDLED_LORA, font_package / "Regular.ttf")
+    _write_manifest(font_package, "font.yaml", {"format": 1, "id": "none", "faces": {"regular": "Regular.ttf"}})
+    decoration_package = root / "decorations" / "none"
+    _write_png(decoration_package / "overlay.png", "RGBA")
+    _write_manifest(
+        decoration_package,
+        "decoration.yaml",
+        {"format": 1, "id": "none", "layers": [{"image": "overlay.png"}]},
+    )
+
+    config = load_application_config(_write_config(tmp_path / "config.yaml"))
+
+    assert "none" not in config.backgrounds
+    assert "none" not in config.fonts
+    assert "none" not in config.decorations
+    assert "reserved identifier 'none' cannot be registered" in caplog.text
 
 
 def test_image_discovery_checks_metadata_without_decoding_or_copying(tmp_path: Path, monkeypatch) -> None:
@@ -825,18 +916,15 @@ def test_invalid_regular_font_face_excludes_its_bundle(tmp_path: Path, caplog) -
     assert "a usable regular face is required" in caplog.text
 
 
-def test_all_duplicate_custom_identifiers_are_excluded_and_bundled_ids_are_reserved(tmp_path: Path, caplog) -> None:
+def test_all_duplicate_custom_identifiers_are_excluded(tmp_path: Path, caplog) -> None:
     root = tmp_path / "assets" / "backgrounds"
     _write_png(root / "a" / "duplicate.png")
     _write_png(root / "b" / "duplicate.png")
-    _write_png(root / "aged-paper.png")
 
     config = load_application_config(_write_config(tmp_path / "config.yaml"))
 
     assert "duplicate" not in config.backgrounds
-    assert config.backgrounds["aged-paper"].bundled
     assert "share identifier 'duplicate'; all are excluded" in caplog.text
-    assert "conflicts with reserved bundled identifier 'aged-paper'" in caplog.text
 
 
 @pytest.mark.parametrize(

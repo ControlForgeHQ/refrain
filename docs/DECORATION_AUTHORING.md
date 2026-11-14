@@ -243,7 +243,7 @@ Decoration authors must assume that normal Refrain operation may place their art
 The standard full-resolution validation background is:
 
 ```text
-handmade-paper
+aged-paper
 ```
 
 This background is used because its non-white textured surface exposes:
@@ -299,7 +299,7 @@ refrain-viewer \
   --tint black \
   --min-font-size 56 \
   --max-font-size 200 \
-  --background handmade-paper \
+  --background aged-paper \
   --decoration <decoration-id> \
   --qr \
   --aspect 16:10 \
@@ -318,7 +318,7 @@ refrain-viewer \
   --tint black \
   --min-font-size 56 \
   --max-font-size 200 \
-  --background handmade-paper \
+  --background aged-paper \
   --decoration <decoration-id> \
   --no-qr \
   --aspect 16:10 \
@@ -337,7 +337,7 @@ refrain-viewer \
   --tint black \
   --min-font-size 56 \
   --max-font-size 200 \
-  --background handmade-paper \
+  --background aged-paper \
   --decoration <decoration-id> \
   --qr \
   --debug-layout \
