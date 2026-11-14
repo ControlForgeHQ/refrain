@@ -160,7 +160,7 @@ tests do not establish physical display or boot behavior.
 2. Check `systemctl status refrain.service` and `journalctl -u refrain.service
    -b`; visually confirm the presentation. Stop and start the service and check
    that shutdown and startup complete without errors.
-3. While running, as the owner try `refrain` and `refrain --demo`: both must
+3. While running, as the owner try `refrain` and `refrain --demo 10`: both must
    reject concurrent ownership. Verify `refrain-viewer --list-destinations`
    and `refrain --refresh` operate against the resident service. Invoke these
    commands from the venv and use the same environment as the service.
