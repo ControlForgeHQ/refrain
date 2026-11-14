@@ -26,7 +26,7 @@ absolute wheel path and a user-owned venv outside the configuration and data
 directories. Replace the path with the actual wheel:
 
 ```sh
-WHEEL=/absolute/path/to/refrain-0.1.0-py3-none-any.whl
+WHEEL=/absolute/path/to/controlforge_refrain-0.1.0-py3-none-any.whl
 python3 -m venv "$HOME/refrain-venv"
 "$HOME/refrain-venv/bin/python" -m pip install "$WHEEL[hardware]"
 "$HOME/refrain-venv/bin/refrain" --initialize

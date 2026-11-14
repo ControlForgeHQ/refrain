@@ -89,7 +89,7 @@ def _runtime_information() -> tuple[str | None, str | None]:
 
 def _application_version() -> str:
     try:
-        return version("refrain")
+        return version("controlforge-refrain")
     except PackageNotFoundError:
         return "development"
 
