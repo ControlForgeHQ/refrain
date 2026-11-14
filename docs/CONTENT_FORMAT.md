@@ -893,21 +893,23 @@ For backgrounds, precedence is:
 
 An unavailable explicit content-entry preference produces a warning and falls back to the next applicable selection level. It does not invalidate the otherwise valid entry.
 
-The literary text color is resolved after the decoration has been selected, using the first level with one or more usable palette identifiers:
+After the decoration and background have been selected, literary text color uses the first level with one or more usable palette identifiers:
 
 1. The content entry's `text_color`.
-2. The selected decoration's `text_color`.
-3. The effective `layout.text.colors` pool.
-4. The built-in `black` fallback.
+2. The selected background's `text_color`.
+3. The selected decoration's `text_color`.
+4. The effective `layout.text.colors` pool.
+5. The built-in `black` fallback.
 
 Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. Resolve the selected palette identifier and RGB value for the complete image preparation.
 
 Decoration colour is resolved once for the selected decoration when at least one layer has effective tintability (`decoration.tintable AND layer.tintable`), using the first level with usable candidates:
 
 1. The content entry's `decoration_color`.
-2. The selected decoration's `decoration_color`.
-3. The effective `layout.decorations.colors` pool.
-4. The built-in `black` fallback.
+2. The selected background's `decoration_color`.
+3. The selected decoration's `decoration_color`.
+4. The effective `layout.decorations.colors` pool.
+5. The built-in `black` fallback.
 
 Invalid and unavailable identifiers are excluded with diagnostics. Duplicate identifiers do not add selection weight. The first level with usable candidates is selected uniformly without combining levels. A successful selection activates tinting; if no layer is effectively tintable, no color is resolved.
 
