@@ -290,6 +290,8 @@ Each should be evaluated against demonstrated user needs and the added maintenan
 
 # Release priorities
 
+Version 0.1 is complete only when the required behaviour has been demonstrated, substantive review findings have been resolved, and the complete physical presentation has been validated on the target hardware.
+
 Development should proceed in the following order:
 
 1. Establish repository documentation, engineering standards, contributor workflow, and the resolution-independent architecture and public interfaces.
@@ -304,4 +306,15 @@ Development should proceed in the following order:
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
 
-Version 0.1 is complete only when the required behaviour has been demonstrated, substantive review findings have been resolved, and the complete physical presentation has been validated on the target hardware.
+## Filesystem publication and consumer work
+
+The following is a separate implementation workstream. It does not replace the Version 0.1 release priorities above or make the companion web service a prerequisite for Version 0.1 release readiness.
+
+Proceed in this order:
+
+1. Document the filesystem-publication architecture and contracts before implementation.
+2. Capture resolved artistic choices during image preparation.
+3. Implement metadata serialization and `refrain-viewer` publication reconstruction.
+4. Implement filesystem `publish` destinations.
+5. Extract `refrain-image-server`; retire the integrated HTTP backend only after its replacement is implemented and validated.
+6. Implement `refrain-web-companion`.

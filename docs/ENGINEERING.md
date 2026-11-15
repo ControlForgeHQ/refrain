@@ -440,6 +440,13 @@ Avoid assumptions tied to a particular username, home directory, mount point, or
 
 Resolve relative paths consistently and document their interpretation.
 
+The planned publication root extends the existing platform-aware path resolver.
+Its default is `$XDG_STATE_HOME/refrain/publish` on Linux, using the existing
+per-user fallback; `%LOCALAPPDATA%\Refrain\Publish` on Windows; and
+`~/Library/Application Support/Refrain/Publish` on macOS. An explicit
+`storage.publish` path follows the established storage semantics, including
+configuration-relative resolution. Do not add a separate path-selection
+mechanism or use a Linux installation path as a cross-platform default.
 
 ## Persistent storage
 
@@ -636,7 +643,29 @@ Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
 The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, expected output specifications, and ordered reveal stages; do not fingerprint every visual choice or serialize a rendering plan. Every required stage for every output specification must be present. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate collection completeness and file integrity, detecting missing, damaged, truncated, or inconsistent files.
 
-During ordinary operation, reuse a complete valid set without checking whether configuration, fonts, palette, or image assets have changed. If the set is absent, incomplete, damaged, or otherwise unusable, resolve current configuration and resources and prepare the complete required variant collection together. Publish the replacement safely only after the complete new collection is ready. A replacement may look different from the prior set.
+For the current Version 0.1 model, the output specification distinguishes image
+variants. Under the planned destination-override model, associate variants with
+the effective presentation requirements as well as output specification and
+selection revision. Destinations with different effective overrides must not
+reuse one another's cached images, even when their output specifications match.
+Keep matching requirements in a coherent preparation group so that random
+presentation-wide choices are resolved once and remain shared across that
+group's output specifications. This distinguishes required override inputs
+without requiring a fingerprint of every resolved rendering decision.
+
+In the current Version 0.1 model, reuse a complete valid set during ordinary
+operation without checking whether configuration, fonts, palette, or image
+assets have changed. If the set is absent, incomplete, damaged, or otherwise
+unusable, resolve current configuration and resources and prepare the complete
+required variant collection together. Publish the replacement safely only
+after the complete new collection is ready. A replacement may look different
+from the prior set.
+
+In the planned destination-override model, changes to effective destination
+overrides change the required variant identity, so an image prepared for
+different requirements must not be treated as a cache hit. Changes to installed
+assets or rendering behavior alone do not promise archival reproduction; only
+missing or invalid required artifacts trigger regeneration.
 
 ### Prerelease implementation simplification
 
@@ -653,6 +682,54 @@ Use atomic file replacement and appropriate synchronization where supported. Cac
 Remove obsolete cache files without disturbing active readers or the complete set being published. Keep cleanup simple and bounded; artifact retention must not become a second source of application state.
 
 The cache store must not modify authoritative selection state. Cache errors are reported and handled by regeneration from the valid daily selection; they must never authorize reselection or reveal regression.
+
+### Filesystem publication storage (planned)
+
+Implement the publication directory, manifest commit point, independent schema
+versions, and consumer recovery behavior defined in
+[Architecture](ARCHITECTURE.md#filesystem-publication-target-planned). Use
+`pathlib` for path construction, keep every destination as a direct child of the
+effective publication root, and derive its name only from a validated
+destination ID. Destination configuration must not accept an arbitrary path to
+delete.
+
+Validate root and destination ownership before any destructive operation.
+Reject symbolic links, Windows junctions, reparse points, traversal, unexpected
+objects, and any other redirection at the root or along a destination path.
+Containment checks must not resolve an unsafe link and then treat its target as
+owned. Traverse owned directories without following links; never remove a
+destination outside the publication root. On uncertain ownership or unsafe
+objects, fail without attempting repair or deletion.
+
+Before creating or cleaning a destination, reject a publication root that
+overlaps protected configuration, content, asset, operational-state, history,
+cache, artifact, or other configured storage paths. Compare resolved standard
+and custom storage targets and reject equality, nesting, or an ancestor root
+whose cleanup could reach protected data. The standard publication root may
+share the operational-data parent with sibling state and history files, but
+must not overlap those protected file targets. If safe separation is uncertain,
+fail before the destructive operation. Standard `--purge` remains limited to
+platform-standard locations and never follows or deletes a custom
+`storage.publish` override.
+
+Write the complete image and metadata under unique publication-derived names
+before making the manifest visible. Close completed files before atomically
+replacing the manifest on the same filesystem. Consumers validate the manifest
+and referenced filenames as untrusted input, verify both SHA-256 hashes, and
+accept only a complete matching dataset. A consumer reads but never rewrites,
+cleans, or claims ownership of publication directories. Keep retries bounded;
+recovery after consumer restart starts from the current manifest, not from
+process-local state or publication history. Do not add a transaction journal,
+backup generations, or an unbounded retry loop.
+
+Test interruption and failure before and after the manifest replacement,
+concurrent readers observing replacement, hash mismatch, absent or superseded
+files, restart recovery, bounded retry exhaustion, and cleanup isolation among
+multiple destinations. Include traversal and symlink/junction/reparse-point
+cases where the platform supports them; skip only an unavailable filesystem
+capability with an explicit reason. Exercise filesystem behavior on both Linux
+and Windows. Consumer services and path handling must not assume systemd or
+Linux filesystem conventions in hardware-independent tests.
 
 ## Resident process ownership and runtime control
 
@@ -1036,6 +1113,12 @@ Distinguish user-requested window closure from application-driven `close()` and 
 
 ### HTTP image-server backend
 
+The requirements below describe the current integrated Version 0.1 backend
+during the transition. Do not extend it as the target non-direct destination
+mechanism. The target `refrain-image-server` is a separately supervised
+consumer of filesystem publications and replaces this backend only after that
+consumer is implemented and validated.
+
 Implement the `image-server` backend using standard HTTP facilities suitable for the supported Python runtime.
 
 Prefer the Python standard library unless an additional dependency provides a demonstrated benefit.
@@ -1390,6 +1473,14 @@ Use temporary directories and isolated test state.
 
 Test path selection with injected platform and environment information. Exercise category-specific custom-resource discovery independently of the current working directory, including nested package references and manifest confinement, while verifying that content directories retain configuration-relative and explicit-absolute semantics. Exercise repeatable initialization, existing user data and assets, links, exclusive file creation, race-time destinations, marker-verified interrupted sample installation, partial failures, reset preservation, purge deletion, confirmation, and deletion boundaries using temporary locations; do not use developer application-data directories.
 
+For planned filesystem publication, verify that standard and configuration-
+relative or absolute custom publication roots overlapping protected
+configuration, content, asset, operational-state, history, cache, artifact, or
+other storage targets are rejected before writes or cleanup. Also verify that
+the platform-standard publication root remains valid as a sibling of the
+authoritative state and history files beneath its operational-data parent,
+without overlapping either file path.
+
 Test persistence failure at meaningful boundaries, including failures before and after commitment.
 
 Verify that incomplete data cannot be mistaken for successfully committed state.
@@ -1398,7 +1489,7 @@ Where practical, test recovery using a newly initialized application instance ra
 
 ### Rendering tests
 
-Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification have identical output dimensions; destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. Verify that each configured destination resolves its own output specification and that the prepared variant set contains exactly the unique required specifications.
+Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. In the current Version 0.1 model, all reveal stages for one output specification have identical output dimensions and destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. In the planned destination-override model, verify that different effective overrides produce separate prepared variants even at identical output specifications, while matching requirements share coherent presentation-wide choices. Verify that the prepared variant set covers each unique output-specification/effective-requirements combination.
 
 Test destination visual post-processing independently of backend construction. Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output. Verify the Waveshare publication path quantizes exactly once, passes palette indices unchanged through driver rotation and 4-bit packing, and leaves the original RGB image unchanged. Verify the conversion can be imported and exercised without GPIO/SPI dependencies and that the driver and viewer use the same conversion. These tests establish software behavior only, not physical panel validation.
 
@@ -1519,11 +1610,11 @@ Deployment instructions must identify the supported operating system, system dep
 
 Installation must not depend on the developer's local directory structure.
 
-Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
+Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. When implemented, create the standard publication root without replacing its existing contents. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
 
 Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configured runtime storage values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
 
-Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory after explicit confirmation. Both operations are intended for use while Refrain is stopped; their standard-installation mutation paths must also participate in the runtime ownership lock described above. This protects against cooperating Refrain processes, not arbitrary concurrent hostile filesystem mutation.
+Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, publication storage, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory and the complete standard publication root after explicit confirmation. Configured custom publication paths are never reset or purged by these commands. Both operations are intended for use while Refrain is stopped; their standard-installation mutation paths must also participate in the runtime ownership lock described above. Consumer shutdown is operator-managed, not enforced: consumers do not acquire the runtime ownership lock, and maintenance does not inspect or stop operating-system services. Operators must stop any consumer that may read data before purging that data or replacing its installation. Refrain does not guarantee safe concurrent reads if a consumer is left running. This ownership lock protects against cooperating Refrain processes, not arbitrary concurrent hostile filesystem mutation.
 
 ### Service management
 
@@ -1534,6 +1625,17 @@ The service should start automatically when enabled and recover from unexpected 
 Avoid duplicating systemd supervision in application code.
 
 Graceful termination must allow the display backend to release resources safely.
+
+This currently describes supervision of the resident. In the target
+architecture, each consumer is a separate executable from the same
+installation, has an independent system-service lifecycle, and reads its own
+top-level section of the shared configuration. The resident does not spawn,
+supervise, or depend on consumers. Configuration enablement and system-service
+enablement are separate. Use existing operating-system service facilities;
+do not implement a service manager. Consumer shutdown before maintenance is an
+operator responsibility; maintenance does not query or stop consumer services
+and does not prevent an independently running consumer from reading during
+purge.
 
 ### Permissions
 

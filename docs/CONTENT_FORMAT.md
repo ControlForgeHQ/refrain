@@ -278,7 +278,7 @@ image-server:
   port: 8080
 ```
 
-The supported destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service.
+The currently supported Version 0.1 destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service. Filesystem `publish` destinations and their planned audience and presentation overrides are not yet implemented or supported by this configuration schema; see the planned architecture in [Architecture](ARCHITECTURE.md#filesystem-publication-target-planned).
 
 Destination IDs must match `[A-Za-z0-9][A-Za-z0-9_-]*`, be no longer than 256 characters, and be globally unique across all types. IDs are used unchanged for runtime discovery, publication selection, and image-server resource paths. `all` is an ordinary valid ID; `@all` is reserved for publication selection. Invalid or duplicate IDs and capacity excesses are configuration errors. Backend capacities are checked before backend or service initialization.
 
@@ -322,6 +322,9 @@ The optional top-level `storage` mapping groups file locations. The locations re
 | `storage.state` | Path string | No | Platform-standard operational-state file |
 | `storage.history` | Path string | No | Platform-standard global-history file |
 | `storage.artifacts` | Path string | No | Platform-standard prepared-artifact directory |
+
+`storage.publish` is part of the planned filesystem-publication architecture,
+not the currently supported Version 0.1 configuration schema.
 
 Content is author-maintained input and is never eligible for deletion by operational cleanup commands. Operational state and global history remain authoritative application data with independent lifecycles. Prepared artifacts are regenerable application data. Setting one field does not change the default location or lifecycle of another.
 
@@ -1061,7 +1064,7 @@ Actions retain declaration order, and duplicate types or identical actions are p
 
 A malformed action—including a non-mapping member, missing or invalid required field, duplicate or unsupported visibility, non-string payload, unsupported envelope field, or oversized payload—is discarded with a warning. A malformed top-level `actions` value is warned about and treated as an empty sequence. These recoverable action errors do not invalidate the content entry or its quotations; validation continues with other actions. Invalid YAML syntax and malformed required entry fields retain their ordinary file or entry rejection behavior.
 
-Actions are captured with the selected quotation in the committed daily selection and persist independently of later edits to the source file. Existing valid version-1 snapshots without an `actions` field recover with an empty sequence. This feature does not include destination classification or filtering, metadata publication, or action execution.
+Actions are captured with the selected quotation in the committed daily selection and persist independently of later edits to the source file. Existing valid version-1 snapshots without an `actions` field recover with an empty sequence. The current Version 0.1 resident does not classify destinations, filter actions, or publish metadata, and does not execute actions. The planned destination-audience filtering for publication metadata is defined in [Architecture](ARCHITECTURE.md#filesystem-publication-target-planned).
 
 ### Text-color preference
 
