@@ -290,18 +290,15 @@ Each should be evaluated against demonstrated user needs and the added maintenan
 
 # Release priorities
 
-Development should proceed in the following order:
+Version 0.1 is complete only when the required behaviour has been demonstrated, substantive review findings have been resolved, and the complete physical presentation has been validated on the target hardware.
 
-1. Establish repository documentation, engineering standards, contributor workflow, and the resolution-independent architecture and public interfaces.
-2. Implement and test the rendering pipeline, configurable output geometry, and ordered decoration compositions.
-3. Ensure durable daily-selection state contains the required selected-content, scheduling, and reveal guarantees, while prepared-image caching remains disposable; satisfy these Version 0.1 prerequisites before release validation.
-4. Implement resolution-aware visual diagnostics and hardware-independent rendering validation.
-5. Refine bundled artwork for the supported aspect ratios and validate on e-paper and representative non-e-paper output.
-6. Establish reliable unattended operation on the target Raspberry Pi.
-7. Complete Version 0.1 validation, documentation, and release.
-8. Proceed to the companion web presentation.
-9. Evaluate later integrations and public publishing independently.
+The filesystem-publication and consumer work should proceed in the following order:
+
+1. Document the filesystem-publication architecture and contracts before implementation.
+2. Capture resolved artistic choices during image preparation.
+3. Implement metadata serialization and `refrain-viewer` publication reconstruction.
+4. Implement filesystem `publish` destinations.
+5. Extract `refrain-image-server`; retire the integrated HTTP backend only after its replacement is implemented and validated.
+6. Implement `refrain-web-companion`.
 
 Implementation work should be divided into narrowly scoped GitHub issues, each with observable acceptance criteria and appropriate validation requirements.
-
-Version 0.1 is complete only when the required behaviour has been demonstrated, substantive review findings have been resolved, and the complete physical presentation has been validated on the target hardware.

@@ -22,6 +22,8 @@ refrain-viewer
 
 In ordinary inspection and export modes, the viewer does not use configured display backends or runtime persistence.
 
+The publication-metadata reconstruction input described in the [architecture](ARCHITECTURE.md#filesystem-publication-target-planned) is planned and is not currently a supported viewer option.
+
 ### Finished-image input
 
 Use `--image PATH` to inspect a completed output image rather than generating a Refrain presentation:

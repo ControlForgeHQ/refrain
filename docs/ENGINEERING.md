@@ -440,6 +440,13 @@ Avoid assumptions tied to a particular username, home directory, mount point, or
 
 Resolve relative paths consistently and document their interpretation.
 
+The planned publication root extends the existing platform-aware path resolver.
+Its default is `$XDG_STATE_HOME/refrain/publish` on Linux, using the existing
+per-user fallback; `%LOCALAPPDATA%\Refrain\Publish` on Windows; and
+`~/Library/Application Support/Refrain/Publish` on macOS. An explicit
+`storage.publish` path follows the established storage semantics, including
+configuration-relative resolution. Do not add a separate path-selection
+mechanism or use a Linux installation path as a cross-platform default.
 
 ## Persistent storage
 
@@ -653,6 +660,43 @@ Use atomic file replacement and appropriate synchronization where supported. Cac
 Remove obsolete cache files without disturbing active readers or the complete set being published. Keep cleanup simple and bounded; artifact retention must not become a second source of application state.
 
 The cache store must not modify authoritative selection state. Cache errors are reported and handled by regeneration from the valid daily selection; they must never authorize reselection or reveal regression.
+
+### Filesystem publication storage (planned)
+
+Implement the publication directory, manifest commit point, independent schema
+versions, and consumer recovery behavior defined in
+[Architecture](ARCHITECTURE.md#filesystem-publication-target-planned). Use
+`pathlib` for path construction, keep every destination as a direct child of the
+effective publication root, and derive its name only from a validated
+destination ID. Destination configuration must not accept an arbitrary path to
+delete.
+
+Validate root and destination ownership before any destructive operation.
+Reject symbolic links, Windows junctions, reparse points, traversal, unexpected
+objects, and any other redirection at the root or along a destination path.
+Containment checks must not resolve an unsafe link and then treat its target as
+owned. Traverse owned directories without following links; never remove a
+destination outside the publication root. On uncertain ownership or unsafe
+objects, fail without attempting repair or deletion.
+
+Write the complete image and metadata under unique publication-derived names
+before making the manifest visible. Close completed files before atomically
+replacing the manifest on the same filesystem. Consumers validate the manifest
+and referenced filenames as untrusted input, verify both SHA-256 hashes, and
+accept only a complete matching dataset. A consumer reads but never rewrites,
+cleans, or claims ownership of publication directories. Keep retries bounded;
+recovery after consumer restart starts from the current manifest, not from
+process-local state or publication history. Do not add a transaction journal,
+backup generations, or an unbounded retry loop.
+
+Test interruption and failure before and after the manifest replacement,
+concurrent readers observing replacement, hash mismatch, absent or superseded
+files, restart recovery, bounded retry exhaustion, and cleanup isolation among
+multiple destinations. Include traversal and symlink/junction/reparse-point
+cases where the platform supports them; skip only an unavailable filesystem
+capability with an explicit reason. Exercise filesystem behavior on both Linux
+and Windows. Consumer services and path handling must not assume systemd or
+Linux filesystem conventions in hardware-independent tests.
 
 ## Resident process ownership and runtime control
 
@@ -1035,6 +1079,12 @@ The window backend must preserve caller-owned image data, replace the image in i
 Distinguish user-requested window closure from application-driven `close()` and unexpected GUI failure. Notify the publication coordinator promptly of user-requested closure; ordinary application shutdown must not emit a withdrawal notification. Unexpected GUI or backend failure remains failure or unavailability rather than intentional withdrawal.
 
 ### HTTP image-server backend
+
+The requirements below describe the current integrated Version 0.1 backend
+during the transition. Do not extend it as the target non-direct destination
+mechanism. The target `refrain-image-server` is a separately supervised
+consumer of filesystem publications and replaces this backend only after that
+consumer is implemented and validated.
 
 Implement the `image-server` backend using standard HTTP facilities suitable for the supported Python runtime.
 
@@ -1519,11 +1569,11 @@ Deployment instructions must identify the supported operating system, system dep
 
 Installation must not depend on the developer's local directory structure.
 
-Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
+Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. When implemented, create the standard publication root without replacing its existing contents. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
 
 Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configured runtime storage values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
 
-Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory after explicit confirmation. Both operations are intended for use while Refrain is stopped; their standard-installation mutation paths must also participate in the runtime ownership lock described above. This protects against cooperating Refrain processes, not arbitrary concurrent hostile filesystem mutation.
+Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, publication storage, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory and the complete standard publication root after explicit confirmation. Configured custom publication paths are never reset or purged by these commands. Both operations are intended for use while Refrain is stopped; their standard-installation mutation paths must also participate in the runtime ownership lock described above. Because independent consumers do not acquire that lock, stop consumer services through their operating-system service facilities before removing or replacing consumer-readable publication data or the installation. This protects against cooperating Refrain processes, not arbitrary concurrent hostile filesystem mutation.
 
 ### Service management
 
@@ -1534,6 +1584,15 @@ The service should start automatically when enabled and recover from unexpected 
 Avoid duplicating systemd supervision in application code.
 
 Graceful termination must allow the display backend to release resources safely.
+
+This currently describes supervision of the resident. In the target
+architecture, each consumer is a separate executable from the same
+installation, has an independent system-service lifecycle, and reads its own
+top-level section of the shared configuration. The resident does not spawn,
+supervise, or depend on consumers. Configuration enablement and system-service
+enablement are separate. Use existing operating-system service facilities;
+do not implement a service manager. Stop consumers before maintenance that
+removes or replaces their installation or publication data.
 
 ### Permissions
 

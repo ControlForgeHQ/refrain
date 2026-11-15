@@ -1403,6 +1403,10 @@ Normal scheduled updates select among prepared images rather than invoking image
 
 ## Display output
 
+The built-in destinations below describe the current Version 0.1 implementation. The
+planned filesystem-publication architecture later in this section is a target, not a
+claim that its backend, metadata, viewer mode, or consumer services are implemented.
+
 ### Backend responsibility
 
 Refrain presents complete rendered images through narrow, hardware-independent display backend interfaces.
@@ -1555,6 +1559,202 @@ The configured listening address controls network accessibility. The service is 
 
 The image-server backend is distinct from future local or public web publishing functionality. It provides rendered image data for clients rather than a general-purpose web presentation or content-management interface.
 
+This section describes the current integrated Version 0.1 backend. It remains in
+place during the transition and is retired only after the independent
+`refrain-image-server` consumer has been implemented and validated against the
+filesystem-publication contract below.
+
+### Filesystem publication target (planned)
+
+Refrain remains responsible for content selection, scheduling, image preparation,
+and publication to directly attached displays. `window` and
+`waveshare-13in3-e` remain resident-owned direct-display backends. The built-in
+`publish` backend becomes the sole non-direct destination mechanism. The resident
+does not host HTTP services and does not require network availability.
+
+Each `publish` destination has its own validated ID, output specification,
+publication audience, presentation overrides, and directory. It publishes the
+destination-specific presentation prepared by Refrain; destinations may share
+prepared image variants when their output specifications match, but never share
+destination identity, audience, overrides, directory, or publication
+acknowledgement. A destination directory is a direct child of the publication
+root, derived only from that validated ID. Destination configuration never
+supplies an arbitrary deletion path. Publication directories belong to Refrain,
+not to consumers; multiple consumers may read the same directory.
+
+#### Publication storage and ownership
+
+The planned `storage.publish` setting overrides the publication root using the
+existing storage-path semantics: absolute paths are used as specified and
+relative paths are resolved from the selected configuration file. Its omitted
+default is a platform-standard per-user operational-data path:
+
+| Platform | Default publication root |
+|---|---|
+| Linux | `$XDG_STATE_HOME/refrain/publish`, using the existing per-user fallback when the variable is missing, empty, or relative |
+| Windows | `%LOCALAPPDATA%\Refrain\Publish` |
+| macOS | `~/Library/Application Support/Refrain/Publish` |
+
+This extends the existing platform-aware path resolver rather than introducing
+a second path-selection mechanism. Standard maintenance commands always target
+the platform-standard installation locations, not a custom `storage.publish`
+override.
+
+`refrain --initialize` creates the standard publication root without replacing
+or cleaning existing contents. `refrain --reset` preserves publication storage.
+`refrain --purge` removes the entire standard publication root and everything
+beneath it, including all destination directories, completed publications, and
+temporary files. Existing ownership locking, confirmation, idempotence, and
+filesystem-safety requirements apply. Services do not acquire the resident's
+exclusive runtime lock; destructive maintenance must therefore be coordinated
+with running consumers, which must be stopped before their publication data or
+installation is removed or replaced.
+
+Path validation and destructive operations must prove that a destination stays
+within the publication root and must reject traversal, symbolic links,
+junctions, reparse points, and other filesystem redirection. Never follow a
+redirecting path or delete an object outside the owned destination directory.
+Reject unsafe destinations rather than attempting cleanup or repair.
+
+#### Dataset publication and recovery
+
+Each destination directory contains one current complete image in its configured
+output format, one versioned JSON metadata document, and a stable
+`manifest.json`. For example:
+
+```text
+<publish-root>/
+├── default/
+│   ├── manifest.json
+│   ├── <publication-id>.png
+│   └── <publication-id>.json
+├── web-public/
+└── web-private/
+```
+
+The manifest has its own schema version and identifies the publication, image
+filename, metadata filename, and SHA-256 hash of each file. The metadata schema
+is versioned independently. Image and metadata filenames derive from a unique
+publication ID. Consumers read the manifest, verify both referenced files and
+their hashes, and accept only a complete matching dataset.
+
+One publication follows this order:
+
+1. Generate a unique publication ID; prepare the image and metadata and compute
+   their hashes.
+2. Write a temporary manifest describing the new publication.
+3. Write and complete the uniquely named image and metadata files.
+4. Atomically replace `manifest.json` with the completed temporary manifest.
+5. Remove obsolete files and any other contents not belonging to the current
+   publication.
+
+Replacing `manifest.json` is the consumer-visible commit point; atomic
+replacement of a whole directory is not required. Never overwrite the files
+referenced by the current manifest before the replacement. A failure before
+commit must not expose an incomplete dataset as current. Cleanup after commit
+must not invalidate the new publication. Consumers tolerate incomplete,
+superseded, or unavailable publications using bounded retries. A consumer that
+starts after publication recovers solely from the current manifest and its
+referenced files. Do not add publication history, backups, a filesystem
+transaction framework, or a separate publication daemon.
+
+Publication failures use the existing per-destination bounded retry and
+eventual-failure behavior; after exhaustion, a later publication opportunity
+permits another attempt. A failed destination does not block publication to
+other destinations or alter committed selection state.
+
+#### Destination-specific metadata and audiences
+
+Metadata describes the presentation actually published by one destination, not
+a generic serialization of the resident's daily selection. Its versioned JSON
+document contains publication identity, type and timestamp; destination
+identity and actual output specification; applicable display date, selection
+identity and actual reveal stage; optional reconstruction data; and an ordered,
+audience-filtered action sequence. Publication type is `scheduled` or
+`transient`. Use explicit `null` values for inapplicable structured fields.
+
+Scheduled metadata contains sufficient reconstruction data for the installed
+`refrain-viewer` to render the destination's presentation at another requested
+aspect ratio and resolution. Include a valid generated single-quotation content
+entry derived from the committed selection, the destination's actual resolved
+background and decoration identifiers, resolved font identifier and
+role-specific faces, applicable palette identifiers, presentation style,
+effective QR setting, and other resolved settings needed for faithful
+reconstruction. The embedded entry conforms to the authoritative
+[content-entry format](CONTENT_FORMAT.md#content-entries).
+
+Capture resolved artistic choices from the same image-preparation operation
+that produces the image; do not repeat random resource selection independently.
+These are derived publication data, not additional authoritative selection
+state. Preserve stable resource and palette identifiers rather than embedding
+asset contents or RGB values. Do not persist calculated text positions, crop
+geometry, or other output-dependent layout results. Reconstruction recalculates
+geometry through the existing renderer for the requested output specification,
+using the currently installed Refrain assets and palette definitions; it does
+not promise archival reproduction if those resources or rendering behavior
+change. Metadata records the actual reveal stage, while reconstruction has the
+complete committed quotation and renders fully revealed by default.
+
+Each destination declares exactly one audience: `public` or `private`.
+Visibility is nonhierarchical: a public destination includes actions declaring
+`public`; a private destination includes actions declaring `private`; an action
+declaring both is included for either audience. Preserve eligible actions in
+their original order, including duplicates. Actions are metadata only and are
+never implicitly executed by publication or a consumer. Public metadata must
+never expose private-only actions. Audience filtering does not replace
+filesystem permissions, authentication, or consumer-side authorization.
+
+Transient publications use the same minimal metadata contract whether their
+image originated from `--image` or a viewer-generated preview. Their metadata
+contains publication identity, destination identity, type, timestamp, and
+output specification, but no committed-presentation association, scheduled
+selection metadata, literary reconstruction data, or actions. The action
+sequence is always empty. Transient publication is an image-delivery event, not
+a reconstructable presentation. Do not extend transient IPC to transfer
+literary or rendering metadata.
+
+#### Viewer reconstruction
+
+The planned `refrain-viewer --publication PATH` mode accepts a complete
+publication metadata document directly, for example:
+
+```bash
+refrain-viewer --publication publication.json \
+  --aspect 16:9 --resolution 3840x2160 --no-qr --output custom.png
+```
+
+It strictly validates the metadata schema, accepts only scheduled
+publications, and explicitly rejects `publication_type: transient`. Published
+content and resolved artistic choices are its baseline; explicit command-line
+presentation overrides replace only the options they specify. Unspecified
+options preserve published choices. Render fully revealed by default and
+recalculate geometry through the existing renderer. This mode does not select
+from the content library, require resident runtime or operational state, or
+acquire the resident ownership lock. Untrusted metadata is never interpreted as
+an unrestricted filesystem path or executable instruction.
+
+#### Independent consumer services
+
+Consumer services are separate executables in the same Refrain installation and
+use the shared `config.yaml`. Each reads and validates its own top-level
+configuration section (including planned `image-server:` and `web-companion:`
+sections), identifies the publication destinations it consumes, and reads and
+verifies their datasets without modifying them. A service may invoke the
+installed `refrain-viewer` for custom rendering, but does not select quotations
+or modify Refrain operational state.
+
+Consumers start, stop, and recover independently of the resident. They do not
+acquire the resident's exclusive runtime lock. The resident does not spawn,
+supervise, or depend on them. Consumer enablement in application configuration
+is distinct from service enablement in systemd. Use existing operating-system
+service facilities, including systemd on supported Linux deployments; do not
+add a service manager, general plugin or service-registration framework,
+additional Python distribution, or network IPC mechanism. The integrated
+`image-server` remains in place until the independent `refrain-image-server`
+replacement is implemented and validated. Add future consumer integrations
+only when justified. Hardware-independent development and testing must remain
+usable on Windows without assuming systemd or Linux filesystem conventions.
+
 ### Update behavior
 
 Display updates occur at meaningful presentation changes, including:
@@ -1621,11 +1821,11 @@ The command-line entry point resolves omitted runtime storage paths to the indep
 
 Normal startup requires the selected configuration file to exist. It does not substitute the packaged default configuration, create an installation directory structure, or copy sample content. Relative content paths remain based on the selected configuration file. Custom visual resources are discovered by category beneath `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/` beside that effective configuration file and are referenced by registered identifier. Manifest image and font references are relative to their containing package and confined to that package. There is no arbitrary absolute-path custom-resource registration interface.
 
-The explicit, noninteractive `--initialize` operation manages only standard per-user destinations and ignores runtime storage settings in configuration. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; ordinary pre-existing nonempty content is left untouched and uninspected. An interrupted sample installation may be resumed only when its installation marker and every existing expected sample file can be positively verified; missing expected files may then be installed without overwriting existing files. Invalid markers, conflicting sample contents, or uncertain ownership require manual inspection rather than automatic repair. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
+The explicit, noninteractive `--initialize` operation manages only standard per-user destinations and ignores runtime storage settings in configuration. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; ordinary pre-existing nonempty content is left untouched and uninspected. An interrupted sample installation may be resumed only when its installation marker and every existing expected sample file can be positively verified; missing expected files may then be installed without overwriting existing files. Invalid markers, conflicting sample contents, or uncertain ownership require manual inspection rather than automatic repair. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. When filesystem publication is implemented, initialization also creates the standard publication root without replacing or cleaning its existing contents. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
 
 Configuration and content remain user-owned inputs. Operational state and global history remain authoritative and historical persistence respectively; prepared artifacts remain derived output. Runtime creation of those persistence and artifact files remains owned by their existing components.
 
-`--reset` and `--purge` are separate interactive operations for the standard per-user installation and must be run while Refrain is stopped. Reset removes only the platform-standard operational-state file, global-history records and rotations, and generated cache contents while preserving configuration, content, all user assets, and installation directories; configured custom storage paths are untouched. Purge removes the Refrain-owned standard configuration, operational, and cache directory trees, including configuration, content, and assets stored beneath the standard configuration directory; it does not follow configured storage paths or remove shared application-data parents. Neither operation reads runtime storage settings or starts the application lifecycle. Their deletion checks and confirmation requirements are described in [engineering guidance](ENGINEERING.md#installation-approach).
+`--reset` and `--purge` are separate interactive operations for the standard per-user installation and must be run while Refrain is stopped. Reset removes only the platform-standard operational-state file, global-history records and rotations, and generated cache contents while preserving configuration, content, all user assets, publication storage, and installation directories; configured custom storage paths are untouched. Purge removes the Refrain-owned standard configuration, operational, cache, and publication directory trees, including configuration, content, and assets stored beneath the standard configuration directory and every destination and temporary file beneath the standard publication root; it does not follow configured storage paths or remove shared application-data parents. Neither operation reads runtime storage settings or starts the application lifecycle. Before purging or otherwise removing consumer-readable publication data, independent consumer services must be stopped using the operating-system service facilities that supervise them. Their deletion checks and confirmation requirements are described in [engineering guidance](ENGINEERING.md#installation-approach).
 
 Platform paths, installation, and service operation are documented in [engineering guidance](ENGINEERING.md#deployment-and-service-operation); public configuration is specified in [the content-format document](CONTENT_FORMAT.md).
 
@@ -1633,7 +1833,7 @@ Platform paths, installation, and service operation are documented in [engineeri
 
 A normal Refrain runtime is the sole owner of its configured backend instances and physical display resources for the lifetime of the process. Only one backend-owning Refrain process may own the per-user installation at a time. A second normal invocation or a concurrent `--demo` invocation fails immediately with an actionable diagnostic rather than starting another runtime. Demo is a standalone backend-owning mode under the same exclusive ownership rule; it does not serve runtime-control requests, and concurrent demo operation is not supported.
 
-Installation-management commands that create, reset, purge, or otherwise mutate the standard installation use the same exclusive-ownership rule and must fail rather than mutate files while a resident runtime owns them. One-shot control clients, including `refrain --refresh`, do not acquire resident ownership; they communicate with the already-running normal runtime.
+Installation-management commands that create, reset, purge, or otherwise mutate the standard installation use the same exclusive-ownership rule and must fail rather than mutate files while a resident runtime owns them. Independent consumer services do not acquire this lock; stop them through their operating-system service facilities before maintenance removes or replaces their installation or publication data. One-shot control clients, including `refrain --refresh`, do not acquire resident ownership; they communicate with the already-running normal runtime.
 
 External tools publishing through the runtime must never construct, initialize, or directly access configured backends. The resident normal runtime exposes the narrowly scoped local runtime-control operations defined under [display output](#transient-publication-and-refresh). The interface is not a network administration API and does not expose the separate `image-server` service as a control channel.
 
@@ -1790,13 +1990,20 @@ An unrecoverable configuration or state error must be reported clearly rather th
 
 ### Companion web presentation
 
-A companion web experience is planned for a later release.
+A `refrain-web-companion` consumer is planned for a later release. It runs as a
+separately supervised process in the same Refrain installation and reads
+destination publications without modifying them.
 
-It should obtain the information required for presentation without assuming that a browser and e-paper display must consume identical rendered image files.
+It may use published metadata and invoke the installed `refrain-viewer` to
+reconstruct a presentation at browser-appropriate geometry. It does not own
+selection or require the browser and e-paper display to consume identical image
+files.
 
 Web presentation must not become responsible for daily quotation selection.
 
-The initial application does not require an HTTP server or web framework.
+The current integrated `image-server` remains in place until its independent
+consumer replacement is implemented and validated. The target resident does
+not host HTTP services or depend on a consumer being enabled or running.
 
 ### Public publishing
 
@@ -1826,9 +2033,8 @@ External integrations must be explicitly configured and must not introduce manda
 
 ## Architectural non-goals
 
-The initial architecture does not require:
+The initial Version 0.1 implementation does not require:
 
-- multiple application services;
 - a general plugin framework;
 - a database server;
 - a content-editing interface;
@@ -1841,7 +2047,9 @@ The initial architecture does not require:
 - external music or media playback;
 - background content retrieval from internet services.
 
-These capabilities may be reconsidered when a concrete use case justifies them.
+The target architecture does include separately supervised publication
+consumers, but no general service-registration or service-management framework.
+Other capabilities may be reconsidered when a concrete use case justifies them.
 
 
 ## Architectural invariants
@@ -1879,5 +2087,6 @@ The following must remain true as the project evolves:
 29. Ordinary operation does not require internet access or external services.
 30. Public presentation does not grant privileged local control.
 31. Future integrations must not become prerequisites for displaying ordinary quotations.
+32. Filesystem publication is the sole non-direct destination mechanism; consumers read Refrain-owned publication data without modifying it or sharing the resident's lifecycle.
 
 Architectural changes must be evaluated against these invariants before implementation work is accepted.
