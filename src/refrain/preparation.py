@@ -331,7 +331,7 @@ def _resolve_text_color(
                 None if decoration is None else decoration.text_color,
                 configuration.text_color_pools,
             ),
-            ("layout.text.colors", configuration.default_text_colors, configuration.text_color_pools),
+            ("text.colors.pools", configuration.default_text_colors, configuration.text_color_pools),
         ),
         chooser,
     )
@@ -364,7 +364,7 @@ def _resolve_decoration_tint(
             ),
             ("selected decoration", decoration.decoration_color, configuration.decoration_color_pools),
             (
-                "layout.decorations.colors",
+                "decorations.colors.pools",
                 configuration.default_decoration_colors,
                 configuration.decoration_color_pools,
             ),
@@ -870,7 +870,7 @@ def _resolve_fonts(
     if resolved_bundle is None or regular is None:
         raise DailyImagePreparationError(
             "cannot resolve a usable font; add a usable content-entry or decoration font preference, "
-            "or configure a usable identifier in layout.fonts.default"
+            "or configure a usable identifier in fonts.pools.default"
         )
 
     preference_levels = (
@@ -942,7 +942,7 @@ def _resolve_decoration(
     if not configuration.default_decorations:
         raise DailyImagePreparationError(
             "no usable decoration remains; add an available decoration preference or configure "
-            "layout.decorations.default"
+            "decorations.pools.default"
         )
     identifier = chooser.choice(configuration.default_decorations)
     return identifier, configuration.decorations.get(identifier)
@@ -989,7 +989,7 @@ def _resolve_background(
     if not configuration.default_backgrounds:
         raise DailyImagePreparationError(
             "no usable background remains; add an available background preference or configure "
-            "layout.backgrounds.default"
+            "backgrounds.pools.default"
         )
     return chooser.choice(configuration.default_backgrounds)
 

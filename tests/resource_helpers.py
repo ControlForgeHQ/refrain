@@ -46,10 +46,10 @@ def write_configuration(path: Path, **settings: object) -> Path:
     write_font_bundle(path.parent / "assets" / "fonts" / "test-font")
     data = {
         "destinations": [{"id": "window", "type": "window"}],
-        "layout": {
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 28, "max_font_size": 100},
+        "fonts": {
+            "pools": {"default": ["test-font"]},
         },
+        "text": {"min_font_size": 28, "max_font_size": 100},
         **settings,
     }
     path.write_text(yaml.safe_dump(data), encoding="utf-8")

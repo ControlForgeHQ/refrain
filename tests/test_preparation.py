@@ -1731,7 +1731,7 @@ def test_reveal_stages_must_remain_cumulative(embedded_font: str) -> None:
 def test_missing_font_fails_when_default_pool_is_empty() -> None:
     snapshot = make_snapshot("missing-font")
 
-    with pytest.raises(DailyImagePreparationError, match="configure a usable identifier in layout.fonts.default"):
+    with pytest.raises(DailyImagePreparationError, match="configure a usable identifier in fonts.pools.default"):
         prepare_daily_images(snapshot, (CompositionVisibility(),), {}, default_fonts=())
 
 

@@ -22,25 +22,26 @@ from refrain.persistence import PersistentStateStore, StateCommitError, StateRec
 from refrain.preparation import DailyImagePreparationError
 
 _CONFIG = """\
-general:
-  day_start: "06:00"
-content:
-  directory: "content"
-reveal:
-  source: "12:00"
-  attribution: "18:00"
 destinations:
   - id: window
     type: "window"
-information_view:
-  duration: 60
-layout:
-  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
-  fonts:
+scheduling:
+  day_start: "06:00"
+  reveal:
+    source: "12:00"
+    attribution: "18:00"
+presentation:
+  information_view:
+    duration: 60
+fonts:
+  pools:
     default: ["test-font", "test-font-alt"]
-  backgrounds:
+backgrounds:
+  pools:
     default: ["none"]
-  text: {min_font_size: 28, max_font_size: 100}
+text:
+  min_font_size: 28
+  max_font_size: 100
 """
 _START = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
 
@@ -327,8 +328,8 @@ def test_demo_pipeline_uses_registered_decoration_and_committed_region(demo):
     )
     demo.config.write_text(
         _CONFIG.replace(
-            '  backgrounds:\n    default: ["none"]',
-            '  backgrounds:\n    default: ["none"]\n' '  decorations: {default: ["demo-overlay"]}',
+            'backgrounds:\n  pools:\n    default: ["none"]',
+            'backgrounds:\n  pools:\n    default: ["none"]\n' 'decorations:\n  pools:\n    default: ["demo-overlay"]',
         ),
         encoding="utf-8",
     )

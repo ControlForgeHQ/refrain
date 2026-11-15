@@ -29,21 +29,22 @@ from refrain.runtime_control import (
 from refrain.scheduling import resolve_reveal_stages
 
 _CONFIG = """\
-general:
-  day_start: "06:00"
-content:
-  directory: content
 destinations:
   - id: configured-output
     type: image-server
-information_view:
-  duration: 0
-layout:
-  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
-  fonts:
+scheduling:
+  day_start: "06:00"
+presentation:
+  information_view:
+    duration: 0
+fonts:
+  pools:
     default: ["test-font"]
-  text: {min_font_size: 28, max_font_size: 100}
+text:
+  min_font_size: 28
+  max_font_size: 100
 storage:
+  content: content
   state: state.json
   history: history.jsonl
   artifacts: artifacts
@@ -709,7 +710,10 @@ def test_alternate_config_remains_beneath_explicit_viewer_override(
 ) -> None:
     config_path, _ = _workspace(tmp_path, with_entry=False)
     config_path.write_text(
-        _CONFIG.replace("min_font_size: 28, max_font_size: 100", "min_font_size: 36, max_font_size: 140")
+        _CONFIG.replace(
+            "  min_font_size: 28\n  max_font_size: 100",
+            "  min_font_size: 36\n  max_font_size: 140",
+        )
     )
     bounds: list[tuple[int, int]] = []
     layout = preparation.layout_composition
@@ -762,8 +766,8 @@ def test_font_size_overrides_precede_each_selected_configuration_bound(
     config_path, _ = _workspace(tmp_path, with_entry=False)
     config_path.write_text(
         _CONFIG.replace(
-            "min_font_size: 28, max_font_size: 100",
-            f"min_font_size: {configured_minimum}, max_font_size: {configured_maximum}",
+            "  min_font_size: 28\n  max_font_size: 100",
+            f"  min_font_size: {configured_minimum}\n  max_font_size: {configured_maximum}",
         ),
         encoding="utf-8",
     )
@@ -793,8 +797,8 @@ def test_cli_rejects_invalid_effective_font_size_ranges(
     config_path, _ = _workspace(tmp_path, with_entry=False)
     config_path.write_text(
         _CONFIG.replace(
-            "min_font_size: 28, max_font_size: 100",
-            f"min_font_size: {configured_minimum}, max_font_size: {configured_maximum}",
+            "  min_font_size: 28\n  max_font_size: 100",
+            f"  min_font_size: {configured_minimum}\n  max_font_size: {configured_maximum}",
         ),
         encoding="utf-8",
     )
