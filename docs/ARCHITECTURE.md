@@ -1814,13 +1814,13 @@ The exact publication mechanism and trust boundaries will be specified before th
 
 ### External actions
 
-Content may eventually be associated with optional actions, including playback through Music Assistant.
+Content entries may declare optional, ordered actions that are captured as opaque semantic data in the committed daily selection.
 
-External actions must remain separate from the core quotation-selection and rendering responsibilities.
+Refrain validates the generic action envelope but does not interpret payloads, execute actions, or require external integrations to display quotations.
 
-An action is not required to display a quotation.
+Publication of actions to external consumers is deferred. Future metadata publication must respect each action's explicitly declared visibility audiences and must not expose actions to destinations outside those audiences.
 
-Privileged actions must not become available to anonymous public viewers merely because associated content is publicly visible.
+Privileged operations must not become available to anonymous public viewers merely because associated content is publicly visible.
 
 External integrations must be explicitly configured and must not introduce mandatory cloud or network dependencies into ordinary display operation.
 
