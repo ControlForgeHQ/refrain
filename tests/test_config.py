@@ -152,13 +152,15 @@ def test_named_pools_expand_recursively_in_order_with_cycle_and_duplicate_handli
         {"format": 1, "id": "trim", "layers": [{"image": "layer.png"}]},
     )
     data = configuration_data()
+    write_font_bundle(tmp_path / "assets" / "fonts" / "other-font", "other-font")
     data["palette"] = {"sage": "#8B956A", "navy": "#354B63"}
     data["layout"].update(
         {
             "fonts": {
-                "default": ["@favorites", "test-font"],
+                "default": ["@favorites", "@other-favorites"],
                 "favorites": ["test-font", "@shared", "test-font"],
                 "shared": ["second-font", "@favorites"],
+                "other-favorites": ["@shared", "other-font"],
                 "empty": [],
             },
             "backgrounds": {
@@ -190,7 +192,7 @@ def test_named_pools_expand_recursively_in_order_with_cycle_and_duplicate_handli
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.default_fonts == ("test-font", "second-font")
+    assert config.default_fonts == ("test-font", "second-font", "other-font")
     assert config.font_pools["empty"] == ()
     assert config.default_backgrounds == ("surface", "surface-alt", "none")
     assert config.default_decorations == ("trim", "none")
@@ -222,6 +224,34 @@ def test_named_pool_invalid_and_reserved_definitions_are_excluded_independently(
     assert "layout.fonts.builtin" in caplog.text
     assert "layout.fonts.bad name" in caplog.text
     assert "circular" not in caplog.text.lower()
+
+
+def test_empty_named_default_pools_keep_each_category_fallback(tmp_path: Path) -> None:
+    data = configuration_data()
+    data["layout"].update(
+        {
+            "fonts": {"default": ["@empty"], "empty": []},
+            "backgrounds": {"default": ["@empty"], "empty": []},
+            "decorations": {
+                "default": ["@empty"],
+                "empty": [],
+                "colors": {"default": ["@empty"], "empty": []},
+            },
+            "text": {
+                "colors": {"default": ["@empty"], "empty": []},
+                "min_font_size": 28,
+                "max_font_size": 100,
+            },
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_fonts == ()
+    assert config.default_backgrounds == ("none",)
+    assert config.default_decorations == ("none",)
+    assert config.default_text_colors == ("black",)
+    assert config.default_decoration_colors == ("black",)
 
 
 def test_builtin_pools_follow_successful_bundled_registration_and_exclude_custom_assets(
@@ -271,19 +301,35 @@ def test_builtin_pools_follow_successful_bundled_registration_and_exclude_custom
     assert config.default_text_colors == config.default_decoration_colors == ("black",)
     assert config.palette["black"] == "#123456"
     assert config.background_pools["builtin"] == ("bundled-paper",)
+    assert config.decoration_pools["builtin"] == ("bundled-frame",)
     assert "custom-paper" not in config.background_pools["builtin"]
     assert "unusable-bundled" not in config.backgrounds
     assert "unusable-bundled" not in config.background_pools["builtin"]
 
     write_font_bundle(bundled_root / "assets" / "fonts" / "added-font", "added-font")
+    Image.new("RGB", (8, 6)).save(backgrounds / "added-paper.png")
+    added_decoration = bundled_root / "assets" / "decorations" / "added-frame"
+    added_decoration.mkdir()
+    Image.new("RGBA", (8, 6)).save(added_decoration / "layer.png")
+    write_asset_manifest(
+        added_decoration,
+        "decoration.yaml",
+        {"format": 1, "id": "added-frame", "layers": [{"image": "layer.png"}]},
+    )
     reloaded = load_application_config(tmp_path / "config.yaml")
     assert reloaded.default_fonts == ("added-font", "bundled-font")
+    assert reloaded.default_backgrounds == ("added-paper", "bundled-paper", "none")
+    assert reloaded.default_decorations == ("added-frame", "bundled-frame", "none")
 
     import shutil
 
     shutil.rmtree(bundled_root / "assets" / "fonts" / "bundled-font")
+    (backgrounds / "bundled-paper.png").unlink()
+    shutil.rmtree(decorations)
     reloaded = load_application_config(tmp_path / "config.yaml")
     assert reloaded.default_fonts == ("added-font",)
+    assert reloaded.default_backgrounds == ("added-paper", "none")
+    assert reloaded.default_decorations == ("added-frame", "none")
 
 
 def test_decoration_manifest_pool_preferences_are_retained_for_configuration_resolution(tmp_path: Path) -> None:

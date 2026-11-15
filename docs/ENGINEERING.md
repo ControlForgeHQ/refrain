@@ -406,11 +406,11 @@ When optional values are omitted, informational default notices should be consol
 
 Discover bundled and user-owned assets when loading effective configuration, using package-resource APIs for bundled resources and category directories relative to the effective configuration for user assets. Do not monitor, modify, or generate files in user asset directories. Safely validate each manifest and resource independently; confine manifest references to their package and do not follow symlinks during discovery.
 
-Construct registries from valid discovered identifiers, but construct default pools only from explicitly configured identifiers. Never add discovered assets to a default pool automatically. Custom resources cannot shadow bundled identifiers, and all custom resources in a same-category collision are excluded deterministically.
+Construct registries from valid discovered identifiers, then resolve named pools once against those registries and the effective palette. Do not add discovered resources to user-defined pools except through the reserved `@builtin` reference, whose file-backed membership is limited to successfully registered bundled assets. Custom resources cannot shadow bundled identifiers, and all custom resources in a same-category collision are excluded deterministically.
 
 An unavailable font preference in an otherwise valid content entry does not invalidate that entry. Report it and proceed to the next font preference, using the effective default pool only when automatic selection is required. An empty effective pool must not invalidate an otherwise usable explicit content-entry or decoration preference.
 
-Validate discovered backgrounds individually against the PNG requirements in `docs/CONTENT_FORMAT.md`. Preserve valid resources when another asset fails. Build the effective default background pool without adding unrequested resources. Report unavailable content-entry background preferences without rejecting otherwise valid entries.
+Validate discovered backgrounds individually against the PNG requirements in `docs/CONTENT_FORMAT.md`. Preserve valid resources when another asset fails. Build the effective default background pool from its resolved definition. Report unavailable content-entry background preferences without rejecting otherwise valid entries.
 
 Validate content independently by source file and, where supported, by entry. Preserve accepted entries when other entries fail validation.
 
@@ -752,7 +752,7 @@ Validate the syntax of content-entry face preferences during content-library loa
 
 Use a controlled random source for deterministic testing of automatic font selection.
 
-Select one font bundle during image preparation using content-entry, decoration, and default-pool precedence, then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit preference applies and that pool is empty, preparation fails with an actionable diagnostic. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
+Select one font bundle during image preparation using content-entry, decoration, and default-pool precedence. Resolve a pool reference at its existing preference level and select one concrete bundle from its distinct candidates; never merge it into another level. Then resolve each literary role within that bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit preference applies and that pool is empty, preparation fails with an actionable diagnostic. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
 Do not store selected bundle identifiers, effective face identifiers, font bytes, filesystem paths, or content digests in operational state. Resolve current preferences once per complete stage preparation and use those faces consistently for all generated stages.
 
@@ -1336,12 +1336,15 @@ Cover each aspect's full design-canvas default, exact and mismatched requested r
 Automated testing should cover:
 
 - application configuration parsing, defaults, warnings, and fatal validation errors;
-- recursive asset discovery, package boundaries, manifest schemas, safe relative references, symlink escapes, malformed-resource isolation, identifier validation, collisions, and independence of discovered availability from default pools;
+- recursive asset discovery, package boundaries, manifest schemas, safe relative references, symlink escapes, malformed-resource isolation, identifier validation, collisions, and discovered-resource membership in default pools only through explicit `@builtin` references;
+- category-scoped named-pool name validation, reserved `builtin`, recursive expansion order, deduplication, independently shared subpools, direct/indirect cycles, invalid references, and empty/malformed definitions;
+- built-in membership from registered bundled resources only, including exclusion of unusable and custom resources, dynamic membership, deterministic order, and no implicit background/decoration `none`;
+- pool references at configuration, content, asset-manifest, and CLI preference levels, including category isolation, precedence, strict explicit overrides, empty-pool fallback, and concrete selection before preparation;
 - missing optional values with documented defaults;
 - explicitly invalid optional values with and without defaults;
 - unrecognized application-configuration fields;
-- unavailable or invalid registered fonts and effective font-pool construction;
-- built-in and custom palette values, invalid palette definitions, and effective text-color pool construction;
+- unavailable or invalid registered fonts and effective named/default font-pool construction;
+- built-in and custom palette values, invalid palette definitions, and effective named/default color-pool construction;
 - bundled and custom standalone and packaged background registration, layer validation, independent rejection of invalid PNGs, reserved identifiers, and default-pool construction;
 - ordered background-layer composition, centered-cover standalone behavior, and shared `contain`, `cover`, `nine-slice`, and `anchor` transformations across background and decoration layers;
 - explicit background preferences, `"none"` suppression, and unavailable-preference fallback;

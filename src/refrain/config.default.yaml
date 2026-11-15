@@ -28,33 +28,26 @@ layout:
 
   fonts:
     default:
-      - "alegreya"
-      - "libre-baskerville"
-      - "lora"
-      - "source-sans-3"
+      - "@builtin"
     font_faces:
       source: italic
 
   backgrounds:
     default:
+      - "@builtin"
       - "none"
-      - "aged-paper"
-      - "canvas"
-      - "marble"
 
   decorations:
     default:
+      - "@builtin"
       - "none"
-      - "ethereal"
-      - "hex"
-      - "lower-flourish"
-      - "simple-border"
-      - "top-bottom-borders"
     colors:
-      - "black"
+      default:
+        - "@builtin"
 
   text:
     colors:
-      - "black"
+      default:
+        - "@builtin"
     min_font_size: 56
     max_font_size: 200

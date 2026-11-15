@@ -167,15 +167,15 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     assert config.content_directory == paths.content_directory
     assert config.display_backends
     configured_pools = packaged_config["layout"]
-    expected_fonts = tuple(configured_pools["fonts"]["default"])
-    expected_backgrounds = tuple(configured_pools["backgrounds"]["default"])
-    expected_decorations = tuple(configured_pools["decorations"]["default"])
-    assert config.default_fonts == expected_fonts
-    assert set(expected_fonts) <= set(config.fonts)
-    assert config.default_backgrounds == expected_backgrounds
-    assert {identifier for identifier in expected_backgrounds if identifier != "none"} <= set(config.backgrounds)
-    assert config.default_decorations == expected_decorations
-    assert {identifier for identifier in expected_decorations if identifier != "none"} <= set(config.decorations)
+    assert configured_pools["fonts"]["default"] == ["@builtin"]
+    assert config.default_fonts == config.font_pools["builtin"]
+    assert set(config.default_fonts) <= set(config.fonts)
+    assert configured_pools["backgrounds"]["default"] == ["@builtin", "none"]
+    assert config.default_backgrounds == (*config.background_pools["builtin"], "none")
+    assert set(config.background_pools["builtin"]) <= set(config.backgrounds)
+    assert configured_pools["decorations"]["default"] == ["@builtin", "none"]
+    assert config.default_decorations == (*config.decoration_pools["builtin"], "none")
+    assert set(config.decoration_pools["builtin"]) <= set(config.decorations)
     entries = load_content_library(paths.content_directory)
     assert entries
     assert any(rule.ordinary for entry in entries for rule in entry.eligibility)
