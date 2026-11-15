@@ -433,7 +433,7 @@ def test_render_as_waveshare_exports_processed_pixels_without_hardware(
                 "--config",
                 str(config),
                 "--render-as",
-                "waveshare-13in3-e",
+                "configured-output",
                 "--output",
                 str(output),
                 "--window",

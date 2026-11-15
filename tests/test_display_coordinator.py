@@ -428,6 +428,46 @@ def test_recoverable_retry_budget_is_finite_and_renews_on_new_publication(monkey
         coordinator.close()
 
 
+@pytest.mark.parametrize(
+    ("failures_before_success", "expected_status"),
+    [(2, PublicationStatus.SUCCEEDED), (3, PublicationStatus.FAILED)],
+)
+def test_one_shot_retries_each_failed_attempt_once(
+    monkeypatch, failures_before_success: int, expected_status: PublicationStatus
+) -> None:
+    monkeypatch.setattr(coordinator_module, "_MAX_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(coordinator_module, "_MAX_RETRY_DELAY", 0.001)
+    attempts = []
+
+    class Backend:
+        def publish(self, _destination, _image):
+            attempts.append(len(attempts) + 1)
+            if len(attempts) <= failures_before_success:
+                raise DisplayBackendUpdateError("temporarily unavailable")
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator((configuration("image-server"),), lambda _config: Backend())
+    try:
+        transient_image = Image.new("RGB", _SPECIFICATION.requested_output_size, (1, 0, 0))
+        operation = coordinator.publish_transient(
+            "default",
+            {"default": _SPECIFICATION},
+            {_SPECIFICATION: transient_image},
+        )
+        result = operation.wait(5)
+
+        assert result.status is expected_status
+        assert attempts == [1, 2, 3]
+        assert result.destinations["default"] == (
+            expected_status is PublicationStatus.SUCCEEDED,
+            None if expected_status is PublicationStatus.SUCCEEDED else "temporarily unavailable",
+        )
+    finally:
+        coordinator.close()
+
+
 @pytest.mark.parametrize("operation", ["initialization", "update"])
 def test_unexpected_backend_exception_is_terminal(operation: str) -> None:
     window_configuration = (configuration("window"),)

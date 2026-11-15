@@ -131,6 +131,7 @@ def _destination(
     participating: bool = True,
     withdrawn: bool = False,
     available: bool = True,
+    publication_accepted: bool = False,
 ) -> dict[str, object]:
     return {
         "identifier": identifier,
@@ -139,6 +140,7 @@ def _destination(
         "participating": participating,
         "withdrawn": withdrawn,
         "available": available,
+        "publication_accepted": publication_accepted,
     }
 
 
@@ -146,7 +148,7 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     paths: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     records = (
-        _destination("window"),
+        _destination("window", publication_accepted=True),
         _destination("wquxga", participating=False, withdrawn=True),
         _destination("epaper-destination-with-a-long-name", available=False),
     )
@@ -170,9 +172,18 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     lines = capsys.readouterr().out.rstrip().splitlines()
     assert seen == {"metadata_path": Path(paths.control_metadata_file), "discovered": True}
     expected_cells = (
-        ("Destination", "Aspect", "Resolution", "Transient", "Participation", "Availability", "Withdrawn"),
-        ("window", "16:9", "1920x1080", "yes", "participating", "available", "no"),
-        ("wquxga", "16:9", "1920x1080", "yes", "not participating", "available", "yes"),
+        (
+            "Destination",
+            "Aspect",
+            "Resolution",
+            "Transient",
+            "Participation",
+            "Delivery",
+            "Publication",
+            "Withdrawn",
+        ),
+        ("window", "16:9", "1920x1080", "yes", "participating", "available", "accepted", "no"),
+        ("wquxga", "16:9", "1920x1080", "yes", "not participating", "available", "not accepted", "yes"),
         (
             "epaper-destination-with-a-long-name",
             "16:9",
@@ -180,6 +191,7 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
             "yes",
             "participating",
             "unavailable/failed",
+            "not accepted",
             "no",
         ),
     )

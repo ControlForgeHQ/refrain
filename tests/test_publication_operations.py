@@ -389,7 +389,7 @@ def test_all_skips_withdrawn_but_does_not_skip_failed_destinations() -> None:
         assert coordinator.withdraw_destination("waveshare-13in3-e")
         status_by_id = {entry["identifier"]: entry for entry in coordinator.destination_statuses}
         assert status_by_id["waveshare-13in3-e"]["withdrawn"] is True
-        assert status_by_id["waveshare-13in3-e"]["available"] is True
+        assert status_by_id["waveshare-13in3-e"]["available"] is False
         withdrawn_all = coordinator.publish_transient(
             "@all",
             {"window": _WIDE},

@@ -939,7 +939,6 @@ class DisplayPublicationCoordinator:
                         if one_shot is not None:
                             ready.one_shot_active = False
                             if retry:
-                                one_shot.retry_attempts[ready.key] += 1
                                 one_shot.retry_at[ready.key] = time.monotonic() + one_shot.retry_delay[ready.key]
                                 one_shot.retry_delay[ready.key] = min(
                                     _MAX_RETRY_DELAY,

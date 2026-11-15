@@ -1265,6 +1265,53 @@ def test_destination_ids_must_be_unique_across_backend_types(tmp_path: Path) -> 
     assert any(item.field == "destinations[1].id" for item in error.value.diagnostics)
 
 
+def test_destination_ids_are_isolated_from_resource_identifier_namespaces(tmp_path: Path) -> None:
+    identifier = "shared"
+    write_font_bundle(tmp_path / "assets" / "fonts" / identifier, identifier)
+    background = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
+    background.parent.mkdir(parents=True)
+    Image.new("RGB", (8, 6)).save(background)
+    decoration_root = tmp_path / "assets" / "decorations" / identifier
+    decoration_root.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(decoration_root / "layer.png")
+    write_asset_manifest(
+        decoration_root,
+        "decoration.yaml",
+        {"format": 1, "id": identifier, "layers": [{"image": "layer.png"}]},
+    )
+    data = configuration_data(
+        destinations=[{"id": identifier, "type": "window"}],
+        palette={identifier: "#718C23"},
+    )
+    data["layout"].update(
+        {
+            "fonts": {"default": [identifier], identifier: [identifier]},
+            "backgrounds": {"default": [identifier], identifier: [identifier]},
+            "decorations": {
+                "default": [identifier],
+                identifier: [identifier],
+                "colors": {"default": [identifier], identifier: [identifier]},
+            },
+            "text": {
+                "min_font_size": 28,
+                "max_font_size": 100,
+                "colors": {"default": [identifier]},
+            },
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.display_backends[0].outputs[0].identifier == identifier
+    assert identifier in config.fonts
+    assert identifier in config.backgrounds
+    assert identifier in config.decorations
+    assert config.palette[identifier] == "#718C23"
+    assert config.font_pools[identifier] == (identifier,)
+    assert config.background_pools[identifier] == (identifier,)
+    assert config.decoration_pools[identifier] == (identifier,)
+
+
 @pytest.mark.parametrize(
     "fields",
     [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}],
