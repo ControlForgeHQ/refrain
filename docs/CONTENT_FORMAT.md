@@ -190,7 +190,7 @@ The example illustrates an image-server output, the information view, explicit Q
 
 The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
 
-Refrain discovers bundled resources through package resources and user resources recursively beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Each discovered resource is available by stable identifier without adding it to a default pool.
+Refrain discovers bundled resources through package resources and user resources recursively beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Each discovered resource is available by stable identifier without adding it to a user-defined pool; `@builtin` explicitly includes successfully registered bundled resources in a pool.
 
 The bundled registries are derived from packaged font and decoration manifests and from packaged background manifests or standalone PNG filenames. Adding or removing a bundled resource does not require an application-code inventory change. A syntactically valid identifier in a readable bundled manifest remains owned by that package even when another manifest field makes the resource unusable; a custom resource cannot claim an identifier established by a bundle.
 
@@ -543,6 +543,43 @@ Backend output mappings supply declared aspects and requested dimensions. Layout
 
 A content entry cannot directly specify presentation insets.
 
+### Named resource pools
+
+Fonts, backgrounds, decorations, literary text colors, and decoration tint colors support category-scoped named pools. Define font, background, and decoration pools alongside `default` in their corresponding `layout` mappings. Define color pools within the corresponding `layout.text.colors` or `layout.decorations.colors` mapping. Each pool value is a sequence of resource identifiers and/or pool references:
+
+```yaml
+layout:
+  fonts:
+    default: ["@favourites"]
+    literary: ["lora", "libre-baskerville"]
+    favourites: ["@literary", "source-sans-3"]
+
+  backgrounds:
+    default: ["@builtin", "none"]
+    subtle: ["aged-paper", "canvas"]
+
+  decorations:
+    default: ["@builtin", "none"]
+    colors:
+      default: ["@builtin"]
+      muted: ["sage", "navy"]
+
+  text:
+    colors:
+      default: ["@builtin"]
+      muted: ["sage", "navy"]
+```
+
+In a resource-selection field, a string beginning with `@` references a named pool in that field's category. References may be nested. Expansion is depth-first in member order; invalid or unavailable members are excluded, repeated resolved identifiers are deduplicated at first occurrence, and cycles are silently skipped on the active recursion path. Unknown or malformed references produce a warning and no candidates. A pool resolving to no candidates is empty; it does not gain an internal fallback. Each distinct expanded candidate has equal selection probability, independent of repeats, nesting, or pool declaration order.
+
+Pool names use the shared case-sensitive ASCII resource-identifier syntax. Names are unique within each category, may be reused across categories, and cannot be `builtin` or conflict with existing non-pool properties such as `font_faces`. `default` is the automatic-selection pool and follows the same expansion rules. The `@` syntax applies only in resource-selection positions; it does not change font-face names, resource definitions, paths, palette values, or content selectors such as `@preview`.
+
+Every category has a reserved `builtin` pool. For fonts, backgrounds, and decorations it contains, in deterministic order, successfully registered bundled resources only; invalid resources and custom resources are excluded. Background and decoration `none` is not implicit in `builtin`. The built-in text-color and decoration-color pools each contain the palette identifier `black`; a configured `palette.black` value remains effective. Defining a user pool named `builtin` is ignored with a warning.
+
+An explicit `@builtin` reference opts into future membership changes as valid bundled resources are added or removed. Direct identifiers and user-defined pools retain their configured membership. No implicit `@builtin` fallback is applied when another pool is empty.
+
+For compatibility, `layout.text.colors` and `layout.decorations.colors` may still be written as a list; that form is the `default` pool. The mapping form defines named pools. Both color pool namespaces independently resolve identifiers from the one top-level `palette`.
+
 ### Font registry
 
 Refrain maintains an effective registry of bundled font bundles and valid bundles discovered recursively under `<configuration directory>/assets/fonts/`. Each bundle has a stable, case-sensitive identifier; content entries and the default pool refer to the identifier, not a path.
@@ -577,7 +614,7 @@ All usable bundled and discovered fonts are available for explicit content-entry
 
 ### Default font pool
 
-The required `layout.fonts.default` field is a nonempty sequence of font identifiers.
+The required `layout.fonts.default` field is a nonempty sequence of font identifiers and/or pool references.
 
 For example:
 
@@ -594,7 +631,7 @@ layout:
 
 The configured default pool defines the user's preferred fonts for automatic selection.
 
-The effective default pool contains only identifiers from the configured pool that correspond to usable fonts in the effective registry.
+The effective default pool contains distinct identifiers resolved from the configured pool that correspond to usable fonts in the effective registry.
 
 Unavailable, unregistered, or otherwise invalid font identifiers are excluded from the effective default pool with warnings.
 
@@ -602,7 +639,7 @@ Duplicate identifiers are ignored after their first occurrence, with a warning.
 
 The effective default pool must contain at least one usable font only when image preparation requires automatic font selection after explicit content-entry and decoration preferences are unavailable.
 
-The default pool is explicitly configured. Refrain must not automatically add bundled or newly discovered fonts to the pool.
+The default pool is explicitly configured. Refrain does not add discovered resources to it unless the configuration references `@builtin`.
 
 The optional `layout.fonts.font_faces` mapping supplies lowest-priority face preferences and does not affect the pool or bundle-selection randomness. It accepts the same `quotation`, `source`, and `attribution` roles and face-identifier syntax as bundle manifests. Invalid mappings or values are warned about and ignored. The packaged `config.default.yaml` explicitly requests italic source; installations whose existing configuration omits this field do not receive an implicit italic preference.
 
@@ -655,8 +692,8 @@ layers:
 | `format` | Integer version (`1`) | Yes | — |
 | `id` | Asset identifier | Yes | — |
 | `layers` | Nonempty ordered sequence of layer mappings | Yes | — |
-| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
-| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
+| `text_color` | Palette identifier, pool reference, or nonempty sequence of either | No | None |
+| `decoration_color` | Palette identifier, pool reference, or nonempty sequence of either | No | None |
 
 `format` must be the integer `1`. Each layer is a mapping with the following fields:
 
@@ -683,7 +720,7 @@ The anchor mapping accepts exactly these two fields:
 
 Layers are composited in declaration order over paper-white on the design canvas using RGBA alpha composition. A recognized package is a discovery boundary, so internal images are not also registered as standalone backgrounds. Manifests use safe YAML loading; unknown fields produce warnings. The obsolete top-level `image` field is invalid. Absolute references, parent traversal, paths escaping the package (including symlink escapes), unsupported formats, invalid layers, and unreadable manifests or images exclude only the affected resource.
 
-Background color fields are optional preferences and do not recolor the background artwork. They accept the same scalar-or-nonempty-list palette syntax as content entries. Invalid or unavailable candidates are diagnosed and ignored without invalidating an otherwise usable background.
+Background color fields are optional preferences and do not recolor the background artwork. They accept the same scalar-or-nonempty-list palette syntax as content entries, including named-pool references. Invalid or unavailable candidates are diagnosed and ignored without invalidating an otherwise usable background.
 
 Standalone PNG files remain supported unchanged and use their filename stem as the identifier. A standalone PNG is a simple centered-cover background and supplies no background-level color preferences.
 
@@ -691,7 +728,7 @@ All usable discovered backgrounds are available for explicit entry or decoration
 
 #### Default background pool
 
-The optional `layout.backgrounds.default` field is a nonempty sequence of registered background identifiers and/or `"none"`.
+The optional `layout.backgrounds.default` field is a nonempty sequence of registered background identifiers, pool references, and/or `"none"`.
 
 For example:
 
@@ -706,7 +743,7 @@ layout:
 
 When omitted, the default background pool is `["none"]`.
 
-The effective pool contains the distinct, usable identifiers from the configured pool. Invalid or unavailable identifiers are excluded with warnings. Duplicates are ignored after their first occurrence.
+`@builtin` expands to the successfully registered bundled backgrounds; it does not include `"none"`. The effective pool contains the distinct, usable identifiers from the configured pool. Invalid or unavailable identifiers are excluded with warnings. Duplicates are ignored after their first occurrence.
 
 Each member of the effective pool has equal selection probability.
 
@@ -783,10 +820,10 @@ layers:
 | `id` | Asset identifier | Yes | — |
 | `layers` | Nonempty ordered sequence of layer mappings | Yes | — |
 | `presentation_insets` | Complete four-edge mapping of nonnegative design-canvas pixel integers | No | Global `layout.presentation_insets` |
-| `font` | Font identifier | No | None |
+| `font` | Font identifier or pool reference | No | None |
 | `font_faces` | Mapping of literary roles to face identifiers | No | None |
-| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
-| `background` | Background identifier or `"none"` | No | None |
+| `text_color` | Palette identifier, pool reference, or nonempty sequence of either | No | None |
+| `background` | Background identifier, pool reference, or `"none"` | No | None |
 | `qr_ready` | Boolean | No | `true` |
 | `qr_from_left` | Nonnegative design-canvas pixel integer | No | — |
 | `qr_from_right` | Nonnegative design-canvas pixel integer | No | `20` when no horizontal method is supplied |
@@ -794,17 +831,17 @@ layers:
 | `qr_from_bottom` | Nonnegative design-canvas pixel integer | No | `20` when no vertical method is supplied |
 | `qr_centered` | Scalar string: `horizontal` or `vertical` | No | — |
 | `tintable` | Boolean | No | `true` |
-| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | None |
+| `decoration_color` | Palette identifier, pool reference, or nonempty sequence of either | No | None |
 
 `format` must be integer `1`; identifiers follow the shared ASCII asset identifier rules. Each layer's image path is resolved relative to the manifest. Safe YAML loading is required and unknown manifest fields produce warnings. Absolute references, parent traversal, escaping paths (including symlink escapes), unsupported formats, invalid layer definitions, and unreadable manifests or images exclude only the affected decoration.
 
 The optional `presentation_insets` must contain all four fields `left`, `right`, `top`, and `bottom`. It replaces the global inset mapping as a whole; partial merging is not performed. Insets are design-canvas measurements, validated and resolved according to [Output specifications and presentation insets](#output-specifications-and-presentation-insets). They are independent of all layer source dimensions, slice coordinates, and transformations.
 
-An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid inset metadata or artwork excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
+An unavailable or invalid optional font/background preference produces a warning and is treated as absent without invalidating an otherwise usable decoration. A valid `@pool` preference is resolved in the corresponding category during image preparation. The optional `font_faces` mapping follows the same warning-and-ignore policy when malformed; its preferences need not name faces available in every bundle. Invalid inset metadata or artwork excludes that decoration. Decorations do not define arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
-The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints decoration images. It accepts the same scalar-or-nonempty-list syntax as the content-entry field. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
+The optional `text_color` is a preference for the literary composition's text when that decoration is selected; it never tints decoration images. It accepts the same scalar-or-nonempty-list syntax as the content-entry field, including named-pool references. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
-The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when at least one layer is effectively tintable. It accepts a palette identifier or nonempty sequence. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
+The decoration-wide `tintable` property must be a YAML boolean and defaults to `true`. A malformed value produces a warning and uses the default. The `decoration_color` preference is distinct from `text_color`; it supplies one color for the decoration when at least one layer is effectively tintable. It accepts a palette identifier, pool reference, or nonempty sequence of either. Invalid or unavailable members are diagnosed during image preparation and ignored without invalidating the decoration.
 
 `qr_ready` must be a YAML boolean and defaults to `true`. When false, QR generation is intentionally suppressed for this selected decoration regardless of the presentation-level QR setting. A malformed value produces a warning and uses the default.
 
@@ -845,7 +882,7 @@ The effective tintability of each layer is `decoration.tintable AND layer.tintab
 
 #### Default decoration pool
 
-The optional `layout.decorations.default` field is a nonempty sequence of registered decoration identifiers and/or `"none"`.
+The optional `layout.decorations.default` field is a nonempty sequence of registered decoration identifiers, pool references, and/or `"none"`.
 
 For example:
 
@@ -860,7 +897,7 @@ layout:
 
 When omitted, the default decoration pool is `["none"]`.
 
-The effective pool contains distinct, usable identifiers. Invalid or unavailable identifiers are excluded with warnings, and duplicates are ignored after their first occurrence.
+`@builtin` expands to the successfully registered bundled decorations; it does not include `"none"`. The effective pool contains distinct, usable identifiers. Invalid or unavailable identifiers are excluded with warnings, and duplicates are ignored after their first occurrence.
 
 Each member has equal selection probability.
 
@@ -874,15 +911,15 @@ Discovery does not change pool membership. Bundled identifiers cannot be shadowe
 
 #### Default decoration color pool
 
-The optional `layout.decorations.colors` field is a nonempty sequence of identifiers from the shared top-level `palette`. When omitted, the effective pool is `["black"]`.
+The optional `layout.decorations.colors` field is either a list of palette identifiers or a mapping of named pools, each containing a sequence of palette identifiers and/or pool references. The list form remains shorthand for `default`. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
 
-Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. If no usable identifier remains, the pool falls back to `["black"]`. Each distinct usable identifier has equal selection probability.
+Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. If the resolved default pool has no usable identifier, color selection uses `["black"]` as its existing fallback; an empty non-default named pool remains empty. Each distinct usable identifier has equal selection probability.
 
 ### Default text-color pool
 
-`layout.text.colors` is an optional nonempty sequence of palette identifiers. When omitted, the effective pool is `["black"]`.
+`layout.text.colors` is either an optional list of palette identifiers or a mapping of named pools, each containing a sequence of palette identifiers and/or pool references. The list form remains shorthand for `default`. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
 
-The effective pool contains distinct identifiers registered in the effective palette. Invalid, unavailable, or duplicate members are excluded with warnings. If no usable member remains, the pool falls back to `["black"]`.
+The effective pool contains distinct identifiers registered in the effective palette. Invalid, unavailable, or duplicate members are excluded with warnings. If the resolved default pool has no usable member, color selection uses `["black"]` as its existing fallback; an empty non-default named pool remains empty.
 
 Each effective member has equal selection probability. A configured override of `palette.black` applies whenever selection resolves to `black`.
 
@@ -1053,12 +1090,12 @@ Each quotation is a separate selection candidate.
 | `source` | String | No | Absent |
 | `attribution` | String | No | Absent |
 | `priority` | Integer | No | `0` |
-| `font` | String | No | Selected decoration preference, then automatic selection from default font pool |
+| `font` | Resource identifier or pool reference | No | Selected decoration preference, then automatic selection from default font pool |
 | `font_faces` | Mapping of literary roles to face identifiers | No | No role preferences |
-| `text_color` | Palette identifier or nonempty sequence of palette identifiers | No | Background preference, decoration preference, global text-color pool, then built-in black |
-| `decoration_color` | Palette identifier or nonempty sequence of palette identifiers | No | Background preference, selected decoration preference, global pool, then built-in black |
-| `background` | String | No | Decoration preference, then default background pool |
-| `decoration` | String | No | Automatic selection from default decoration pool |
+| `text_color` | Palette identifier, pool reference, or nonempty sequence of either | No | Background preference, decoration preference, global text-color pool, then built-in black |
+| `decoration_color` | Palette identifier, pool reference, or nonempty sequence of either | No | Background preference, selected decoration preference, global pool, then built-in black |
+| `background` | Resource identifier, pool reference, or `"none"` | No | Decoration preference, then default background pool |
+| `decoration` | Decoration identifier, pool reference, or `"none"` | No | Automatic selection from default decoration pool |
 | `presentation_style` | String | No | `"centered"` |
 | `eligibility` | Sequence of eligibility rules | No | Ordinary eligibility |
 | `reveal` | Mapping of reveal overrides | No | Global reveal schedule |
@@ -1071,7 +1108,7 @@ Individual quotations do not have independent overrides.
 
 ### Text-color preference
 
-An entry may prefer one palette identifier or provide a nonempty selection pool:
+An entry may prefer one palette identifier or pool reference, or provide a nonempty selection pool of either:
 
 ```yaml
 text_color: burnt-orange
@@ -1083,11 +1120,11 @@ text_color:
   - burnt-orange
 ```
 
-List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Resolve the first level containing one or more usable identifiers: content entry, selected background, selected decoration, effective `layout.text.colors` pool, then built-in `black`. Candidates from different levels are never combined. Unknown, malformed, or unavailable members are diagnosed and excluded; a preference with no usable members falls through to the next level without invalidating its resource or content entry. RGB values are not accepted here.
+List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Resolve pool references in the text-color namespace. Resolve the first level containing one or more usable identifiers: content entry, selected background, selected decoration, effective `layout.text.colors` pool, then built-in `black`. Candidates from different levels are never combined. Unknown, malformed, or unavailable members are diagnosed and excluded; a preference with no usable members falls through to the next level without invalidating its resource or content entry. RGB values are not accepted here.
 
 ### Decoration-color preference
 
-An entry may prefer one shared-palette identifier or provide a nonempty selection pool:
+An entry may prefer one shared-palette identifier or pool reference, or provide a nonempty selection pool of either:
 
 ```yaml
 decoration_color: burnt-orange
@@ -1100,7 +1137,7 @@ decoration_color:
   - burnt-orange
 ```
 
-When effective decoration tinting is required, resolve the first level containing usable identifiers: content entry, selected background, selected decoration, effective `layout.decorations.colors` pool, then built-in `black`. Candidates from different levels are never combined, and selection within a level is uniform among distinct usable identifiers. This preference affects only a selected decoration whose layers are effectively tintable; it never recolors the background. Invalid or unavailable identifiers do not invalidate their resource or the content entry. Direct RGB values are not accepted.
+When effective decoration tinting is required, resolve pool references in the independent decoration-color namespace and choose the first level containing usable identifiers: content entry, selected background, selected decoration, effective `layout.decorations.colors` pool, then built-in `black`. Candidates from different levels are never combined, and selection within a level is uniform among distinct usable identifiers. This preference affects only a selected decoration whose layers are effectively tintable; it never recolors the background. Invalid or unavailable identifiers do not invalidate their resource or the content entry. Direct RGB values are not accepted.
 
 ### Entry identifiers
 

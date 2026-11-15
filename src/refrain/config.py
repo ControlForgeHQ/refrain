@@ -234,6 +234,11 @@ class ApplicationConfiguration:
     palette: Mapping[str, str] = field(default_factory=lambda: MappingProxyType(_BUILTIN_PALETTE))
     default_text_colors: tuple[str, ...] = ("black",)
     default_decoration_colors: tuple[str, ...] = ("black",)
+    font_pools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    background_pools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    decoration_pools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    text_color_pools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    decoration_color_pools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def required_output_specifications(self) -> tuple[ResolvedOutputSpecification, ...]:
@@ -363,6 +368,125 @@ def _parse_time(value: object, field: str, report: Callable[..., None], *, fallb
         report(field, message)
         return None
     return time.fromisoformat(value)
+
+
+def _resolve_configured_pools(
+    section: dict[str, object],
+    field: str,
+    non_pool_fields: set[str],
+    available: set[str],
+    builtin: tuple[str, ...],
+    report: Callable[..., None],
+    *,
+    default_fallback: tuple[str, ...] | None = None,
+    default_required: bool = False,
+    default_label: str = "resource identifiers",
+    identifier_label: str = "resource",
+    default_shorthand: bool = False,
+    allow_none: bool = False,
+    warn_duplicates: bool = False,
+) -> tuple[Mapping[str, tuple[str, ...]], tuple[str, ...]]:
+    definitions: dict[str, object] = {}
+    for name, value in section.items():
+        if name in non_pool_fields:
+            continue
+        location = f"{field}.{name}" if isinstance(name, str) else f"{field}[{name!r}]"
+        if not valid_identifier(name):
+            report(location, "must be a valid ASCII pool name; the pool is ignored")
+        elif name == "builtin":
+            report(location, "is reserved for the built-in resource pool; the definition is ignored")
+        else:
+            definitions[name] = value
+
+    if "default" not in definitions:
+        if default_required:
+            report(
+                f"{field}.default",
+                f"is required and must be a nonempty sequence of {default_label}",
+                logging.ERROR,
+            )
+            definitions["default"] = []
+        else:
+            definitions["default"] = list(default_fallback or ())
+    elif not isinstance(definitions["default"], list) or not definitions["default"]:
+        severity = logging.ERROR if default_required else logging.WARNING
+        report(
+            f"{field}.default",
+            (
+                f"is required and must be a nonempty sequence of {default_label}"
+                if default_required
+                else f"must be a nonempty sequence of {default_label}"
+            ),
+            severity,
+        )
+        definitions["default"] = []
+
+    normalized: dict[str, list[object]] = {}
+    for name, value in definitions.items():
+        location = f"{field}.{name}"
+        if not isinstance(value, list):
+            report(location, "must be a sequence of resource identifiers; the pool is empty")
+            normalized[name] = []
+        else:
+            normalized[name] = value
+    normalized["builtin"] = list(builtin)
+
+    resolved: dict[str, tuple[str, ...]] = {"builtin": tuple(builtin)}
+    for root in normalized:
+        if root == "builtin" or root in resolved:
+            continue
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def expand(name: str, active: tuple[str, ...]) -> None:
+            for index, member in enumerate(normalized[name]):
+                location = (
+                    f"{field}[{index}]" if name == "default" and default_shorthand else f"{field}.{name}[{index}]"
+                )
+                if not isinstance(member, str):
+                    report(location, f"must be a valid {identifier_label} identifier; it is excluded")
+                    continue
+                if member.startswith("@"):
+                    reference = member[1:]
+                    if not valid_identifier(reference):
+                        report(location, f"pool reference {member!r} is malformed; it is excluded")
+                        continue
+                    if reference in active:
+                        continue
+                    if reference not in normalized:
+                        report(location, f"pool reference {member!r} is unknown; it is excluded")
+                        continue
+                    expand(reference, (*active, reference))
+                    continue
+                if not valid_identifier(member):
+                    report(location, f"must be a valid {identifier_label} identifier; it is excluded")
+                    continue
+                if member == "none" and allow_none:
+                    candidate = member
+                elif member in available:
+                    candidate = member
+                else:
+                    report(location, f"{identifier_label} identifier {member!r} is unavailable; it is excluded")
+                    continue
+                if candidate in seen:
+                    if warn_duplicates:
+                        report(
+                            location,
+                            f"duplicates {identifier_label} identifier {candidate!r}; the duplicate is ignored",
+                        )
+                    continue
+                seen.add(candidate)
+                ordered.append(candidate)
+
+        expand(root, (root,))
+        resolved[root] = tuple(ordered)
+
+    default_values = resolved["default"]
+    if not default_values and default_fallback is not None:
+        report(f"{field}.default", f"has no usable members; using {list(default_fallback)!r}")
+        default_values = default_fallback
+        resolved["default"] = default_values
+    return MappingProxyType(resolved), default_values
 
 
 def _valid_image_server_host(value: object) -> bool:
@@ -735,21 +859,11 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             report("layout.presentation_insets", str(error), logging.ERROR)
 
     fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
-    _known_fields(fonts_data, {"default", "available", "font_faces"}, "layout.fonts", report)
     if "available" in fonts_data:
         report(
             "layout.fonts.available",
             "is no longer supported; place each font bundle under assets/fonts/ with a font.yaml manifest",
         )
-    default_value = fonts_data.get("default")
-    default_fonts: tuple[str, ...] = ()
-    if not isinstance(default_value, list) or not default_value:
-        report(
-            "layout.fonts.default",
-            "is required and must be a nonempty sequence of font identifiers",
-            logging.ERROR,
-        )
-
     package_root = files("refrain")
     from .assets import discover_fonts
 
@@ -763,26 +877,20 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         if "font_faces" in fonts_data
         else MappingProxyType({})
     )
-
-    if isinstance(default_value, list):
-        effective_default_fonts: list[str] = []
-        seen_default_fonts: set[str] = set()
-        for index, identifier in enumerate(default_value):
-            field = f"layout.fonts.default[{index}]"
-            if not valid_identifier(identifier):
-                report(field, "must be a valid font identifier; it is excluded")
-            elif identifier in seen_default_fonts:
-                report(field, f"duplicates font identifier {identifier!r}; the duplicate is ignored")
-            elif identifier not in font_registry:
-                report(field, f"font identifier {identifier!r} is unavailable; it is excluded")
-            else:
-                effective_default_fonts.append(identifier)
-            if isinstance(identifier, str):
-                seen_default_fonts.add(identifier)
-        default_fonts = tuple(effective_default_fonts)
+    font_pools, default_fonts = _resolve_configured_pools(
+        fonts_data,
+        "layout.fonts",
+        {"available", "font_faces"},
+        set(font_registry),
+        tuple(sorted(identifier for identifier, resource in font_registry.items() if resource.bundled)),
+        report,
+        default_required=True,
+        default_label="font identifiers",
+        identifier_label="font",
+        warn_duplicates=True,
+    )
 
     backgrounds_data = _mapping(layout.get("backgrounds", {}), "layout.backgrounds", report)
-    _known_fields(backgrounds_data, {"default", "available"}, "layout.backgrounds", report)
     if "available" in backgrounds_data:
         report(
             "layout.backgrounds.available",
@@ -795,36 +903,22 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         file.parent / "assets" / "backgrounds",
         report,
     )
-
-    default_backgrounds = ("none",)
     if "default" not in backgrounds_data:
         use_default("layout.backgrounds.default", "['none']")
-    else:
-        background_default_value = backgrounds_data["default"]
-        effective_backgrounds: list[str] = []
-        seen_backgrounds: set[str] = set()
-        if not isinstance(background_default_value, list):
-            report("layout.backgrounds.default", "must be a nonempty sequence of background identifiers")
-        else:
-            for index, identifier in enumerate(background_default_value):
-                field_name = f"layout.backgrounds.default[{index}]"
-                if not valid_identifier(identifier):
-                    report(field_name, "must be a valid background identifier; it is excluded")
-                    continue
-                if identifier in seen_backgrounds:
-                    continue
-                seen_backgrounds.add(identifier)
-                if identifier != "none" and identifier not in background_registry:
-                    report(field_name, f"background identifier {identifier!r} is unavailable; it is excluded")
-                else:
-                    effective_backgrounds.append(identifier)
-        if effective_backgrounds:
-            default_backgrounds = tuple(effective_backgrounds)
-        else:
-            report("layout.backgrounds.default", "has no usable members; using ['none']")
+    background_pools, default_backgrounds = _resolve_configured_pools(
+        backgrounds_data,
+        "layout.backgrounds",
+        {"available"},
+        set(background_registry),
+        tuple(sorted(identifier for identifier, resource in background_registry.items() if resource.bundled)),
+        report,
+        default_fallback=("none",),
+        default_label="background identifiers",
+        identifier_label="background",
+        allow_none=True,
+    )
 
     decorations_data = _mapping(layout.get("decorations", {}), "layout.decorations", report)
-    _known_fields(decorations_data, {"available", "default", "colors"}, "layout.decorations", report)
     if "available" in decorations_data:
         report(
             "layout.decorations.available",
@@ -842,95 +936,83 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             value, field, reporter, severity
         ),
     )
-
-    default_decorations = ("none",)
     if "default" not in decorations_data:
         use_default("layout.decorations.default", "['none']")
-    else:
-        decoration_default_value = decorations_data["default"]
-        effective_decorations: list[str] = []
-        seen_decorations: set[str] = set()
-        if not isinstance(decoration_default_value, list):
-            report("layout.decorations.default", "must be a nonempty sequence of decoration identifiers")
-        else:
-            for index, identifier in enumerate(decoration_default_value):
-                field_name = f"layout.decorations.default[{index}]"
-                if not valid_identifier(identifier):
-                    report(field_name, "must be a valid decoration identifier; it is excluded")
-                    continue
-                if identifier in seen_decorations:
-                    continue
-                seen_decorations.add(identifier)
-                if identifier != "none" and identifier not in decoration_registry:
-                    report(
-                        field_name,
-                        f"decoration identifier {identifier!r} is unavailable; it is excluded",
-                    )
-                else:
-                    effective_decorations.append(identifier)
-        if effective_decorations:
-            default_decorations = tuple(effective_decorations)
-        else:
-            report("layout.decorations.default", "has no usable members; using ['none']")
+    decoration_pools, default_decorations = _resolve_configured_pools(
+        decorations_data,
+        "layout.decorations",
+        {"available", "colors"},
+        set(decoration_registry),
+        tuple(sorted(identifier for identifier, resource in decoration_registry.items() if resource.bundled)),
+        report,
+        default_fallback=("none",),
+        default_label="decoration identifiers",
+        identifier_label="decoration",
+        allow_none=True,
+    )
 
-    default_decoration_colors = ("black",)
     if "colors" not in decorations_data:
         use_default("layout.decorations.colors", "['black']")
+        configured_decoration_colors: object = {"default": ["black"]}
     else:
         configured_decoration_colors = decorations_data["colors"]
-        usable_decoration_colors: list[str] = []
-        seen_decoration_colors: set[str] = set()
-        if not isinstance(configured_decoration_colors, list) or not configured_decoration_colors:
-            report("layout.decorations.colors", "must be a nonempty sequence of palette identifiers")
-        else:
-            for index, identifier in enumerate(configured_decoration_colors):
-                field_name = f"layout.decorations.colors[{index}]"
-                if not valid_identifier(identifier):
-                    report(field_name, "must be a valid palette identifier; it is excluded")
-                elif identifier in seen_decoration_colors:
-                    report(
-                        field_name,
-                        f"duplicates palette identifier {identifier!r}; the duplicate is ignored",
-                    )
-                elif identifier not in palette:
-                    report(field_name, f"palette identifier {identifier!r} is unavailable; it is excluded")
-                else:
-                    usable_decoration_colors.append(identifier)
-                if isinstance(identifier, str):
-                    seen_decoration_colors.add(identifier)
-        if usable_decoration_colors:
-            default_decoration_colors = tuple(usable_decoration_colors)
-        else:
-            report("layout.decorations.colors", "has no usable members; using ['black']")
+    if isinstance(configured_decoration_colors, list):
+        decoration_colors_data: dict[str, object] = {"default": configured_decoration_colors}
+        decoration_colors_shorthand = True
+    elif isinstance(configured_decoration_colors, dict):
+        decoration_colors_data = configured_decoration_colors
+        decoration_colors_shorthand = False
+    else:
+        report(
+            "layout.decorations.colors",
+            "must be a palette-identifier sequence or a mapping of named pools",
+        )
+        decoration_colors_data = {"default": []}
+        decoration_colors_shorthand = False
+    decoration_color_pools, default_decoration_colors = _resolve_configured_pools(
+        decoration_colors_data,
+        "layout.decorations.colors",
+        set(),
+        set(palette),
+        ("black",),
+        report,
+        default_fallback=("black",),
+        default_label="palette identifiers",
+        identifier_label="palette",
+        default_shorthand=decoration_colors_shorthand,
+        warn_duplicates=True,
+    )
 
     text_data = _mapping(layout.get("text", {}), "layout.text", report)
     _known_fields(text_data, {"colors", "min_font_size", "max_font_size"}, "layout.text", report)
-    default_text_colors = ("black",)
     if "colors" not in text_data:
         use_default("layout.text.colors", "['black']")
+        configured_text_colors: object = {"default": ["black"]}
     else:
         configured_text_colors = text_data["colors"]
-        usable_text_colors: list[str] = []
-        seen_text_colors: set[str] = set()
-        if not isinstance(configured_text_colors, list) or not configured_text_colors:
-            report("layout.text.colors", "must be a nonempty sequence of palette identifiers")
-        else:
-            for index, identifier in enumerate(configured_text_colors):
-                field_name = f"layout.text.colors[{index}]"
-                if not valid_identifier(identifier):
-                    report(field_name, "must be a valid palette identifier; it is excluded")
-                elif identifier in seen_text_colors:
-                    report(field_name, f"duplicates palette identifier {identifier!r}; the duplicate is ignored")
-                elif identifier not in palette:
-                    report(field_name, f"palette identifier {identifier!r} is unavailable; it is excluded")
-                else:
-                    usable_text_colors.append(identifier)
-                if isinstance(identifier, str):
-                    seen_text_colors.add(identifier)
-        if usable_text_colors:
-            default_text_colors = tuple(usable_text_colors)
-        else:
-            report("layout.text.colors", "has no usable members; using ['black']")
+    if isinstance(configured_text_colors, list):
+        text_colors_data: dict[str, object] = {"default": configured_text_colors}
+        text_colors_shorthand = True
+    elif isinstance(configured_text_colors, dict):
+        text_colors_data = configured_text_colors
+        text_colors_shorthand = False
+    else:
+        report("layout.text.colors", "must be a palette-identifier sequence or a mapping of named pools")
+        text_colors_data = {"default": []}
+        text_colors_shorthand = False
+    text_color_pools, default_text_colors = _resolve_configured_pools(
+        text_colors_data,
+        "layout.text.colors",
+        set(),
+        set(palette),
+        ("black",),
+        report,
+        default_fallback=("black",),
+        default_label="palette identifiers",
+        identifier_label="palette",
+        default_shorthand=text_colors_shorthand,
+        warn_duplicates=True,
+    )
 
     sizes: dict[str, int] = {}
     for field in ("min_font_size", "max_font_size"):
@@ -970,4 +1052,9 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         palette=MappingProxyType(palette),
         default_text_colors=default_text_colors,
         default_decoration_colors=default_decoration_colors,
+        font_pools=font_pools,
+        background_pools=background_pools,
+        decoration_pools=decoration_pools,
+        text_color_pools=text_color_pools,
+        decoration_color_pools=decoration_color_pools,
     )

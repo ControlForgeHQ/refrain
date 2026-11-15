@@ -659,6 +659,159 @@ def test_explicit_presentation_overrides_precede_entry_and_decoration_preference
     assert choices.fonts["quotation"].identifier == "lora"
 
 
+def test_resource_pool_references_resolve_at_each_preference_level() -> None:
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        font="@dec-font",
+        background="@dec-background",
+        text_color=("@dec-text-color",),
+        decoration_color=("@dec-tint",),
+        tintable=True,
+    )
+    alternate = DecorationResource(
+        "alternate",
+        (DecorationLayerResource(Path("/unused-alternate.png"), "contain", tintable=True),),
+        False,
+        tintable=True,
+    )
+    configuration = _configuration(
+        {
+            **_MULTI_FACE_REGISTRY,
+            "lora-alt": FontResource("lora-alt", _REGULAR_FONT, bundled=True),
+        },
+        backgrounds={
+            "paper": BackgroundResource("paper", Path("/unused-paper.png"), False),
+            "canvas": BackgroundResource("canvas", Path("/unused-canvas.png"), False),
+        },
+        decorations={"frame": decoration, "alternate": alternate},
+    )
+    configuration = replace(
+        configuration,
+        font_pools={"entry-fonts": ("lora", "lora-alt"), "dec-font": ("lora",)},
+        background_pools={"entry-backgrounds": ("paper", "canvas"), "dec-background": ("paper",)},
+        decoration_pools={"entry-decorations": ("frame", "alternate")},
+        text_color_pools={
+            "entry-text-color": ("burnt-orange", "blue"),
+            "dec-text-color": ("black",),
+        },
+        decoration_color_pools={"entry-tint": ("blue", "burnt-orange"), "dec-tint": ("black",)},
+    )
+    snapshot = replace(
+        make_snapshot("@entry-fonts"),
+        background="@entry-backgrounds",
+        decoration="@entry-decorations",
+        text_color=("@entry-text-color",),
+        decoration_color=("@entry-tint",),
+    )
+
+    class LastChoice:
+        def __init__(self) -> None:
+            self.pools: list[tuple[str, ...]] = []
+
+        def choice(self, values):
+            pool = tuple(values)
+            self.pools.append(pool)
+            return pool[-1]
+
+    chooser = LastChoice()
+    choices = preparation._resolve_presentation_choices(
+        snapshot,
+        configuration,
+        chooser,
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=PresentationOverrides(),
+    )
+
+    assert choices.fonts["quotation"].identifier == "lora-alt"
+    assert choices.decoration_identifier == "alternate"
+    assert choices.background_identifier == "canvas"
+    assert choices.text_color == (0, 0, 255)
+    assert choices.decoration_tint == (198, 90, 32)
+    assert ("lora", "lora-alt") in chooser.pools
+    assert ("paper", "canvas") in chooser.pools
+    assert ("frame", "alternate") in chooser.pools
+
+
+def test_pool_reference_presentation_overrides_are_strict_and_select_concrete_ids() -> None:
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        tintable=True,
+    )
+    configuration = _configuration(
+        {
+            **_MULTI_FACE_REGISTRY,
+            "lora-alt": FontResource("lora-alt", _REGULAR_FONT, bundled=True),
+        },
+        backgrounds={"paper": BackgroundResource("paper", Path("/unused-paper.png"), False)},
+        decorations={"frame": decoration},
+    )
+    configuration = replace(
+        configuration,
+        font_pools={"font-choice": ("lora-alt",)},
+        background_pools={"background-choice": ("paper",)},
+        decoration_pools={"decoration-choice": ("frame",)},
+        text_color_pools={"text-choice": ("burnt-orange",)},
+        decoration_color_pools={"tint-choice": ("blue",)},
+    )
+
+    choices = preparation._resolve_presentation_choices(
+        make_snapshot("lora"),
+        configuration,
+        Random(1),
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=PresentationOverrides(
+            font="@font-choice",
+            background="@background-choice",
+            decoration="@decoration-choice",
+            text_color="@text-choice",
+            tint="@tint-choice",
+        ),
+    )
+
+    assert choices.fonts["quotation"].identifier == "lora-alt"
+    assert choices.background_identifier == "paper"
+    assert choices.decoration_identifier == "frame"
+    assert choices.text_color == (198, 90, 32)
+    assert choices.decoration_tint == (0, 0, 255)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        PresentationOverrides(font="@empty"),
+        PresentationOverrides(background="@empty"),
+        PresentationOverrides(decoration="@empty"),
+        PresentationOverrides(text_color="@empty"),
+        PresentationOverrides(tint="@empty"),
+    ],
+)
+def test_empty_pool_reference_in_explicit_override_remains_strict(overrides: PresentationOverrides) -> None:
+    configuration = replace(
+        _configuration(_MULTI_FACE_REGISTRY),
+        font_pools={"empty": ()},
+        background_pools={"empty": ()},
+        decoration_pools={"empty": ()},
+        text_color_pools={"empty": ()},
+        decoration_color_pools={"empty": ()},
+    )
+
+    with pytest.raises(DailyImagePreparationError, match="explicit .*pool reference"):
+        preparation._resolve_presentation_choices(
+            make_snapshot("lora"),
+            configuration,
+            Random(1),
+            force_white_background=False,
+            forced_decoration_tint=None,
+            overrides=overrides,
+        )
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -1611,6 +1764,53 @@ def test_unusable_explicit_font_uses_configured_default_pool(tmp_path, caplog, m
     assert images[0].size == _IMAGE_SIZE
     assert layouts[0].font_identifier == "a-fallback"
     assert "broken" in caplog.text
+
+
+def test_unusable_font_retries_same_explicit_pool_before_lower_precedence(tmp_path) -> None:
+    broken_path = tmp_path / "broken.ttf"
+    broken_path.write_bytes(b"not a font")
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain"),),
+        False,
+        font="@decoration-font",
+    )
+    configuration = replace(
+        _configuration(
+            {
+                "broken": FontResource("broken", broken_path, bundled=False),
+                "usable": FontResource("usable", _REGULAR_FONT, bundled=True),
+                "decoration-font": FontResource("decoration-font", _REGULAR_FONT, bundled=True),
+                "global-font": FontResource("global-font", _REGULAR_FONT, bundled=True),
+            },
+            default_fonts=("global-font",),
+        ),
+        font_pools={
+            "entry-fonts": ("broken", "usable"),
+            "decoration-font": ("decoration-font",),
+        },
+    )
+
+    class FirstChoice:
+        def __init__(self) -> None:
+            self.pools: list[tuple[str, ...]] = []
+
+        def choice(self, values):
+            pool = tuple(values)
+            self.pools.append(pool)
+            return pool[0]
+
+    chooser = FirstChoice()
+    fonts = preparation._resolve_fonts(
+        make_snapshot("@entry-fonts"),
+        configuration,
+        decoration,
+        chooser,
+        PresentationOverrides(),
+    )
+
+    assert fonts["quotation"].identifier == "usable"
+    assert chooser.pools == [("broken", "usable"), ("usable",)]
 
 
 def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: str) -> None:

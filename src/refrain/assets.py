@@ -723,7 +723,14 @@ def discover_decorations(
                     report(f"{field}.presentation_insets", "is invalid; this decoration is excluded", logging.WARNING)
                     continue
             preferred_font = data.get("font")
-            if "font" in data and (not valid_identifier(preferred_font) or preferred_font not in font_ids):
+            valid_font_reference = (
+                isinstance(preferred_font, str)
+                and preferred_font.startswith("@")
+                and valid_identifier(preferred_font[1:])
+            )
+            if "font" in data and not (
+                valid_font_reference or (valid_identifier(preferred_font) and preferred_font in font_ids)
+            ):
                 report(
                     f"{field}.font",
                     f"font preference {preferred_font!r} is unavailable or invalid; ignored",
@@ -736,9 +743,17 @@ def discover_decorations(
                 else MappingProxyType({})
             )
             preferred_background = data.get("background")
-            if "background" in data and (
-                not valid_identifier(preferred_background)
-                or (preferred_background != "none" and preferred_background not in background_ids)
+            valid_background_reference = (
+                isinstance(preferred_background, str)
+                and preferred_background.startswith("@")
+                and valid_identifier(preferred_background[1:])
+            )
+            if "background" in data and not (
+                valid_background_reference
+                or (
+                    valid_identifier(preferred_background)
+                    and (preferred_background == "none" or preferred_background in background_ids)
+                )
             ):
                 report(
                     f"{field}.background",

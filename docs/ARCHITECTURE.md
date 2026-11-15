@@ -1097,11 +1097,11 @@ The architecture does not require a general-purpose layout framework, externally
 
 Configuration loading owns asset discovery, validation, collision handling, and construction of independent font, background, and decoration registries. Bundled resources are discovered through Python package-resource APIs; user resources are discovered recursively under the corresponding `assets/{fonts,backgrounds,decorations}/` directory beside the effective configuration. Discovery occurs once when configuration is loaded. It does not monitor or modify user directories.
 
-Discovery establishes availability by stable identifier only. It never adds resources to selection pools. The configured default pools remain the sole source of automatic-selection eligibility; any available resource may still be selected explicitly by content or decoration metadata.
+Discovery establishes availability by stable identifier only. After discovery, configuration loading resolves category-scoped named pools against those registries and the effective palette. The reserved `builtin` pool for fonts, backgrounds, and decorations contains only successfully registered bundled resources; color `builtin` pools contain `black`. Custom or unusable assets do not enter file-backed built-in membership. Other discovered resources are not added to automatic-selection eligibility unless a configured pool explicitly names them.
 
 Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow identifiers claimed by packaged resources, and every custom resource in an intra-category collision is excluded deterministically.
 
-Application configuration defines a default selection pool for each resource type. Each pool may contain the reserved value `"none"`, representing the intentional absence of that resource.
+Application configuration retains the resolved concrete candidates for each named pool and a default selection pool for each resource type. Pool references are category-local. Expansion is depth-first in declaration order, preserves the first occurrence of each usable identifier, and silently skips references to pools on the active recursion path. Expansion does not choose randomly; each distinct candidate receives equal probability at the later selection point. Invalid, unavailable, malformed, and unknown references are diagnosed and excluded without discarding other candidates. Empty pools do not have an internal fallback. Background and decoration pools may contain the reserved value `"none"`, representing the intentional absence of that resource.
 
 An omitted resource configuration preserves the plain paper-white, undecorated presentation.
 
@@ -1109,7 +1109,7 @@ Decoration, font, background, color, layout, and QR decisions are resolved durin
 
 For each selected quotation, Refrain resolves the decoration first:
 
-1. Use the content entry's explicit decoration when available.
+1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit decoration when available.
 2. An explicit decoration value of `"none"` suppresses decoration selection.
 3. Otherwise, select from the effective default decoration pool.
 
@@ -1117,20 +1117,20 @@ The selected decoration may provide preferred font and background values and a c
 
 Exactly one font bundle is selected during image preparation using this precedence:
 
-1. Use the content entry's explicit font when it is available and usable.
-2. Otherwise, use the selected decoration's preferred font when it is available and usable.
+1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit font when usable.
+2. Otherwise, resolve and select one candidate from the selected decoration's preferred font pool when usable.
 3. Otherwise, select from the effective default font pool.
 
 Background selection follows this precedence:
 
-1. Use the content entry's explicit background when available.
+1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit background when available.
 2. An explicit background value of `"none"` suppresses all background selection, including a decoration's preferred background.
-3. Otherwise, use the selected decoration's preferred background when specified and available.
+3. Otherwise, resolve and select one candidate from the selected decoration's preferred background pool when specified and available.
 4. Otherwise, select from the effective default background pool.
 
 A decoration may explicitly prefer `"none"` as its background. This suppresses automatic background selection unless the content entry supplies its own background preference.
 
-When a requested resource is unavailable, Refrain retains an otherwise valid content entry and proceeds to the next applicable preference, with an appropriate diagnostic.
+Each preference pool is resolved at its existing precedence level and is never merged into another level. An empty explicit pool is unavailable and falls through to the next established preference. When a requested resource is unavailable, Refrain retains an otherwise valid content entry and proceeds to the next applicable preference, with an appropriate diagnostic. Explicit viewer overrides remain strict: an empty or unavailable referenced pool is an error rather than a fallback.
 
 Only after decoration and background selection are known does preparation resolve text and decoration colors. Background preferences therefore cannot affect background selection and do not create a circular selection dependency.
 
@@ -1140,9 +1140,9 @@ Each effective background and decoration default pool has equal-probability sele
 
 Font, background, decoration, color, layout, and QR decisions are resolved from current configuration and available resources during image preparation. They are not part of quotation identity or repetition history and are not persisted as daily selection decisions.
 
-After selecting the background, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected background's `text_color`, the selected decoration's `text_color`, the effective `layout.text.colors` pool, then built-in `black`. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
+After selecting the background, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected background's `text_color`, the selected decoration's `text_color`, the effective `layout.text.colors` pool, then built-in `black`. Pool references expand in the text-color namespace. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
 
-When decoration tinting is required, resolve one decoration color using the first level with usable candidates: the content entry's `decoration_color`, the selected background's `decoration_color`, the selected decoration's `decoration_color`, the effective `layout.decorations.colors` pool, then built-in `black`. Do not resolve a decoration color when no selected decoration layer is effectively tintable. Background color preferences are presentation preferences only; they do not tint background artwork.
+When decoration tinting is required, resolve one decoration color using the first level with usable candidates: the content entry's `decoration_color`, the selected background's `decoration_color`, the selected decoration's `decoration_color`, the effective `layout.decorations.colors` pool, then built-in `black`. Pool references expand in the independent decoration-color namespace. Do not resolve a decoration color when no selected decoration layer is effectively tintable. Background color preferences are presentation preferences only; they do not tint background artwork.
 
 The selected text and decoration colors are resolved for the complete preparation. Color selection is independent of quotation identity and repetition history.
 
@@ -1281,7 +1281,7 @@ Bundled fonts, backgrounds, and decorations are package-owned resources accessed
 
 Refrain maintains an effective font registry containing usable bundled and discovered font bundles.
 
-Application configuration defines an explicit default font pool using stable identifiers. The effective default pool contains only usable fonts from that configured pool and may be empty when none of its configured identifiers is usable.
+Application configuration defines category-scoped named pools using stable identifiers and resolves their references after resource discovery. The reserved `builtin` font pool contains successfully registered bundled fonts; it is included in automatic selection only when explicitly referenced. The effective default font pool contains only distinct usable fonts from its resolved definition and may be empty.
 
 Unusable or invalid user font registrations are excluded from the effective registry with appropriate warnings. Custom font identifiers cannot override identifiers claimed by readable bundled manifests.
 
@@ -1291,17 +1291,17 @@ A decoration may also specify a preferred font.
 
 During image preparation, font selection follows this precedence:
 
-1. Use an available and usable explicit content-entry font preference.
-2. Otherwise, use an available and usable font preference from the selected decoration.
+1. Resolve the content-entry font preference. For a pool reference, try its distinct expanded candidates in random order without replacement until one is usable; for a direct preference, try that font.
+2. Only if the content-entry preference has no usable font, resolve the selected decoration's preferred font pool the same way, or try its direct preference.
 3. Otherwise, select from the effective default font pool.
 
-An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning and proceeds to the next bundle-selection preference.
+An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning for each unavailable candidate and exhausts that preference level before proceeding to the next bundle-selection preference. Lower-priority preferences are not randomly selected before they are reached.
 
 After selecting the bundle, Refrain independently resolves the `quotation`, `source`, and `attribution` faces within that bundle. For each role, the first defined preference wins in this order: content entry, selected decoration, selected bundle manifest, global `layout.fonts.font_faces`, then implicit `regular`. An explicit `regular` is defined and overrides lower-priority values. If the winning face is unavailable or unusable, that role falls directly to the selected bundle's `regular` face with an actionable warning; lower-priority face preferences are not consulted. No role selects another bundle. Decoration face preferences apply to the selected bundle even when an entry overrides the decoration's bundle preference.
 
-Each distinct font in the effective default pool has equal selection probability when automatic selection is required.
+Each distinct font in an expanded preference or effective default pool has equal selection probability when that preference is used. Repeated identifiers, nested references, and shared subpools do not add weight.
 
-Automatic font selection requires at least one usable member in the effective default font pool. An empty pool is not an error when a usable explicit content-entry or decoration preference applies. If no usable explicit preference applies and the pool is empty, preparation fails with an actionable diagnostic. Refrain must not silently populate the pool with unrelated bundled fonts or use a separate emergency fallback pool.
+Automatic font selection requires at least one usable member in the effective default font pool. An empty pool is not an error when a usable explicit content-entry or decoration preference applies. If no usable explicit preference applies and the pool is empty, preparation fails with an actionable diagnostic. Refrain must not silently populate the pool with unrelated bundled fonts or use a separate emergency fallback pool; bundled membership is opt-in through `@builtin`.
 
 Font selection is independent for each complete image preparation. Fonts do not have repetition histories, and a font may be used on consecutive days.
 

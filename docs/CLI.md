@@ -81,14 +81,14 @@ The following options explicitly override a presentation choice:
 
 | Option | Accepted value |
 |---|---|
-| `--font FONT_ID` | Identifier of a registered font bundle. |
+| `--font FONT_ID\|@POOL` | Identifier of a registered font bundle or a named font pool reference. |
 | `--quotation-face FACE_ID` | Face identifier available in the selected font bundle for the quotation role. |
 | `--source-face FACE_ID` | Face identifier available in the selected font bundle for the source role. |
 | `--attribution-face FACE_ID` | Face identifier available in the selected font bundle for the attribution role. |
-| `--background BACKGROUND_ID\|none` | Registered background identifier, or `none` to suppress the background. |
-| `--decoration DECORATION_ID\|none` | Registered decoration identifier, or `none` to suppress the decoration. |
-| `--text-color COLOR_ID` | Identifier of a color in the shared palette for literary text. |
-| `--tint COLOR_ID` | Identifier of a color in the shared palette for tintable decoration artwork. |
+| `--background BACKGROUND_ID\|none\|@POOL` | Registered background identifier, `none` to suppress the background, or a named background pool reference. |
+| `--decoration DECORATION_ID\|none\|@POOL` | Registered decoration identifier, `none` to suppress decoration, or a named decoration pool reference. |
+| `--text-color COLOR_ID\|@POOL` | Shared-palette identifier or named text-color pool reference. |
+| `--tint COLOR_ID\|@POOL` | Shared-palette identifier or named decoration-color pool reference. |
 | `--style centered\|left-aligned` | One of the two supported literary presentation styles. |
 | `--qr` | Enable the literary QR code. |
 | `--no-qr` | Suppress the literary QR code. |
@@ -98,7 +98,7 @@ The following options explicitly override a presentation choice:
 
 `--qr` and `--no-qr` are mutually exclusive. When both font-size bounds are supplied, the minimum may not exceed the maximum.
 
-An explicit viewer override is strict. If an explicitly requested registered resource, face, color, style, or other value cannot be used, viewer preparation fails with an actionable diagnostic rather than silently falling back to a lower-precedence preference or default pool. Properties not explicitly overridden continue to use normal Refrain preference resolution and pool selection. `none` explicitly suppresses only the background or decoration, as shown above.
+An explicit viewer override is strict. A `@POOL` override selects one candidate from that category's expanded pool; if the pool has no selectable candidates, viewer preparation fails with an actionable diagnostic rather than silently falling back. If an explicitly requested registered resource, face, color, style, or other value cannot be used, viewer preparation likewise fails instead of consulting a lower-precedence preference or default pool. Properties not explicitly overridden continue to use normal Refrain preference resolution and pool selection. `none` explicitly suppresses only the background or decoration, as shown above.
 
 For example:
 

@@ -98,6 +98,12 @@ def _identifier(value: str) -> str:
     return value
 
 
+def _resource_preference(value: str) -> str:
+    if value.startswith("@") and _IDENTIFIER.fullmatch(value[1:]):
+        return value
+    return _identifier(value)
+
+
 def _positive_font_size(value: str) -> int:
     if not value.isascii() or not value.isdecimal() or int(value) < 1:
         raise argparse.ArgumentTypeError("font size must be a positive integer number of design-canvas pixels")
@@ -736,7 +742,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--image", type=Path, metavar="PATH", help="inspect or publish a finished RGB PNG unchanged")
     parser.add_argument("--config", help="application configuration YAML file")
     parser.add_argument("--entry", type=parse_entry_selector, metavar="ENTRY_ID[:N]")
-    parser.add_argument("--font", type=_identifier, metavar="FONT_ID")
+    parser.add_argument("--font", type=_resource_preference, metavar="FONT_ID|@POOL")
     parser.add_argument("--quotation-face", type=_identifier, metavar="FACE_ID")
     parser.add_argument("--source-face", type=_identifier, metavar="FACE_ID")
     parser.add_argument("--attribution-face", type=_identifier, metavar="FACE_ID")
@@ -752,10 +758,10 @@ def _parser() -> argparse.ArgumentParser:
         metavar="PIXELS",
         help="maximum design-canvas pixel size for automatic quotation fitting",
     )
-    parser.add_argument("--background", type=_identifier, metavar="BACKGROUND_ID|none")
-    parser.add_argument("--decoration", type=_identifier, metavar="DECORATION_ID|none")
-    parser.add_argument("--text-color", type=_identifier, metavar="COLOR_ID")
-    parser.add_argument("--tint", type=_identifier, metavar="COLOR_ID")
+    parser.add_argument("--background", type=_resource_preference, metavar="BACKGROUND_ID|none|@POOL")
+    parser.add_argument("--decoration", type=_resource_preference, metavar="DECORATION_ID|none|@POOL")
+    parser.add_argument("--text-color", type=_resource_preference, metavar="COLOR_ID|@POOL")
+    parser.add_argument("--tint", type=_resource_preference, metavar="COLOR_ID|@POOL")
     parser.add_argument("--style", choices=("centered", "left-aligned"))
     qr_options = parser.add_mutually_exclusive_group()
     qr_options.add_argument("--qr", dest="qr_enabled", action="store_true")

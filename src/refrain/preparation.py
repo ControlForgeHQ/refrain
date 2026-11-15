@@ -12,6 +12,7 @@ from types import MappingProxyType
 
 from PIL import Image, ImageFont, ImageOps
 
+from .assets import valid_identifier
 from .config import (
     ApplicationConfiguration,
     BackgroundResource,
@@ -135,15 +136,26 @@ def _resolve_presentation_choices(
     )
     background = configuration.backgrounds.get(background_identifier)
     text_color = _resolve_text_color(configuration, snapshot, decoration, background, chooser, overrides.text_color)
-    if overrides.tint is not None and overrides.tint not in configuration.palette:
-        raise DailyImagePreparationError(f"explicit decoration tint color {overrides.tint!r} is not in the palette")
+    tint_identifier = (
+        None
+        if overrides.tint is None
+        else _strict_pool_override(
+            overrides.tint,
+            configuration.decoration_color_pools,
+            configuration.palette,
+            "decoration tint color",
+            chooser,
+        )
+    )
+    if tint_identifier is not None and tint_identifier not in configuration.palette:
+        raise DailyImagePreparationError(f"explicit decoration tint color {tint_identifier!r} is not in the palette")
     decoration_tint = _resolve_decoration_tint(
         configuration,
         snapshot,
         decoration,
         chooser,
         () if decoration is None else decoration.layers,
-        (_palette_color(configuration, overrides.tint) if overrides.tint is not None else forced_decoration_tint),
+        (_palette_color(configuration, tint_identifier) if tint_identifier is not None else forced_decoration_tint),
         background,
     )
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, overrides)
@@ -219,16 +231,65 @@ def _palette_color(configuration: ApplicationConfiguration, identifier: str) -> 
     return int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16)
 
 
+def _preference_candidates(
+    preference: str | Sequence[str] | None,
+    pools: Mapping[str, tuple[str, ...]],
+    source: str,
+) -> tuple[str, ...]:
+    if preference is None:
+        return ()
+    members = (preference,) if isinstance(preference, str) else preference
+    result: list[str] = []
+    seen: set[str] = set()
+    for member in members:
+        if not isinstance(member, str):
+            _LOGGER.warning("Invalid resource preference from %s; excluding it", source)
+            continue
+        if member.startswith("@"):
+            name = member[1:]
+            if not valid_identifier(name):
+                _LOGGER.warning("Pool reference %r from %s is malformed; excluding it", member, source)
+                continue
+            candidates = pools.get(name)
+            if candidates is None:
+                _LOGGER.warning("Pool reference %r from %s is unknown; excluding it", member, source)
+                continue
+        else:
+            candidates = (member,)
+        for identifier in candidates:
+            if identifier not in seen:
+                seen.add(identifier)
+                result.append(identifier)
+    return tuple(result)
+
+
+def _strict_pool_override(
+    value: str,
+    pools: Mapping[str, tuple[str, ...]],
+    available: Mapping[str, object],
+    label: str,
+    chooser: random.Random,
+) -> str:
+    if not value.startswith("@"):
+        return value
+    candidates = _preference_candidates(value, pools, f"explicit {label}")
+    usable = tuple(identifier for identifier in candidates if identifier in available)
+    if not usable:
+        raise DailyImagePreparationError(f"explicit {label} pool reference {value!r} has no selectable candidates")
+    return chooser.choice(usable)
+
+
 def _resolve_palette_preference(
     configuration: ApplicationConfiguration,
-    levels: Sequence[tuple[str, Sequence[str] | None]],
+    levels: Sequence[tuple[str, Sequence[str] | None, Mapping[str, tuple[str, ...]]]],
     chooser: random.Random,
 ) -> tuple[str, tuple[int, int, int]]:
-    for source, candidates in levels:
+    for source, candidates, pools in levels:
         if candidates is None:
             continue
-        usable = tuple(dict.fromkeys(identifier for identifier in candidates if identifier in configuration.palette))
-        for identifier in candidates:
+        resolved = _preference_candidates(candidates, pools, source)
+        usable = tuple(identifier for identifier in resolved if identifier in configuration.palette)
+        for identifier in resolved:
             if identifier not in configuration.palette:
                 _LOGGER.warning("Palette identifier %r from %s is unavailable; excluding it", identifier, source)
         if usable:
@@ -246,16 +307,31 @@ def _resolve_text_color(
     override: str | None = None,
 ) -> tuple[int, int, int]:
     if override is not None:
-        if override not in configuration.palette:
-            raise DailyImagePreparationError(f"explicit text color {override!r} is not in the palette")
-        return _palette_color(configuration, override)
+        identifier = _strict_pool_override(
+            override,
+            configuration.text_color_pools,
+            configuration.palette,
+            "text color",
+            chooser,
+        )
+        if identifier not in configuration.palette:
+            raise DailyImagePreparationError(f"explicit text color {identifier!r} is not in the palette")
+        return _palette_color(configuration, identifier)
     identifier, color = _resolve_palette_preference(
         configuration,
         (
-            ("content entry", snapshot.text_color),
-            ("selected background", None if background is None else background.text_color),
-            ("selected decoration", None if decoration is None else decoration.text_color),
-            ("layout.text.colors", configuration.default_text_colors),
+            ("content entry", snapshot.text_color, configuration.text_color_pools),
+            (
+                "selected background",
+                None if background is None else background.text_color,
+                configuration.text_color_pools,
+            ),
+            (
+                "selected decoration",
+                None if decoration is None else decoration.text_color,
+                configuration.text_color_pools,
+            ),
+            ("layout.text.colors", configuration.default_text_colors, configuration.text_color_pools),
         ),
         chooser,
     )
@@ -280,10 +356,18 @@ def _resolve_decoration_tint(
     identifier, color = _resolve_palette_preference(
         configuration,
         (
-            ("content entry", snapshot.decoration_color),
-            ("selected background", None if background is None else background.decoration_color),
-            ("selected decoration", decoration.decoration_color),
-            ("layout.decorations.colors", configuration.default_decoration_colors),
+            ("content entry", snapshot.decoration_color, configuration.decoration_color_pools),
+            (
+                "selected background",
+                None if background is None else background.decoration_color,
+                configuration.decoration_color_pools,
+            ),
+            ("selected decoration", decoration.decoration_color, configuration.decoration_color_pools),
+            (
+                "layout.decorations.colors",
+                configuration.default_decoration_colors,
+                configuration.decoration_color_pools,
+            ),
         ),
         chooser,
     )
@@ -711,45 +795,59 @@ def _resolve_fonts(
     chooser: random.Random,
     overrides: PresentationOverrides,
 ) -> dict[str, ResolvedFont]:
-    candidates: list[tuple[str, str]] = []
+    preferences: list[tuple[str, str]] = []
     if snapshot.font is not None:
-        candidates.append(("content entry", snapshot.font))
+        preferences.append(("content entry", snapshot.font))
     if decoration is not None and decoration.font is not None:
-        candidates.append(("selected decoration", decoration.font))
+        preferences.append(("selected decoration", decoration.font))
 
     resolved_bundle: FontResource | None = None
     regular: ResolvedFont | None = None
     tried: set[str] = set()
     if overrides.font is not None:
-        resource = configuration.fonts.get(overrides.font)
-        if resource is None:
-            raise DailyImagePreparationError(f"explicit font {overrides.font!r} is not registered")
-        try:
-            regular = _read_font(resource)
-        except Exception as error:
-            raise DailyImagePreparationError(f"explicit font {overrides.font!r} is unusable: {error}") from error
-        resolved_bundle = resource
-    for source, identifier in (() if overrides.font is not None else candidates):
-        tried.add(identifier)
+        identifier = _strict_pool_override(
+            overrides.font,
+            configuration.font_pools,
+            configuration.fonts,
+            "font",
+            chooser,
+        )
         resource = configuration.fonts.get(identifier)
         if resource is None:
-            _LOGGER.warning(
-                "Requested font %r from %s is unavailable; checking the next preference",
-                identifier,
-                source,
-            )
-            continue
+            raise DailyImagePreparationError(f"explicit font {identifier!r} is not registered")
         try:
             regular = _read_font(resource)
-            resolved_bundle = resource
-            break
         except Exception as error:
-            _LOGGER.warning(
-                "Requested font %r from %s is unusable; checking the next preference: %s",
-                identifier,
-                source,
-                error,
-            )
+            raise DailyImagePreparationError(f"explicit font {identifier!r} is unusable: {error}") from error
+        resolved_bundle = resource
+    if overrides.font is None:
+        for source, preference in preferences:
+            pool = list(_preference_candidates(preference, configuration.font_pools, source))
+            while pool:
+                identifier = chooser.choice(pool)
+                pool.remove(identifier)
+                tried.add(identifier)
+                resource = configuration.fonts.get(identifier)
+                if resource is None:
+                    _LOGGER.warning(
+                        "Requested font %r from %s is unavailable; checking the next candidate or preference",
+                        identifier,
+                        source,
+                    )
+                    continue
+                try:
+                    regular = _read_font(resource)
+                    resolved_bundle = resource
+                    break
+                except Exception as error:
+                    _LOGGER.warning(
+                        "Requested font %r from %s is unusable; checking the next candidate or preference: %s",
+                        identifier,
+                        source,
+                        error,
+                    )
+            if resolved_bundle is not None:
+                break
 
     if resolved_bundle is None:
         pool = tuple(identifier for identifier in configuration.default_fonts if identifier not in tried)
@@ -816,19 +914,30 @@ def _resolve_decoration(
     override: str | None = None,
 ) -> tuple[str, DecorationResource | None]:
     if override is not None:
-        if override == "none":
+        identifier = _strict_pool_override(
+            override,
+            configuration.decoration_pools,
+            {**configuration.decorations, "none": None},
+            "decoration",
+            chooser,
+        )
+        if identifier == "none":
             return "none", None
-        resource = configuration.decorations.get(override)
+        resource = configuration.decorations.get(identifier)
         if resource is None:
-            raise DailyImagePreparationError(f"explicit decoration {override!r} is not registered")
-        return override, resource
+            raise DailyImagePreparationError(f"explicit decoration {identifier!r} is not registered")
+        return identifier, resource
     preferred = snapshot.decoration
     if preferred == "none":
         return "none", None
     if preferred is not None:
-        resource = configuration.decorations.get(preferred)
-        if resource is not None:
-            return preferred, resource
+        candidates = _preference_candidates(preferred, configuration.decoration_pools, "content entry")
+        usable = tuple(
+            identifier for identifier in candidates if identifier == "none" or identifier in configuration.decorations
+        )
+        if usable:
+            identifier = chooser.choice(usable)
+            return identifier, configuration.decorations.get(identifier)
         _LOGGER.warning("Requested decoration %r is unavailable; using the default decoration pool", preferred)
     if not configuration.default_decorations:
         raise DailyImagePreparationError(
@@ -847,11 +956,18 @@ def _resolve_background(
     override: str | None = None,
 ) -> str:
     if override is not None:
-        if override == "none":
+        identifier = _strict_pool_override(
+            override,
+            configuration.background_pools,
+            {**configuration.backgrounds, "none": None},
+            "background",
+            chooser,
+        )
+        if identifier == "none":
             return "none"
-        if override not in configuration.backgrounds:
-            raise DailyImagePreparationError(f"explicit background {override!r} is not registered")
-        return override
+        if identifier not in configuration.backgrounds:
+            raise DailyImagePreparationError(f"explicit background {identifier!r} is not registered")
+        return identifier
     preferences = (
         ("content entry", snapshot.background),
         ("selected decoration", None if decoration is None else decoration.background),
@@ -859,8 +975,12 @@ def _resolve_background(
     for source, preferred in preferences:
         if preferred is None:
             continue
-        if preferred == "none" or preferred in configuration.backgrounds:
-            return preferred
+        candidates = _preference_candidates(preferred, configuration.background_pools, source)
+        usable = tuple(
+            identifier for identifier in candidates if identifier == "none" or identifier in configuration.backgrounds
+        )
+        if usable:
+            return chooser.choice(usable)
         _LOGGER.warning(
             "Requested background %r from %s is unavailable; checking the next preference",
             preferred,
