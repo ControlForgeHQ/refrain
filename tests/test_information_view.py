@@ -271,13 +271,20 @@ def test_fitted_text_can_align_an_identity_block_to_its_right_edge() -> None:
 
 def test_preview_example_writes_complete_png_without_application_state(tmp_path: Path) -> None:
     repository = Path(__file__).parent.parent
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        'destinations:\n  - id: default\n    type: "window"\n'
+        'fonts:\n  pools:\n    default: ["@builtin"]\n'
+        'text:\n  colors:\n    pools:\n      default: ["@builtin"]\n',
+        encoding="utf-8",
+    )
     output = tmp_path / "information-view.png"
     result = subprocess.run(
         [
             sys.executable,
             str(repository / "examples" / "information_view.py"),
             "--config",
-            str(repository / "examples" / "config.yaml"),
+            str(config),
             "--output",
             str(output),
         ],

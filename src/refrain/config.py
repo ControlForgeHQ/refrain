@@ -30,16 +30,16 @@ from .geometry import (
 )
 
 _TOP_LEVEL_FIELDS = {
-    "general",
-    "content",
-    "reveal",
     "destinations",
     "image-server",
-    "layout",
-    "presentation",
-    "information_view",
-    "palette",
     "storage",
+    "scheduling",
+    "presentation",
+    "palette",
+    "fonts",
+    "text",
+    "backgrounds",
+    "decorations",
 }
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _MAX_DESTINATION_IDENTIFIER_LENGTH = 256
@@ -363,10 +363,21 @@ def _parse_time(value: object, field: str, report: Callable[..., None], *, fallb
     return time.fromisoformat(value)
 
 
+def _configured_pools(
+    section: dict[str, object],
+    field: str,
+    allowed_fields: set[str],
+    report: Callable[..., None],
+) -> dict[str, object]:
+    _known_fields(section, allowed_fields | {"pools"}, field, report)
+    if "pools" not in section:
+        return {}
+    return _mapping(section["pools"], f"{field}.pools", report)
+
+
 def _resolve_configured_pools(
     section: dict[str, object],
     field: str,
-    non_pool_fields: set[str],
     available: set[str],
     builtin: tuple[str, ...],
     report: Callable[..., None],
@@ -375,14 +386,11 @@ def _resolve_configured_pools(
     default_required: bool = False,
     default_label: str = "resource identifiers",
     identifier_label: str = "resource",
-    default_shorthand: bool = False,
     allow_none: bool = False,
     warn_duplicates: bool = False,
 ) -> tuple[Mapping[str, tuple[str, ...]], tuple[str, ...]]:
     definitions: dict[str, object] = {}
     for name, value in section.items():
-        if name in non_pool_fields:
-            continue
         location = f"{field}.{name}" if isinstance(name, str) else f"{field}[{name!r}]"
         if not valid_identifier(name):
             report(location, "must be a valid ASCII pool name; the pool is ignored")
@@ -433,9 +441,7 @@ def _resolve_configured_pools(
 
         def expand(name: str, active: tuple[str, ...]) -> None:
             for index, member in enumerate(normalized[name]):
-                location = (
-                    f"{field}[{index}]" if name == "default" and default_shorthand else f"{field}.{name}[{index}]"
-                )
+                location = f"{field}.{name}[{index}]"
                 if not isinstance(member, str):
                     report(location, f"must be a valid {identifier_label} identifier; it is excluded")
                     continue
@@ -500,110 +506,155 @@ def _valid_image_server_host(value: object) -> bool:
         )
 
 
-def load_background_image(resource: BackgroundResource) -> Image.Image:
-    """Revalidate and return a fully decoded RGB/RGBA image owned by the caller.
-
-    Unreadable resources raise their loading exception; unsupported images raise
-    ``ValueError``. No image is cached, so regeneration checks the current resource.
-    The decoded image is returned directly to avoid a second full-resolution copy.
-    """
-    if resource.path is None:
-        raise ValueError("packaged background images are loaded from their layers")
-    return _load_layer_image(resource.path, "background")
-
-
-def load_decoration_layer_image(resource: DecorationLayerResource) -> Image.Image:
-    """Revalidate and return a fully decoded RGB or RGBA layer owned by the caller."""
-    return _load_layer_image(resource.image, "decoration")
+def _parse_palette(data: dict[str, object], report: Callable[..., None]) -> dict[str, str]:
+    palette = dict(_BUILTIN_PALETTE)
+    if "palette" not in data:
+        return palette
+    for identifier, value in _mapping(data["palette"], "palette", report).items():
+        field = f"palette.{identifier}" if isinstance(identifier, str) else f"palette[{identifier!r}]"
+        if not valid_identifier(identifier):
+            report(field, "must be a valid palette identifier; the colour is ignored")
+        elif not isinstance(value, str) or not _HEX_COLOR.fullmatch(value):
+            report(field, "must be a quoted six-digit #RRGGBB colour; the colour is ignored")
+        else:
+            palette[identifier] = value
+    return palette
 
 
-def load_composition_layer_image(resource: CompositionLayerResource) -> Image.Image:
-    """Revalidate and return a fully decoded RGB or RGBA composition layer."""
-    category = "background" if isinstance(resource, BackgroundLayerResource) else "decoration"
-    return _load_layer_image(resource.image, category)
+def _parse_storage(
+    data: dict[str, object],
+    file: Path,
+    report: Callable[..., None],
+) -> tuple[Path, StorageConfiguration]:
+    storage_data: dict[str, object] = {}
+    if "storage" in data:
+        if not isinstance(data["storage"], dict):
+            report("storage", "must be a mapping", logging.ERROR)
+        else:
+            storage_data = data["storage"]
+            _known_fields(storage_data, {"content", "state", "history", "artifacts"}, "storage", report)
+
+    content_value = storage_data.get("content", "content")
+    if not isinstance(content_value, str) or not content_value:
+        report("storage.content", "must be a nonempty path string; using the documented default 'content'")
+        content_value = "content"
+    content_directory = Path(content_value)
+    if not content_directory.is_absolute():
+        content_directory = file.parent / content_directory
+
+    storage_values: dict[str, Path] = {}
+    for storage_field in ("state", "history", "artifacts"):
+        if storage_field not in storage_data:
+            continue
+        value = storage_data[storage_field]
+        if not isinstance(value, str) or not value:
+            report(f"storage.{storage_field}", "must be a nonempty path string", logging.ERROR)
+            continue
+        storage_path = Path(value)
+        if not storage_path.is_absolute():
+            storage_path = file.parent / storage_path
+        storage_values[storage_field] = storage_path
+    return content_directory, StorageConfiguration(**storage_values)
 
 
-def _load_layer_image(path: Union[Path, Traversable], category: str) -> Image.Image:
-    with path.open("rb") as image_file:
-        image = Image.open(image_file)
+def _parse_scheduling(
+    data: dict[str, object],
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[time, RevealSchedule]:
+    scheduling = _mapping(data.get("scheduling", {}), "scheduling", report)
+    _known_fields(scheduling, {"day_start", "reveal"}, "scheduling", report)
+    if "day_start" not in scheduling:
+        use_default("scheduling.day_start", "'05:00'")
+    day_start = _parse_time(
+        scheduling.get("day_start", "05:00"),
+        "scheduling.day_start",
+        report,
+        fallback="the documented default '05:00'",
+    )
+    if day_start is None:
+        day_start = time(5)
+
+    reveal_data = _mapping(scheduling.get("reveal", {}), "scheduling.reveal", report)
+    _known_fields(reveal_data, {"source", "attribution"}, "scheduling.reveal", report)
+    reveal_times: dict[str, time] = {}
+    for name, default in (("source", "12:00"), ("attribution", "18:00")):
+        config_field = f"scheduling.reveal.{name}"
+        if name not in reveal_data:
+            use_default(config_field, repr(default))
+        parsed = _parse_time(
+            reveal_data.get(name, default),
+            config_field,
+            report,
+            fallback=f"the documented default {default!r}",
+        )
+        if parsed is None:
+            parsed = time.fromisoformat(default)
+        if parsed < day_start:
+            if name in reveal_data:
+                report(
+                    config_field,
+                    f"must not precede scheduling.day_start; using the documented default {default!r}",
+                )
+                parsed = time.fromisoformat(default)
+            if parsed < day_start:
+                report(
+                    config_field,
+                    f"the documented default {default!r} precedes scheduling.day_start; supply a valid reveal time",
+                    logging.ERROR,
+                )
+        reveal_times[name] = parsed
+    return day_start, RevealSchedule(reveal_times["source"], reveal_times["attribution"])
+
+
+def _parse_presentation(
+    data: dict[str, object],
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[PresentationInsets, int, bool]:
+    presentation = _mapping(data.get("presentation", {}), "presentation", report)
+    _known_fields(presentation, {"insets", "information_view", "qr"}, "presentation", report)
+
+    if "insets" not in presentation:
+        use_default("presentation.insets", "{left: 384, right: 384, top: 324, bottom: 324}")
+        insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
+    else:
+        insets = _parse_presentation_insets(presentation["insets"], "presentation.insets", report)
+    if insets is None:
+        insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
+    for aspect_ratio in SUPPORTED_PRESENTATION_ASPECTS:
+        design_canvas_size, _ = design_canvas_for_aspect(aspect_ratio)
         try:
-            if image.format != "PNG":
-                raise ValueError(f"{category} must be a PNG image")
-            if getattr(image, "n_frames", 1) != 1:
-                raise ValueError(f"{category} must be a single-frame PNG image")
-            if image.mode not in {"RGB", "RGBA"}:
-                raise ValueError(f"{category} mode must be RGB or RGBA")
-            image.load()
-        except Exception:
-            image.close()
-            raise
-        return image
+            validate_presentation_insets(insets, design_canvas_size)
+        except PresentationGeometryError as error:
+            report("presentation.insets", str(error), logging.ERROR)
 
+    information_view = _mapping(presentation.get("information_view", {}), "presentation.information_view", report)
+    _known_fields(information_view, {"duration"}, "presentation.information_view", report)
+    duration = information_view.get("duration", 60)
+    if "duration" not in information_view:
+        use_default("presentation.information_view.duration", "60")
+    elif isinstance(duration, bool) or not isinstance(duration, int) or not 0 <= duration <= 300:
+        report(
+            "presentation.information_view.duration",
+            "must be an integer between 0 and 300; using the documented default 60",
+        )
+        duration = 60
 
-def load_application_config(config_file: Union[str, Path]) -> ApplicationConfiguration:
-    """Load configuration, applying documented defaults and logging recoverable problems."""
-    file = Path(config_file).absolute()
-    diagnostics: list[ConfigurationDiagnostic] = []
-    fatal_diagnostics: list[ConfigurationDiagnostic] = []
-    defaults_used: list[str] = []
-
-    def report(field: str, message: str, severity: int = logging.WARNING) -> None:
-        diagnostic = ConfigurationDiagnostic(file=file, field=field, message=message, severity=severity)
-        diagnostics.append(diagnostic)
-        if severity >= logging.ERROR:
-            fatal_diagnostics.append(diagnostic)
-
-    def use_default(field: str, value: str) -> None:
-        defaults_used.append(f"{field}={value}")
-
-    def finish_diagnostics() -> None:
-        for diagnostic in diagnostics:
-            if diagnostic.severity >= logging.WARNING:
-                _LOGGER.log(diagnostic.severity, "%s", diagnostic)
-        if defaults_used:
-            _LOGGER.info("%s: using documented defaults for optional fields: %s", file, ", ".join(defaults_used))
-
-    try:
-        contents = file.read_text(encoding="utf-8")
-        data = load_yaml(contents, allow_non_string_keys=True)
-    except (OSError, UnicodeError) as error:
-        report("$", f"cannot read UTF-8 YAML file: {error}", logging.ERROR)
-        finish_diagnostics()
-        raise ApplicationConfigurationError(tuple(fatal_diagnostics)) from error
-    except yaml.YAMLError as error:
-        location = yaml_error_location(error)
-        prefix = f"{location}: " if location else ""
-        report("$", f"invalid or unsupported YAML: {prefix}{error}", logging.ERROR)
-        finish_diagnostics()
-        raise ApplicationConfigurationError(tuple(fatal_diagnostics)) from error
-
-    if not isinstance(data, dict):
-        report("$", "must contain one top-level mapping", logging.ERROR)
-        finish_diagnostics()
-        raise ApplicationConfigurationError(tuple(fatal_diagnostics))
-    _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
-
-    presentation_data = _mapping(data.get("presentation", {}), "presentation", report)
-    _known_fields(presentation_data, {"qr"}, "presentation", report)
-    qr_data = _mapping(presentation_data.get("qr", {}), "presentation.qr", report)
-    _known_fields(qr_data, {"enabled"}, "presentation.qr", report)
-    qr_enabled = qr_data.get("enabled", True)
-    if "enabled" in qr_data and type(qr_enabled) is not bool:
+    qr = _mapping(presentation.get("qr", {}), "presentation.qr", report)
+    _known_fields(qr, {"enabled"}, "presentation.qr", report)
+    qr_enabled = qr.get("enabled", True)
+    if "enabled" in qr and type(qr_enabled) is not bool:
         report("presentation.qr.enabled", "must be a YAML boolean; QR generation remains enabled", logging.WARNING)
         qr_enabled = True
+    return insets, duration, qr_enabled
 
-    palette = dict(_BUILTIN_PALETTE)
-    if "palette" in data:
-        palette_data = _mapping(data["palette"], "palette", report)
-        for identifier, value in palette_data.items():
-            field_name = f"palette.{identifier}" if isinstance(identifier, str) else f"palette[{identifier!r}]"
-            if not valid_identifier(identifier):
-                report(field_name, "must be a valid palette identifier; the colour is ignored")
-            elif not isinstance(value, str) or not _HEX_COLOR.fullmatch(value):
-                report(field_name, "must be a quoted six-digit #RRGGBB colour; the colour is ignored")
-            else:
-                palette[identifier] = value
 
+def _parse_destinations(
+    data: dict[str, object],
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[DisplayBackendConfiguration, ...]:
     from .display.capabilities import DESTINATION_CAPACITIES
 
     image_server_enabled = "image-server" in data
@@ -704,7 +755,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                 DisplayOutputConfiguration(identifier, specification)
             )
 
-    display_backends = [
+    return tuple(
         DisplayBackendConfiguration(
             backend_type,
             image_server_host,
@@ -713,299 +764,288 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             image_server_enabled,
         )
         for backend_type, outputs in destination_groups.items()
-    ]
-
-    general = _mapping(data.get("general", {}), "general", report)
-    _known_fields(general, {"day_start"}, "general", report)
-
-    if "day_start" not in general:
-        use_default("general.day_start", "'05:00'")
-    day_start = _parse_time(
-        general.get("day_start", "05:00"),
-        "general.day_start",
-        report,
-        fallback="the documented default '05:00'",
     )
-    if day_start is None:
-        day_start = time(5)
 
-    content = _mapping(data.get("content", {}), "content", report)
-    _known_fields(content, {"directory"}, "content", report)
-    directory_value = content.get("directory", "content")
-    if not isinstance(directory_value, str) or not directory_value:
-        report("content.directory", "must be a nonempty path string; using the documented default 'content'")
-        directory_value = "content"
-    content_directory = Path(directory_value)
-    if not content_directory.is_absolute():
-        content_directory = file.parent / content_directory
 
-    storage_values: dict[str, Path] = {}
-    if "storage" in data:
-        storage_data = data["storage"]
-        if not isinstance(storage_data, dict):
-            report("storage", "must be a mapping", logging.ERROR)
-            storage_data = {}
-        else:
-            _known_fields(storage_data, {"state", "history", "artifacts"}, "storage", report)
-        for storage_field in ("state", "history", "artifacts"):
-            if storage_field not in storage_data:
-                continue
-            value = storage_data[storage_field]
-            if not isinstance(value, str) or not value:
-                report(f"storage.{storage_field}", "must be a nonempty path string", logging.ERROR)
-                continue
-            storage_path = Path(value)
-            if not storage_path.is_absolute():
-                storage_path = file.parent / storage_path
-            storage_values[storage_field] = storage_path
-    storage = StorageConfiguration(**storage_values)
-
-    information_view = _mapping(data.get("information_view", {}), "information_view", report)
-    _known_fields(information_view, {"duration"}, "information_view", report)
-    information_view_duration = information_view.get("duration", 60)
-    if "duration" not in information_view:
-        use_default("information_view.duration", "60")
-    elif (
-        isinstance(information_view_duration, bool)
-        or not isinstance(information_view_duration, int)
-        or not 0 <= information_view_duration <= 300
-    ):
-        report(
-            "information_view.duration",
-            "must be an integer between 0 and 300; using the documented default 60",
-        )
-        information_view_duration = 60
-
-    reveal_data = _mapping(data.get("reveal", {}), "reveal", report)
-    _known_fields(reveal_data, {"source", "attribution"}, "reveal", report)
-
-    reveal_times: dict[str, time] = {}
-    for field, default in (("source", "12:00"), ("attribution", "18:00")):
-        config_field = f"reveal.{field}"
-        if field not in reveal_data:
-            use_default(config_field, repr(default))
-        parsed = _parse_time(
-            reveal_data.get(field, default),
-            config_field,
-            report,
-            fallback=f"the documented default {default!r}",
-        )
-        if parsed is None:
-            parsed = time.fromisoformat(default)
-        if parsed < day_start:
-            if field in reveal_data:
-                report(
-                    config_field,
-                    f"must not precede general.day_start; using the documented default {default!r}",
-                )
-                parsed = time.fromisoformat(default)
-            if parsed < day_start:
-                report(
-                    config_field,
-                    f"the documented default {default!r} precedes general.day_start; supply a valid reveal time",
-                    logging.ERROR,
-                )
-        reveal_times[field] = parsed
-    reveal = RevealSchedule(reveal_times["source"], reveal_times["attribution"])
-
-    layout = _mapping(data.get("layout", {}), "layout", report)
-    _known_fields(
-        layout,
-        {"presentation_insets", "fonts", "backgrounds", "decorations", "text"},
-        "layout",
+def _parse_color_pools(
+    section: dict[str, object],
+    field: str,
+    palette: Mapping[str, str],
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[Mapping[str, tuple[str, ...]], tuple[str, ...]]:
+    if "colors" not in section:
+        use_default(f"{field}.colors.pools.default", "['black']")
+    colors = _mapping(section.get("colors", {}), f"{field}.colors", report)
+    pools = _configured_pools(colors, f"{field}.colors", set(), report)
+    return _resolve_configured_pools(
+        pools,
+        f"{field}.colors.pools",
+        set(palette),
+        ("black",),
         report,
+        default_fallback=("black",),
+        default_label="palette identifiers",
+        identifier_label="palette",
+        warn_duplicates=True,
     )
-    if "presentation_insets" not in layout:
-        use_default("layout.presentation_insets", "{left: 384, right: 384, top: 324, bottom: 324}")
-        presentation_insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
-    else:
-        presentation_insets = _parse_presentation_insets(
-            layout["presentation_insets"], "layout.presentation_insets", report
-        )
-    if presentation_insets is None:
-        presentation_insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
-    for aspect_ratio in SUPPORTED_PRESENTATION_ASPECTS:
-        design_canvas_size, _ = design_canvas_for_aspect(aspect_ratio)
-        try:
-            validate_presentation_insets(presentation_insets, design_canvas_size)
-        except PresentationGeometryError as error:
-            report("layout.presentation_insets", str(error), logging.ERROR)
 
-    fonts_data = _mapping(layout.get("fonts", {}), "layout.fonts", report)
-    if "available" in fonts_data:
-        report(
-            "layout.fonts.available",
-            "is no longer supported; place each font bundle under assets/fonts/ with a font.yaml manifest",
-        )
-    package_root = files("refrain")
+
+def _load_font_resources(
+    section: dict[str, object],
+    file: Path,
+    package_root: Traversable,
+    report: Callable[..., None],
+) -> tuple[dict[str, FontResource], Mapping[str, tuple[str, ...]], tuple[str, ...], Mapping[str, str]]:
     from .assets import discover_fonts
 
-    font_registry = discover_fonts(
+    pools = _configured_pools(section, "fonts", {"faces"}, report)
+    registry = discover_fonts(
         package_root.joinpath("assets", "fonts"),
         file.parent / "assets" / "fonts",
         report,
     )
-    font_faces = (
-        parse_font_faces(fonts_data["font_faces"], "layout.fonts.font_faces", report)
-        if "font_faces" in fonts_data
-        else MappingProxyType({})
-    )
-    font_pools, default_fonts = _resolve_configured_pools(
-        fonts_data,
-        "layout.fonts",
-        {"available", "font_faces"},
-        set(font_registry),
-        tuple(sorted(identifier for identifier, resource in font_registry.items() if resource.bundled)),
+    faces = parse_font_faces(section["faces"], "fonts.faces", report) if "faces" in section else MappingProxyType({})
+    resolved_pools, default = _resolve_configured_pools(
+        pools,
+        "fonts.pools",
+        set(registry),
+        tuple(sorted(identifier for identifier, resource in registry.items() if resource.bundled)),
         report,
         default_required=True,
         default_label="font identifiers",
         identifier_label="font",
         warn_duplicates=True,
     )
+    return registry, resolved_pools, default, faces
 
-    backgrounds_data = _mapping(layout.get("backgrounds", {}), "layout.backgrounds", report)
-    if "available" in backgrounds_data:
-        report(
-            "layout.backgrounds.available",
-            "is no longer supported; place PNG files or background packages under assets/backgrounds/",
-        )
+
+def _load_background_resources(
+    section: dict[str, object],
+    file: Path,
+    package_root: Traversable,
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[dict[str, BackgroundResource], Mapping[str, tuple[str, ...]], tuple[str, ...]]:
     from .assets import discover_backgrounds
 
-    background_registry = discover_backgrounds(
+    pools = _configured_pools(section, "backgrounds", set(), report)
+    registry = discover_backgrounds(
         package_root.joinpath("assets", "backgrounds"),
         file.parent / "assets" / "backgrounds",
         report,
     )
-    if "default" not in backgrounds_data:
-        use_default("layout.backgrounds.default", "['none']")
-    background_pools, default_backgrounds = _resolve_configured_pools(
-        backgrounds_data,
-        "layout.backgrounds",
-        {"available"},
-        set(background_registry),
-        tuple(sorted(identifier for identifier, resource in background_registry.items() if resource.bundled)),
+    if "default" not in pools:
+        use_default("backgrounds.pools.default", "['none']")
+    resolved_pools, default = _resolve_configured_pools(
+        pools,
+        "backgrounds.pools",
+        set(registry),
+        tuple(sorted(identifier for identifier, resource in registry.items() if resource.bundled)),
         report,
         default_fallback=("none",),
         default_label="background identifiers",
         identifier_label="background",
         allow_none=True,
     )
+    return registry, resolved_pools, default
 
-    decorations_data = _mapping(layout.get("decorations", {}), "layout.decorations", report)
-    if "available" in decorations_data:
-        report(
-            "layout.decorations.available",
-            "is no longer supported; use assets/decorations/ packages containing decoration.yaml",
-        )
+
+def _load_decoration_resources(
+    section: dict[str, object],
+    file: Path,
+    package_root: Traversable,
+    fonts: Mapping[str, FontResource],
+    backgrounds: Mapping[str, BackgroundResource],
+    palette: Mapping[str, str],
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[
+    dict[str, DecorationResource],
+    Mapping[str, tuple[str, ...]],
+    tuple[str, ...],
+    Mapping[str, tuple[str, ...]],
+    tuple[str, ...],
+]:
     from .assets import discover_decorations
 
-    decoration_registry = discover_decorations(
+    pools = _configured_pools(section, "decorations", {"colors"}, report)
+    registry = discover_decorations(
         package_root.joinpath("assets", "decorations"),
         file.parent / "assets" / "decorations",
-        set(font_registry),
-        set(background_registry),
+        set(fonts),
+        set(backgrounds),
         report,
         lambda value, field, reporter, severity=logging.ERROR: _parse_decoration_insets(
             value, field, reporter, severity
         ),
     )
-    if "default" not in decorations_data:
-        use_default("layout.decorations.default", "['none']")
-    decoration_pools, default_decorations = _resolve_configured_pools(
-        decorations_data,
-        "layout.decorations",
-        {"available", "colors"},
-        set(decoration_registry),
-        tuple(sorted(identifier for identifier, resource in decoration_registry.items() if resource.bundled)),
+    if "default" not in pools:
+        use_default("decorations.pools.default", "['none']")
+    resolved_pools, default = _resolve_configured_pools(
+        pools,
+        "decorations.pools",
+        set(registry),
+        tuple(sorted(identifier for identifier, resource in registry.items() if resource.bundled)),
         report,
         default_fallback=("none",),
         default_label="decoration identifiers",
         identifier_label="decoration",
         allow_none=True,
     )
+    color_pools, default_colors = _parse_color_pools(section, "decorations", palette, report, use_default)
+    return registry, resolved_pools, default, color_pools, default_colors
 
-    if "colors" not in decorations_data:
-        use_default("layout.decorations.colors", "['black']")
-        configured_decoration_colors: object = {"default": ["black"]}
-    else:
-        configured_decoration_colors = decorations_data["colors"]
-    if isinstance(configured_decoration_colors, list):
-        decoration_colors_data: dict[str, object] = {"default": configured_decoration_colors}
-        decoration_colors_shorthand = True
-    elif isinstance(configured_decoration_colors, dict):
-        decoration_colors_data = configured_decoration_colors
-        decoration_colors_shorthand = False
-    else:
-        report(
-            "layout.decorations.colors",
-            "must be a palette-identifier sequence or a mapping of named pools",
-        )
-        decoration_colors_data = {"default": []}
-        decoration_colors_shorthand = False
-    decoration_color_pools, default_decoration_colors = _resolve_configured_pools(
-        decoration_colors_data,
-        "layout.decorations.colors",
-        set(),
-        set(palette),
-        ("black",),
-        report,
-        default_fallback=("black",),
-        default_label="palette identifiers",
-        identifier_label="palette",
-        default_shorthand=decoration_colors_shorthand,
-        warn_duplicates=True,
-    )
 
-    text_data = _mapping(layout.get("text", {}), "layout.text", report)
-    _known_fields(text_data, {"colors", "min_font_size", "max_font_size"}, "layout.text", report)
-    if "colors" not in text_data:
-        use_default("layout.text.colors", "['black']")
-        configured_text_colors: object = {"default": ["black"]}
-    else:
-        configured_text_colors = text_data["colors"]
-    if isinstance(configured_text_colors, list):
-        text_colors_data: dict[str, object] = {"default": configured_text_colors}
-        text_colors_shorthand = True
-    elif isinstance(configured_text_colors, dict):
-        text_colors_data = configured_text_colors
-        text_colors_shorthand = False
-    else:
-        report("layout.text.colors", "must be a palette-identifier sequence or a mapping of named pools")
-        text_colors_data = {"default": []}
-        text_colors_shorthand = False
-    text_color_pools, default_text_colors = _resolve_configured_pools(
-        text_colors_data,
-        "layout.text.colors",
-        set(),
-        set(palette),
-        ("black",),
-        report,
-        default_fallback=("black",),
-        default_label="palette identifiers",
-        identifier_label="palette",
-        default_shorthand=text_colors_shorthand,
-        warn_duplicates=True,
-    )
-
-    sizes: dict[str, int] = {}
-    for field in ("min_font_size", "max_font_size"):
-        value = text_data.get(field)
+def _load_text_settings(
+    section: dict[str, object],
+    palette: Mapping[str, str],
+    report: Callable[..., None],
+    use_default: Callable[[str, str], None],
+) -> tuple[Mapping[str, tuple[str, ...]], tuple[str, ...], int, int]:
+    _known_fields(section, {"colors", "min_font_size", "max_font_size"}, "text", report)
+    color_pools, default_colors = _parse_color_pools(section, "text", palette, report, use_default)
+    bounds: dict[str, int] = {}
+    for name, default in (("min_font_size", 56), ("max_font_size", 200)):
+        if name not in section:
+            use_default(f"text.{name}", str(default))
+        value = section.get(name, default)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            report(f"layout.text.{field}", "is required and must be a positive integer", logging.ERROR)
-        else:
-            sizes[field] = value
-    if len(sizes) == 2 and sizes["max_font_size"] < sizes["min_font_size"]:
-        report("layout.text.max_font_size", "must be greater than or equal to min_font_size", logging.ERROR)
+            report(f"text.{name}", "must be a positive integer", logging.ERROR)
+            value = default
+        bounds[name] = value
+    if bounds["max_font_size"] < bounds["min_font_size"]:
+        report("text.max_font_size", "must be greater than or equal to min_font_size", logging.ERROR)
+    return color_pools, default_colors, bounds["min_font_size"], bounds["max_font_size"]
+
+
+def load_background_image(resource: BackgroundResource) -> Image.Image:
+    """Revalidate and return a fully decoded RGB/RGBA image owned by the caller.
+
+    Unreadable resources raise their loading exception; unsupported images raise
+    ``ValueError``. No image is cached, so regeneration checks the current resource.
+    The decoded image is returned directly to avoid a second full-resolution copy.
+    """
+    if resource.path is None:
+        raise ValueError("packaged background images are loaded from their layers")
+    return _load_layer_image(resource.path, "background")
+
+
+def load_decoration_layer_image(resource: DecorationLayerResource) -> Image.Image:
+    """Revalidate and return a fully decoded RGB or RGBA layer owned by the caller."""
+    return _load_layer_image(resource.image, "decoration")
+
+
+def load_composition_layer_image(resource: CompositionLayerResource) -> Image.Image:
+    """Revalidate and return a fully decoded RGB or RGBA composition layer."""
+    category = "background" if isinstance(resource, BackgroundLayerResource) else "decoration"
+    return _load_layer_image(resource.image, category)
+
+
+def _load_layer_image(path: Union[Path, Traversable], category: str) -> Image.Image:
+    with path.open("rb") as image_file:
+        image = Image.open(image_file)
+        try:
+            if image.format != "PNG":
+                raise ValueError(f"{category} must be a PNG image")
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError(f"{category} must be a single-frame PNG image")
+            if image.mode not in {"RGB", "RGBA"}:
+                raise ValueError(f"{category} mode must be RGB or RGBA")
+            image.load()
+        except Exception:
+            image.close()
+            raise
+        return image
+
+
+def load_application_config(config_file: Union[str, Path]) -> ApplicationConfiguration:
+    """Load configuration, applying documented defaults and logging recoverable problems."""
+    file = Path(config_file).absolute()
+    diagnostics: list[ConfigurationDiagnostic] = []
+    fatal_diagnostics: list[ConfigurationDiagnostic] = []
+    defaults_used: list[str] = []
+
+    def report(field: str, message: str, severity: int = logging.WARNING) -> None:
+        diagnostic = ConfigurationDiagnostic(file=file, field=field, message=message, severity=severity)
+        diagnostics.append(diagnostic)
+        if severity >= logging.ERROR:
+            fatal_diagnostics.append(diagnostic)
+
+    def use_default(field: str, value: str) -> None:
+        defaults_used.append(f"{field}={value}")
+
+    def finish_diagnostics() -> None:
+        for diagnostic in diagnostics:
+            if diagnostic.severity >= logging.WARNING:
+                _LOGGER.log(diagnostic.severity, "%s", diagnostic)
+        if defaults_used:
+            _LOGGER.info("%s: using documented defaults for optional fields: %s", file, ", ".join(defaults_used))
+
+    try:
+        contents = file.read_text(encoding="utf-8")
+        data = load_yaml(contents, allow_non_string_keys=True)
+    except (OSError, UnicodeError) as error:
+        report("$", f"cannot read UTF-8 YAML file: {error}", logging.ERROR)
+        finish_diagnostics()
+        raise ApplicationConfigurationError(tuple(fatal_diagnostics)) from error
+    except yaml.YAMLError as error:
+        location = yaml_error_location(error)
+        prefix = f"{location}: " if location else ""
+        report("$", f"invalid or unsupported YAML: {prefix}{error}", logging.ERROR)
+        finish_diagnostics()
+        raise ApplicationConfigurationError(tuple(fatal_diagnostics)) from error
+
+    if not isinstance(data, dict):
+        report("$", "must contain one top-level mapping", logging.ERROR)
+        finish_diagnostics()
+        raise ApplicationConfigurationError(tuple(fatal_diagnostics))
+    _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
+
+    palette = _parse_palette(data, report)
+
+    display_backends = _parse_destinations(data, report, use_default)
+    day_start, reveal = _parse_scheduling(data, report, use_default)
+    content_directory, storage = _parse_storage(data, file, report)
+    presentation_insets, information_view_duration, qr_enabled = _parse_presentation(data, report, use_default)
+
+    package_root = files("refrain")
+    fonts_data = _mapping(data.get("fonts", {}), "fonts", report)
+    font_registry, font_pools, default_fonts, font_faces = _load_font_resources(fonts_data, file, package_root, report)
+    backgrounds_data = _mapping(data.get("backgrounds", {}), "backgrounds", report)
+    background_registry, background_pools, default_backgrounds = _load_background_resources(
+        backgrounds_data, file, package_root, report, use_default
+    )
+    decorations_data = _mapping(data.get("decorations", {}), "decorations", report)
+    (
+        decoration_registry,
+        decoration_pools,
+        default_decorations,
+        decoration_color_pools,
+        default_decoration_colors,
+    ) = _load_decoration_resources(
+        decorations_data,
+        file,
+        package_root,
+        font_registry,
+        background_registry,
+        palette,
+        report,
+        use_default,
+    )
+    text_data = _mapping(data.get("text", {}), "text", report)
+    text_color_pools, default_text_colors, min_font_size, max_font_size = _load_text_settings(
+        text_data, palette, report, use_default
+    )
 
     finish_diagnostics()
     if fatal_diagnostics:
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
 
-    assert presentation_insets is not None
     assert display_backends
     return ApplicationConfiguration(
         file=file,
-        display_backends=tuple(display_backends),
+        display_backends=display_backends,
         day_start=day_start,
         content_directory=content_directory,
         storage=storage,
@@ -1013,8 +1053,8 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         presentation_insets=presentation_insets,
         fonts=MappingProxyType(font_registry),
         default_fonts=default_fonts,
-        min_font_size=sizes["min_font_size"],
-        max_font_size=sizes["max_font_size"],
+        min_font_size=min_font_size,
+        max_font_size=max_font_size,
         information_view_duration=information_view_duration,
         qr_enabled=qr_enabled,
         backgrounds=MappingProxyType(background_registry),

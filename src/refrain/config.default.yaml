@@ -1,52 +1,58 @@
-# This is the initial editable configuration installed by --initialize.
-general:
-  day_start: "05:00"
-
-reveal:
-  source: "12:00"
-  attribution: "18:00"
-
-information_view:
-  duration: 60
-
+# Display destinations
 destinations:
   - id: "default"
     type: "image-server"
 
-# This optional section enables the loopback-only HTTP service.
+# Enable the image-server HTTP service with default settings.
 image-server:
-  host: "127.0.0.1"
-  port: 8080
 
-layout:
-  presentation_insets:
-    left: 384
-    right: 384
-    top: 324
-    bottom: 324
+# Scheduling
+scheduling:
+  day_start: "05:00"
+  reveal:
+    source: "12:00"
+    attribution: "18:00"
 
-  fonts:
+# Presentation
+presentation:
+  information_view:
+    duration: 60
+
+# Custom colors
+palette:
+  sage: "#8A9B79"
+  slate: "#52657A"
+  terracotta: "#C65A20"
+
+# Fonts
+fonts:
+  pools:
     default:
       - "@builtin"
-    font_faces:
-      source: italic
+  faces:
+    source: italic
 
-  backgrounds:
+# Text
+text:
+  colors:
+    pools:
+      default:
+        - "@builtin"
+
+# Backgrounds
+backgrounds:
+  pools:
     default:
       - "@builtin"
       - "none"
 
-  decorations:
+# Decorations
+decorations:
+  pools:
     default:
       - "@builtin"
       - "none"
-    colors:
+  colors:
+    pools:
       default:
         - "@builtin"
-
-  text:
-    colors:
-      default:
-        - "@builtin"
-    min_font_size: 56
-    max_font_size: 200

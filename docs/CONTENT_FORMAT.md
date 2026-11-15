@@ -128,23 +128,6 @@ Content-entry-specific information must not be stored in application configurati
 ### Example
 
 ```yaml
-general:
-  day_start: "05:00"
-
-content:
-  directory: "content"
-
-reveal:
-  source: "12:00"
-  attribution: "18:00"
-
-information_view:
-  duration: 60
-
-presentation:
-  qr:
-    enabled: true
-
 destinations:
   - id: "default"
     type: "image-server"
@@ -153,42 +136,73 @@ image-server:
   host: "127.0.0.1"
   port: 8080
 
-layout:
-  presentation_insets:
+storage:
+  content: "content"
+  state: "state/current.json"
+  history: "state/history.json"
+  artifacts: "cache/artifacts"
+
+scheduling:
+  day_start: "05:00"
+  reveal:
+    source: "12:00"
+    attribution: "18:00"
+
+presentation:
+  insets:
     left: 384
     right: 384
     top: 324
     bottom: 324
+  information_view:
+    duration: 60
+  qr:
+    enabled: true
 
-  fonts:
-    default:
-      - "libre-baskerville"
-      - "lora"
-      - "source-sans-3"
-    font_faces:
-      source: italic
+palette:
+  sage: "#8A9B79"
+  slate: "#52657A"
+  terracotta: "#C65A20"
 
-  backgrounds:
-    default:
-      - "none"
-      - "aged-paper"
+fonts:
+  pools:
+    default: ["@literary", "source-sans-3"]
+    literary: ["lora", "alegreya", "libre-baskerville"]
+    complete: ["@builtin"]
+  faces:
+    quotation: regular
+    source: italic
+    attribution: italic
 
-  decorations:
-    default:
-      - "none"
-    colors:
-      - "black"
+text:
+  min_font_size: 56
+  max_font_size: 200
+  colors:
+    pools:
+      default: ["@neutral"]
+      neutral: ["black", "slate"]
+      complete: ["@builtin"]
 
-  text:
-    colors:
-      - "black"
-    min_font_size: 56
-    max_font_size: 200
+backgrounds:
+  pools:
+    default: ["@subtle", "none"]
+    subtle: ["aged-paper", "canvas"]
+    complete: ["@builtin"]
+
+decorations:
+  pools:
+    default: ["@minimal", "none"]
+    minimal: ["simple-border", "lower-flourish"]
+    complete: ["@builtin"]
+  colors:
+    pools:
+      default: ["@muted"]
+      muted: ["black", "sage", "slate"]
 ```
 
-The example illustrates an image-server destination and listener, the information view, explicit QR policy, independent literary insets, resource pools, and automatic quotation fitting.
+The example is comprehensive. It assumes the named visual resources exist and is not the shipped starting configuration.
 
-The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
+The installed distribution includes `config.default.yaml` as the concise editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone.
 
 Refrain discovers bundled resources through package resources and user resources recursively beside the effective configuration file under `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/`. Each discovered resource is available by stable identifier without adding it to a user-defined pool; `@builtin` explicitly includes successfully registered bundled resources in a pool.
 
@@ -198,11 +212,11 @@ Fonts, packaged backgrounds, and decorations use YAML manifests whose referenced
 
 Custom visual resources are selected by registered identifier; there is no arbitrary absolute-path resource registration interface. The configuration-file, content-directory, and operational-path rules above remain separate.
 
-When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `content.directory` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly. Explicit `storage` paths use the same configuration-relative rule; omitted storage values continue to use independent platform-standard locations.
+When `--config` selects a nonstandard configuration file, its containing directory supplies the assets root. Refrain does not search platform-standard or current-working-directory asset locations in that case. `storage.content` remains independent: when omitted it is `content/` beside the configuration file, an explicit relative value is configuration-relative, and an absolute value is used directly. Explicit operational `storage` paths use the same configuration-relative rule; omitted paths continue to use independent platform-standard locations.
 
 The `default` pools control automatic resource selection. A resource need not appear in its default pool to be selected explicitly by a content entry.
 
-The reserved value `"none"` is available for backgrounds and decorations. The example uses it to preserve the original undecorated, paper-white presentation.
+The reserved value `"none"` is available for backgrounds and decorations. The shipped configuration uses it to preserve the original undecorated, paper-white presentation.
 
 User-supplied resource paths, rectangle dimensions, and font-size values are examples rather than universal defaults.
 
@@ -225,11 +239,12 @@ palette:
   sky-blue: "#78B7D4"
   nasty-green-goo: "#718C23"
 
-layout:
-  decorations:
-    colors:
-      - "black"
-      - "burnt-orange"
+decorations:
+  colors:
+    pools:
+      default:
+        - "black"
+        - "burnt-orange"
 ```
 
 RGB lists and direct RGB values in content entries or decoration manifests are not supported.
@@ -279,13 +294,15 @@ Each image-server destination is exposed at `/display/<id>/current`. The service
 
 Unsupported configuration fields are reported as unrecognized fields. The retired `display` configuration is not part of the supported schema.
 
-### General settings
+### Scheduling settings
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `general.day_start` | Time string | No | `"05:00"` |
+| `scheduling.day_start` | Time string | No | `"05:00"` |
+| `scheduling.reveal.source` | Time string | No | `"12:00"` |
+| `scheduling.reveal.attribution` | Time string | No | `"18:00"` |
 
-The host operating system supplies the local timezone and daylight-saving rules for all configured scheduling times. A `general.timezone` field is unsupported and is reported as an unknown field.
+The host operating system supplies the local timezone and daylight-saving rules for all configured scheduling times. A timezone field is unsupported.
 
 `day_start` specifies the local wall-clock time at which a new logical display day normally begins.
 
@@ -297,27 +314,28 @@ Seconds, timezone suffixes, and loosely formatted times are not supported in Ver
 
 ### Storage settings
 
-The optional top-level `storage` mapping selects runtime persistence and prepared-artifact locations.
+The optional top-level `storage` mapping groups file locations. The locations retain their independent ownership, persistence, and cleanup semantics.
 
 | Field | Type | Required | Default |
 |---|---|---|---|
+| `storage.content` | Path string | No | `"content"` beside the selected configuration file |
 | `storage.state` | Path string | No | Platform-standard operational-state file |
 | `storage.history` | Path string | No | Platform-standard global-history file |
 | `storage.artifacts` | Path string | No | Platform-standard prepared-artifact directory |
 
-Each field is independent. In particular, setting `storage.state` does not change the default location of global history.
+Content is author-maintained input and is never eligible for deletion by operational cleanup commands. Operational state and global history remain authoritative application data with independent lifecycles. Prepared artifacts are regenerable application data. Setting one field does not change the default location or lifecycle of another.
 
-An absolute path is used as specified. A relative path is resolved from the directory containing the selected configuration file. An omitted field continues to use its corresponding platform-standard Refrain location; selecting another file with `--config` does not itself relocate storage.
+An absolute path is used as specified. A relative path is resolved from the directory containing the selected configuration file. Omitted operational storage fields continue to use their corresponding platform-standard Refrain locations; selecting another file with `--config` does not itself relocate them. Omitted `storage.content` uses `content/` beside the selected configuration file.
 
-When present, `storage` must be a mapping and each supported value must be a nonempty string. Unsupported fields are reported and ignored according to the configuration unknown-field policy. An explicitly invalid storage value is an error; Refrain does not replace it with a platform default.
+When present, `storage` must be a mapping and each supported value must be a nonempty string. Invalid `storage.content` produces a warning and uses its documented default. Invalid operational storage paths are errors; Refrain does not replace them with platform defaults. Unsupported fields are reported and ignored according to the configuration unknown-field policy.
 
 ### Information view settings
 
-The optional `information_view` mapping controls automatic presentation of Refrain's application information view during startup.
+The optional `presentation.information_view` mapping controls automatic presentation of Refrain's application information view during startup.
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `information_view.duration` | Integer | No | `60` |
+| `presentation.information_view.duration` | Integer | No | `60` |
 
 `duration` specifies the automatic information-view presentation duration in seconds.
 
@@ -334,7 +352,7 @@ The information view appears once on each application start when enabled. It doe
 
 If the information view cannot be prepared or successfully published within the application's bounded initial attempt period, ordinary daily presentation proceeds without requiring successful information-view publication.
 
-Omitting `information_view` or its `duration` field uses the documented default of 60 seconds.
+Omitting `presentation.information_view` or its `duration` field uses the documented default of 60 seconds.
 
 An explicitly supplied invalid duration produces a warning and uses the documented default, according to the application's configuration-validation rules.
 
@@ -358,32 +376,16 @@ Boolean values are required when the field is present; strings, integers, and ot
 
 QR enablement is configured at the presentation level only. Content entries have no QR override; a decoration's `qr_ready` field may suppress generation for that selected decoration.
 
-### Content settings
-
-| Field | Type | Required | Default |
-|---|---|---|---|
-| `content.directory` | String | No | `"content"` |
-
-`directory` identifies the location of the content library. The field may be omitted; when absent, the effective directory is `content/` alongside the selected configuration file. This default applies equally to platform-standard configuration and a file selected with `--config`, and does not produce an informational diagnostic.
-
-Relative paths are interpreted relative to the directory containing the application configuration file.
-
-Absolute paths are permitted.
-
-The path must identify a readable directory when the library is loaded.
-
-Directory organization does not influence content eligibility, priority, or selection probability.
-
 ### Global reveal schedule
 
 | Field | Type | Required | Default |
 |---|---|---|---|
-| `reveal.source` | Time string | No | `"12:00"` |
-| `reveal.attribution` | Time string | No | `"18:00"` |
+| `scheduling.reveal.source` | Time string | No | `"12:00"` |
+| `scheduling.reveal.attribution` | Time string | No | `"18:00"` |
 
 The global reveal schedule establishes default host-local times for source and attribution.
 
-The initial presentation stage, which reveals the quotation, occurs at `general.day_start`.
+The initial presentation stage, which reveals the quotation, occurs at `scheduling.day_start`.
 
 `source` and `attribution` specify when those fields first become visible, if present in the selected content entry.
 
@@ -401,13 +403,13 @@ This restriction avoids ambiguity about whether a clock time refers to the curre
 
 The runtime behavior of clock adjustments, missed stages, and restarts is defined by the architecture.
 
-### Layout settings
+### Resource category settings
 
-Version 0.1 provides one configurable, typography-first presentation layout with optional backgrounds and decorations.
+Fonts, text, backgrounds, and decorations are independent top-level configuration sections. All five resource-selection categories declare named pools under an explicit `pools` mapping.
 
 The complete literary composition consists of the primary quotation and its optional source and attribution.
 
-The Version 0.1 public layout configuration defines:
+The public configuration defines:
 
 - default independent literary presentation insets;
 - discovered fonts and their default selection pool;
@@ -429,22 +431,22 @@ Each configured output destination has an output specification consisting of a d
 
 Requested dimensions are positive integer pixels in width, height order and need not exactly match the declared aspect ratio. For example, an output specification may declare 4:3 and request `[1600, 1190]`; the architecture resolves the presentation canvas separately and resizes only the completed image to the requested dimensions. The 3840 × 2400 reference envelope does not limit requested output dimensions. Boolean values, non-integer dimensions, zero or negative dimensions, and unsupported aspect ratios are configuration errors. See [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry) for design-, presentation-, and output-image geometry.
 
-The optional `layout.presentation_insets` mapping defines the default literary rectangle as four independent design-canvas pixel measurements. If omitted, it defaults to `left: 384`, `right: 384`, `top: 324`, and `bottom: 324`:
+The optional `presentation.insets` mapping defines the default literary rectangle as four independent design-canvas pixel measurements. If omitted, it defaults to `left: 384`, `right: 384`, `top: 324`, and `bottom: 324`:
 
 | Field | Type | Required |
 |---|---|---|
-| `layout.presentation_insets.left` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
-| `layout.presentation_insets.right` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
-| `layout.presentation_insets.top` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
-| `layout.presentation_insets.bottom` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `presentation.insets.left` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `presentation.insets.right` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `presentation.insets.top` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
+| `presentation.insets.bottom` | Nonnegative design-canvas pixel integer | Yes, when the mapping is supplied |
 
 The 3840 × 2400 envelope defines the maximum design area from which the aspect-specific design canvas is selected. Insets are applied inward from that design canvas's edges, not from the full reference envelope. Thus `left: 180` means 180 design-canvas pixels at every supported aspect ratio. Insets are not normalized coordinates; resolve the literary rectangle in design-canvas coordinates and scale its edges to the presentation canvas using the deterministic rounding rules in `ARCHITECTURE.md`. Do not scale literary geometry directly to aspect-mismatched requested output dimensions. Boolean values and non-integer values are invalid.
 
 For example:
 
 ```yaml
-layout:
-  presentation_insets:
+presentation:
+  insets:
     left: 384
     right: 384
     top: 324
@@ -455,46 +457,50 @@ Each opposing pair must leave a positive width or height on the active design ca
 
 The effective rectangle contains the complete quotation and any source and attribution. All present fields, including unrevealed fields, must fit in the rectangle without overlap, clipping, or truncation. Its geometry remains stable across every reveal stage. This fitting guarantee does not prevent the text rectangle from overlapping independently composited artwork or QR output. The default configuration and bundled artwork must avoid undesirable overlap; custom configuration and decoration authors are responsible for checking their composition. Refrain does not detect or correct graphical overlap.
 
-Backend output mappings supply declared aspects and requested dimensions. Layout YAML supplies design-canvas pixel insets and source-image slice measurements. The fixed reference envelope is 3840 × 2400. Design-canvas dimensions, presentation-canvas dimensions, and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
+Backend output mappings supply declared aspects and requested dimensions. Presentation configuration supplies design-canvas pixel insets; asset manifests supply source-image slice measurements. The fixed reference envelope is 3840 × 2400. Design-canvas dimensions, presentation-canvas dimensions, and derived rendering geometry are resolved during image preparation; they are not additional YAML fields or daily-selection state.
 
 A content entry cannot directly specify presentation insets.
 
 ### Named resource pools
 
-Fonts, backgrounds, decorations, literary text colors, and decoration tint colors support category-scoped named pools. Define font, background, and decoration pools alongside `default` in their corresponding `layout` mappings. Define color pools within the corresponding `layout.text.colors` or `layout.decorations.colors` mapping. Each pool value is a sequence of resource identifiers and/or pool references:
+Fonts, backgrounds, decorations, literary text colors, and decoration tint colors support category-scoped named pools. Each category declares them in its own `pools` mapping. Each pool value is a sequence of resource identifiers and/or pool references:
 
 ```yaml
-layout:
-  fonts:
+fonts:
+  pools:
     default: ["@favourites"]
     literary: ["lora", "libre-baskerville"]
     favourites: ["@literary", "source-sans-3"]
 
-  backgrounds:
+backgrounds:
+  pools:
     default: ["@builtin", "none"]
     subtle: ["aged-paper", "canvas"]
 
-  decorations:
+decorations:
+  pools:
     default: ["@builtin", "none"]
-    colors:
+  colors:
+    pools:
       default: ["@builtin"]
       muted: ["sage", "navy"]
 
-  text:
-    colors:
+text:
+  colors:
+    pools:
       default: ["@builtin"]
       muted: ["sage", "navy"]
 ```
 
 In a resource-selection field, a string beginning with `@` references a named pool in that field's category. References may be nested. Expansion is depth-first in member order; invalid or unavailable members are excluded, repeated resolved identifiers are deduplicated at first occurrence, and cycles are silently skipped on the active recursion path. Unknown or malformed references produce a warning and no candidates. A pool resolving to no candidates is empty; it does not gain an internal fallback. Each distinct expanded candidate has equal selection probability, independent of repeats, nesting, or pool declaration order.
 
-Pool names use the shared case-sensitive ASCII resource-identifier syntax. Names are unique within each category, may be reused across categories, and cannot be `builtin` or conflict with existing non-pool properties such as `font_faces`. `default` is the automatic-selection pool and follows the same expansion rules. The `@` syntax applies only in resource-selection positions; it does not change font-face names, resource definitions, paths, palette values, or content selectors such as `@preview`.
+Pool names use the shared case-sensitive ASCII resource-identifier syntax. Names are unique within each category and may be reused across categories. Pool names are scoped to their `pools` mapping and do not conflict with settings such as `fonts.faces` or `colors` in their parent section. `builtin` is reserved. `default` is the automatic-selection pool and follows the same expansion rules. The `@` syntax applies only in resource-selection positions; it does not change font-face names, resource definitions, paths, palette values, or content selectors such as `@preview`.
 
 Every category has a reserved `builtin` pool. For fonts, backgrounds, and decorations it contains, in deterministic order, successfully registered bundled resources only; invalid resources and custom resources are excluded. Background and decoration `none` is not implicit in `builtin`. The built-in text-color and decoration-color pools each contain the palette identifier `black`; a configured `palette.black` value remains effective. Defining a user pool named `builtin` is ignored with a warning.
 
 An explicit `@builtin` reference opts into future membership changes as valid bundled resources are added or removed. Direct identifiers and user-defined pools retain their configured membership. No implicit `@builtin` fallback is applied when another pool is empty.
 
-For compatibility, `layout.text.colors` and `layout.decorations.colors` may still be written as a list; that form is the `default` pool. The mapping form defines named pools. Both color pool namespaces independently resolve identifiers from the one top-level `palette`.
+All five categories require the explicit mapping form shown above; color lists directly under `text.colors` or `decorations.colors` are unsupported. Both color-pool namespaces independently resolve identifiers from the one top-level `palette`.
 
 ### Font registry
 
@@ -530,19 +536,19 @@ All usable bundled and discovered fonts are available for explicit content-entry
 
 ### Default font pool
 
-The required `layout.fonts.default` field is a nonempty sequence of font identifiers and/or pool references.
+The required `fonts.pools.default` field is a nonempty sequence of font identifiers and/or pool references.
 
 For example:
 
 ```yaml
-layout:
-  fonts:
+fonts:
+  pools:
     default:
       - "libre-baskerville"
       - "lora"
       - "my-lora"
-    font_faces:
-      source: italic
+  faces:
+    source: italic
 ```
 
 The configured default pool defines the user's preferred fonts for automatic selection.
@@ -557,7 +563,7 @@ The effective default pool must contain at least one usable font only when image
 
 The default pool is explicitly configured. Refrain does not add discovered resources to it unless the configuration references `@builtin`.
 
-The optional `layout.fonts.font_faces` mapping supplies lowest-priority face preferences and does not affect the pool or bundle-selection randomness. It accepts the same `quotation`, `source`, and `attribution` roles and face-identifier syntax as bundle manifests. Invalid mappings or values are warned about and ignored. The packaged `config.default.yaml` explicitly requests italic source; installations whose existing configuration omits this field do not receive an implicit italic preference.
+The optional `fonts.faces` mapping supplies lowest-priority face preferences and does not affect the pool or bundle-selection randomness. It accepts the same `quotation`, `source`, and `attribution` roles and face-identifier syntax as bundle manifests. Invalid mappings or values are warned about and ignored. The packaged `config.default.yaml` explicitly requests italic source; installations whose existing configuration omits this field do not receive an implicit italic preference.
 
 A registered font need not appear in the default pool. Fonts outside the default pool remain available for explicit selection by content entries.
 
@@ -644,13 +650,13 @@ All usable discovered backgrounds are available for explicit entry or decoration
 
 #### Default background pool
 
-The optional `layout.backgrounds.default` field is a nonempty sequence of registered background identifiers, pool references, and/or `"none"`.
+The optional `backgrounds.pools.default` field is a nonempty sequence of registered background identifiers, pool references, and/or `"none"`.
 
 For example:
 
 ```yaml
-layout:
-  backgrounds:
+backgrounds:
+  pools:
     default:
       - "none"
       - "paper"
@@ -735,7 +741,7 @@ layers:
 | `format` | Integer version (`1`) | Yes | — |
 | `id` | Asset identifier | Yes | — |
 | `layers` | Nonempty ordered sequence of layer mappings | Yes | — |
-| `presentation_insets` | Complete four-edge mapping of nonnegative design-canvas pixel integers | No | Global `layout.presentation_insets` |
+| `presentation_insets` | Complete four-edge mapping of nonnegative design-canvas pixel integers | No | Global `presentation.insets` |
 | `font` | Font identifier or pool reference | No | None |
 | `font_faces` | Mapping of literary roles to face identifiers | No | None |
 | `text_color` | Palette identifier, pool reference, or nonempty sequence of either | No | None |
@@ -798,13 +804,13 @@ The effective tintability of each layer is `decoration.tintable AND layer.tintab
 
 #### Default decoration pool
 
-The optional `layout.decorations.default` field is a nonempty sequence of registered decoration identifiers, pool references, and/or `"none"`.
+The optional `decorations.pools.default` field is a nonempty sequence of registered decoration identifiers, pool references, and/or `"none"`.
 
 For example:
 
 ```yaml
-layout:
-  decorations:
+decorations:
+  pools:
     default:
       - "none"
       - "botanical-corners"
@@ -827,13 +833,13 @@ Discovery does not change pool membership. Bundled identifiers cannot be shadowe
 
 #### Default decoration color pool
 
-The optional `layout.decorations.colors` field is either a list of palette identifiers or a mapping of named pools, each containing a sequence of palette identifiers and/or pool references. The list form remains shorthand for `default`. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
+The optional `decorations.colors.pools` mapping defines named decoration-color pools. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
 
 Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. If the resolved default pool has no usable identifier, color selection uses `["black"]` as its existing fallback; an empty non-default named pool remains empty. Each distinct usable identifier has equal selection probability.
 
 ### Default text-color pool
 
-`layout.text.colors` is either an optional list of palette identifiers or a mapping of named pools, each containing a sequence of palette identifiers and/or pool references. The list form remains shorthand for `default`. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
+The optional `text.colors.pools` mapping defines named text-color pools. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
 
 The effective pool contains distinct identifiers registered in the effective palette. Invalid, unavailable, or duplicate members are excluded with warnings. If the resolved default pool has no usable member, color selection uses `["black"]` as its existing fallback; an empty non-default named pool remains empty.
 
@@ -858,7 +864,7 @@ Each literary role then resolves a face within that one selected bundle, indepen
 1. The content entry's `font_faces` preference.
 2. The selected decoration's `font_faces` preference.
 3. The selected font bundle's `font_faces` preference.
-4. `layout.fonts.font_faces`.
+4. `fonts.faces`.
 5. The bundle's `regular` face.
 
 The first defined preference wins, including an explicit `regular`. If that winning face is unavailable or unusable, that role uses `regular` with a warning; lower-priority preferences are not consulted. A role never selects another bundle. The selected decoration's face preferences apply even when the content entry selected a different bundle.
@@ -876,7 +882,7 @@ After the decoration and background have been selected, literary text color uses
 1. The content entry's `text_color`.
 2. The selected background's `text_color`.
 3. The selected decoration's `text_color`.
-4. The effective `layout.text.colors` pool.
+4. The effective `text.colors.pools` pool.
 5. The built-in `black` fallback.
 
 Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. Selection is uniform among distinct usable identifiers at one level; candidates from different levels are never combined. Resolve the selected palette identifier and RGB value for the complete image preparation.
@@ -886,7 +892,7 @@ Decoration colour is resolved once for the selected decoration when at least one
 1. The content entry's `decoration_color`.
 2. The selected background's `decoration_color`.
 3. The selected decoration's `decoration_color`.
-4. The effective `layout.decorations.colors` pool.
+4. The effective `decorations.colors.pools` pool.
 5. The built-in `black` fallback.
 
 Invalid and unavailable identifiers are excluded with diagnostics. Duplicate identifiers do not add selection weight. The first level with usable candidates is selected uniformly without combining levels. A successful selection activates tinting; if no layer is effectively tintable, no color is resolved.
@@ -909,20 +915,19 @@ The handling of missing resources during regeneration is defined in `docs/ARCHIT
 
 ### Automatic quotation fitting
 
-The `layout.text` mapping defines the permitted font-size bounds for the primary quotation.
+The `text` mapping defines the permitted font-size bounds for the primary quotation. Both bounds are optional and default independently to 56 and 200 design-canvas pixels.
 
-| Field | Type | Required |
-|---|---|---|
-| `layout.text.min_font_size` | Positive design-canvas pixel integer | Yes |
-| `layout.text.max_font_size` | Positive design-canvas pixel integer | Yes |
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `text.min_font_size` | Positive design-canvas pixel integer | No | `56` |
+| `text.max_font_size` | Positive design-canvas pixel integer | No | `200` |
 
 For example:
 
 ```yaml
-layout:
-  text:
-    min_font_size: 28
-    max_font_size: 100
+text:
+  min_font_size: 28
+  max_font_size: 100
 ```
 
 Configured font-size bounds are design-canvas pixel measurements. Scale the effective bounds to presentation-canvas pixels before fitting and rendering; do not derive them from aspect-mismatched output-image dimensions.
@@ -1036,7 +1041,7 @@ text_color:
   - burnt-orange
 ```
 
-List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Resolve pool references in the text-color namespace. Resolve the first level containing one or more usable identifiers: content entry, selected background, selected decoration, effective `layout.text.colors` pool, then built-in `black`. Candidates from different levels are never combined. Unknown, malformed, or unavailable members are diagnosed and excluded; a preference with no usable members falls through to the next level without invalidating its resource or content entry. RGB values are not accepted here.
+List members have equal probability; duplicate identifiers do not add weight. Identifiers must be available in the effective palette during image preparation. Resolve pool references in the text-color namespace. Resolve the first level containing one or more usable identifiers: content entry, selected background, selected decoration, effective `text.colors.pools` pool, then built-in `black`. Candidates from different levels are never combined. Unknown, malformed, or unavailable members are diagnosed and excluded; a preference with no usable members falls through to the next level without invalidating its resource or content entry. RGB values are not accepted here.
 
 ### Decoration-color preference
 
@@ -1053,7 +1058,7 @@ decoration_color:
   - burnt-orange
 ```
 
-When effective decoration tinting is required, resolve pool references in the independent decoration-color namespace and choose the first level containing usable identifiers: content entry, selected background, selected decoration, effective `layout.decorations.colors` pool, then built-in `black`. Candidates from different levels are never combined, and selection within a level is uniform among distinct usable identifiers. This preference affects only a selected decoration whose layers are effectively tintable; it never recolors the background. Invalid or unavailable identifiers do not invalidate their resource or the content entry. Direct RGB values are not accepted.
+When effective decoration tinting is required, resolve pool references in the independent decoration-color namespace and choose the first level containing usable identifiers: content entry, selected background, selected decoration, effective `decorations.colors.pools` pool, then built-in `black`. Candidates from different levels are never combined, and selection within a level is uniform among distinct usable identifiers. This preference affects only a selected decoration whose layers are effectively tintable; it never recolors the background. Invalid or unavailable identifiers do not invalidate their resource or the content entry. Direct RGB values are not accepted.
 
 ### Entry identifiers
 
@@ -1594,7 +1599,7 @@ Apply the following rules:
 - An unavailable or invalid discovered background or decoration produces a warning and is excluded from its effective registry.
 - An unavailable or unregistered default background or decoration identifier produces a warning and is excluded from its effective default pool.
 - An unavailable optional font preference on an otherwise usable decoration is ignored with a warning.
-- A malformed `font_faces` mapping in global configuration, a decoration manifest, or a font-bundle manifest is warned about and ignored without invalidating the containing resource.
+- A malformed `fonts.faces` mapping in application configuration, or `font_faces` mapping in a decoration manifest or font-bundle manifest, is warned about and ignored without invalidating the containing resource.
 - A missing background or decoration pool defaults to `["none"]`.
 - A configured background or decoration pool with no usable members falls back to `["none"]` with a warning.
 - Invalid decoration insets, layer definitions, or nine-slice boundaries exclude that decoration without invalidating unrelated resources.

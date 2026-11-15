@@ -11,16 +11,17 @@ from resource_helpers import write_font_bundle
 from refrain import PresentationInsets, load_application_config
 
 
-def _config_data(**layout_sections: object) -> dict[str, object]:
-    layout: dict[str, object] = {
-        "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
-        "fonts": {"default": ["test-font"]},
-        "backgrounds": {"default": ["none"]},
-        "decorations": {"default": ["none"]},
+def _config_data(**sections: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "presentation": {"insets": {"left": 384, "right": 384, "top": 216, "bottom": 216}},
+        "fonts": {"pools": {"default": ["test-font"]}},
+        "backgrounds": {"pools": {"default": ["none"]}},
+        "decorations": {"pools": {"default": ["none"]}},
         "text": {"min_font_size": 12, "max_font_size": 32},
+        "destinations": [{"id": "window", "type": "window"}],
     }
-    layout.update(layout_sections)
-    return {"destinations": [{"id": "window", "type": "window"}], "layout": layout}
+    data.update(sections)
+    return data
 
 
 def _write_config(path: Path, data: dict[str, object] | None = None) -> Path:
@@ -213,9 +214,9 @@ def test_bundled_resources_are_discovered_and_not_added_to_default_pools(tmp_pat
     config_path = _write_config(
         tmp_path / "config.yaml",
         _config_data(
-            fonts={"default": ["future-font"]},
-            backgrounds={"default": ["none"]},
-            decorations={"default": ["none"]},
+            fonts={"pools": {"default": ["future-font"]}},
+            backgrounds={"pools": {"default": ["none"]}},
+            decorations={"pools": {"default": ["none"]}},
         ),
     )
 
@@ -1023,12 +1024,12 @@ def test_invalid_font_bundles_are_excluded_independently(tmp_path: Path, manifes
     assert str(manifest["id"]) in caplog.text
 
 
-def test_legacy_available_mappings_are_ignored_with_migration_diagnostics(tmp_path: Path, caplog) -> None:
+def test_unknown_asset_configuration_fields_are_ignored(tmp_path: Path, caplog) -> None:
     baseline = load_application_config(_write_config(tmp_path / "baseline.yaml"))
     data = _config_data(
-        fonts={"default": ["test-font"], "available": {"legacy": "font.ttf"}},
-        backgrounds={"default": ["none"], "available": {"legacy": "paper.png"}},
-        decorations={"default": ["none"], "available": {"legacy": {"image": "border.png"}}},
+        fonts={"pools": {"default": ["test-font"]}, "available": {"legacy": "font.ttf"}},
+        backgrounds={"pools": {"default": ["none"]}, "available": {"legacy": "paper.png"}},
+        decorations={"pools": {"default": ["none"]}, "available": {"legacy": {"image": "border.png"}}},
     )
 
     config = load_application_config(_write_config(tmp_path / "config.yaml", data))
@@ -1036,4 +1037,4 @@ def test_legacy_available_mappings_are_ignored_with_migration_diagnostics(tmp_pa
     assert dict(config.fonts) == dict(baseline.fonts)
     assert dict(config.backgrounds) == dict(baseline.backgrounds)
     assert dict(config.decorations) == dict(baseline.decorations)
-    assert caplog.text.count("is no longer supported") == 3
+    assert caplog.text.count("is not a supported configuration field; it is ignored") == 3

@@ -53,23 +53,23 @@ from refrain.information_view import InformationViewPreparationError
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
-general:
-  day_start: "06:00"
-content:
-  directory: "content"
-reveal:
-  source: "12:00"
-  attribution: "18:00"
 destinations:
   - id: epaper
     type: "waveshare-13in3-e"
-information_view:
-  duration: 0
-layout:
-  presentation_insets: {left: 384, right: 384, top: 324, bottom: 324}
-  fonts:
+scheduling:
+  day_start: "06:00"
+  reveal:
+    source: "12:00"
+    attribution: "18:00"
+presentation:
+  information_view:
+    duration: 0
+fonts:
+  pools:
     default: ["test-font"]
-  text: {min_font_size: 28, max_font_size: 100}
+text:
+  min_font_size: 28
+  max_font_size: 100
 """
 
 
@@ -353,7 +353,12 @@ def test_runtime_control_lifecycle_is_required(
 )
 def test_background_preferences_are_preserved_without_resolution(workspace: Workspace, preference, caplog) -> None:
     workspace.background("paper-a")
-    workspace.config.write_text(_CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["paper-a"]\n  fonts:'))
+    workspace.config.write_text(
+        _CONFIG.replace(
+            "fonts:",
+            'backgrounds:\n  pools:\n    default: ["paper-a"]\nfonts:',
+        )
+    )
     ordinary(workspace, extra="" if preference is None else f'background: "{preference}"\n')
     configuration = application.load_application_config(workspace.config)
     proposal, snapshot = application._select_snapshot(configuration, date(2026, 3, 10), Random(1))
@@ -368,7 +373,10 @@ def test_background_pool_is_not_resolved_before_commit(workspace: Workspace) -> 
     workspace.background("pool-a")
     workspace.background("pool-b")
     workspace.config.write_text(
-        _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["pool-a", "none", "pool-a", "pool-b"]\n  fonts:')
+        _CONFIG.replace(
+            "fonts:",
+            'backgrounds:\n  pools:\n    default: ["pool-a", "none", "pool-a", "pool-b"]\nfonts:',
+        )
     )
     configuration = application.load_application_config(workspace.config)
 
@@ -392,8 +400,8 @@ def test_decoration_preferences_remain_semantic_content(workspace: Workspace) ->
     )
     workspace.config.write_text(
         _CONFIG.replace(
-            "  fonts:",
-            '  backgrounds: {default: ["paper-a"]}\n' '  decorations: {default: ["none"]}\n' "  fonts:",
+            "fonts:",
+            'backgrounds: {pools: {default: ["paper-a"]}}\n' 'decorations: {pools: {default: ["none"]}}\n' "fonts:",
         )
     )
     ordinary(workspace, extra='decoration: "custom"\n')
@@ -447,8 +455,8 @@ def test_explicit_none_and_entry_resource_preferences_override_decoration(worksp
     )
     workspace.config.write_text(
         _CONFIG.replace(
-            "  fonts:",
-            '  backgrounds: {default: ["paper-a"]}\n' '  decorations: {default: ["custom"]}\n' "  fonts:",
+            "fonts:",
+            'backgrounds: {pools: {default: ["paper-a"]}}\n' 'decorations: {pools: {default: ["custom"]}}\n' "fonts:",
         )
     )
     ordinary(workspace, extra='decoration: "none"\nfont: "test-font"\nbackground: "none"\n')
@@ -493,7 +501,7 @@ def test_role_face_precedence_falls_directly_to_regular_without_reselecting_bund
     workspace.config.write_text(
         _CONFIG.replace(
             'default: ["test-font"]',
-            'default: ["literary"]\n    font_faces: {quotation: italic, source: italic, attribution: italic}',
+            'default: ["literary"]\n  faces: {quotation: italic, source: italic, attribution: italic}',
         )
     )
     ordinary(
@@ -539,7 +547,7 @@ def test_bundle_and_global_face_preferences_apply_only_after_entry_and_decoratio
     workspace.config.write_text(
         _CONFIG.replace(
             'default: ["test-font"]',
-            'default: ["literary"]\n    font_faces: {source: italic, attribution: italic}',
+            'default: ["literary"]\n  faces: {source: italic, attribution: italic}',
         )
     )
     ordinary(
@@ -559,7 +567,7 @@ def test_unavailable_explicit_decoration_falls_back_to_pool(workspace: Workspace
     package.mkdir(parents=True)
     Image.new("RGBA", (16, 12)).save(package / "overlay.png")
     write_decoration_manifest(package, "test-frame")
-    workspace.config.write_text(_CONFIG.replace("  fonts:", '  decorations: {default: ["test-frame"]}\n  fonts:'))
+    workspace.config.write_text(_CONFIG.replace("fonts:", 'decorations: {pools: {default: ["test-frame"]}}\nfonts:'))
     ordinary(workspace, extra='decoration: "not-registered"\n')
 
     configuration = application.load_application_config(workspace.config)
@@ -582,8 +590,8 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
     )
     workspace.config.write_text(
         _CONFIG.replace(
-            "  fonts:",
-            '  decorations: {default: ["custom"]}\n' "  fonts:",
+            "fonts:",
+            'decorations: {pools: {default: ["custom"]}}\nfonts:',
         )
     )
     ordinary(workspace)
@@ -606,8 +614,8 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     path = workspace.background("paper", (100, 140, 180))
     workspace.config.write_text(
         _CONFIG.replace(
-            "  fonts:",
-            '  backgrounds:\n    default: ["paper"]\n  fonts:',
+            "fonts:",
+            'backgrounds:\n  pools:\n    default: ["paper"]\nfonts:',
         )
     )
     ordinary(workspace)
@@ -617,7 +625,7 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     path.unlink()
     workspace.background("fallback-paper")
     workspace.config.write_text(
-        _CONFIG.replace("  fonts:", '  backgrounds:\n    default: ["fallback-paper"]\n  fonts:')
+        _CONFIG.replace("fonts:", 'backgrounds:\n  pools:\n    default: ["fallback-paper"]\nfonts:')
     )
     second, second_display = workspace.run(at(10, 7))
     assert second.state == first.state
@@ -739,7 +747,7 @@ def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Works
     ordinary(workspace)
     workspace.config.write_text(
         _CONFIG.replace('day_start: "06:00"', 'day_start: "08:00"').replace(
-            "reveal:\n  source:", 'reveal:\n  quotation: "00:00"\n  source:'
+            "reveal:\n    source:", 'reveal:\n    quotation: "00:00"\n    source:'
         ),
         encoding="utf-8",
     )

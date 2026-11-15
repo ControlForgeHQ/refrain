@@ -1317,7 +1317,7 @@ Keep three configuration-testing responsibilities separate:
 
 - Application-default tests omit optional settings and verify documented fallback values, required settings, and effective constraints. Exercise operation when its actual prerequisites are satisfied.
 - Configuration-processing tests supply controlled inputs for parsing, validation, precedence, ordering, and diagnostics. Prefer small synthetic resources where resource characteristics matter; avoid fixtures that inherit unrelated shipped settings.
-- Shipped-configuration tests load the actual `config.default.yaml` and `examples/config.yaml`, validate their effective settings and resource availability, and exercise representative preparation or rendering without freezing incidental choices.
+- Shipped-configuration tests load the actual `config.default.yaml`, validate its effective settings and resource availability, and exercise representative preparation or rendering without freezing incidental choices.
 
 Exact-value assertions remain appropriate for documented contracts, deliberately supplied fixture values, deterministic rendering or selection scenarios, and persistent-state or protocol compatibility. A valid change to shipped configuration or bundled resources must not unnecessarily invalidate unrelated behavioral tests. Comparing parsed pools with their source YAML alone is insufficient: also verify usability and retain rejection or diagnostic coverage for invalid configuration and unavailable resources.
 
@@ -1429,7 +1429,7 @@ Test font configuration and selection behavior, including:
 - explicit content-entry font preferences;
 - a valid explicit content-entry or decoration preference with an empty effective default pool;
 - automatic-selection failure when the effective default pool is empty and no usable explicit preference applies;
-- `font_faces` parsing and invalid-value handling at all four configuration/content/manifest levels;
+- application-level `fonts.faces` parsing and invalid-value handling, plus `font_faces` handling in content entries and resource manifests;
 - role-face precedence, explicit-regular overrides, unavailable winning-face fallback without lower-level preference lookup, and decoration preferences applied to an entry-selected bundle;
 - consistent face resolution across stages generated together and reuse of complete caches despite later typography configuration or asset changes;
 - unregistered content-entry fonts and their warnings;

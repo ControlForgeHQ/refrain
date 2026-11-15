@@ -166,14 +166,14 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     config = load_application_config(paths.config_file)
     assert config.content_directory == paths.content_directory
     assert config.display_backends
-    configured_pools = packaged_config["layout"]
-    assert configured_pools["fonts"]["default"] == ["@builtin"]
+    configured_pools = packaged_config
+    assert configured_pools["fonts"]["pools"]["default"] == ["@builtin"]
     assert config.default_fonts == config.font_pools["builtin"]
     assert set(config.default_fonts) <= set(config.fonts)
-    assert configured_pools["backgrounds"]["default"] == ["@builtin", "none"]
+    assert configured_pools["backgrounds"]["pools"]["default"] == ["@builtin", "none"]
     assert config.default_backgrounds == (*config.background_pools["builtin"], "none")
     assert set(config.background_pools["builtin"]) <= set(config.backgrounds)
-    assert configured_pools["decorations"]["default"] == ["@builtin", "none"]
+    assert configured_pools["decorations"]["pools"]["default"] == ["@builtin", "none"]
     assert config.default_decorations == (*config.decoration_pools["builtin"], "none")
     assert set(config.decoration_pools["builtin"]) <= set(config.decorations)
     entries = load_content_library(paths.content_directory)
@@ -662,7 +662,8 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     external_resource = tmp_path / "external-font.ttf"
     external_resource.write_bytes(b"external font")
     (paths.config_directory / "config.yaml").write_text(
-        f"content: {{directory: /external}}\nlayout: {{fonts: {{available: {{outside: {external_resource}}}}}}}\n",
+        f"storage: {{content: /external}}\n"
+        f'fonts: {{pools: {{default: ["@builtin"]}}, available: {{outside: {external_resource}}}}}\n',
         encoding="utf-8",
     )
     (paths.config_directory / "content").mkdir()

@@ -31,12 +31,17 @@ from refrain.geometry import ResolvedOutputSpecification
 
 def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
-        "general": {},
-        "content": {"directory": "content"},
         "destinations": [{"id": "desktop", "type": "window"}],
-        "layout": {
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 28, "max_font_size": 100},
+        "fonts": {"pools": {"default": ["test-font"]}},
+        "text": {
+            "colors": {"pools": {"default": ["black"]}},
+            "min_font_size": 28,
+            "max_font_size": 100,
+        },
+        "backgrounds": {"pools": {"default": ["none"]}},
+        "decorations": {
+            "pools": {"default": ["none"]},
+            "colors": {"pools": {"default": ["black"]}},
         },
     }
     data.update(overrides)
@@ -66,13 +71,15 @@ def diagnostic_fields(path: Path) -> tuple[str, ...]:
 
 def background_configuration(**settings: object) -> dict[str, object]:
     data = configuration_data()
-    data["layout"]["backgrounds"] = settings
+    data["backgrounds"] = {"pools": {key: value for key, value in settings.items() if key != "available"}}
+    if "available" in settings:
+        data["backgrounds"]["available"] = settings["available"]
     return data
 
 
 def decoration_configuration(**settings: object) -> dict[str, object]:
     data = configuration_data()
-    data["layout"]["decorations"] = settings
+    data["decorations"]["pools"] = settings
     return data
 
 
@@ -113,28 +120,25 @@ def test_builtin_palette_custom_colors_and_black_text_default(tmp_path: Path) ->
 def test_decoration_color_pool_uses_shared_palette_and_distinct_members(tmp_path: Path, caplog) -> None:
     data = configuration_data()
     data["palette"] = {"sage-green": "#718C23", "terracotta": "#C65A20"}
-    data["layout"]["decorations"] = {
-        "default": ["none"],
-        "colors": ["sage-green", "missing", "sage-green", "terracotta", None],
-    }
+    data["decorations"]["colors"]["pools"] = {"default": ["sage-green", "missing", "sage-green", "terracotta", None]}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.default_decoration_colors == ("sage-green", "terracotta")
     assert "palette identifier 'missing' is unavailable" in caplog.text
     assert "duplicates palette identifier 'sage-green'" in caplog.text
-    assert "layout.decorations.colors[4]" in caplog.text
+    assert "decorations.colors.pools.default[4]" in caplog.text
 
 
 @pytest.mark.parametrize("pool", [None, [], "bad", ["missing"], ["", None]])
 def test_unusable_decoration_color_pool_falls_back_to_black(tmp_path: Path, caplog, pool: object) -> None:
     data = configuration_data()
-    data["layout"]["decorations"] = {"colors": pool}
+    data["decorations"]["colors"]["pools"] = {"default": pool}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.default_decoration_colors == ("black",)
-    assert "layout.decorations.colors" in caplog.text
+    assert "decorations.colors.pools" in caplog.text
     assert "using ['black']" in caplog.text
 
 
@@ -155,35 +159,45 @@ def test_named_pools_expand_recursively_in_order_with_cycle_and_duplicate_handli
     data = configuration_data()
     write_font_bundle(tmp_path / "assets" / "fonts" / "other-font", "other-font")
     data["palette"] = {"sage": "#8B956A", "navy": "#354B63"}
-    data["layout"].update(
+    data.update(
         {
             "fonts": {
-                "default": ["@favorites", "@other-favorites"],
-                "favorites": ["test-font", "@shared", "test-font"],
-                "shared": ["second-font", "@favorites"],
-                "other-favorites": ["@shared", "other-font"],
-                "empty": [],
+                "pools": {
+                    "default": ["@favorites", "@other-favorites"],
+                    "favorites": ["test-font", "@shared", "test-font"],
+                    "shared": ["second-font", "@favorites"],
+                    "other-favorites": ["@shared", "other-font"],
+                    "empty": [],
+                }
             },
             "backgrounds": {
-                "default": ["@paper", "none"],
-                "paper": ["surface", "@alternate"],
-                "alternate": ["surface-alt", "@paper"],
+                "pools": {
+                    "default": ["@paper", "none"],
+                    "paper": ["surface", "@alternate"],
+                    "alternate": ["surface-alt", "@paper"],
+                }
             },
             "decorations": {
-                "default": ["@frames", "none"],
-                "frames": ["trim", "@empty-frames"],
-                "empty-frames": [],
+                "pools": {
+                    "default": ["@frames", "none"],
+                    "frames": ["trim", "@empty-frames"],
+                    "empty-frames": [],
+                },
                 "colors": {
-                    "default": ["@accents"],
-                    "accents": ["navy", "@shared-colors", "navy"],
-                    "shared-colors": ["black", "@accents"],
+                    "pools": {
+                        "default": ["@accents"],
+                        "accents": ["navy", "@shared-colors", "navy"],
+                        "shared-colors": ["black", "@accents"],
+                    }
                 },
             },
             "text": {
                 "colors": {
-                    "default": ["@accents", "sage"],
-                    "accents": ["sage", "@shared-colors", "sage"],
-                    "shared-colors": ["navy", "@accents"],
+                    "pools": {
+                        "default": ["@accents", "sage"],
+                        "accents": ["sage", "@shared-colors", "sage"],
+                        "shared-colors": ["navy", "@accents"],
+                    }
                 },
                 "min_font_size": 28,
                 "max_font_size": 100,
@@ -204,14 +218,16 @@ def test_named_pools_expand_recursively_in_order_with_cycle_and_duplicate_handli
 
 def test_named_pool_invalid_and_reserved_definitions_are_excluded_independently(tmp_path: Path, caplog) -> None:
     data = configuration_data()
-    data["layout"]["fonts"] = {
-        "default": ["@loop", "@unknown", "@@", "not-installed", "test-font"],
-        "loop": ["@other", "test-font"],
-        "other": ["@loop", "test-font"],
-        "empty": [],
-        "malformed": "test-font",
-        "bad name": ["test-font"],
-        "builtin": ["not-installed"],
+    data["fonts"] = {
+        "pools": {
+            "default": ["@loop", "@unknown", "@@", "not-installed", "test-font"],
+            "loop": ["@other", "test-font"],
+            "other": ["@loop", "test-font"],
+            "empty": [],
+            "malformed": "test-font",
+            "bad name": ["test-font"],
+            "builtin": ["not-installed"],
+        }
     }
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
@@ -219,27 +235,29 @@ def test_named_pool_invalid_and_reserved_definitions_are_excluded_independently(
     assert config.default_fonts == ("test-font",)
     assert config.font_pools["empty"] == ()
     assert config.font_pools["malformed"] == ()
-    assert "layout.fonts.default[1]" in caplog.text
+    assert "fonts.pools.default[1]" in caplog.text
     assert "pool reference '@@' is malformed" in caplog.text
-    assert "layout.fonts.not-installed" not in caplog.text
-    assert "layout.fonts.builtin" in caplog.text
-    assert "layout.fonts.bad name" in caplog.text
+    assert "fonts.pools.not-installed" not in caplog.text
+    assert "fonts.pools.builtin" in caplog.text
+    assert "fonts.pools.bad name" in caplog.text
     assert "circular" not in caplog.text.lower()
 
 
 def test_empty_named_default_pools_keep_each_category_fallback(tmp_path: Path) -> None:
     data = configuration_data()
-    data["layout"].update(
+    data.update(
         {
-            "fonts": {"default": ["@empty"], "empty": []},
-            "backgrounds": {"default": ["@empty"], "empty": []},
+            "fonts": {"pools": {"default": ["@empty"], "empty": []}},
+            "backgrounds": {"pools": {"default": ["@empty"], "empty": []}},
             "decorations": {
-                "default": ["@empty"],
-                "empty": [],
-                "colors": {"default": ["@empty"], "empty": []},
+                "pools": {
+                    "default": ["@empty"],
+                    "empty": [],
+                },
+                "colors": {"pools": {"default": ["@empty"], "empty": []}},
             },
             "text": {
-                "colors": {"default": ["@empty"], "empty": []},
+                "colors": {"pools": {"default": ["@empty"], "empty": []}},
                 "min_font_size": 28,
                 "max_font_size": 100,
             },
@@ -285,12 +303,19 @@ def test_builtin_pools_follow_successful_bundled_registration_and_exclude_custom
     Image.new("RGB", (8, 6)).save(tmp_path / "assets" / "backgrounds" / "custom-paper.png")
     data = configuration_data()
     data["palette"] = {"black": "#123456"}
-    data["layout"].update(
+    data.update(
         {
-            "fonts": {"default": ["@builtin"]},
-            "backgrounds": {"default": ["@builtin", "none"]},
-            "decorations": {"default": ["@builtin", "none"], "colors": {"default": ["@builtin"]}},
-            "text": {"colors": {"default": ["@builtin"]}, "min_font_size": 28, "max_font_size": 100},
+            "fonts": {"pools": {"default": ["@builtin"]}},
+            "backgrounds": {"pools": {"default": ["@builtin", "none"]}},
+            "decorations": {
+                "pools": {"default": ["@builtin", "none"]},
+                "colors": {"pools": {"default": ["@builtin"]}},
+            },
+            "text": {
+                "colors": {"pools": {"default": ["@builtin"]}},
+                "min_font_size": 28,
+                "max_font_size": 100,
+            },
         }
     )
 
@@ -355,12 +380,19 @@ def test_decoration_manifest_pool_preferences_are_retained_for_configuration_res
     )
     data = configuration_data()
     data["palette"] = {"sage": "#8B956A"}
-    data["layout"].update(
+    data.update(
         {
-            "fonts": {"default": ["test-font"], "preferred-fonts": ["test-font"]},
-            "backgrounds": {"default": ["none"], "preferred-backgrounds": ["surface"]},
-            "decorations": {"default": ["frame"], "colors": {"tint-palette": ["sage"]}},
-            "text": {"colors": {"text-palette": ["sage"]}, "min_font_size": 28, "max_font_size": 100},
+            "fonts": {"pools": {"default": ["test-font"], "preferred-fonts": ["test-font"]}},
+            "backgrounds": {"pools": {"default": ["none"], "preferred-backgrounds": ["surface"]}},
+            "decorations": {
+                "pools": {"default": ["frame"]},
+                "colors": {"pools": {"tint-palette": ["sage"]}},
+            },
+            "text": {
+                "colors": {"pools": {"text-palette": ["sage"]}},
+                "min_font_size": 28,
+                "max_font_size": 100,
+            },
         }
     )
 
@@ -389,7 +421,7 @@ def test_invalid_palette_definitions_are_warned_and_ignored(tmp_path: Path, capl
 def test_text_color_pool_filters_unavailable_and_duplicate_members(tmp_path: Path, caplog) -> None:
     data = configuration_data()
     data["palette"] = {"burnt-orange": "#C65A20"}
-    data["layout"]["text"]["colors"] = ["burnt-orange", "missing", "burnt-orange", None, "blue"]
+    data["text"]["colors"]["pools"] = {"default": ["burnt-orange", "missing", "burnt-orange", None, "blue"]}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -401,21 +433,18 @@ def test_text_color_pool_filters_unavailable_and_duplicate_members(tmp_path: Pat
 @pytest.mark.parametrize("pool", [None, [], "bad", ["missing"], ["", None]])
 def test_unusable_text_color_pool_falls_back_to_black(tmp_path: Path, caplog, pool: object) -> None:
     data = configuration_data()
-    data["layout"]["text"]["colors"] = pool
+    data["text"]["colors"]["pools"] = {"default": pool}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.default_text_colors == ("black",)
-    assert "layout.text.colors" in caplog.text
+    assert "text.colors.pools" in caplog.text
     assert "using ['black']" in caplog.text
 
 
 def test_global_role_face_preferences(tmp_path: Path) -> None:
     data = configuration_data()
-    data["layout"]["fonts"] = {
-        "default": ["test-font"],
-        "font_faces": {"quotation": "regular", "source": "italic"},
-    }
+    data["fonts"]["faces"] = {"quotation": "regular", "source": "italic"}
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
     assert dict(config.font_faces) == {"quotation": "regular", "source": "italic"}
 
@@ -428,12 +457,12 @@ def test_invalid_global_role_face_preferences_are_warned_and_ignored(
     tmp_path: Path, preferences: object, caplog
 ) -> None:
     data = configuration_data()
-    data["layout"]["fonts"] = {"default": ["test-font"], "font_faces": preferences}
+    data["fonts"]["faces"] = preferences
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.font_faces == {}
-    assert "layout.fonts.font_faces" in caplog.text
+    assert "fonts.faces" in caplog.text
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
@@ -520,7 +549,7 @@ def test_malformed_background_registrations_warn(tmp_path: Path, available: obje
 
     assert set(config.backgrounds) == set(baseline.backgrounds)
     assert all(resource.bundled for resource in config.backgrounds.values())
-    assert "layout.backgrounds.available" in caplog.text
+    assert "backgrounds.available" in caplog.text
 
 
 def test_default_background_pool_deduplicates_and_excludes_invalid_values(tmp_path: Path, caplog) -> None:
@@ -544,26 +573,26 @@ def test_unusable_background_pool_falls_back_to_none(tmp_path: Path, pool: objec
     config = load_application_config(write_config(tmp_path / "config.yaml", background_configuration(default=pool)))
 
     assert config.default_backgrounds == ("none",)
-    assert "layout.backgrounds.default" in caplog.text
+    assert "backgrounds.pools.default" in caplog.text
     assert "has no usable members; using ['none']" in caplog.text
 
 
 @pytest.mark.parametrize("section", [None, [], "bad"])
 def test_malformed_background_section_warns_and_uses_default(tmp_path: Path, section: object, caplog) -> None:
     data = configuration_data()
-    data["layout"]["backgrounds"] = section
+    data["backgrounds"] = section
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.default_backgrounds == ("none",)
-    assert "layout.backgrounds: must be a mapping" in caplog.text
+    assert "backgrounds: must be a mapping" in caplog.text
 
 
 def test_unknown_background_settings_warn(tmp_path: Path, caplog) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", background_configuration(unknown=True)))
 
     assert config.default_backgrounds == ("none",)
-    assert "layout.backgrounds.unknown" in caplog.text
+    assert "backgrounds.pools.unknown" in caplog.text
 
 
 def test_background_loader_revalidates_resource_changes(tmp_path: Path) -> None:
@@ -860,6 +889,110 @@ def test_loads_documented_defaults_with_explicit_required_settings(tmp_path: Pat
     assert config.default_text_colors == config.default_decoration_colors == ("black",)
 
 
+def test_optional_font_size_bounds_default_independently(tmp_path: Path) -> None:
+    both_omitted = load_application_config(write_config(tmp_path / "default.yaml", configuration_data(text={})))
+    minimum_only = load_application_config(
+        write_config(tmp_path / "minimum.yaml", configuration_data(text={"min_font_size": 60}))
+    )
+    maximum_only = load_application_config(
+        write_config(tmp_path / "maximum.yaml", configuration_data(text={"max_font_size": 80}))
+    )
+
+    assert (both_omitted.min_font_size, both_omitted.max_font_size) == (56, 200)
+    assert (minimum_only.min_font_size, minimum_only.max_font_size) == (60, 200)
+    assert (maximum_only.min_font_size, maximum_only.max_font_size) == (56, 80)
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "56"])
+def test_invalid_explicit_font_size_bounds_remain_errors(tmp_path: Path, value: object) -> None:
+    fields = diagnostic_fields(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(text={"min_font_size": value}),
+        )
+    )
+
+    assert "text.min_font_size" in fields
+
+
+def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path) -> None:
+    data = configuration_data(
+        destinations=[
+            {"id": "test-font", "type": "window", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
+            {"id": "service", "type": "image-server"},
+        ],
+        **{
+            "image-server": None,
+            "storage": {
+                "content": "entries",
+                "state": "state/current.json",
+                "history": "state/history.json",
+                "artifacts": "cache/artifacts",
+            },
+            "scheduling": {
+                "day_start": "05:00",
+                "reveal": {"source": "12:00", "attribution": "18:00"},
+            },
+            "presentation": {
+                "insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
+                "information_view": {"duration": 30},
+                "qr": {"enabled": False},
+            },
+            "palette": {"black": "#101010", "sage": "#8A9B79"},
+            "fonts": {
+                "pools": {
+                    "default": ["@faces"],
+                    "faces": ["test-font"],
+                    "complete": ["@builtin"],
+                },
+                "faces": {"source": "italic"},
+            },
+            "text": {
+                "min_font_size": 56,
+                "max_font_size": 200,
+                "colors": {"pools": {"default": ["@colors"], "colors": ["sage"]}},
+            },
+            "backgrounds": {
+                "pools": {"default": ["@pools"], "pools": ["none"], "complete": ["@builtin"]},
+            },
+            "decorations": {
+                "pools": {"default": ["@colors"], "colors": ["none"]},
+                "colors": {"pools": {"default": ["@pools"], "pools": ["sage"]}},
+            },
+        },
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_fonts == ("test-font",)
+    assert config.font_pools["faces"] == ("test-font",)
+    assert config.default_backgrounds == ("none",)
+    assert config.background_pools["pools"] == ("none",)
+    assert config.default_decorations == ("none",)
+    assert config.decoration_pools["colors"] == ("none",)
+    assert config.default_text_colors == config.default_decoration_colors == ("sage",)
+    assert config.font_faces == {"source": "italic"}
+    assert config.palette["black"] == "#101010"
+    assert config.content_directory == tmp_path / "entries"
+    assert config.storage.state == tmp_path / "state" / "current.json"
+    assert config.information_view_duration == 30
+    assert config.qr_enabled is False
+    assert config.display_backends[1].service_enabled is True
+
+
+def test_color_pool_list_shorthand_is_unsupported(tmp_path: Path, caplog) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(text={"colors": ["red"]}, decorations={"colors": ["blue"]}),
+        )
+    )
+
+    assert config.default_text_colors == config.default_decoration_colors == ("black",)
+    assert "text.colors: must be a mapping" in caplog.text
+    assert "decorations.colors: must be a mapping" in caplog.text
+
+
 def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
@@ -916,7 +1049,7 @@ def test_waveshare_rejects_output_overrides(tmp_path: Path, override: dict[str, 
 
 def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> None:
     data = configuration_data()
-    data.pop("content")
+    data.pop("storage", None)
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -927,14 +1060,22 @@ def test_omitted_content_directory_uses_default_without_information_diagnostic(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     data = configuration_data()
-    data["content"] = {}
+    data["storage"] = {}
     config_path = write_config(tmp_path / "config.yaml", data)
     caplog.set_level("INFO")
 
     config = load_application_config(config_path)
 
     assert config.content_directory == tmp_path / "content"
-    assert not any("content.directory" in record.message for record in caplog.records)
+    assert not any("storage.content" in record.message for record in caplog.records)
+
+
+def test_storage_content_path_resolves_relative_to_config_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "alternate" / "config.yaml"
+
+    config = load_application_config(write_config(config_path, configuration_data(storage={"content": "entries"})))
+
+    assert config.content_directory == config_path.parent / "entries"
 
 
 @pytest.mark.parametrize("storage", [None, {}])
@@ -970,6 +1111,7 @@ def test_each_configured_storage_path_resolves_relative_to_config_file(tmp_path:
 
 def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: Path) -> None:
     configured = {
+        "content": tmp_path / "content",
         "state": tmp_path / "state.json",
         "history": tmp_path / "global-history.jsonl",
         "artifacts": tmp_path / "artifacts",
@@ -982,6 +1124,7 @@ def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: 
         )
     )
 
+    assert config.content_directory == configured["content"]
     assert config.storage.state == configured["state"]
     assert config.storage.history == configured["history"]
     assert config.storage.artifacts == configured["artifacts"]
@@ -1016,17 +1159,13 @@ def test_unknown_storage_fields_follow_configuration_warning_policy(tmp_path: Pa
     "config_path",
     [
         Path(__file__).parent.parent / "src" / "refrain" / "config.default.yaml",
-        Path(__file__).parent.parent / "examples" / "config.yaml",
     ],
-    ids=["installed-default", "development-example"],
+    ids=["installed-default"],
 )
 def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path: Path, tmp_path: Path, caplog) -> None:
-    if config_path.name == "config.default.yaml":
-        installed = tmp_path / config_path.name
-        installed.write_bytes(config_path.read_bytes())
-        config = load_application_config(installed)
-    else:
-        config = load_application_config(config_path)
+    installed = tmp_path / config_path.name
+    installed.write_bytes(config_path.read_bytes())
+    config = load_application_config(installed)
 
     assert config.display_backends
     assert config.default_fonts
@@ -1037,7 +1176,11 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
     assert set(config.default_decoration_colors) <= config.palette.keys()
     assert config.day_start <= min(config.reveal.source, config.reveal.attribution)
     assert 0 <= config.information_view_duration <= 300
-    assert 0 < config.min_font_size <= config.max_font_size
+    assert config.min_font_size == 56
+    assert config.max_font_size == 200
+    assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
+    assert config.qr_enabled is True
+    assert config.storage.state is config.storage.history is config.storage.artifacts is None
 
     snapshot = DailySnapshot(
         entry_id="shipped-config",
@@ -1078,7 +1221,7 @@ def test_information_view_duration_accepts_inclusive_integer_range(tmp_path: Pat
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(information_view={"duration": duration}),
+            configuration_data(presentation={"information_view": {"duration": duration}}),
         )
     )
 
@@ -1090,12 +1233,12 @@ def test_invalid_information_view_duration_warns_and_uses_default(tmp_path: Path
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(information_view={"duration": duration}),
+            configuration_data(presentation={"information_view": {"duration": duration}}),
         )
     )
 
     assert config.information_view_duration == 60
-    assert "information_view.duration" in caplog.text
+    assert "presentation.information_view.duration" in caplog.text
     assert "using the documented default 60" in caplog.text
 
 
@@ -1104,7 +1247,7 @@ def test_information_view_duration_defaults_when_mapping_or_field_is_omitted(tmp
     explicit_empty = load_application_config(
         write_config(
             tmp_path / "explicit-empty.yaml",
-            configuration_data(information_view={}),
+            configuration_data(presentation={"information_view": {}}),
         )
     )
 
@@ -1283,19 +1426,18 @@ def test_destination_ids_are_isolated_from_resource_identifier_namespaces(tmp_pa
         destinations=[{"id": identifier, "type": "window"}],
         palette={identifier: "#718C23"},
     )
-    data["layout"].update(
+    data.update(
         {
-            "fonts": {"default": [identifier], identifier: [identifier]},
-            "backgrounds": {"default": [identifier], identifier: [identifier]},
+            "fonts": {"pools": {"default": [identifier], identifier: [identifier]}},
+            "backgrounds": {"pools": {"default": [identifier], identifier: [identifier]}},
             "decorations": {
-                "default": [identifier],
-                identifier: [identifier],
-                "colors": {"default": [identifier], identifier: [identifier]},
+                "pools": {"default": [identifier], identifier: [identifier]},
+                "colors": {"pools": {"default": [identifier], identifier: [identifier]}},
             },
             "text": {
                 "min_font_size": 28,
                 "max_font_size": 100,
-                "colors": {"default": [identifier]},
+                "colors": {"pools": {"default": [identifier]}},
             },
         }
     )
@@ -1426,7 +1568,10 @@ def test_non_mapping_destination_entry_is_diagnosed(tmp_path: Path) -> None:
 
 def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Path) -> None:
     absolute_content = tmp_path / "absolute-content"
-    data = configuration_data(content={"directory": str(absolute_content)}, reveal={"source": "08:00"})
+    data = configuration_data(
+        storage={"content": str(absolute_content)},
+        scheduling={"reveal": {"source": "08:00"}},
+    )
     config = load_application_config(write_config(tmp_path / "nested" / "config.yaml", data))
 
     assert config.content_directory == absolute_content
@@ -1438,8 +1583,7 @@ def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Pa
 
 def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> None:
     data = configuration_data(
-        general={"timezone": "UTC", "day_start": "23:59"},
-        reveal={"source": "23:59", "attribution": "23:59"},
+        scheduling={"day_start": "23:59", "reveal": {"source": "23:59", "attribution": "23:59"}},
     )
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
@@ -1452,13 +1596,7 @@ def test_reveal_times_at_display_day_boundaries_are_valid(tmp_path: Path) -> Non
 def test_user_font_is_resolved_and_retained_outside_default_pool(tmp_path: Path) -> None:
     package = tmp_path / "assets" / "fonts" / "extra"
     user_font = write_font_bundle(package, "extra")
-    data = configuration_data(
-        layout={
-            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 28, "max_font_size": 100},
-        }
-    )
+    data = configuration_data()
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
@@ -1487,16 +1625,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
         {"format": 1, "id": "border", "layers": [{"image": "Border.png", "method": "contain"}]},
     )
 
-    data = configuration_data(
-        content={"directory": "entries"},
-        layout={
-            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["test-font"]},
-            "backgrounds": {"default": ["none"]},
-            "decorations": {"default": ["none"]},
-            "text": {"min_font_size": 28, "max_font_size": 100},
-        },
-    )
+    data = configuration_data(storage={"content": "entries"})
     config_path = write_config(config_directory / "config.yaml", data)
     working_directory = tmp_path / "unrelated-working-directory"
     working_directory.mkdir()
@@ -1512,13 +1641,7 @@ def test_category_relative_resources_use_the_effective_config_directory_and_nest
 
 @pytest.mark.parametrize("absolute_path", ["/tmp/custom-font.ttf", r"C:\Users\example\custom-font.ttf"])
 def test_absolute_font_manifest_path_is_rejected(tmp_path: Path, caplog, absolute_path: str) -> None:
-    data = configuration_data(
-        layout={
-            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 28, "max_font_size": 100},
-        }
-    )
+    data = configuration_data()
 
     package = tmp_path / "assets" / "fonts" / "extra"
     package.mkdir(parents=True)
@@ -1547,13 +1670,7 @@ def test_mixed_discovered_font_bundles_keep_only_usable_fonts(tmp_path: Path, ca
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(
-                layout={
-                    "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-                    "fonts": {"default": ["valid-user-font", "missing-user-font"]},
-                    "text": {"min_font_size": 28, "max_font_size": 100},
-                }
-            ),
+            configuration_data(fonts={"pools": {"default": ["valid-user-font", "missing-user-font"]}}),
         )
     )
 
@@ -1566,120 +1683,64 @@ def test_mixed_discovered_font_bundles_keep_only_usable_fonts(tmp_path: Path, ca
 
 def test_non_string_configuration_keys_are_warned_and_ignored(tmp_path: Path, caplog) -> None:
     config_data = configuration_data(
-        general={"timezone": "UTC", 1: "ignored", "unknown": "ignored"},
-        layout={
-            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["test-font"], "available": {1: "ignored.ttf"}},
-            "text": {"min_font_size": 28, "max_font_size": 100},
-        },
+        scheduling={"day_start": "05:00", 1: "ignored", "unknown": "ignored"},
+        fonts={"pools": {"default": ["test-font"]}, "available": {1: "ignored.ttf"}},
     )
     config = load_application_config(write_config(tmp_path / "config.yaml", config_data))
 
     assert config.default_fonts == ("test-font",)
     assert 1 not in config.fonts
-    assert "general[1]" in caplog.text
-    assert "general.timezone" in caplog.text
-    assert "layout.fonts.available: is no longer supported" in caplog.text
+    assert "scheduling[1]" in caplog.text
+    assert "scheduling.unknown" in caplog.text
+    assert "fonts.available: is not a supported configuration field" in caplog.text
     assert "ignored" in caplog.text
 
 
 @pytest.mark.parametrize(
     ("insets", "expected_field"),
     [
-        ({}, "layout.presentation_insets.left"),
-        ({"left": -1, "right": 384, "top": 324, "bottom": 324}, "layout.presentation_insets.left"),
-        ({"left": True, "right": 384, "top": 324, "bottom": 324}, "layout.presentation_insets.left"),
-        ({"left": 1.5, "right": 384, "top": 324, "bottom": 324}, "layout.presentation_insets.left"),
-        ({"left": 1920, "right": 1920, "top": 324, "bottom": 324}, "layout.presentation_insets"),
-        ({"left": 384, "right": 384, "top": 1080, "bottom": 1080}, "layout.presentation_insets"),
+        ({}, "presentation.insets.left"),
+        ({"left": -1, "right": 384, "top": 324, "bottom": 324}, "presentation.insets.left"),
+        ({"left": True, "right": 384, "top": 324, "bottom": 324}, "presentation.insets.left"),
+        ({"left": 1.5, "right": 384, "top": 324, "bottom": 324}, "presentation.insets.left"),
+        ({"left": 1920, "right": 1920, "top": 324, "bottom": 324}, "presentation.insets"),
+        ({"left": 384, "right": 384, "top": 1080, "bottom": 1080}, "presentation.insets"),
     ],
 )
 def test_invalid_presentation_insets_are_rejected(
     tmp_path: Path, insets: dict[str, int | float | bool], expected_field: str
 ) -> None:
-    data = configuration_data(
-        layout={
-            "presentation_insets": insets,
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 1, "max_font_size": 2},
-        }
-    )
+    data = configuration_data(presentation={"insets": insets})
 
     assert expected_field in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
 def test_presentation_insets_accept_zero_edges(tmp_path: Path) -> None:
-    data = configuration_data(
-        layout={
-            "presentation_insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 1, "max_font_size": 2},
-        }
-    )
+    data = configuration_data(presentation={"insets": {"left": 0, "right": 0, "top": 0, "bottom": 0}})
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.presentation_insets == PresentationInsets(0, 0, 0, 0)
 
 
-def test_unsupported_layout_field_is_ignored_with_warning(tmp_path: Path, caplog) -> None:
-    data = configuration_data(
-        layout={
-            "quotation_region": {"x": 0.1, "y": 0.15, "width": 0.8, "height": 0.55},
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 1, "max_font_size": 2},
-        }
-    )
-
-    config = load_application_config(write_config(tmp_path / "config.yaml", data))
-
-    assert [(spec.aspect_ratio, spec.requested_output_size) for spec in config.required_output_specifications] == [
-        ("16:9", (1920, 1080))
-    ]
-    assert "layout.quotation_region" in caplog.text
-    assert "ignored" in caplog.text
-
-
 @pytest.mark.parametrize(
     ("data", "expected_field"),
     [
         (
-            configuration_data(
-                layout={
-                    "presentation_insets": {"left": 3840, "right": 0, "top": 0, "bottom": 0},
-                    "fonts": {"default": ["test-font"]},
-                    "text": {"min_font_size": 1, "max_font_size": 2},
-                }
-            ),
-            "layout.presentation_insets",
+            configuration_data(presentation={"insets": {"left": 3840, "right": 0, "top": 0, "bottom": 0}}),
+            "presentation.insets",
         ),
         (
-            configuration_data(
-                layout={
-                    "presentation_insets": {"left": True, "right": 384, "top": 324, "bottom": 324},
-                    "fonts": {"default": ["test-font"]},
-                    "text": {"min_font_size": 1, "max_font_size": 2},
-                }
-            ),
-            "layout.presentation_insets.left",
+            configuration_data(presentation={"insets": {"left": True, "right": 384, "top": 324, "bottom": 324}}),
+            "presentation.insets.left",
         ),
         (
-            configuration_data(
-                layout={
-                    "fonts": {"default": ["test-font"]},
-                    "text": {"min_font_size": 10, "max_font_size": 9},
-                }
-            ),
-            "layout.text.max_font_size",
+            configuration_data(text={"min_font_size": 10, "max_font_size": 9}),
+            "text.max_font_size",
         ),
         (
-            configuration_data(
-                layout={
-                    "fonts": {"default": []},
-                    "text": {"min_font_size": 1, "max_font_size": 2},
-                }
-            ),
-            "layout.fonts.default",
+            configuration_data(fonts={"pools": {"default": []}}),
+            "fonts.pools.default",
         ),
     ],
 )
@@ -1693,8 +1754,12 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
     config_path = write_config(
         tmp_path / "config.yaml",
         configuration_data(
-            general={"timezone": "UTC", "day_start": "6:00", "unknown": True},
-            reveal={"quotation": "00:00", "source": "invalid"},
+            scheduling={
+                "timezone": "UTC",
+                "day_start": "6:00",
+                "unknown": True,
+                "reveal": {"quotation": "00:00", "source": "invalid"},
+            },
             unexpected=True,
         ),
     )
@@ -1705,12 +1770,11 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
     assert config.day_start == time(5)
     assert config.reveal.source == time(12)
     assert "using documented defaults" in caplog.text
-    assert "general.day_start" in caplog.text
-    assert "general.timezone" in caplog.text
-    assert "reveal.quotation" in caplog.text
+    assert "scheduling.day_start" in caplog.text
+    assert "scheduling.timezone" in caplog.text
+    assert "scheduling.reveal.quotation" in caplog.text
     assert "is not a supported configuration field; it is ignored" in caplog.text
-    assert "reveal.source" in caplog.text
-    assert "general.unknown" in caplog.text
+    assert "scheduling.reveal.source" in caplog.text
     assert "unexpected" in caplog.text
     assert "using" in caplog.text and "ignored" in caplog.text
 
@@ -1731,13 +1795,7 @@ def test_default_font_pool_filters_unavailable_and_duplicates(
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(
-                layout={
-                    "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-                    "fonts": {"default": default_fonts},
-                    "text": {"min_font_size": 28, "max_font_size": 100},
-                }
-            ),
+            configuration_data(fonts={"pools": {"default": default_fonts}}),
         )
     )
 
@@ -1749,11 +1807,11 @@ def test_default_font_pool_filters_unavailable_and_duplicates(
 @pytest.mark.parametrize(
     "contents",
     [
-        "general: [not, a, mapping",
+        "scheduling: [not, a, mapping",
         "- one\n- two\n",
-        "general: &shared {timezone: UTC}\ncontent: *shared\n",
-        "general:\n  timezone: UTC\n  timezone: America/Toronto\n",
-        "general:\n  timezone: UTC\n---\ngeneral:\n  timezone: UTC\n",
+        "scheduling: &shared {day_start: '05:00'}\nstorage: *shared\n",
+        "scheduling:\n  day_start: '05:00'\n  day_start: '06:00'\n",
+        "scheduling:\n  day_start: '05:00'\n---\nscheduling:\n  day_start: '05:00'\n",
     ],
 )
 def test_invalid_yaml_is_rejected(tmp_path: Path, contents: str) -> None:
@@ -1830,13 +1888,7 @@ def test_unreadable_user_font_is_excluded(tmp_path: Path, monkeypatch: pytest.Mo
     package.mkdir(parents=True)
     user_font = package / "font.ttf"
     user_font.write_bytes(write_font_bundle(package, "extra").read_bytes())
-    data = configuration_data(
-        layout={
-            "presentation_insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
-            "fonts": {"default": ["test-font"]},
-            "text": {"min_font_size": 28, "max_font_size": 100},
-        }
-    )
+    data = configuration_data()
     write_asset_manifest(package, "font.yaml", {"format": 1, "id": "extra", "faces": {"regular": "font.ttf"}})
     config_path = write_config(tmp_path / "config.yaml", data)
     original_open = Path.open

@@ -28,7 +28,7 @@ from refrain import (
         ("test-font", {}, 3),
         (
             "alternate-font",
-            {"general": {"day_start": "08:15"}, "reveal": {"source": "09:20", "attribution": "09:20"}},
+            {"scheduling": {"day_start": "08:15", "reveal": {"source": "09:20", "attribution": "09:20"}}},
             2,
         ),
     ],
@@ -45,13 +45,11 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(
     config_path.write_text(
         yaml.safe_dump(
             {
-                "content": {"directory": "content"},
+                "storage": {"content": "content"},
                 "destinations": [{"id": "window", "type": "window"}],
-                "layout": {
-                    "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
-                    "fonts": {"default": [font_identifier]},
-                    "text": {"min_font_size": 12, "max_font_size": 24},
-                },
+                "presentation": {"insets": {"left": 384, "right": 384, "top": 216, "bottom": 216}},
+                "fonts": {"pools": {"default": [font_identifier]}},
+                "text": {"min_font_size": 12, "max_font_size": 24},
                 **settings,
             },
             sort_keys=False,
@@ -179,15 +177,13 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "content": {"directory": "content"},
+                "storage": {"content": "content"},
                 "destinations": [{"id": "window", "type": "window"}],
-                "layout": {
-                    "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
-                    "fonts": {"default": ["family-serif"]},
-                    "backgrounds": {"default": ["paper"]},
-                    "decorations": {"default": ["border"]},
-                    "text": {"min_font_size": 28, "max_font_size": 36},
-                },
+                "presentation": {"insets": {"left": 384, "right": 384, "top": 216, "bottom": 216}},
+                "fonts": {"pools": {"default": ["family-serif"]}},
+                "backgrounds": {"pools": {"default": ["paper"]}},
+                "decorations": {"pools": {"default": ["border"]}},
+                "text": {"min_font_size": 28, "max_font_size": 36},
             },
             sort_keys=False,
         ),
