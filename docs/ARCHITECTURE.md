@@ -1651,12 +1651,6 @@ exclusive runtime lock; destructive maintenance must therefore be coordinated
 with running consumers, which must be stopped before their publication data or
 installation is removed or replaced.
 
-This coordination is operator-managed, not enforced by Refrain. Installation
-maintenance excludes a cooperating resident but does not inspect or stop
-consumer services, and a consumer left running may observe unavailable data
-during purge. Operators must stop consumers before destructive maintenance;
-the architecture does not add a service-manager query or another lock protocol.
-
 Consumer shutdown coordination is operator-managed, not enforced by Refrain.
 The resident ownership lock excludes a resident runtime and standard
 installation-maintenance command from each other; consumers do not acquire that
