@@ -140,7 +140,7 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Destination Identifier:** The runtime-supplied opaque identifier for one configured output destination. It is used only to route a runtime-control request.
 
-**Prepared Image:** A persisted output image representing one reveal stage of the committed daily selection for one output specification. Destinations with identical output specifications may share it.
+**Prepared Image:** A persisted output image representing one reveal stage of a committed daily selection for one output specification and its effective presentation requirements. Under the current Version 0.1 configuration, destinations with identical output specifications may share it. Under the planned destination-override model, sharing also requires matching effective presentation requirements.
 
 **Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared output images.
 
@@ -770,11 +770,30 @@ For each output specification, the prepared images form an ordered reveal-stage 
 
 Prepared images are persisted on disk and associated with the committed selection and their output specifications.
 
+The preceding sharing rules describe the current Version 0.1 model, which has no
+destination-specific presentation overrides. Under the planned override model,
+the required variants are keyed by both output specification and effective
+presentation requirements. Destinations with different effective overrides
+must use separate prepared variants even when their output specifications are
+identical. Destinations with matching requirements may share a preparation
+group, including its resolved presentation-wide choices; output-specification-
+dependent layout and rendering are still resolved independently. This target
+extension must not change the committed selection or turn derived rendering
+choices into authoritative operational state.
+
 They are derived artifacts, not independently authoritative application state.
 
 Prepared images must remain associated with the committed selection revision and expected reveal-stage sequence.
 
-A complete, valid set is reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate it.
+In the current Version 0.1 model, a complete, valid set is reused throughout
+ordinary operation and after application restart. Changes to configuration or
+assets do not by themselves invalidate or regenerate it.
+
+In the planned destination-override model, a change to effective overrides
+changes the presentation requirements for that destination and cannot reuse an
+incompatible prepared image. This does not make the cache archival: changes to
+available resources or rendering behavior may change the result when missing or
+otherwise unusable images must be regenerated.
 
 If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation.
 
@@ -974,7 +993,7 @@ The design canvas is the high-resolution, aspect-specific graphical composition 
 
 Background and decoration layers use the same underlying image-transformation implementation. For `anchor`, the source is first uniformly scaled according to the selected design-canvas dimension, then aligned by its complete scaled rectangle to the declared canvas anchor, clipped at the design-canvas boundary, and alpha-composited. Scaling preserves aspect ratio and uses deterministic nearest-pixel rounding with half-pixel values rounded upward; clipping outside the canvas is normal composition, not a validation failure.
 
-Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested output resolution. Backend-specific configuration and defaults determine these values; do not infer the declared ratio from requested dimensions. The presentation-canvas dimensions are derived from the specification and do not form part of artifact identity. When requested dimensions exactly match the declared ratio, the presentation canvas has those dimensions. Otherwise, it is the nearest positive integer-pixel resolution that exactly matches the declared ratio, using the existing deterministic nearest-raster and tie-breaking rules.
+Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested output resolution. Backend-specific configuration and defaults determine these values; do not infer the declared ratio from requested dimensions. The presentation-canvas dimensions are derived from the specification and do not form part of artifact identity. Under the planned destination-override model, prepared-image identity additionally distinguishes the effective presentation requirements applied to a destination. When requested dimensions exactly match the declared ratio, the presentation canvas has those dimensions. Otherwise, it is the nearest positive integer-pixel resolution that exactly matches the declared ratio, using the existing deterministic nearest-raster and tie-breaking rules.
 
 For a mismatched request, reduce the declared ratio to integer dimensions `(rw, rh)`, then compute `k = max(1, round_half_up((rw × requested_width + rh × requested_height) / (rw² + rh²)))`. The presentation canvas is `(rw × k, rh × k)`. This projected scale and half-up tie break define the nearest exact-ratio raster deterministically.
 
@@ -1467,7 +1486,7 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 For normal scheduled publication, Refrain coordinates publication of the current prepared presentation to every participating configured destination. A backend may manage multiple destinations through one backend instance; each destination has independent identity, geometry, publication state, and acknowledgement. The independent scheduling, coalescing, and acknowledgement behavior in this section applies to normal scheduled publication; transient push and refresh use the admission and completion rules in [Transient publication and refresh](#transient-publication-and-refresh).
 
-A single committed daily selection and its coherent set of prepared output images are shared by all destinations. Only the selection is authoritative.
+Under the current Version 0.1 model, a single committed daily selection and its coherent set of prepared output images are shared by all destinations. Under the planned destination-override model, the committed selection remains shared, but prepared images are shared only within compatible preparation groups whose effective presentation requirements match. Only the selection is authoritative.
 
 For normal scheduled publication, participating destinations are tracked independently. A destination may remain configured but be intentionally withdrawn from publication for the remainder of the resident runtime. Withdrawal is distinct from failure or unavailability: ordinary scheduled publication skips a withdrawn destination, and later publication requests do not restore it. A failure or unavailable backend does not constitute withdrawal. A slow or failed operation on one backend instance must not delay publication through another backend instance or prevent subsequent scheduling evaluation. Destinations sharing one backend instance share its lifecycle and serialization.
 
@@ -1574,13 +1593,24 @@ does not host HTTP services and does not require network availability.
 
 Each `publish` destination has its own validated ID, output specification,
 publication audience, presentation overrides, and directory. It publishes the
-destination-specific presentation prepared by Refrain; destinations may share
-prepared image variants when their output specifications match, but never share
-destination identity, audience, overrides, directory, or publication
-acknowledgement. A destination directory is a direct child of the publication
-root, derived only from that validated ID. Destination configuration never
-supplies an arbitrary deletion path. Publication directories belong to Refrain,
-not to consumers; multiple consumers may read the same directory.
+destination-specific presentation prepared by Refrain. Scheduled preparation
+groups destinations only when their effective presentation requirements match;
+within a group, presentation-wide artistic choices are resolved once and kept
+consistent across output specifications. Different effective overrides,
+including backgrounds, decorations, fonts, colors, tint, or QR settings, must
+not share prepared images even when output specifications match. Prepared
+variants may be shared only when both the output specification and effective
+presentation requirements match. Destinations never share identity, audience,
+overrides, directory, or publication acknowledgement. A destination directory
+is a direct child of the publication root, derived only from that validated ID.
+Destination configuration never supplies an arbitrary deletion path.
+Publication directories belong to Refrain, not to consumers; multiple consumers
+may read the same directory.
+
+Destination overrides affect scheduled rendering only. A transient finished
+image supplied to push is already destination-ready: it is validated against
+the requested dimensions and published unchanged, without applying destination
+rendering overrides or preparation.
 
 #### Publication storage and ownership
 
@@ -1600,6 +1630,17 @@ a second path-selection mechanism. Standard maintenance commands always target
 the platform-standard installation locations, not a custom `storage.publish`
 override.
 
+Before any destructive publication operation, reject a resolved publication
+root that overlaps protected Refrain data: configuration, content, user assets,
+authoritative state or history files, prepared-artifact/cache directories, or
+other protected configured storage. Overlap includes a root equal to, inside,
+or an ancestor of a protected data path when cleanup could reach that data.
+Compare against effective custom paths as well as standard paths. The standard
+publication root may share the platform operational-data parent with sibling
+state and history files, but must not contain, replace, or be contained by those
+protected data targets. Perform these checks before creating or cleaning a
+destination; fail closed if safe separation cannot be established.
+
 `refrain --initialize` creates the standard publication root without replacing
 or cleaning existing contents. `refrain --reset` preserves publication storage.
 `refrain --purge` removes the entire standard publication root and everything
@@ -1609,6 +1650,20 @@ filesystem-safety requirements apply. Services do not acquire the resident's
 exclusive runtime lock; destructive maintenance must therefore be coordinated
 with running consumers, which must be stopped before their publication data or
 installation is removed or replaced.
+
+This coordination is operator-managed, not enforced by Refrain. Installation
+maintenance excludes a cooperating resident but does not inspect or stop
+consumer services, and a consumer left running may observe unavailable data
+during purge. Operators must stop consumers before destructive maintenance;
+the architecture does not add a service-manager query or another lock protocol.
+
+Consumer shutdown coordination is operator-managed, not enforced by Refrain.
+The resident ownership lock excludes a resident runtime and standard
+installation-maintenance command from each other; consumers do not acquire that
+lock, and maintenance does not query or stop system services. Operators must
+stop any consumer that may read data before purging that data or replacing its
+installation. This requirement does not promise protection from a consumer left
+running or from arbitrary concurrent filesystem access.
 
 Path validation and destructive operations must prove that a destination stays
 within the publication root and must reject traversal, symbolic links,
@@ -1685,15 +1740,19 @@ reconstruction. The embedded entry conforms to the authoritative
 
 Capture resolved artistic choices from the same image-preparation operation
 that produces the image; do not repeat random resource selection independently.
-These are derived publication data, not additional authoritative selection
-state. Preserve stable resource and palette identifiers rather than embedding
-asset contents or RGB values. Do not persist calculated text positions, crop
-geometry, or other output-dependent layout results. Reconstruction recalculates
-geometry through the existing renderer for the requested output specification,
-using the currently installed Refrain assets and palette definitions; it does
-not promise archival reproduction if those resources or rendering behavior
-change. Metadata records the actual reveal stage, while reconstruction has the
-complete committed quotation and renders fully revealed by default.
+Metadata for a scheduled publication describes the resolved choices and actual
+output specification used for that destination's image, from the same
+preparation operation; do not independently re-resolve them when serializing
+metadata. These are derived publication data, not additional authoritative
+selection state. Preserve stable resource and palette identifiers rather than
+embedding asset contents or RGB values. Do not persist calculated text
+positions, crop geometry, or other output-dependent layout results.
+Reconstruction recalculates geometry through the existing renderer for the
+requested output specification, using the currently installed Refrain assets
+and palette definitions; it does not promise archival reproduction if those
+resources or rendering behavior change. Metadata records the actual reveal
+stage, while reconstruction has the complete committed quotation and renders
+fully revealed by default.
 
 Each destination declares exactly one audience: `public` or `private`.
 Visibility is nonhierarchical: a public destination includes actions declaring
@@ -2072,11 +2131,11 @@ The following must remain true as the project evolves:
 14. Selection revisions increase monotonically and are maintained independently of global history.
 15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
 16. A committed daily selection preserves the selected content, captured content-level preferences, and effective reveal schedule independently of subsequent content-library changes.
-17. Every required reveal-stage image is generated for each unique required output specification.
-18. Presentation-wide choices remain consistent across output specifications, while presentation-canvas layout and rendering results are resolved independently for each specification.
+17. Every required reveal-stage image is generated for each unique combination of output specification and effective presentation requirements; in the current Version 0.1 model without destination overrides, output specification alone distinguishes variants.
+18. Presentation-wide choices remain consistent across output specifications within one compatible preparation group, while presentation-canvas layout and rendering results are resolved independently for each specification.
 19. The declared aspect ratio is distinct from requested output resolution: it selects the design canvas and determines the exact-ratio presentation-canvas dimensions for each output specification.
 20. Graphical composition and configured presentation measurements move from the design canvas to the presentation canvas before all literary, QR, and diagnostic composition; only an optional final whole-image resize to the exact requested dimensions may follow.
-21. Destinations with identical output specifications may share a prepared output image, and each backend receives it without owning literary composition or presentation policy.
+21. Destinations may share a prepared output image only when both their output specifications and effective presentation requirements match; each backend receives it without owning literary composition or presentation policy.
 22. Complete prepared-variant sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
 23. Missing or unusable variants can be prepared from the committed selection without reselection, history changes, or reveal regression.
 24. A restart retains the committed selection and reveal progression only while the current logical display date matches the committed date.
