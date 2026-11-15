@@ -60,9 +60,9 @@ content:
 reveal:
   source: "12:00"
   attribution: "18:00"
-display:
-  backends:
-    - type: "waveshare-13in3-e"
+destinations:
+  - id: epaper
+    type: "waveshare-13in3-e"
 information_view:
   duration: 0
 layout:
@@ -300,13 +300,13 @@ def test_transient_admission_gives_due_stage_priority(workspace: Workspace, hour
         lambda: at(10, hour),
         Event(),
         Lock(),
-        "all",
+        "@all",
         {"display": specification},
         {specification: image},
         admit,
     )
     assert result.result.status is expected
-    assert calls == (["all"] if expected is PublicationStatus.SUCCEEDED else [])
+    assert calls == (["@all"] if expected is PublicationStatus.SUCCEEDED else [])
     with pytest.raises(ValueError, match="closed"):
         image.getpixel((0, 0))
 
@@ -757,8 +757,8 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
-            '    - type: "waveshare-13in3-e"',
-            '    - type: "window"\n    - type: "image-server"\n      outputs:\n        - id: "default"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"',
+            '  - id: desktop\n    type: "window"\n  - id: default\n    type: "image-server"',
         ),
         encoding="utf-8",
     )
@@ -1090,7 +1090,7 @@ def test_invalid_content_is_excluded_and_invalid_configuration_remains_fatal(wor
     assert "bad.yaml" in caplog.text
     assert workspace.load().revision == 1
 
-    workspace.config.write_text("display: {backend: nope}\n", encoding="utf-8")
+    workspace.config.write_text("destinations: []\n", encoding="utf-8")
     with pytest.raises(ApplicationError, match="configuration"):
         workspace.run(at(10, 8))
     assert workspace.load().revision == 1
@@ -1130,12 +1130,8 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
     ordinary(workspace)
     workspace.config.write_text(
         _CONFIG.replace(
-            '- type: "waveshare-13in3-e"',
-            "- type: image-server\n"
-            "      outputs:\n"
-            "        - id: default\n"
-            '          aspect_ratio: "16:10"\n'
-            "          resolution: [800, 500]",
+            '  - id: epaper\n    type: "waveshare-13in3-e"',
+            "  - id: default\n" "    type: image-server\n" '    aspect_ratio: "16:10"\n' "    resolution: [800, 500]",
         ),
         encoding="utf-8",
     )
@@ -1174,11 +1170,11 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
 
     workspace.config.write_text(
         _CONFIG.replace(
-            '- type: "waveshare-13in3-e"',
-            "- type: image-server\n      outputs:\n"
-            '        - id: default\n          aspect_ratio: "16:9"\n          resolution: [800, 450]\n'
-            '        - id: kitchen\n          aspect_ratio: "4:3"\n          resolution: [640, 480]\n'
-            '        - id: hallway\n          aspect_ratio: "16:10"\n          resolution: [800, 500]',
+            '  - id: epaper\n    type: "waveshare-13in3-e"',
+            "  - id: default\n    type: image-server\n"
+            '    aspect_ratio: "16:9"\n    resolution: [800, 450]\n'
+            '  - id: kitchen\n    type: image-server\n    aspect_ratio: "4:3"\n    resolution: [640, 480]\n'
+            '  - id: hallway\n    type: image-server\n    aspect_ratio: "16:10"\n    resolution: [800, 500]',
         ),
         encoding="utf-8",
     )
@@ -1218,21 +1214,21 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         image.close()
 
 
-def test_display_initialization_failure_preserves_state(workspace: Workspace) -> None:
+def test_display_initialization_failure_does_not_prevent_resident_publication_state(workspace: Workspace) -> None:
     ordinary(workspace)
 
     def factory(configuration):
         raise DisplayBackendInitializationError("no display")
 
-    with pytest.raises(ApplicationError, match="all configured display destinations"):
-        run_startup(
-            workspace.config,
-            workspace.state,
-            workspace.artifacts,
-            history_path=workspace.history,
-            now=at(10, 8),
-            backend_factory=factory,
-        )
+    result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        history_path=workspace.history,
+        now=at(10, 8),
+        backend_factory=factory,
+    )
+    assert result.selected_initial_quotation
     state = workspace.load()
     assert state.revision == 1 and state.highest_reveal_stage == 0
     result, _ = workspace.run(at(10, 8))
@@ -1242,8 +1238,7 @@ def test_display_initialization_failure_preserves_state(workspace: Workspace) ->
 def test_display_update_failure_closes_backend_and_persists_required_reveal(workspace: Workspace) -> None:
     ordinary(workspace)
     display = FakeDisplay(fail_update=True)
-    with pytest.raises(ApplicationError, match="all configured display destinations"):
-        workspace.run(at(10, 19), display)
+    workspace.run(at(10, 19), display)
     assert display.closed == 1
     state = workspace.load()
     assert state.revision == 1 and state.highest_reveal_stage == 2
@@ -1596,8 +1591,8 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
         workspace.config.read_text(encoding="utf-8")
         .replace("duration: 0", "duration: 2")
         .replace(
-            '    - type: "waveshare-13in3-e"',
-            '    - type: "window"\n    - type: "image-server"\n      outputs:\n        - id: "default"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"',
+            '  - id: desktop\n    type: "window"\n  - id: default\n    type: "image-server"',
         ),
         encoding="utf-8",
     )
@@ -1873,9 +1868,9 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
         port = listener.getsockname()[1]
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
-            '    - type: "waveshare-13in3-e"',
-            f'    - type: "window"\n    - type: "image-server"\n'
-            f'      host: "127.0.0.1"\n      port: {port}\n      outputs:\n        - id: "default"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"',
+            '  - id: desktop\n    type: "window"\n  - id: default\n    type: "image-server"\n'
+            f'image-server:\n  host: "127.0.0.1"\n  port: {port}',
         ),
         encoding="utf-8",
     )
@@ -2012,7 +2007,7 @@ def test_window_and_image_server_publish_independently() -> None:
         assert update_started.wait(2)
         deadline = monotonic() + 4
         while monotonic() < deadline:
-            if coordinator.acknowledgements["image-server:default"] == identity:
+            if coordinator.acknowledgements["default"] == identity:
                 with urlopen(f"http://127.0.0.1:{port}/display/default/current", timeout=1) as response:
                     published = Image.open(BytesIO(response.read()))
                     assert published.size == server_specification.requested_output_size
@@ -2294,7 +2289,7 @@ def test_continuous_initialization_retry(workspace, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("operation", ["initialize", "update"])
-def test_continuous_terminal_display_error_stops_without_retry(workspace, monkeypatch, operation) -> None:
+def test_continuous_terminal_display_error_does_not_stop_runtime_or_retry(workspace, monkeypatch, operation) -> None:
     ordinary(workspace)
     clock = RuntimeClock(at(10, 7))
     display = FakeDisplay()
@@ -2312,20 +2307,29 @@ def test_continuous_terminal_display_error_stops_without_retry(workspace, monkey
 
     display.update = fail_update
 
-    def wait_for_terminal_failure(deadline, shutdown, **kwargs):
-        assert update_failed.wait(1)
-        return False
+    wait_count = 0
 
-    with pytest.raises(ApplicationError, match="all configured display destinations"):
-        run_continuously(
-            workspace,
-            clock,
-            monkeypatch,
-            backend_factory=initialize,
-            scheduling_wait=wait_for_terminal_failure,
-        )
+    def wait_for_terminal_failure(deadline, shutdown, **kwargs):
+        nonlocal wait_count
+        assert update_failed.wait(1)
+        wait_count += 1
+        if wait_count == 1:
+            clock.move(at(10, 12))
+            return False
+        shutdown.set()
+        return True
+
+    presentations, _, _ = run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        backend_factory=initialize,
+        scheduling_wait=wait_for_terminal_failure,
+    )
+    assert presentations == [(1, 0), (1, 1)]
     assert display.closed == (1 if operation == "update" else 0)
-    assert clock.retry_delays == [] and clock.deadlines == []
+    assert clock.retry_delays == [] and wait_count == 2
+    assert workspace.load().highest_reveal_stage == 1
     assert len(workspace.history_records()) == 1
     assert len(png_files(workspace.artifacts)) == 3
 
@@ -2357,7 +2361,7 @@ def test_continuous_shutdown_during_recovery_bounds_retries_and_logs(workspace, 
         )
     assert stages == [(1, 0)] and display.closed == 1
     assert clock.retry_delays == []
-    assert caplog.text.count("Display destination waveshare-13in3-e update failed") == 1
+    assert caplog.text.count("Display destination epaper update failed") == 1
     assert workspace.load().revision == 1 and png_files(workspace.artifacts)
 
 
@@ -2537,7 +2541,7 @@ def test_continuous_shutdown_during_update_persists_successful_reveal(workspace,
     stages, _, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 2)] and display.closed == 1
     assert len(display.images) == 1
-    assert coordinators[0].acknowledgements == {"waveshare-13in3-e": (1, 2)}
+    assert coordinators[0].acknowledgements == {"epaper": (1, 2)}
     assert workspace.load().highest_reveal_stage == 2
 
 

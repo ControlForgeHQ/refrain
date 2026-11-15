@@ -19,13 +19,13 @@ from PIL import Image
 from ..config import (
     DisplayBackendConfiguration,
     DisplayOutputConfiguration,
-    canonical_destination_identifier,
 )
 from ..geometry import ResolvedOutputSpecification
 from . import DisplayBackend, DisplayBackendError, WithdrawableDisplayBackend, create_display_backend
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
+_MAX_RETRY_ATTEMPTS = 5
 _SHUTDOWN_TIMEOUT = 60.0
 
 
@@ -104,6 +104,7 @@ class _OneShotPublication:
     outcomes: dict[str, tuple[bool, str | None]]
     retry_at: dict[str, float]
     retry_delay: dict[str, float]
+    retry_attempts: dict[str, int]
     forced: bool
 
 
@@ -119,6 +120,8 @@ class _DestinationState:
     successful_at: float | None = None
     retry_at: float = 0.0
     retry_delay: float = 1.0
+    retry_attempts: int = 0
+    recoverable_failure: bool = False
     terminal: bool = False
     error: str | None = None
     withdrawn: bool = False
@@ -150,14 +153,13 @@ class DisplayPublicationCoordinator:
         self._stopping = False
         self._draining = False
         self._states = {
-            identifier: _DestinationState(configuration, destination, identifier)
+            destination.identifier: _DestinationState(configuration, destination, destination.identifier)
             for configuration in configurations
             for destination in configuration.outputs
-            for identifier in (canonical_destination_identifier(configuration, destination),)
         }
         expected_destinations = sum(len(configuration.outputs) for configuration in configurations)
         if len(self._states) != expected_destinations:
-            raise ValueError("configured display destinations must have unique canonical identifiers")
+            raise ValueError("configured display destinations must have unique identifiers")
         for identifier, supported in (transient_capabilities or {}).items():
             if identifier not in self._states:
                 raise ValueError(f"unknown display destination {identifier!r}")
@@ -189,6 +191,7 @@ class DisplayPublicationCoordinator:
             image_server_host=configuration.host,
             image_server_port=configuration.port,
             image_server_output_ids=tuple(output.identifier for output in configuration.outputs),
+            image_server_enabled=configuration.service_enabled,
         )
 
     @property
@@ -198,7 +201,7 @@ class DisplayPublicationCoordinator:
 
     @property
     def destination_identifiers(self) -> tuple[str, ...]:
-        """Return the canonical runtime identifiers owned by this coordinator."""
+        """Return the configured identifiers owned by this coordinator."""
         with self._condition:
             return tuple(self._states)
 
@@ -224,15 +227,23 @@ class DisplayPublicationCoordinator:
         with self._condition:
             return tuple(self._destination_status(key, state) for key, state in self._states.items())
 
-    @staticmethod
-    def _destination_status(key: str, state: _DestinationState) -> dict[str, object]:
+    def _destination_status(self, key: str, state: _DestinationState) -> dict[str, object]:
+        backend = self._backends.get(state.backend_configuration.type)
+        delivery_available = getattr(backend, "delivery_available", None)
+        if isinstance(delivery_available, bool):
+            available = delivery_available
+        else:
+            available = backend is not None and not state.terminal and state.error is None
         return {
             "identifier": key,
             "output_specification": state.destination.output_specification,
             "supports_transient": state.transient_supported,
             "participating": not state.withdrawn,
             "withdrawn": state.withdrawn,
-            "available": not state.terminal and state.error is None,
+            "available": available,
+            "publication_accepted": (
+                state.desired_identity is not None and state.successful_identity == state.desired_identity
+            ),
         }
 
     def iter_destination_statuses(self) -> Iterator[dict[str, object]]:
@@ -255,6 +266,7 @@ class DisplayPublicationCoordinator:
             if self._states and all(state.desired_identity == identity for state in self._states.values()):
                 self._close_images(images)
                 return
+            self._renew_recovery(self._states.values())
             required = {
                 state.destination.output_specification
                 for state in self._states.values()
@@ -335,6 +347,7 @@ class DisplayPublicationCoordinator:
             if self._backend_busy(selected):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.BUSY, selected)
+            self._renew_recovery(self._states[key] for key in selected)
             return self._admit_one_shot(selected, images, identity=None, forced=False)
 
     def force_scheduled_publication(
@@ -375,6 +388,7 @@ class DisplayPublicationCoordinator:
             if self._backend_busy(selected):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.BUSY, selected)
+            self._renew_recovery(self._states[key] for key in selected)
             return self._admit_one_shot(selected, images, identity=identity, forced=True)
 
     def _resolve_destinations(
@@ -384,7 +398,7 @@ class DisplayPublicationCoordinator:
         if isinstance(destinations, str):
             selected = (
                 tuple(key for key, state in self._states.items() if not state.withdrawn)
-                if destinations == "all"
+                if destinations == "@all"
                 else (destinations,)
             )
         else:
@@ -482,6 +496,7 @@ class DisplayPublicationCoordinator:
             outcomes={},
             retry_at={key: 0.0 for key in destinations},
             retry_delay={key: 1.0 for key in destinations},
+            retry_attempts={key: 0 for key in destinations},
             forced=forced,
         )
         for key in destinations:
@@ -725,6 +740,7 @@ class DisplayPublicationCoordinator:
         backend: DisplayBackend | None = None
         backend_retry_at = 0.0
         backend_retry_delay = 1.0
+        backend_retry_attempts = 0
         try:
             while True:
                 ready: _DestinationState | None = None
@@ -766,6 +782,10 @@ class DisplayPublicationCoordinator:
                             and selected_state is not None
                             and (self._draining or now >= backend_retry_at)
                         ):
+                            if backend_retry_attempts >= _MAX_RETRY_ATTEMPTS:
+                                backend_retry_attempts = 0
+                                backend_retry_delay = 1.0
+                                backend_retry_at = 0.0
                             initialize_backend = True
                             break
                         if backend is not None and selected_state is not None:
@@ -806,6 +826,7 @@ class DisplayPublicationCoordinator:
                         self._condition.wait(timeout)
 
                 if initialize_backend:
+                    backend_retry_attempts += 1
                     try:
                         backend = self._factory(configuration)
                         if isinstance(backend, WithdrawableDisplayBackend):
@@ -822,7 +843,12 @@ class DisplayPublicationCoordinator:
                     except Exception as error:
                         recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                         with self._condition:
-                            retry = recoverable and not self._stopping and not self._draining
+                            retry = (
+                                recoverable
+                                and backend_retry_attempts < _MAX_RETRY_ATTEMPTS
+                                and not self._stopping
+                                and not self._draining
+                            )
                             if retry:
                                 backend_retry_at = time.monotonic() + backend_retry_delay
                                 backend_retry_delay = min(_MAX_RETRY_DELAY, backend_retry_delay * 2)
@@ -833,7 +859,9 @@ class DisplayPublicationCoordinator:
                                 if (state.terminal or state.withdrawn) and not pending_one_shot:
                                     continue
                                 state.error = str(error)
-                                state.terminal = not recoverable
+                                state.recoverable_failure = recoverable
+                                state.retry_attempts = backend_retry_attempts if recoverable else 0
+                                state.terminal = not retry
                                 if state.terminal:
                                     self._release(state.pending)
                                     state.pending = None
@@ -862,17 +890,19 @@ class DisplayPublicationCoordinator:
                             _LOGGER.exception(
                                 "Unexpected display backend %s initialization failure", configuration.type
                             )
-                        if not recoverable:
-                            return
                         continue
 
                     with self._condition:
                         self._backends[configuration.type] = backend
+                        for state in states:
+                            state.retry_attempts = 0
+                            state.recoverable_failure = False
                         if self._stopping:
                             self._condition.notify_all()
                             return
                     backend_retry_at = 0.0
                     backend_retry_delay = 1.0
+                    backend_retry_attempts = 0
                     continue
 
                 assert ready is not None and backend is not None
@@ -893,10 +923,19 @@ class DisplayPublicationCoordinator:
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
-                        retry = recoverable and not self._stopping and not self._draining
+                        if one_shot is not None:
+                            one_shot.retry_attempts[ready.key] += 1
+                            ready.retry_attempts = one_shot.retry_attempts[ready.key]
+                        else:
+                            ready.retry_attempts += 1
+                        ready.recoverable_failure = recoverable
+                        attempt = ready.retry_attempts
+                        retry = (
+                            recoverable and attempt < _MAX_RETRY_ATTEMPTS and not self._stopping and not self._draining
+                        )
                         if not ready.withdrawn:
                             ready.error = str(error)
-                            ready.terminal = not recoverable
+                            ready.terminal = not retry
                         if one_shot is not None:
                             ready.one_shot_active = False
                             if retry:
@@ -931,13 +970,10 @@ class DisplayPublicationCoordinator:
                             ready.pending = None
                         self._signal_all_unavailable()
                         self._condition.notify_all()
-                        all_terminal = all(state.terminal for state in states)
                     if isinstance(error, DisplayBackendError):
                         _LOGGER.warning("Display destination %s update failed: %s", ready.key, error)
                     else:
                         _LOGGER.exception("Unexpected display destination %s update failure", ready.key)
-                    if all_terminal:
-                        return
                     continue
 
                 with self._condition:
@@ -954,6 +990,8 @@ class DisplayPublicationCoordinator:
                         ready.error = None
                         ready.retry_at = 0.0
                         ready.retry_delay = 1.0
+                        ready.retry_attempts = 0
+                        ready.recoverable_failure = False
                     self._condition.notify_all()
                     if presentation is not None:
                         self._release(presentation)
@@ -979,6 +1017,17 @@ class DisplayPublicationCoordinator:
         participating = [state for state in self._states.values() if not state.withdrawn]
         if self._all_unavailable_event is not None and participating and all(state.terminal for state in participating):
             self._all_unavailable_event.set()
+
+    @staticmethod
+    def _renew_recovery(states: Iterable[_DestinationState]) -> None:
+        for state in states:
+            if not state.recoverable_failure or state.withdrawn:
+                continue
+            state.terminal = False
+            state.error = None
+            state.retry_at = 0.0
+            state.retry_delay = 1.0
+            state.retry_attempts = 0
 
 
 __all__ = [

@@ -145,13 +145,13 @@ presentation:
   qr:
     enabled: true
 
-display:
-  backends:
-    - type: "image-server"
-      host: "127.0.0.1"
-      port: 8080
-      outputs:
-        - id: "default"
+destinations:
+  - id: "default"
+    type: "image-server"
+
+image-server:
+  host: "127.0.0.1"
+  port: 8080
 
 layout:
   presentation_insets:
@@ -186,7 +186,7 @@ layout:
     max_font_size: 200
 ```
 
-The example illustrates an image-server output, the information view, explicit QR policy, independent literary insets, resource pools, and automatic quotation fitting.
+The example illustrates an image-server destination and listener, the information view, explicit QR policy, independent literary insets, resource pools, and automatic quotation fitting.
 
 The installed distribution includes `config.default.yaml` as an editable starting point. `python -m refrain --initialize` copies it alongside a packaged sample content library; the installed copy is authoritative and is not synchronized or replaced automatically. Its bundled resource pools use the identifiers documented below and it relies on host-local time rather than a configured timezone. `examples/config.yaml` remains a development example with a separate purpose.
 
@@ -234,134 +234,50 @@ layout:
 
 RGB lists and direct RGB values in content entries or decoration manifests are not supported.
 
-### Display backends
+### Display destinations
 
-The required `display.backends` field selects one or more implementations used to present complete rendered images.
-
-The field must contain a nonempty sequence of backend mappings.
-
-Each backend mapping requires a `type` field identifying one supported built-in backend.
-
-Version 0.1 defines the following built-in backend identifiers:
-
-| Value | Description |
-|---|---|
-| `"window"` | Displays complete presentation images in a desktop window on a supported graphical Windows or Linux environment. |
-| `"waveshare-13in3-e"` | Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E). |
-| `"image-server"` | Serves one or more named prepared output images to HTTP clients. |
-
-Each backend type may appear at most once in `display.backends`.
-
-The sequence must contain at least one valid, uniquely identified backend. Duplicate backend types are configuration errors.
-
-Backend declaration order has no semantic meaning and does not establish execution priority.
-
-Only implemented backends may be selected at runtime. Unsupported backend identifiers do not become available merely because they appear in configuration.
-
-An unavailable backend must produce an actionable diagnostic rather than silently selecting another type. Runtime failures of an individual backend do not invalidate other configured destinations.
-
-The `display.backends` field has no implicit default. Development example configurations may select `"window"`; installations using the physical e-paper panel must explicitly include `"waveshare-13in3-e"`.
-
-The former singular `display.backend` field is not supported. No compatibility alias or automatic conversion is provided.
-
-Each output destination resolves an output specification consisting of a declared presentation aspect ratio and a requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain prepares one complete set of reveal-stage images for each unique output specification required by the configured destinations. Destinations with identical specifications may share prepared variants; destinations with different specifications receive their matching variants.
-
-A backend must not geometrically resize, crop, pad, or otherwise adapt an output image prepared for another destination. Backend-owned pixel-format or orientation conversion is permitted only where explicitly defined by that backend's contract. Backend selection is independent of content selection, reveal scheduling, and image preparation.
-
-Version 0.1 does not support third-party backend discovery, arbitrary Python module paths, or an external display plugin interface.
-
-#### Backend-specific fields
-
-Each backend mapping contains its required `type` field and any supported settings for that backend.
-
-The `window` backend resolves one output specification and accepts `aspect_ratio` and `resolution` as a pair. When neither is supplied, its output specification defaults to `16:9 @ 1920 × 1080`; for example, `- type: "window"` uses that default. When both are supplied, they define its output specification; supplying only one is a configuration error.
-
-The `waveshare-13in3-e` backend has the fixed output specification `4:3 @ 1600 × 1200`. Its aspect ratio and resolution are intrinsic to the backend and cannot be configured; supplying either field is a configuration error.
-
-The `image-server` backend supports optional `host` and `port` fields and a required nonempty `outputs` sequence. Each output has a stable, unique `id` within that backend instance and may specify an `aspect_ratio` and `resolution` pair. If neither is supplied, the output defaults to `16:10 @ 3840 × 2400`; supplying only one is a configuration error. One image-server backend instance may serve multiple named outputs; they are not separate backend instances.
-
-For example:
+The required top-level `destinations` field is a nonempty sequence of publication targets. Each destination requires an explicit `id` and `type`:
 
 ```yaml
-display:
-  backends:
-    - type: "window"
-      aspect_ratio: "4:3"
-      resolution: [1600, 1200]
+destinations:
+  - id: desktop
+    type: window
+    aspect_ratio: "16:9"
+    resolution: [1920, 1080]
 
-    - type: "waveshare-13in3-e"
+  - id: epaper
+    type: waveshare-13in3-e
 
-    - type: "image-server"
-      host: "0.0.0.0"
-      port: 8080
-      outputs:
-        - id: "default"
+  - id: kitchen
+    type: image-server
+    aspect_ratio: "16:10"
+    resolution: [3840, 2400]
 
-        - id: "repeat-kitchen"
-          aspect_ratio: "4:3"
-          resolution: [1600, 1200]
+  - id: hallway
+    type: image-server
+    aspect_ratio: "4:3"
+    resolution: [1600, 1200]
 
-        - id: "repeat-hallway"
-          aspect_ratio: "16:9"
-          resolution: [1920, 1080]
+image-server:
+  host: "127.0.0.1"
+  port: 8080
 ```
 
-The following fields are supported for the `window` backend:
+The supported destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service.
 
-| Field | Type | Required | Default |
-|---|---|---|---|
-| `aspect_ratio` | Supported aspect ratio string | No | `"16:9"` |
-| `resolution` | Two positive integer pixel dimensions, `[width, height]` | No | `[1920, 1080]` |
+Destination IDs must match `[A-Za-z0-9][A-Za-z0-9_-]*`, be no longer than 256 characters, and be globally unique across all types. IDs are used unchanged for runtime discovery, publication selection, and image-server resource paths. `all` is an ordinary valid ID; `@all` is reserved for publication selection. Invalid or duplicate IDs and capacity excesses are configuration errors. Backend capacities are checked before backend or service initialization.
 
-These fields must either both be omitted or both be supplied. A resolution does not imply an aspect ratio, and Refrain does not infer a resolution from an aspect ratio or fill one supplied field from the other's default.
+Each destination resolves an output specification consisting of a declared presentation aspect ratio and requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain prepares one complete set of reveal-stage images for each unique output specification required by configured destinations. Destinations with identical specifications may share prepared variants; destinations with different specifications receive their matching variants.
 
-The `waveshare-13in3-e` backend accepts neither `aspect_ratio` nor `resolution`. Its fixed output specification is `4:3 @ 1600 × 1200`.
+The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` destination defaults to `16:10 @ 3840 × 2400`. Both accept `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
 
-The following fields are supported for the `image-server` backend:
+The optional top-level `image-server` mapping controls the shared read-only HTTP listener. Its presence enables the service; an empty mapping, `{}`, and a bare `image-server:` key are equivalent. `host` defaults to `"127.0.0.1"` and `port` to `8080`; the port must be an integer from 1 through 65535. When this mapping is absent, image-server destinations remain configured and accept in-memory publications, but external HTTP delivery is unavailable. Listener failure does not invalidate accepted image representations. One service is shared by all image-server destinations.
 
-| Field | Type | Required | Default |
-|---|---|---|---|
-| `host` | String | No | `"127.0.0.1"` |
-| `port` | Integer | No | `8080` |
-| `outputs` | Nonempty sequence of named output mappings | Yes | — |
+The default loopback address prevents connections from other network devices. Binding to a network-accessible address does not provide authentication or encryption; the service is intended for trusted local networks and must not be exposed directly to untrusted networks or the public Internet.
 
-`host` and `port` belong directly to the `image-server` backend mapping. `outputs` contains the output destinations served by this one backend instance.
+Each image-server destination is exposed at `/display/<id>/current`. The service retains the latest complete PNG representation and entity tag for each destination in memory; no separate persistent image store is used.
 
-Each `outputs` item has the following fields:
-
-| Field | Type | Required | Default |
-|---|---|---|---|
-| `id` | Stable, nonempty string unique within this image-server backend; its canonical runtime destination identifier must not exceed 256 characters | Yes | — |
-| `aspect_ratio` | Supported aspect ratio string | No | `"16:10"` |
-| `resolution` | Two positive integer pixel dimensions, `[width, height]` | No | `[3840, 2400]` |
-
-For each named output, `aspect_ratio` and `resolution` must either both be omitted or both be supplied. Supplying only one is a configuration error. Do not infer either value from the other. The output ID identifies a destination within the server and does not create another backend instance.
-
-`host` specifies the local address on which the HTTP service listens.
-
-It must be a nonempty string identifying a valid local bind address or hostname.
-
-Common values include:
-
-- `"127.0.0.1"`: Listen only on the local IPv4 loopback interface.
-- `"0.0.0.0"`: Listen on all available IPv4 interfaces.
-- A specific local IP address: Listen only on that address.
-
-The default loopback address prevents connections from other network devices. Access from another device requires an appropriate listening address and any necessary operating-system firewall configuration.
-
-Binding to a network-accessible address does not provide authentication or encryption. The image-server service is intended for trusted local networks and must not be exposed directly to untrusted networks or the public Internet.
-
-`port` specifies the TCP listening port. It must be an integer between 1 and 65535, inclusive. Boolean values, strings, floating-point values, zero, and out-of-range integers are invalid.
-
-An unavailable listening address or occupied port is a backend initialization failure, not a configuration fallback condition.
-
-Invalid optional image-server settings are handled according to the application's documented configuration-validation rules.
-
-Unsupported fields within a backend mapping are reported as unrecognized configuration fields.
-
-The image-server exposes each named output as a distinct PNG resource at `/display/<output_id>/current`, as defined in `docs/ARCHITECTURE.md`. A named output's stable ID determines its resource path.
-
-The backend retains each named output's current image representation in memory and requires no separate image-storage directory or filesystem path.
+Unsupported configuration fields are reported as unrecognized fields. The retired `display` configuration is not part of the supported schema.
 
 ### General settings
 

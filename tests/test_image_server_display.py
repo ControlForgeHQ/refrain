@@ -151,6 +151,59 @@ def test_named_outputs_keep_independent_images_and_entity_tags() -> None:
         backend.close()
 
 
+def test_publication_is_retained_when_http_service_is_disabled() -> None:
+    port = available_port()
+    backend = ImageServerDisplayBackend(port=port, output_ids=("kitchen",), service_enabled=False)
+    image = Image.new("RGB", (4, 3), "red")
+    try:
+        backend.publish(DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3))), image)
+        assert not backend.delivery_available
+        representation = backend._representations["kitchen"]
+        assert representation is not None
+        with Image.open(io.BytesIO(representation[0])) as retained:
+            assert retained.getpixel((0, 0)) == (255, 0, 0)
+        with pytest.raises(OSError):
+            request(port, path="/display/kitchen/current")
+    finally:
+        image.close()
+        backend.close()
+
+
+def test_listener_bind_failure_does_not_reject_publication_and_recovers_latest_image(monkeypatch) -> None:
+    import refrain.display.image_server as image_server_module
+
+    port = available_port()
+    allow_bind = Event()
+    original_bind = image_server_module._ImageHTTPServer.server_bind
+
+    def bind(server):
+        if not allow_bind.is_set():
+            raise OSError(errno.EADDRNOTAVAIL, "address unavailable")
+        original_bind(server)
+
+    monkeypatch.setattr(image_server_module._ImageHTTPServer, "server_bind", bind)
+    backend = ImageServerDisplayBackend(port=port, output_ids=("kitchen",))
+    first = Image.new("RGB", (4, 3), "red")
+    latest = Image.new("RGB", (4, 3), "blue")
+    destination = DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)))
+    try:
+        backend.publish(destination, first)
+        assert not backend.delivery_available
+        assert backend._representations["kitchen"] is not None
+
+        allow_bind.set()
+        backend.publish(destination, latest)
+        assert backend.delivery_available
+        status, _headers, body = request(port, path="/display/kitchen/current")
+        assert status == 200
+        with Image.open(io.BytesIO(body)) as served:
+            assert served.getpixel((0, 0)) == (0, 0, 255)
+    finally:
+        first.close()
+        latest.close()
+        backend.close()
+
+
 def test_browser_refresh_uses_a_new_connection_after_each_response() -> None:
     backend, port = backend_at_available_port()
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
@@ -408,58 +461,75 @@ def test_close_does_not_deadlock_with_active_request_and_update(monkeypatch: pyt
     assert "closed" in str(update_errors[0])
 
 
-def test_occupied_port_is_reported_as_initialization_failure() -> None:
+def test_occupied_port_does_not_prevent_publication() -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         port = listener.getsockname()[1]
 
-        with pytest.raises(DisplayBackendInitializationError, match="could not bind image-server") as failure:
-            ImageServerDisplayBackend(port=port)
-        assert failure.value.recoverable
+        backend = ImageServerDisplayBackend(port=port)
+        image = Image.new("RGB", (4, 3), "red")
+        try:
+            assert not backend.delivery_available
+            backend.update(image)
+            assert backend._representations["default"] is not None
+        finally:
+            image.close()
+            backend.close()
 
 
-@pytest.mark.parametrize(
-    ("error_number", "recoverable"),
-    [(errno.EADDRNOTAVAIL, True), (errno.EADDRINUSE, True), (errno.EACCES, False), (errno.EINVAL, False)],
-)
-def test_bind_failures_distinguish_temporary_resources_from_configuration(
-    monkeypatch: pytest.MonkeyPatch, error_number: int, recoverable: bool
-) -> None:
+@pytest.mark.parametrize("error_number", [errno.EADDRNOTAVAIL, errno.EADDRINUSE, errno.EACCES, errno.EINVAL])
+def test_bind_failures_leave_publisher_operational(monkeypatch: pytest.MonkeyPatch, error_number: int) -> None:
     def fail_bind(_server):
         raise OSError(error_number, "simulated bind failure")
 
     monkeypatch.setattr("refrain.display.image_server._ImageHTTPServer.server_bind", fail_bind)
-    with pytest.raises(DisplayBackendInitializationError) as failure:
-        ImageServerDisplayBackend(port=available_port())
-    assert failure.value.recoverable is recoverable
+    backend = ImageServerDisplayBackend(port=available_port())
+    image = Image.new("RGB", (4, 3), "blue")
+    try:
+        backend.update(image)
+        assert not backend.delivery_available
+        assert backend._representations["default"] is not None
+    finally:
+        image.close()
+        backend.close()
 
 
-def test_windows_access_denied_socket_error_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_windows_access_denied_socket_error_does_not_prevent_publication(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_bind(_server):
         error = OSError(errno.EACCES, "simulated Windows socket access error")
         error.winerror = 10013
         raise error
 
     monkeypatch.setattr("refrain.display.image_server._ImageHTTPServer.server_bind", fail_bind)
-    with pytest.raises(DisplayBackendInitializationError) as failure:
-        ImageServerDisplayBackend(port=available_port())
-    assert failure.value.recoverable
+    backend = ImageServerDisplayBackend(port=available_port())
+    image = Image.new("RGB", (4, 3), "blue")
+    try:
+        backend.update(image)
+        assert not backend.delivery_available
+        assert backend._representations["default"] is not None
+    finally:
+        image.close()
+        backend.close()
 
 
-@pytest.mark.parametrize(
-    ("error_number", "recoverable"), [(socket.EAI_AGAIN, True), (socket.EAI_NONAME, False), (socket.EAI_FAIL, False)]
-)
-def test_address_resolution_failure_classification(
-    monkeypatch: pytest.MonkeyPatch, error_number: int, recoverable: bool
+@pytest.mark.parametrize("error_number", [socket.EAI_AGAIN, socket.EAI_NONAME, socket.EAI_FAIL])
+def test_address_resolution_failure_does_not_prevent_publication(
+    monkeypatch: pytest.MonkeyPatch, error_number: int
 ) -> None:
     def fail_resolution(*_args, **_kwargs):
         raise socket.gaierror(error_number, "simulated resolution failure")
 
     monkeypatch.setattr("refrain.display.image_server.socket.getaddrinfo", fail_resolution)
-    with pytest.raises(DisplayBackendInitializationError) as failure:
-        ImageServerDisplayBackend(host="example.invalid", port=8080)
-    assert failure.value.recoverable is recoverable
+    backend = ImageServerDisplayBackend(host="example.invalid", port=8080)
+    image = Image.new("RGB", (4, 3), "green")
+    try:
+        backend.update(image)
+        assert not backend.delivery_available
+        assert backend._representations["default"] is not None
+    finally:
+        image.close()
+        backend.close()
 
 
 @pytest.mark.parametrize("kwargs", [{"host": ""}, {"port": 0}, {"output_ids": ()}])
@@ -469,7 +539,7 @@ def test_invalid_backend_arguments_are_not_retried(kwargs: dict[str, object]) ->
     assert not failure.value.recoverable
 
 
-def test_thread_start_failure_releases_bound_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_thread_start_failure_does_not_prevent_publication(monkeypatch: pytest.MonkeyPatch) -> None:
     port = available_port()
 
     class FailedThread:
@@ -480,8 +550,13 @@ def test_thread_start_failure_releases_bound_listener(monkeypatch: pytest.Monkey
             raise RuntimeError("thread unavailable")
 
     monkeypatch.setattr("refrain.display.image_server.Thread", FailedThread)
-    with pytest.raises(DisplayBackendInitializationError, match="thread unavailable"):
-        ImageServerDisplayBackend(port=port)
+    backend = ImageServerDisplayBackend(port=port)
+    image = Image.new("RGB", (4, 3), "yellow")
+    backend.update(image)
+    assert not backend.delivery_available
+    assert backend._representations["default"] is not None
+    image.close()
+    backend.close()
 
     monkeypatch.undo()
     replacement = ImageServerDisplayBackend(port=port)

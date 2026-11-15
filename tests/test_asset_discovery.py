@@ -20,7 +20,7 @@ def _config_data(**layout_sections: object) -> dict[str, object]:
         "text": {"min_font_size": 12, "max_font_size": 32},
     }
     layout.update(layout_sections)
-    return {"display": {"backends": [{"type": "window"}]}, "layout": layout}
+    return {"destinations": [{"id": "window", "type": "window"}], "layout": layout}
 
 
 def _write_config(path: Path, data: dict[str, object] | None = None) -> Path:

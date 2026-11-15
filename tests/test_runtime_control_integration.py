@@ -74,15 +74,13 @@ def resident(tmp_path, monkeypatch):
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text().replace(
-            '- type: "waveshare-13in3-e"',
-            '- type: "image-server"\n'
-            "      outputs:\n"
-            '        - id: "one"\n'
-            '          aspect_ratio: "16:9"\n'
-            "          resolution: [800, 450]\n"
-            '        - id: "two"\n'
-            '          aspect_ratio: "16:9"\n'
-            "          resolution: [800, 450]",
+            '  - id: epaper\n    type: "waveshare-13in3-e"',
+            '  - id: one\n    type: "image-server"\n'
+            '    aspect_ratio: "16:9"\n'
+            "    resolution: [800, 450]\n"
+            '  - id: two\n    type: "image-server"\n'
+            '    aspect_ratio: "16:9"\n'
+            "    resolution: [800, 450]",
         )
     )
     shutdown = Event()
@@ -197,7 +195,7 @@ def _connection(path):
 def test_real_resident_listener_and_refresh(resident):
     metadata, _, published, *_ = resident
     client = RuntimeControlClient(metadata)
-    assert [item["identifier"] for item in client.discover()] == ["image-server:one", "image-server:two"]
+    assert [item["identifier"] for item in client.discover()] == ["one", "two"]
     assert client.refresh().status.value == "succeeded"
     assert published == ["one", "two", "one", "two"]
 
@@ -304,7 +302,7 @@ def test_real_transient_preserves_scheduled_state_and_acknowledgements(resident)
     specs = {item["identifier"]: item["output_specification"] for item in records}
     specification = records[0]["output_specification"]
     with Image.new("RGB", specification.requested_output_size, (17, 81, 93)) as image:
-        result = client.publish_transient("all", specs, {specification: image})
+        result = client.publish_transient("@all", specs, {specification: image})
     assert result.status.value == "succeeded"
     assert published == ["one", "two", "one", "two"]
     assert pixels[-2:] == [(17, 81, 93), (17, 81, 93)]
@@ -327,7 +325,7 @@ def test_newly_due_scheduled_stage_rejects_transient_before_publication(resident
     # The scheduler remains asleep while the control request observes the newly due stage.
     clock[0] = at(10, 18)
     with Image.new("RGB", specification.requested_output_size, (17, 81, 93)) as image:
-        result = client.publish_transient("all", specs, {specification: image})
+        result = client.publish_transient("@all", specs, {specification: image})
     assert result.status.value == "busy"
     assert published == ["one", "two"]
     assert coordinator.desired_identity == before_identity
@@ -367,7 +365,7 @@ def test_disconnect_during_real_refresh_preparation_does_not_publish(resident, m
     monkeypatch.setattr(control_module, "_ensure_connected", observe_check)
     connection = _connection(metadata)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert entered.wait(5)
         connection.close()
         release.set()
@@ -384,7 +382,7 @@ def test_real_shutdown_defers_coordinator_until_admitted_refresh_completes(resid
     hold.set()
     connection = _connection(metadata)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert json.loads(connection.recv_bytes())["status"] == "accepted"
         assert entered.wait(5)
         connection.close()
@@ -417,7 +415,7 @@ def test_shutdown_closes_backend_before_stuck_unadmitted_handler_exits(resident,
     monkeypatch.setattr(application, "_refresh_scheduled", blocked_refresh)
     connection = _connection(metadata)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert entered.wait(5)
         shutdown.set()
         thread.join(5)

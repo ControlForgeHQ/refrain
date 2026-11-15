@@ -86,9 +86,9 @@ def test_backend_withdrawal_discards_pending_and_skips_future_publications() -> 
     try:
         coordinator.publish((1, 0), _images(_WIDE, value=1))
         assert entered.wait(2)
-        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 0))
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server"] == (1, 0))
         coordinator.publish((1, 1), _images(_WIDE, value=2))
-        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 1))
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server"] == (1, 1))
         backends["window"].callback()
         assert coordinator._states["window"].pending is None
         assert coordinator.destination_statuses[0]["withdrawn"] is True
@@ -98,10 +98,10 @@ def test_backend_withdrawal_discards_pending_and_skips_future_publications() -> 
         assert coordinator.wait_for_publication((1, 2), timeout=2)
         refresh = coordinator.force_scheduled_publication((1, 2), _images(_WIDE, value=4))
         assert refresh.wait(2).status is PublicationStatus.SUCCEEDED
-        assert set(refresh.result.destinations) == {"image-server:image-server"}
-        transient = coordinator.publish_transient("all", {"image-server:image-server": _WIDE}, _images(_WIDE, value=5))
+        assert set(refresh.result.destinations) == {"image-server"}
+        transient = coordinator.publish_transient("@all", {"image-server": _WIDE}, _images(_WIDE, value=5))
         assert transient.wait(2).status is PublicationStatus.SUCCEEDED
-        assert set(transient.result.destinations) == {"image-server:image-server"}
+        assert set(transient.result.destinations) == {"image-server"}
         rejected = coordinator.publish_transient("window", {"window": _WIDE}, _images(_WIDE))
         assert rejected.result.status is PublicationStatus.WITHDRAWN
         assert publications == {"window": [1], "image-server": [1, 2, 3, 4, 5]}
@@ -145,9 +145,9 @@ def test_withdrawal_during_scheduled_failure_preserves_availability(monkeypatch,
     try:
         coordinator.publish((1, 0), images)
         assert entered.wait(2)
-        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 0))
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server"] == (1, 0))
         coordinator.publish((1, 1), _images(_WIDE, value=2))
-        assert _wait_until(lambda: coordinator.acknowledgements["image-server:image-server"] == (1, 1))
+        assert _wait_until(lambda: coordinator.acknowledgements["image-server"] == (1, 1))
         backends["window"].callback()
         release.set()
         with coordinator._condition:
@@ -203,13 +203,11 @@ def test_backend_withdrawal_does_not_cancel_admitted_one_shot(forced: bool, fail
         if forced:
             operation = coordinator.force_scheduled_publication((1, 0), _images(_WIDE))
         else:
-            operation = coordinator.publish_transient(
-                "all", {"window": _WIDE, "image-server:image-server": _WIDE}, _images(_WIDE)
-            )
+            operation = coordinator.publish_transient("@all", {"window": _WIDE, "image-server": _WIDE}, _images(_WIDE))
         assert entered.wait(2)
         backends["window"].callback()
         assert coordinator.destination_statuses[0]["withdrawn"] is True
-        assert set(operation.result.destinations) == {"window", "image-server:image-server"}
+        assert set(operation.result.destinations) == {"window", "image-server"}
         release.set()
         assert operation.wait(2).status is (PublicationStatus.FAILED if fail else PublicationStatus.SUCCEEDED)
         assert operation.result.destinations["window"][0] is not fail
@@ -217,7 +215,7 @@ def test_backend_withdrawal_does_not_cancel_admitted_one_shot(forced: bool, fail
             assert operation.result.destinations["window"][1] == "window closed during publication"
         status = coordinator.destination_statuses[0]
         assert (status["participating"], status["withdrawn"], status["available"]) == (False, True, True)
-        assert operation.result.destinations["image-server:image-server"][0] is True
+        assert operation.result.destinations["image-server"][0] is True
         assert sorted(publications) == ["image-server", "window"]
     finally:
         release.set()
@@ -296,7 +294,7 @@ def test_transient_admission_is_atomic_when_one_selected_destination_is_busy() -
         assert window_entered.wait(1)
         assert _wait_until(lambda: coordinator.acknowledgements["waveshare-13in3-e"] == (1, 0))
         request = coordinator.publish_transient(
-            "all",
+            "@all",
             {"window": _WIDE, "waveshare-13in3-e": _PORTRAIT},
             _images(_WIDE, _PORTRAIT),
         )
@@ -391,9 +389,9 @@ def test_all_skips_withdrawn_but_does_not_skip_failed_destinations() -> None:
         assert coordinator.withdraw_destination("waveshare-13in3-e")
         status_by_id = {entry["identifier"]: entry for entry in coordinator.destination_statuses}
         assert status_by_id["waveshare-13in3-e"]["withdrawn"] is True
-        assert status_by_id["waveshare-13in3-e"]["available"] is True
+        assert status_by_id["waveshare-13in3-e"]["available"] is False
         withdrawn_all = coordinator.publish_transient(
-            "all",
+            "@all",
             {"window": _WIDE},
             _images(_WIDE),
         )
@@ -412,7 +410,7 @@ def test_all_skips_withdrawn_but_does_not_skip_failed_destinations() -> None:
     failed = DisplayPublicationCoordinator(configurations, lambda config: Backend(config.type), retry=False)
     try:
         request = failed.publish_transient(
-            "all",
+            "@all",
             {"window": _WIDE, "waveshare-13in3-e": _PORTRAIT},
             _images(_WIDE, _PORTRAIT, value=3),
         )
@@ -507,10 +505,10 @@ def test_shared_backend_destinations_are_serialized_while_unselected_backend_pro
     try:
         coordinator.publish((1, 0), {_WIDE: Image.new("RGB", (4, 4), (1, 0, 0))})
         assert entered_window.wait(1)
-        assert _wait_until(lambda: coordinator.acknowledgements["image-server:hallway"] == (1, 0))
+        assert _wait_until(lambda: coordinator.acknowledgements["hallway"] == (1, 0))
         request = coordinator.publish_transient(
-            ("image-server:kitchen", "image-server:hallway"),
-            {"image-server:kitchen": _WIDE, "image-server:hallway": _WIDE},
+            ("kitchen", "hallway"),
+            {"kitchen": _WIDE, "hallway": _WIDE},
             _images(_WIDE),
         )
         assert request.wait(1).status is PublicationStatus.SUCCEEDED
@@ -563,10 +561,10 @@ def test_forced_publication_repeats_current_identity_and_skips_withdrawn_destina
             == {
                 "window": (4, 2),
                 "waveshare-13in3-e": (4, 2),
-                "image-server:default": (4, 2),
+                "default": (4, 2),
             }
         )
-        assert coordinator.withdraw_destination("image-server:default")
+        assert coordinator.withdraw_destination("default")
         forced = coordinator.force_scheduled_publication(
             (4, 2),
             {
@@ -584,7 +582,7 @@ def test_forced_publication_repeats_current_identity_and_skips_withdrawn_destina
                 "waveshare-13in3-e",
             ]
         )
-        assert coordinator.acknowledgements["image-server:default"] == (4, 2)
+        assert coordinator.acknowledgements["default"] == (4, 2)
         assert coordinator.desired_identity == (4, 2)
         assert len(forced_images) == 2
         with pytest.raises(ValueError):

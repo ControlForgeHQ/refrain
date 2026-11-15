@@ -306,6 +306,8 @@ For example:
 - the display backend reports communication or refresh failure;
 - the application controller determines whether to retry, continue, or terminate.
 
+Validate destination IDs for required presence, URL-safe ASCII syntax, runtime-control length, and global uniqueness before initializing any backend. Backend implementations declare their maximum destination capacity through side-effect-free metadata so invalid counts are rejected before hardware or service initialization. Preserve backend grouping where one instance owns shared resources for multiple destinations.
+
 Do not hide materially different failures behind a generic success/failure result when the distinction affects correct recovery.
 
 Conversely, avoid creating elaborate exception hierarchies without a demonstrated need.
@@ -696,9 +698,9 @@ Add hardware-independent tests using fake backends and controlled synchronizatio
 
 - exclusive normal and demo ownership, rejection of a second process and concurrent demo, release on shutdown, installation-management exclusion, and control-client behavior with no resident runtime;
 - authenticated local connections, malformed, unsupported, oversized, and inconsistent protocol requests, and rejection before backend access;
-- discovery of canonical destination IDs and output specifications, including single-output and named multi-output backends, and rejection when a destination or specification changes after discovery;
+- discovery of exact configured destination IDs and output specifications, including single-destination and shared multi-destination backends, and rejection when a destination or specification changes after discovery;
 - exact output-dimension validation, missing image variants, and shared image use for destinations with identical specifications;
-- atomic busy rejection for one destination and for `all`, no partial publication after failed admission, independent operation on different backend instances, and serialization on the same instance;
+- atomic busy rejection for one destination and for `@all`, no partial publication after failed admission, independent operation on different backend instances, and serialization on the same instance;
 - per-destination scheduled acknowledgement and coalescing, including distinct acknowledgements for named destinations with identical output specifications;
 - scheduled desired state remaining authoritative after an admitted transient push, transient completion remaining separate from scheduled acknowledgement, no replacement of admitted transient work by later scheduling, and no repaint on routine reevaluation of an unchanged scheduled identity;
 - no push mutation of selection, revision, global or repetition history, reveal progression, scheduling state, or prepared artifacts;
@@ -936,7 +938,7 @@ The initial implementation needs one application-owned information-view layout. 
 
 ### Interface and implementation boundaries
 
-Provide a small synchronous display backend interface whose publication operation accepts a complete Pillow image and identifies one selected configured destination. The destination may be passed explicitly or represented by an equivalent destination-bound abstraction; an image-only `update(image)` operation is not sufficient for a backend that owns multiple named outputs. The contract is generic and does not prescribe a particular Python method signature.
+Provide a small synchronous display backend interface whose publication operation accepts a complete Pillow image and identifies one selected configured destination. The destination may be passed explicitly or represented by an equivalent destination-bound abstraction; an image-only `update(image)` operation is not sufficient for a backend that owns multiple destinations. The contract is generic and does not prescribe a particular Python method signature.
 
 The interface operates on complete Pillow images rather than artifact paths.
 
@@ -976,7 +978,7 @@ Keep backend publication synchronous and based on complete Pillow images.
 
 Serialize publication and lifecycle operations for each individual backend instance. Never invoke overlapping operations on the same instance, including operations for different named destinations.
 
-For normal scheduled publication only, maintain at most one pending desired presentation identity per configured destination. When a newer scheduled presentation becomes required, replace that destination's obsolete pending scheduled request rather than accumulating stages, and retain the latest required identity for that destination. Track the most recent successful scheduled publication independently per destination, including named outputs even when they share an output specification or backend instance.
+For normal scheduled publication only, maintain at most one pending desired presentation identity per configured destination. When a newer scheduled presentation becomes required, replace that destination's obsolete pending scheduled request rather than accumulating stages, and retain the latest required identity for that destination. Track the most recent successful scheduled publication independently per destination, including those sharing an output specification or backend instance.
 
 Do not interrupt an active hardware transfer unless its backend explicitly supports safe interruption.
 
@@ -996,7 +998,7 @@ Associate each outstanding scheduled destination publication with the identity i
 
 Transient publication uses separate admission and completion state, not the replaceable scheduled-presentation slot. Once admitted, a transient request must complete or fail for every requested destination and must not be replaced because newer scheduled work appears. It neither changes the scheduled desired identity nor clears or satisfies scheduled acknowledgement. Shared backend serialization, image ownership, resource lifetime, and safe shutdown rules apply to scheduled, transient, and forced refresh operations.
 
-Keep intentional withdrawal distinct from backend failure or unavailability. Ordinary scheduled work, transient `all`, and forced refresh skip an intentionally withdrawn destination; an explicit transient request naming it is rejected. A failed or unavailable destination remains part of transient `all` and forced refresh results rather than being silently reclassified as withdrawn. Do not add general runtime destination enable/disable or configuration mutation.
+Keep intentional withdrawal distinct from backend failure or delivery unavailability. Ordinary scheduled work, transient `@all`, and forced refresh skip an intentionally withdrawn destination; an explicit transient request naming it is rejected. A failed or unavailable destination remains part of transient `@all` and forced refresh results rather than being silently reclassified as withdrawn. Do not add general runtime destination enable/disable or configuration mutation.
 
 Avoid unnecessary image duplication. Backend workers must receive images whose lifetime remains valid throughout their publication operation.
 
@@ -1058,9 +1060,9 @@ The backend must stop accepting requests and release its listening resources dur
 
 Test the backend without physical display hardware or external network services. Automated tests should exercise the HTTP interface through a real local listening socket, including:
 
-- successful retrieval of every named output PNG;
+- successful retrieval of every configured image-server destination PNG;
 - correct response content type and image contents;
-- independent entity tags and conditional requests for each named output;
+- independent entity tags and conditional requests for each image-server destination;
 - replacement of each output image and invalidation of that output's previous entity tag;
 - correct delivery when multiple outputs share a prepared variant or use distinct variants;
 - requests made before the first successful image update;
@@ -1130,7 +1132,7 @@ Classify failures sufficiently to support meaningful diagnostics and bounded rec
 
 `DisplayBackendError.recoverable` defaults to true. Backends mark errors nonrecoverable when the active instance cannot safely accept another update, such as a closed window or disabled hardware transport.
 
-Retry recoverable errors on the affected backend without blocking other workers or the application scheduler.
+Retry recoverable errors on the affected backend without blocking other workers or the application scheduler. Limit each recovery opportunity to five total initialization or publication attempts, with retry delays starting at one second and doubling to a 60-second maximum.
 
 Only `DisplayBackendError` instances explicitly marked recoverable are retried. Unexpected exceptions during construction or update are logged as programming/backend failures and terminally disable that destination.
 
@@ -1140,11 +1142,11 @@ Initialization failures should be reported independently. Do not assume that an 
 
 Where recovery requires constructing a replacement backend instance, coordinate cleanup and reinitialization without overlapping operations on the same destination.
 
-Use bounded retry delays rather than unrestricted rapid retries.
+Use bounded retry delays rather than unrestricted rapid retries. After retry exhaustion, stop attempting that failure until a subsequent scheduled publication, refresh, or applicable transient publication creates a new recovery opportunity. Do not retry unrecoverable errors or intentionally withdrawn destinations.
 
 Retries must not indefinitely block recognition of newer scheduled presentation requirements.
 
-If every configured backend becomes unavailable, report the loss of all presentation destinations. Continue bounded recovery when possible; otherwise allow the application to fail so that external service supervision can respond.
+If every configured destination becomes unavailable, report the condition and keep the resident runtime operating its scheduler, persistence, preparation, and runtime-control responsibilities. Total destination unavailability, unrecoverable failure, or intentional withdrawal is not a fatal application condition.
 
 Distinguish failures occurring before presentation, failures during presentation, and uncertain outcomes when the underlying implementation permits.
 
@@ -1164,7 +1166,7 @@ Include hardware-independent tests covering:
 - One backend continuing while another is blocked or slow.
 - No overlapping updates to an individual backend.
 - For normal scheduled publication, replacement of obsolete per-destination pending stages with the latest required presentation.
-- Independent successful scheduled-publication tracking per destination, including named outputs sharing one output specification.
+- Independent successful scheduled-publication tracking per destination, including destinations sharing one output specification.
 - Failed and uncertain destination publications not being treated as successful.
 - Recovery from individual backend failures without reselection.
 - Startup recovery and republication to available backends.
@@ -1234,9 +1236,9 @@ Require deterministic hardware-independent tests with explicit current instants 
 
 Reuse the application selection, resource resolution, daily-selection commitment, reveal-progress persistence, image-cache recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the durable daily selection without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
 
-Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement, then measure the viewing interval from `first_successful_publication_time()` using the same monotonic clock supplied to the coordinator. An unacknowledged stage cannot advance. Initialization, preparation, failed publications, and wall-clock adjustments must not consume or alter the interval. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
+Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement. Measure the viewing interval from `first_successful_publication_time()` when an acknowledgement exists; if no destination accepts the image, start the interval at its publication attempt so reveal progression continues. Use the same monotonic clock supplied to the coordinator. Initialization, preparation, failed publications, and wall-clock adjustments must not alter persisted selection or reveal state. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
 
-Use the normal independent backend retries and increasing application retry delays from 1 to at most 60 seconds. Do not reset backends between stages or require all destinations to succeed. Wake progression and retry waits on shutdown or terminal loss of every backend, and report the latter as an actionable application error rather than continuing selection without a destination.
+Use the normal independent backend retries and increasing application retry delays from 1 to at most 60 seconds. Do not reset backends between stages or require all destinations to succeed. Continue progression and retry waits while destinations are unavailable, failed, or withdrawn; only shutdown ends the session for those conditions.
 
 Stop new work on Ctrl+C or SIGTERM. Close the publication coordinator before removing temporary storage, preserving its bounded worker shutdown and image-reference ownership. Attempt session cleanup even after fatal application errors; report cleanup failures without concealing the primary error or touching production files. Each invocation starts fresh and has no resumable session state. Suppress the startup information view in demo mode.
 
@@ -1329,7 +1331,7 @@ Test default and explicit `@preview` selection, exact normal-entry selection, om
 
 Verify `refrain-viewer --debug-layout` uses the shared presentation diagnostics without enabling overlays in normal runtime or demo preparation.
 
-Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline for local inspection/export, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. For local inspection/export, use sentinel persistence locations and backend factories to verify the viewer never accesses configured backends or runtime persistence. For push, verify it never constructs, initializes, or directly accesses configured backends, but does exercise the resident runtime-control publication path using discovered output specifications. Verify that a destination reported as not supporting transient publication is rejected before rendering, both when selected directly and when included by `--push all`. Do not treat mocked window behavior as graphical-session validation.
+Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline for local inspection/export, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. For local inspection/export, use sentinel persistence locations and backend factories to verify the viewer never accesses configured backends or runtime persistence. For push, verify it never constructs, initializes, or directly accesses configured backends, but does exercise the resident runtime-control publication path using discovered output specifications. Verify that a destination reported as not supporting transient publication is rejected before rendering, both when selected directly and when included by `--push @all`. Verify that a literal destination ID `all` is routed as a named destination and never treated as the all-participating selector. Do not treat mocked window behavior as graphical-session validation.
 
 ### Core test coverage
 

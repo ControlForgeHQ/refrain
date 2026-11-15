@@ -33,7 +33,8 @@ _TOP_LEVEL_FIELDS = {
     "general",
     "content",
     "reveal",
-    "display",
+    "destinations",
+    "image-server",
     "layout",
     "presentation",
     "information_view",
@@ -42,6 +43,7 @@ _TOP_LEVEL_FIELDS = {
 }
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
 _MAX_DESTINATION_IDENTIFIER_LENGTH = 256
+_DESTINATION_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
@@ -188,16 +190,7 @@ class DisplayBackendConfiguration:
     host: str = "127.0.0.1"
     port: int = 8080
     outputs: tuple[DisplayOutputConfiguration, ...] = ()
-
-
-def canonical_destination_identifier(
-    backend: DisplayBackendConfiguration,
-    destination: DisplayOutputConfiguration,
-) -> str:
-    """Return the runtime-canonical identifier for one configured destination."""
-    if backend.type == "image-server" or len(backend.outputs) > 1:
-        return f"{backend.type}:{destination.identifier}"
-    return backend.type
+    service_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -611,19 +604,64 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
             else:
                 palette[identifier] = value
 
-    display = _mapping(data.get("display", {}), "display", report)
-    _known_fields(display, {"backends"}, "display", report)
-    configured_backends = display.get("backends")
-    display_backends: list[DisplayBackendConfiguration] = []
-    seen_backends: set[str] = set()
-    if not isinstance(configured_backends, list) or not configured_backends:
-        report("display.backends", "is required and must be a nonempty sequence of backend mappings", logging.ERROR)
+    from .display.capabilities import DESTINATION_CAPACITIES
+
+    image_server_enabled = "image-server" in data
+    image_server_value = data.get("image-server", {})
+    if image_server_value is None:
+        image_server_value = {}
+    image_server = _mapping(image_server_value, "image-server", report)
+    _known_fields(image_server, {"host", "port"}, "image-server", report)
+    image_server_host = "127.0.0.1"
+    image_server_port = 8080
+    if image_server_enabled:
+        if "host" not in image_server:
+            use_default("image-server.host", repr(image_server_host))
+        elif _valid_image_server_host(image_server["host"]):
+            image_server_host = image_server["host"]
+        else:
+            report(
+                "image-server.host",
+                "must be a nonempty local bind address or hostname; using the documented default '127.0.0.1'",
+            )
+        if "port" not in image_server:
+            use_default("image-server.port", str(image_server_port))
+        port_value = image_server.get("port", image_server_port)
+        if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
+            report("image-server.port", "must be an integer between 1 and 65535; using the documented default 8080")
+        else:
+            image_server_port = port_value
+
+    configured_destinations = data.get("destinations")
+    destination_groups: dict[str, list[DisplayOutputConfiguration]] = {}
+    destination_counts: dict[str, int] = {}
+    seen_destination_ids: set[str] = set()
+    if not isinstance(configured_destinations, list) or not configured_destinations:
+        report("destinations", "is required and must be a nonempty sequence of destination mappings", logging.ERROR)
     else:
-        for index, value in enumerate(configured_backends):
-            field = f"display.backends[{index}]"
+        for index, value in enumerate(configured_destinations):
+            field = f"destinations[{index}]"
             if not isinstance(value, dict):
-                report(field, "must be a backend mapping", logging.ERROR)
+                report(field, "must be a destination mapping", logging.ERROR)
                 continue
+            _known_fields(value, {"id", "type", "aspect_ratio", "resolution"}, field, report)
+            identifier = value.get("id")
+            if (
+                not isinstance(identifier, str)
+                or not _DESTINATION_IDENTIFIER.fullmatch(identifier)
+                or len(identifier) > _MAX_DESTINATION_IDENTIFIER_LENGTH
+            ):
+                report(
+                    f"{field}.id",
+                    "is required and must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most 256 characters",
+                    logging.ERROR,
+                )
+                continue
+            if identifier in seen_destination_ids:
+                report(f"{field}.id", f"duplicates destination ID {identifier!r}", logging.ERROR)
+                continue
+            seen_destination_ids.add(identifier)
+
             backend_type = value.get("type")
             if not isinstance(backend_type, str) or backend_type not in _DISPLAY_BACKENDS:
                 report(
@@ -632,100 +670,27 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                     logging.ERROR,
                 )
                 continue
-            if backend_type in seen_backends:
-                report(f"{field}.type", f"duplicates backend type {backend_type!r}", logging.ERROR)
+            destination_counts[backend_type] = destination_counts.get(backend_type, 0) + 1
+            capacity = DESTINATION_CAPACITIES[backend_type]
+            if capacity is not None and destination_counts[backend_type] > capacity:
+                report(
+                    f"{field}.type",
+                    f"backend {backend_type!r} supports at most {capacity} destination(s)",
+                    logging.ERROR,
+                )
                 continue
-            seen_backends.add(backend_type)
-            allowed = (
-                {"type", "host", "port", "outputs"}
-                if backend_type == "image-server"
-                else ({"type", "aspect_ratio", "resolution"} if backend_type == "window" else {"type"})
-            )
-            _known_fields(value, allowed, field, report)
-            host = "127.0.0.1"
-            port = 8080
-            outputs: list[DisplayOutputConfiguration] = []
-            if backend_type == "image-server":
-                if "host" not in value:
-                    use_default(f"{field}.host", repr(host))
-                elif _valid_image_server_host(value["host"]):
-                    host = value["host"]
-                else:
-                    report(
-                        f"{field}.host",
-                        "must be a nonempty local bind address or hostname; using the documented default '127.0.0.1'",
-                    )
-                if "port" not in value:
-                    use_default(f"{field}.port", str(port))
-                port_value = value.get("port")
-                if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
-                    if "port" in value:
-                        report(
-                            f"{field}.port",
-                            "must be an integer between 1 and 65535; using the documented default 8080",
-                        )
-                else:
-                    port = port_value
-                configured_outputs = value.get("outputs")
-                if not isinstance(configured_outputs, list) or not configured_outputs:
-                    report(
-                        f"{field}.outputs",
-                        "is required and must be a nonempty sequence of output mappings",
-                        logging.ERROR,
-                    )
-                else:
-                    seen_output_ids: set[str] = set()
-                    for output_index, output_value in enumerate(configured_outputs):
-                        output_field = f"{field}.outputs[{output_index}]"
-                        if not isinstance(output_value, dict):
-                            report(output_field, "must be an output mapping", logging.ERROR)
-                            continue
-                        _known_fields(
-                            output_value,
-                            {"id", "aspect_ratio", "resolution"},
-                            output_field,
-                            report,
-                        )
-                        output_id = output_value.get("id")
-                        if not isinstance(output_id, str) or not output_id.strip():
-                            report(
-                                f"{output_field}.id",
-                                "is required and must be a nonempty string",
-                                logging.ERROR,
-                            )
-                            continue
-                        if len(f"{backend_type}:{output_id}") > _MAX_DESTINATION_IDENTIFIER_LENGTH:
-                            report(
-                                f"{output_field}.id",
-                                "canonical runtime destination identifier must not exceed 256 characters",
-                                logging.ERROR,
-                            )
-                            continue
-                        if output_id in seen_output_ids:
-                            report(
-                                f"{output_field}.id",
-                                f"duplicates output ID {output_id!r}",
-                                logging.ERROR,
-                            )
-                            continue
-                        seen_output_ids.add(output_id)
-                        specification = _resolve_output_specification(
-                            output_value,
-                            output_field,
-                            report,
-                            default_aspect="16:10",
-                            default_size=(3840, 2400),
-                        )
-                        outputs.append(DisplayOutputConfiguration(output_id, specification))
-            elif backend_type == "window":
+
+            if backend_type in {"window", "image-server"}:
+                default_aspect, default_size = (
+                    ("16:9", (1920, 1080)) if backend_type == "window" else ("16:10", (3840, 2400))
+                )
                 specification = _resolve_output_specification(
                     value,
                     field,
                     report,
-                    default_aspect="16:9",
-                    default_size=(1920, 1080),
+                    default_aspect=default_aspect,
+                    default_size=default_size,
                 )
-                outputs.append(DisplayOutputConfiguration(backend_type, specification))
             else:
                 for forbidden_field in ("aspect_ratio", "resolution"):
                     if forbidden_field in value:
@@ -734,13 +699,21 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
                             "is not valid for the fixed 4:3 @ 1600 × 1200 Waveshare output",
                             logging.ERROR,
                         )
-                outputs.append(
-                    DisplayOutputConfiguration(
-                        backend_type,
-                        ResolvedOutputSpecification("4:3", (1600, 1200)),
-                    )
-                )
-            display_backends.append(DisplayBackendConfiguration(backend_type, host, port, tuple(outputs)))
+                specification = ResolvedOutputSpecification("4:3", (1600, 1200))
+            destination_groups.setdefault(backend_type, []).append(
+                DisplayOutputConfiguration(identifier, specification)
+            )
+
+    display_backends = [
+        DisplayBackendConfiguration(
+            backend_type,
+            image_server_host,
+            image_server_port,
+            tuple(outputs),
+            image_server_enabled,
+        )
+        for backend_type, outputs in destination_groups.items()
+    ]
 
     general = _mapping(data.get("general", {}), "general", report)
     _known_fields(general, {"day_start"}, "general", report)

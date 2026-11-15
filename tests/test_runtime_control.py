@@ -91,7 +91,7 @@ def _wait_until(predicate):
 
 def _request(specifications, payloads, *, preflight=True):
     return {
-        "version": 1,
+        "version": 2,
         "operation": "publish",
         "preflight": preflight,
         "target": list(specifications),
@@ -112,19 +112,19 @@ def _png(specification):
 def test_transient_slot_blocks_during_transfer_and_cleans_disconnect(runtime):
     path, _, seen, _, _, server = runtime
     payloads = {SPEC: _png(SPEC)}
-    specifications = {"image-server:one": SPEC}
+    specifications = {"one": SPEC}
     with _raw(path) as first:
         first.send_bytes(json.dumps(_request(specifications, payloads)).encode())
         assert json.loads(first.recv_bytes())["status"] == "ready"
         assert server._staging_path.is_dir()
         with Image.new("RGB", SPEC.requested_output_size) as image:
-            result = RuntimeControlClient(path).publish_transient("image-server:one", specifications, {SPEC: image})
+            result = RuntimeControlClient(path).publish_transient("one", specifications, {SPEC: image})
         assert result.status is PublicationStatus.BUSY
         assert server._staging_path.is_dir()
     _wait_until(lambda: not server._staging_path.exists())
     with Image.new("RGB", SPEC.requested_output_size) as image:
         assert (
-            RuntimeControlClient(path).publish_transient("image-server:one", specifications, {SPEC: image}).status
+            RuntimeControlClient(path).publish_transient("one", specifications, {SPEC: image}).status
             is PublicationStatus.SUCCEEDED
         )
     assert len(seen) == 1
@@ -135,14 +135,15 @@ def test_shutdown_preserves_admitted_staging_until_worker_finishes(runtime):
     release.clear()
     entered.clear()
     payloads = {SPEC: _png(SPEC)}
-    specifications = {"image-server:one": SPEC}
+    specifications = {"one": SPEC}
     try:
         with _raw(path) as connection:
             connection.send_bytes(json.dumps(_request(specifications, payloads)).encode())
             assert json.loads(connection.recv_bytes())["status"] == "ready"
             connection.send_bytes(payloads[SPEC])
             connection.send_bytes(b'{"commit":true}')
-            assert json.loads(connection.recv_bytes())["status"] == "accepted"
+            accepted = json.loads(connection.recv_bytes())
+            assert accepted["status"] == "accepted", accepted
             assert entered.wait(5)
             assert server.close()
             coordinator.begin_draining()
@@ -164,9 +165,7 @@ def test_callback_exception_after_admission_cannot_cancel_publication(runtime):
 
     server._transient_admission = admission
     with Image.new("RGB", SPEC.requested_output_size, (9, 8, 7)) as image:
-        result = RuntimeControlClient(path).publish_transient(
-            "image-server:one", {"image-server:one": SPEC}, {SPEC: image}
-        )
+        result = RuntimeControlClient(path).publish_transient("one", {"one": SPEC}, {SPEC: image})
     assert result.status is PublicationStatus.SUCCEEDED
     _wait_until(lambda: not server._staging_path.exists())
     assert seen == [("one", (9, 8, 7))]
@@ -186,25 +185,19 @@ def test_cleanup_failure_keeps_slot_and_retries_without_blocking_terminal(runtim
     monkeypatch.setattr(control_module.StagedTransientImages, "close", close)
     try:
         with Image.new("RGB", SPEC.requested_output_size, (9, 8, 7)) as image:
-            result = RuntimeControlClient(path).publish_transient(
-                "image-server:one", {"image-server:one": SPEC}, {SPEC: image}
-            )
+            result = RuntimeControlClient(path).publish_transient("one", {"one": SPEC}, {SPEC: image})
             assert result.status is PublicationStatus.SUCCEEDED
             assert attempted.wait(2)
             assert coordinator.destination_statuses
             staged = server._staging_path / "0.png"
             original_bytes = staged.read_bytes()
-            result = RuntimeControlClient(path).publish_transient(
-                "image-server:two", {"image-server:two": SPEC}, {SPEC: image}
-            )
+            result = RuntimeControlClient(path).publish_transient("two", {"two": SPEC}, {SPEC: image})
             assert result.status is PublicationStatus.BUSY
             assert staged.read_bytes() == original_bytes
             allow_cleanup.set()
             _wait_until(lambda: not server._staging_path.exists())
             _wait_until(lambda: not server._transient_slot.locked())
-            result = RuntimeControlClient(path).publish_transient(
-                "image-server:two", {"image-server:two": SPEC}, {SPEC: image}
-            )
+            result = RuntimeControlClient(path).publish_transient("two", {"two": SPEC}, {SPEC: image})
             assert result.status is PublicationStatus.SUCCEEDED
         assert seen == [("one", (9, 8, 7)), ("two", (9, 8, 7))]
     finally:
@@ -232,7 +225,7 @@ def test_abandoned_transfer_during_staging_write_is_not_admitted(runtime, monkey
 
     monkeypatch.setattr(Path, "write_bytes", slow_write)
     payloads = {SPEC: _png(SPEC)}
-    specifications = {"image-server:one": SPEC}
+    specifications = {"one": SPEC}
     connection = _raw(path)
     try:
         connection.send_bytes(json.dumps(_request(specifications, payloads)).encode())
@@ -259,9 +252,9 @@ def test_transient_staging_removed_on_pre_admission_failure(runtime, monkeypatch
     if failure == "timeout":
         monkeypatch.setattr(control_module, "_IO_TIMEOUT", 0.1)
     payloads = {SPEC: _png(SPEC)}
-    specifications = {"image-server:one": SPEC}
+    specifications = {"one": SPEC}
     if failure == "rejected":
-        specifications = {"image-server:unknown": SPEC}
+        specifications = {"unknown": SPEC}
     with _raw(path) as connection:
         connection.send_bytes(json.dumps(_request(specifications, payloads)).encode())
         assert json.loads(connection.recv_bytes())["status"] == "ready"
@@ -282,7 +275,7 @@ def test_stale_transient_staging_removed_before_listener(runtime, tmp_path):
     staging = path.with_name(path.name + ".transient")
     staging.mkdir()
     (staging / "0.png").write_bytes(b"stale")
-    server = RuntimeControlServer(coordinator, path, lambda _admit: None)
+    server = RuntimeControlServer(coordinator, path, lambda _guard: None)
     server.start()
     try:
         assert path.exists()
@@ -296,7 +289,7 @@ def test_variants_validate_sequentially_without_retained_decoded_images(runtime,
     path, _, seen, _, _, server = runtime
     specs = [SPEC, ResolvedOutputSpecification("16:9", (17, 9)), ResolvedOutputSpecification("16:9", (18, 9))]
     payloads = {spec: _png(spec) for spec in specs}
-    specifications = {f"image-server:{index}": spec for index, spec in enumerate(specs)}
+    specifications = {str(index): spec for index, spec in enumerate(specs)}
     opened = []
     original_open = Image.open
 
@@ -366,25 +359,26 @@ def test_staged_three_backend_publication_survives_disconnect_and_cleans_up(tmp_
 
     coordinator = DisplayPublicationCoordinator(configurations, lambda config: Backend(config.type), retry=False)
     path = tmp_path / "runtime.json"
-    server = RuntimeControlServer(coordinator, path, lambda _admit: None)
+    server = RuntimeControlServer(coordinator, path, lambda _guard: None)
     server.start()
     specifications = {
         "window": window,
-        "waveshare-13in3-e": waveshare,
-        "image-server:one": server_spec,
-        "image-server:two": server_spec,
+        "waveshare": waveshare,
+        "one": server_spec,
+        "two": server_spec,
     }
     payloads = {spec: _png(spec) for spec in (window, waveshare, server_spec)}
     try:
         with _raw(path) as connection:
             request = _request(specifications, payloads)
-            request["target"] = "all"
+            request["target"] = "@all"
             connection.send_bytes(json.dumps(request).encode())
             assert json.loads(connection.recv_bytes())["status"] == "ready"
             for payload in payloads.values():
                 connection.send_bytes(payload)
             connection.send_bytes(b'{"commit":true}')
-            assert json.loads(connection.recv_bytes())["status"] == "accepted"
+            accepted = json.loads(connection.recv_bytes())
+            assert accepted["status"] == "accepted", accepted
             assert all(event.wait(5) for event in entered.values())
             assert len(list(server._staging_path.glob("*.png"))) == 3
             with Image.new("RGB", window.requested_output_size) as image:
@@ -413,7 +407,7 @@ def test_discovery_push_and_refresh(runtime):
     path, coordinator, seen, _, _, _ = runtime
     client = RuntimeControlClient(path)
     destinations = client.discover()
-    assert [record["identifier"] for record in destinations] == ["image-server:one", "image-server:two"]
+    assert [record["identifier"] for record in destinations] == ["one", "two"]
     assert all(record["output_specification"] == SPEC and record["supports_transient"] for record in destinations)
     assert all(record["participating"] and record["available"] and not record["withdrawn"] for record in destinations)
     assert seen == []
@@ -421,7 +415,7 @@ def test_discovery_push_and_refresh(runtime):
     image = Image.new("RGB", SPEC.requested_output_size, (9, 8, 7))
     try:
         specs = {record["identifier"]: SPEC for record in destinations}
-        result = client.publish_transient("all", specs, {SPEC: image})
+        result = client.publish_transient("@all", specs, {SPEC: image})
         assert result.status is PublicationStatus.SUCCEEDED
         assert set(result.destinations) == set(specs)
         assert sorted(seen) == [("one", (9, 8, 7)), ("two", (9, 8, 7))]
@@ -462,7 +456,7 @@ def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_pat
         )
         client = RuntimeControlClient(tmp_path / "runtime.json")
         records = client.discover()
-        assert [r["identifier"] for r in records] == [f"image-server:output-{i}" for i in range(130)]
+        assert [r["identifier"] for r in records] == [f"output-{i}" for i in range(130)]
         result = client.refresh()
         assert result.status is PublicationStatus.SUCCEEDED
         assert len(result.destinations) == len(seen) == 130
@@ -472,7 +466,7 @@ def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_pat
 
 
 def test_discovery_destination_identifier_at_limit(tmp_path):
-    identifier = "😀" * (256 - len("image-server:"))
+    identifier = "a" * 256
 
     class Backend:
         def publish(self, destination, image):
@@ -491,19 +485,17 @@ def test_discovery_destination_identifier_at_limit(tmp_path):
     server.start()
     try:
         records = RuntimeControlClient(tmp_path / "runtime.json").discover()
-        assert records[0]["identifier"] == f"image-server:{identifier}"
+        assert records[0]["identifier"] == identifier
         assert records[0]["output_specification"] == SPEC
         result = RuntimeControlClient(tmp_path / "runtime.json").refresh()
         assert result.status is PublicationStatus.SUCCEEDED
-        assert list(result.destinations) == [f"image-server:{identifier}"]
+        assert list(result.destinations) == [identifier]
     finally:
         server.close()
         coordinator.close()
 
 
-@pytest.mark.parametrize(
-    "identifier", ["normal", "😀" * (256 - len("image-server:"))], ids=["normal", "identifier-limit"]
-)
+@pytest.mark.parametrize("identifier", ["normal", "a" * 256], ids=["normal", "identifier-limit"])
 def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, identifier):
     failure = Event()
     release = Event()
@@ -536,7 +528,7 @@ def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, ide
         result = RuntimeControlClient(path).refresh(on_accepted=on_accepted)
         assert accepted == [True]
         assert result.status is PublicationStatus.FAILED
-        success, message = result.destinations[f"image-server:{identifier}"]
+        success, message = result.destinations[identifier]
         assert success is False
         assert message.endswith(" [truncated]")
         assert len(message) == control_module._MAX_ERROR_CHARS
@@ -573,9 +565,7 @@ def test_oversized_destination_discovery_and_refresh(tmp_path, size):
         assert record["output_specification"] == oversized
         assert record["supports_transient"] is False
         with Image.new("RGB", size) as image:
-            result = client.publish_transient(
-                "image-server:large", {"image-server:large": oversized}, {oversized: image}
-            )
+            result = client.publish_transient("large", {"large": oversized}, {oversized: image})
         assert result.status is PublicationStatus.UNSUPPORTED
         assert not seen
         specification = {"aspect_ratio": "16:9", "size": list(size)}
@@ -583,10 +573,10 @@ def test_oversized_destination_discovery_and_refresh(tmp_path, size):
             connection.send_bytes(
                 json.dumps(
                     {
-                        "version": 1,
+                        "version": 2,
                         "operation": "publish",
-                        "target": "all",
-                        "specifications": {"image-server:large": specification},
+                        "target": "@all",
+                        "specifications": {"large": specification},
                         "images": [{"specification": specification, "encoding": "png", "length": 1}],
                     }
                 ).encode()
@@ -600,7 +590,7 @@ def test_oversized_destination_discovery_and_refresh(tmp_path, size):
         coordinator.close()
 
 
-@pytest.mark.parametrize("target", ["all", "image-server:large"])
+@pytest.mark.parametrize("target", ["@all", "large"])
 def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monkeypatch, target):
     seen = []
 
@@ -629,7 +619,7 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
     monkeypatch.setattr(Connection, "send_bytes", observe_send)
     try:
         with Image.frombytes("RGB", stale.requested_output_size, os.urandom(512 * 256 * 3)) as image:
-            result = RuntimeControlClient(path).publish_transient(target, {"image-server:large": stale}, {stale: image})
+            result = RuntimeControlClient(path).publish_transient(target, {"large": stale}, {stale: image})
         assert result.status is PublicationStatus.UNSUPPORTED
         assert not sent_images
         assert not seen
@@ -648,12 +638,12 @@ def test_transient_raster_envelope():
 def test_transient_destination_count_remains_bounded(runtime):
     path, _, seen, _, _, _ = runtime
     specification = {"aspect_ratio": "16:9", "size": [16, 9]}
-    identifiers = [f"image-server:{i}" for i in range(65)]
+    identifiers = [str(i) for i in range(65)]
     with _raw(path) as connection:
         connection.send_bytes(
             json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "operation": "publish",
                     "target": identifiers,
                     "specifications": {identifier: specification for identifier in identifiers},
@@ -679,10 +669,10 @@ def test_client_checks_aggregate_bytes_after_each_encoded_variant(runtime, monke
 
     monkeypatch.setattr(Image.Image, "save", save)
     images = {spec: Image.new("RGB", spec.requested_output_size, (9, 8, 7)) for spec in specs}
-    specifications = {f"image-server:{index}": spec for index, spec in enumerate(specs)}
+    specifications = {str(index): spec for index, spec in enumerate(specs)}
     try:
         with pytest.raises(RuntimeProtocolError, match="transport limit"):
-            RuntimeControlClient(path).publish_transient("all", specifications, images)
+            RuntimeControlClient(path).publish_transient("@all", specifications, images)
         assert saved == [spec.requested_output_size for spec in specs[:2]]
         assert not seen
     finally:
@@ -704,9 +694,9 @@ def test_server_rejects_resource_limits_before_image_transfer(runtime, limit, mo
     elif limit == "total-bytes":
         monkeypatch.setattr(control_module, "_MAX_TOTAL_BYTES", 1)
     specifications = [{"aspect_ratio": "16:9", "size": size} for size in sizes]
-    identifiers = [f"image-server:{index}" for index in range(len(sizes))]
+    identifiers = [str(index) for index in range(len(sizes))]
     request = {
-        "version": 1,
+        "version": 2,
         "operation": "publish",
         "target": identifiers,
         "specifications": dict(zip(identifiers, specifications, strict=True)),
@@ -726,7 +716,7 @@ def test_client_rejects_non_rgb_before_transfer(runtime, mode):
     path, _, seen, _, _, _ = runtime
     with Image.new(mode, SPEC.requested_output_size) as image:
         with pytest.raises(RuntimeProtocolError, match="RGB"):
-            RuntimeControlClient(path).publish_transient("image-server:one", {"image-server:one": SPEC}, {SPEC: image})
+            RuntimeControlClient(path).publish_transient("one", {"one": SPEC}, {SPEC: image})
     assert not seen
 
 
@@ -740,10 +730,10 @@ def test_non_rgb_png_rejected_before_admission(runtime, mode):
         payload = data.getvalue()
     specification = {"aspect_ratio": "16:9", "size": [16, 9]}
     request = {
-        "version": 1,
+        "version": 2,
         "operation": "publish",
-        "target": ["image-server:one"],
-        "specifications": {"image-server:one": specification},
+        "target": ["one"],
+        "specifications": {"one": specification},
         "images": [{"specification": specification, "encoding": "png", "length": len(payload)}],
     }
     with _raw(path) as connection:
@@ -776,15 +766,15 @@ def test_separate_process_can_authenticate_and_discover(runtime):
 
 def test_withdrawn_discovery_and_publication(runtime):
     path, coordinator, seen, _, _, _ = runtime
-    assert coordinator.withdraw_destination("image-server:two")
+    assert coordinator.withdraw_destination("two")
     client = RuntimeControlClient(path)
     records = client.discover()
     assert records[1]["withdrawn"] and not records[1]["participating"]
     with Image.new("RGB", SPEC.requested_output_size, (9, 8, 7)) as image:
-        rejected = client.publish_transient("image-server:two", {"image-server:two": SPEC}, {SPEC: image})
+        rejected = client.publish_transient("two", {"two": SPEC}, {SPEC: image})
         assert rejected.status is PublicationStatus.WITHDRAWN
         assert not seen
-        result = client.publish_transient("all", {"image-server:one": SPEC}, {SPEC: image})
+        result = client.publish_transient("@all", {"one": SPEC}, {SPEC: image})
     assert result.status is PublicationStatus.SUCCEEDED
     assert seen == [("one", (9, 8, 7))]
 
@@ -894,7 +884,7 @@ def test_close_returns_running_refresh_handler_for_ownership_retention(tmp_path)
     server.start()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert entered.wait(1)
         pending = server.close()
         assert pending and all(isinstance(worker, Thread) for worker in pending)
@@ -931,7 +921,7 @@ def test_refresh_admission_guard_rejects_disconnection_or_shutdown(runtime, tmp_
     server.start()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert preparing.wait(1)
         if shutdown:
             assert server.close()
@@ -957,9 +947,7 @@ def test_shutdown_event_rejects_transient_before_listener_close(runtime, tmp_pat
     shutdown.set()
     try:
         with Image.new("RGB", SPEC.requested_output_size) as image:
-            result = RuntimeControlClient(path).publish_transient(
-                "image-server:one", {"image-server:one": SPEC}, {SPEC: image}
-            )
+            result = RuntimeControlClient(path).publish_transient("one", {"one": SPEC}, {SPEC: image})
         assert result.status is PublicationStatus.STOPPING
         assert seen == []
     finally:
@@ -974,8 +962,8 @@ def test_transient_admission_callback_releases_staging_even_on_exception(runtime
 
     def admit(target, specifications, images, _guard):
         assert not server._lock.locked()
-        assert target == ["image-server:one"]
-        assert specifications == {"image-server:one": SPEC}
+        assert target == ["one"]
+        assert specifications == {"one": SPEC}
         retained.extend(images.values())
         with Image.open(retained[0]) as staged:
             assert staged.getpixel((0, 0)) == (9, 8, 7)
@@ -987,9 +975,7 @@ def test_transient_admission_callback_releases_staging_even_on_exception(runtime
     server.start()
     try:
         with Image.new("RGB", SPEC.requested_output_size, (9, 8, 7)) as image:
-            result = RuntimeControlClient(path).publish_transient(
-                "image-server:one", {"image-server:one": SPEC}, {SPEC: image}
-            )
+            result = RuntimeControlClient(path).publish_transient("one", {"one": SPEC}, {SPEC: image})
         assert result.status is (PublicationStatus.FAILED if raise_error else PublicationStatus.INVALID)
         deadline = time.monotonic() + 2
         while retained[0].exists() and time.monotonic() < deadline:
@@ -1027,10 +1013,10 @@ def test_transient_guard_rejects_disconnection_or_shutdown(runtime, tmp_path, sh
             payload = data.getvalue()
         specification = {"aspect_ratio": "16:9", "size": [16, 9]}
         message = {
-            "version": 1,
+            "version": 2,
             "operation": "publish",
-            "target": ["image-server:one"],
-            "specifications": {"image-server:one": specification},
+            "target": ["one"],
+            "specifications": {"one": specification},
             "images": [{"specification": specification, "encoding": "png", "length": len(payload)}],
         }
         connection.send_bytes(json.dumps(message).encode())
@@ -1072,7 +1058,7 @@ def test_shutdown_event_rejects_and_releases_prepared_refresh(runtime, tmp_path)
     server.start()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert entered.wait(1)
         shutdown.set()
         release.set()
@@ -1144,9 +1130,9 @@ def test_stalled_publication_response_is_bounded(monkeypatch):
     "message",
     [
         {"version": 999, "operation": "discover"},
-        {"version": 1, "operation": "unknown"},
-        {"version": 1, "operation": "refresh", "identity": [1, 0]},
-        {"version": 1, "operation": "publish", "target": [], "specifications": {}, "images": []},
+        {"version": 2, "operation": "unknown"},
+        {"version": 2, "operation": "refresh", "identity": [1, 0]},
+        {"version": 2, "operation": "publish", "target": [], "specifications": {}, "images": []},
     ],
 )
 def test_invalid_requests_never_publish(runtime, message):
@@ -1162,10 +1148,10 @@ def test_incomplete_payload_never_publishes(runtime):
     path, _, seen, _, _, _ = runtime
     spec = {"aspect_ratio": "16:9", "size": [16, 9]}
     request = {
-        "version": 1,
+        "version": 2,
         "operation": "publish",
-        "target": ["image-server:one"],
-        "specifications": {"image-server:one": spec},
+        "target": ["one"],
+        "specifications": {"one": spec},
         "images": [{"specification": spec, "encoding": "png", "length": 5}],
     }
     with _raw(path) as connection:
@@ -1179,10 +1165,10 @@ def test_disconnect_before_complete_transfer_never_publishes(runtime):
     path, _, seen, _, _, _ = runtime
     spec = {"aspect_ratio": "16:9", "size": [16, 9]}
     message = {
-        "version": 1,
+        "version": 2,
         "operation": "publish",
-        "target": ["image-server:one"],
-        "specifications": {"image-server:one": spec},
+        "target": ["one"],
+        "specifications": {"one": spec},
         "images": [{"specification": spec, "encoding": "png", "length": 5}],
     }
     connection = _raw(path)
@@ -1212,10 +1198,10 @@ def test_invalid_image_descriptor_or_payload_never_publishes(runtime, encoding, 
     path, _, seen, _, _, _ = runtime
     spec = {"aspect_ratio": "16:9", "size": size}
     message = {
-        "version": 1,
+        "version": 2,
         "operation": "publish",
-        "target": ["image-server:one"],
-        "specifications": {"image-server:one": spec},
+        "target": ["one"],
+        "specifications": {"one": spec},
         "images": [{"specification": spec, "encoding": encoding, "length": len(payload)}],
     }
     with _raw(path) as connection:
@@ -1231,17 +1217,17 @@ def test_busy_and_changed_specification_are_rejected(runtime):
     client = RuntimeControlClient(path)
     wrong = ResolvedOutputSpecification("4:3", (16, 12))
     with Image.new("RGB", (16, 12)) as image:
-        result = client.publish_transient("image-server:one", {"image-server:one": wrong}, {wrong: image})
+        result = client.publish_transient("one", {"one": wrong}, {wrong: image})
         assert result.status is PublicationStatus.INVALID
     entered.clear()
     release.clear()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert json.loads(connection.recv_bytes())["status"] == "accepted"
         assert entered.wait(1)
         with Image.new("RGB", SPEC.requested_output_size) as image:
-            result = client.publish_transient("image-server:one", {"image-server:one": SPEC}, {SPEC: image})
+            result = client.publish_transient("one", {"one": SPEC}, {SPEC: image})
         assert result.status is PublicationStatus.BUSY
         assert seen == []
     finally:
@@ -1291,7 +1277,7 @@ def test_disconnect_after_admission_does_not_cancel(runtime):
     entered.clear()
     release.clear()
     connection = _raw(path)
-    connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+    connection.send_bytes(b'{"version":2,"operation":"refresh"}')
     assert json.loads(connection.recv_bytes())["status"] == "accepted"
     assert entered.wait(1)
     connection.close()
@@ -1337,7 +1323,7 @@ def test_shutdown_retains_admitted_work_until_all_destinations_finish(runtime):
     release.clear()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
         assert json.loads(connection.recv_bytes())["status"] == "accepted"
         assert entered.wait(1)
         connection.close()

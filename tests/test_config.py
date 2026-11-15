@@ -26,13 +26,14 @@ from refrain import (
     prepare_daily_images,
     resolve_reveal_stages,
 )
+from refrain.geometry import ResolvedOutputSpecification
 
 
 def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "general": {},
         "content": {"directory": "content"},
-        "display": {"backends": [{"type": "window"}]},
+        "destinations": [{"id": "desktop", "type": "window"}],
         "layout": {
             "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
@@ -863,7 +864,7 @@ def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
 
     output = config.display_backends[0].outputs[0]
-    assert output.identifier == "window"
+    assert output.identifier == "desktop"
     assert output.output_specification.aspect_ratio == "16:9"
     assert output.output_specification.requested_output_size == (1920, 1080)
 
@@ -873,7 +874,7 @@ def test_window_destination_accepts_explicit_output_specification(tmp_path: Path
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
-                display={"backends": [{"type": "window", "aspect_ratio": "4:3", "resolution": [1600, 1200]}]}
+                destinations=[{"id": "desktop", "type": "window", "aspect_ratio": "4:3", "resolution": [1600, 1200]}]
             ),
         )
     )
@@ -888,17 +889,17 @@ def test_window_destination_accepts_explicit_output_specification(tmp_path: Path
     [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}],
 )
 def test_window_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
-    data = configuration_data(display={"backends": [{"type": "window", **fields}]})
+    data = configuration_data(destinations=[{"id": "desktop", "type": "window", **fields}])
 
     fields_present = diagnostic_fields(write_config(tmp_path / "config.yaml", data))
-    assert "display.backends[0]" in fields_present
+    assert "destinations[0]" in fields_present
 
 
 def test_waveshare_destination_is_fixed_to_4_3_1600_by_1200(tmp_path: Path) -> None:
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(display={"backends": [{"type": "waveshare-13in3-e"}]}),
+            configuration_data(destinations=[{"id": "epaper", "type": "waveshare-13in3-e"}]),
         )
     )
 
@@ -908,11 +909,9 @@ def test_waveshare_destination_is_fixed_to_4_3_1600_by_1200(tmp_path: Path) -> N
 
 @pytest.mark.parametrize("override", [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}])
 def test_waveshare_rejects_output_overrides(tmp_path: Path, override: dict[str, object]) -> None:
-    data = configuration_data(display={"backends": [{"type": "waveshare-13in3-e", **override}]})
+    data = configuration_data(destinations=[{"id": "epaper", "type": "waveshare-13in3-e", **override}])
 
-    assert f"display.backends[0].{next(iter(override))}" in diagnostic_fields(
-        write_config(tmp_path / "config.yaml", data)
-    )
+    assert f"destinations[0].{next(iter(override))}" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
 def test_content_directory_default_is_configuration_relative(tmp_path: Path) -> None:
@@ -1116,116 +1115,201 @@ def test_recognizes_reserved_waveshare_backend(tmp_path: Path) -> None:
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
-            configuration_data(display={"backends": [{"type": "waveshare-13in3-e"}]}),
+            configuration_data(destinations=[{"id": "epaper", "type": "waveshare-13in3-e"}]),
         )
     )
 
     assert config.display_backends[0].type == "waveshare-13in3-e"
 
 
-def test_image_server_configuration_defaults_and_explicit_settings(tmp_path: Path, caplog) -> None:
+@pytest.mark.parametrize("backend_type", ["window", "waveshare-13in3-e"])
+def test_single_destination_backend_capacity_is_checked_during_configuration_validation(
+    tmp_path: Path, backend_type: str
+) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(
+            destinations=[
+                {"id": "first", "type": backend_type},
+                {"id": "second", "type": backend_type},
+            ]
+        ),
+    )
+
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(config_path)
+
+    assert any("supports at most 1 destination" in item.message for item in error.value.diagnostics)
+
+
+def test_image_server_destinations_are_registered_without_enabling_the_service(tmp_path: Path) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(destinations=[{"id": "kitchen", "type": "image-server"}]),
+        )
+    )
+
+    backend = config.display_backends[0]
+    assert backend.type == "image-server"
+    assert not backend.service_enabled
+    assert backend.host == "127.0.0.1"
+    assert backend.port == 8080
+    assert backend.outputs[0].identifier == "kitchen"
+    assert backend.outputs[0].output_specification == ResolvedOutputSpecification("16:10", (3840, 2400))
+
+
+@pytest.mark.parametrize("section", [None, {}, {"host": "127.0.0.1", "port": 8080}])
+def test_present_image_server_section_enables_service_with_defaults(
+    tmp_path: Path, caplog, section: dict[str, object]
+) -> None:
     with caplog.at_level("INFO"):
-        default_config = load_application_config(
+        config = load_application_config(
             write_config(
-                tmp_path / "default.yaml",
-                configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": "default"}]}]}),
+                tmp_path / "config.yaml",
+                configuration_data(
+                    destinations=[{"id": "kitchen", "type": "image-server"}],
+                    **{"image-server": section},
+                ),
             )
         )
-    configured = load_application_config(
+
+    assert config.display_backends[0].service_enabled
+    assert config.display_backends[0].host == "127.0.0.1"
+    assert config.display_backends[0].port == 8080
+    assert "image-server:" not in caplog.text
+
+
+def test_image_server_service_settings_are_independent_of_destinations(tmp_path: Path) -> None:
+    config = load_application_config(
         write_config(
-            tmp_path / "configured.yaml",
+            tmp_path / "config.yaml",
             configuration_data(
-                display={
-                    "backends": [
-                        {
-                            "type": "image-server",
-                            "host": "0.0.0.0",
-                            "port": 8123,
-                            "outputs": [{"id": "default"}],
-                        }
-                    ],
-                }
+                destinations=[
+                    {"id": "kitchen", "type": "image-server"},
+                    {"id": "hallway", "type": "image-server", "aspect_ratio": "4:3", "resolution": [1600, 1200]},
+                ],
+                **{"image-server": {"host": "0.0.0.0", "port": 8123}},
             ),
         )
     )
 
-    assert "display.backends[0].host" in caplog.text
-    assert "display.backends[0].port" in caplog.text
-    assert default_config.display_backends[0].host == "127.0.0.1"
-    assert default_config.display_backends[0].port == 8080
-    default_output = default_config.display_backends[0].outputs[0].output_specification
-    assert (default_output.aspect_ratio, default_output.requested_output_size) == ("16:10", (3840, 2400))
-    assert configured.display_backends[0].host == "0.0.0.0"
-    assert configured.display_backends[0].port == 8123
+    assert len(config.display_backends) == 1
+    backend = config.display_backends[0]
+    assert backend.service_enabled
+    assert backend.host == "0.0.0.0"
+    assert backend.port == 8123
+    assert [output.identifier for output in backend.outputs] == ["kitchen", "hallway"]
+    assert backend.outputs[1].output_specification == ResolvedOutputSpecification("4:3", (1600, 1200))
+    assert len(config.required_output_specifications) == 2
 
 
-@pytest.mark.parametrize("outputs", [None, [], "default"])
-def test_image_server_requires_nonempty_outputs(tmp_path: Path, outputs: object) -> None:
+@pytest.mark.parametrize("identifier", ["", " ", None, 1, "-bad", "_bad", "bad name", "é", "id:part"])
+def test_destination_ids_require_url_safe_ascii_identifier_syntax(tmp_path: Path, identifier: object) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(display={"backends": [{"type": "image-server", "outputs": outputs}]}),
+        configuration_data(destinations=[{"id": identifier, "type": "image-server"}]),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    assert any(item.field == "display.backends[0].outputs" for item in error.value.diagnostics)
+    assert any(item.field == "destinations[0].id" for item in error.value.diagnostics)
 
 
-@pytest.mark.parametrize("output_id", ["", " ", None, 1])
-def test_image_server_output_ids_must_be_nonempty_strings(tmp_path: Path, output_id: object) -> None:
+def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
+    identifier = "a" * 256
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": output_id}]}]}),
-    )
-
-    with pytest.raises(ApplicationConfigurationError) as error:
-        load_application_config(config_path)
-
-    assert any(item.field == "display.backends[0].outputs[0].id" for item in error.value.diagnostics)
-
-
-@pytest.mark.parametrize("character", ["a", "é"])
-def test_image_server_canonical_destination_identifier_length_limit(tmp_path: Path, character: str) -> None:
-    prefix = "image-server:"
-    output_id = character * (256 - len(prefix))
-    config_path = write_config(
-        tmp_path / "config.yaml",
-        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": output_id}]}]}),
+        configuration_data(
+            destinations=[
+                {"id": identifier, "type": "image-server"},
+                {"id": "all", "type": "window"},
+            ]
+        ),
     )
 
     config = load_application_config(config_path)
-    assert config.display_backends[0].outputs[0].identifier == output_id
-    assert len(prefix + output_id) == 256
+    assert {output.identifier for backend in config.display_backends for output in backend.outputs} == {
+        identifier,
+        "all",
+    }
 
     write_config(
         config_path,
-        configuration_data(
-            display={"backends": [{"type": "image-server", "outputs": [{"id": output_id + character}]}]}
-        ),
+        configuration_data(destinations=[{"id": identifier + "a", "type": "image-server"}]),
     )
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
     assert any(
-        item.field == "display.backends[0].outputs[0].id"
-        and "canonical runtime destination identifier must not exceed 256 characters" in item.message
+        item.field == "destinations[0].id" and "at most 256 characters" in item.message
         for item in error.value.diagnostics
     )
 
 
-def test_image_server_rejects_duplicate_output_ids(tmp_path: Path) -> None:
+def test_destination_ids_must_be_unique_across_backend_types(tmp_path: Path) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
         configuration_data(
-            display={"backends": [{"type": "image-server", "outputs": [{"id": "room"}, {"id": "room"}]}]}
+            destinations=[
+                {"id": "room", "type": "image-server"},
+                {"id": "room", "type": "window"},
+            ]
         ),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    assert any(item.field == "display.backends[0].outputs[1].id" for item in error.value.diagnostics)
+    assert any(item.field == "destinations[1].id" for item in error.value.diagnostics)
+
+
+def test_destination_ids_are_isolated_from_resource_identifier_namespaces(tmp_path: Path) -> None:
+    identifier = "shared"
+    write_font_bundle(tmp_path / "assets" / "fonts" / identifier, identifier)
+    background = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
+    background.parent.mkdir(parents=True)
+    Image.new("RGB", (8, 6)).save(background)
+    decoration_root = tmp_path / "assets" / "decorations" / identifier
+    decoration_root.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(decoration_root / "layer.png")
+    write_asset_manifest(
+        decoration_root,
+        "decoration.yaml",
+        {"format": 1, "id": identifier, "layers": [{"image": "layer.png"}]},
+    )
+    data = configuration_data(
+        destinations=[{"id": identifier, "type": "window"}],
+        palette={identifier: "#718C23"},
+    )
+    data["layout"].update(
+        {
+            "fonts": {"default": [identifier], identifier: [identifier]},
+            "backgrounds": {"default": [identifier], identifier: [identifier]},
+            "decorations": {
+                "default": [identifier],
+                identifier: [identifier],
+                "colors": {"default": [identifier], identifier: [identifier]},
+            },
+            "text": {
+                "min_font_size": 28,
+                "max_font_size": 100,
+                "colors": {"default": [identifier]},
+            },
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.display_backends[0].outputs[0].identifier == identifier
+    assert identifier in config.fonts
+    assert identifier in config.backgrounds
+    assert identifier in config.decorations
+    assert config.palette[identifier] == "#718C23"
+    assert config.font_pools[identifier] == (identifier,)
+    assert config.background_pools[identifier] == (identifier,)
+    assert config.decoration_pools[identifier] == (identifier,)
 
 
 @pytest.mark.parametrize(
@@ -1235,13 +1319,13 @@ def test_image_server_rejects_duplicate_output_ids(tmp_path: Path) -> None:
 def test_image_server_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(display={"backends": [{"type": "image-server", "outputs": [{"id": "default", **fields}]}]}),
+        configuration_data(destinations=[{"id": "kitchen", "type": "image-server", **fields}]),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    assert any(item.field == "display.backends[0].outputs[0]" for item in error.value.diagnostics)
+    assert any(item.field == "destinations[0]" for item in error.value.diagnostics)
 
 
 def test_image_server_outputs_resolve_independently_and_share_duplicate_specifications(tmp_path: Path) -> None:
@@ -1249,19 +1333,17 @@ def test_image_server_outputs_resolve_independently_and_share_duplicate_specific
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
-                display={
-                    "backends": [
-                        {"type": "window"},
-                        {
-                            "type": "image-server",
-                            "outputs": [
-                                {"id": "default"},
-                                {"id": "wide", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
-                                {"id": "portrait-ish", "aspect_ratio": "4:3", "resolution": [1600, 1200]},
-                            ],
-                        },
-                    ]
-                }
+                destinations=[
+                    {"id": "desktop", "type": "window"},
+                    {"id": "default", "type": "image-server"},
+                    {"id": "wide", "type": "image-server", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
+                    {
+                        "id": "portrait-ish",
+                        "type": "image-server",
+                        "aspect_ratio": "4:3",
+                        "resolution": [1600, 1200],
+                    },
+                ]
             ),
         )
     )
@@ -1276,14 +1358,14 @@ def test_image_server_outputs_resolve_independently_and_share_duplicate_specific
 @pytest.mark.parametrize(
     ("image_server", "expected_field"),
     [
-        ({"unknown": 1}, "display.backends[1].unknown"),
-        ({"host": ""}, "display.backends[1].host"),
-        ({"host": "not a hostname"}, "display.backends[1].host"),
-        ({"host": True}, "display.backends[1].host"),
-        ({"port": True}, "display.backends[1].port"),
-        ({"port": "8080"}, "display.backends[1].port"),
-        ({"port": 0}, "display.backends[1].port"),
-        ({"port": 65536}, "display.backends[1].port"),
+        ({"unknown": 1}, "image-server.unknown"),
+        ({"host": ""}, "image-server.host"),
+        ({"host": "not a hostname"}, "image-server.host"),
+        ({"host": True}, "image-server.host"),
+        ({"port": True}, "image-server.port"),
+        ({"port": "8080"}, "image-server.port"),
+        ({"port": 0}, "image-server.port"),
+        ({"port": 65536}, "image-server.port"),
     ],
 )
 def test_invalid_image_server_settings_are_recoverable(
@@ -1293,39 +1375,34 @@ def test_invalid_image_server_settings_are_recoverable(
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
-                display={
-                    "backends": [
-                        {"type": "window"},
-                        {"type": "image-server", "outputs": [{"id": "default"}], **image_server},
-                    ]
-                }
+                destinations=[{"id": "desktop", "type": "window"}],
+                **{"image-server": image_server},
             ),
         )
     )
 
     assert expected_field in caplog.text
-    assert config.display_backends[1].host == "127.0.0.1"
-    assert config.display_backends[1].port == 8080
+    assert config.display_backends[0].host == "127.0.0.1"
+    assert config.display_backends[0].port == 8080
 
 
 @pytest.mark.parametrize(
-    ("display", "expected_message"),
+    ("destinations", "expected_message"),
     [
         (None, "is required"),
-        ({}, "is required"),
-        ({"backends": "window"}, "nonempty sequence"),
-        ({"backends": [{"type": "unknown"}]}, "supported backends"),
-        ({"backends": [{"type": "window"}, {"type": "window"}]}, "duplicates backend"),
+        ([], "nonempty sequence"),
+        ("bad", "nonempty sequence"),
+        ([{"id": "desktop", "type": "unknown"}], "supported backends"),
+        (
+            [{"id": "one", "type": "window"}, {"id": "two", "type": "window"}],
+            "supports at most 1 destination",
+        ),
     ],
 )
-def test_required_and_invalid_display_backend_are_rejected(
-    tmp_path: Path, display: object, expected_message: str
+def test_required_and_invalid_destinations_are_rejected(
+    tmp_path: Path, destinations: object, expected_message: str
 ) -> None:
-    data = configuration_data()
-    if display is None:
-        data.pop("display")
-    else:
-        data["display"] = display
+    data = configuration_data(destinations=destinations)
     config_path = write_config(tmp_path / "config.yaml", data)
 
     with pytest.raises(ApplicationConfigurationError) as error:
@@ -1335,25 +1412,16 @@ def test_required_and_invalid_display_backend_are_rejected(
     assert expected_message in diagnostic.message
 
 
-def test_singular_display_configuration_is_not_supported(tmp_path: Path) -> None:
-    config_path = write_config(tmp_path / "config.yaml", configuration_data(display={"backend": "window"}))
-
-    with pytest.raises(ApplicationConfigurationError) as error:
-        load_application_config(config_path)
-
-    assert any(item.field == "display.backends" for item in error.value.diagnostics)
-
-
-def test_non_mapping_backend_entry_is_diagnosed(tmp_path: Path) -> None:
+def test_non_mapping_destination_entry_is_diagnosed(tmp_path: Path) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(display={"backends": [{"type": "window"}, None]}),
+        configuration_data(destinations=[{"id": "desktop", "type": "window"}, None]),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
 
-    assert any(item.field == "display.backends[1]" for item in error.value.diagnostics)
+    assert any(item.field == "destinations[1]" for item in error.value.diagnostics)
 
 
 def test_optional_mappings_default_and_absolute_paths_are_preserved(tmp_path: Path) -> None:

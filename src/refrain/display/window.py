@@ -131,6 +131,11 @@ class WindowDisplayBackend:
         if user_closed:
             callback()
 
+    @property
+    def delivery_available(self) -> bool:
+        """Whether the desktop window's presentation thread is still running."""
+        return self._thread.is_alive() and not self._closed
+
     def _process_commands(self) -> None:
         while True:
             try:
