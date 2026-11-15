@@ -139,6 +139,28 @@ def test_font_size_options_can_be_supplied_together() -> None:
 
 
 @pytest.mark.parametrize(
+    ("option", "pool"),
+    [
+        ("--font", "@literary"),
+        ("--background", "@paper"),
+        ("--decoration", "@minimal"),
+        ("--text-color", "@muted"),
+        ("--tint", "@accents"),
+    ],
+)
+def test_resource_overrides_accept_named_pool_references(option: str, pool: str) -> None:
+    arguments = viewer._parser().parse_args([option, pool])
+
+    assert getattr(arguments, option[2:].replace("-", "_")) == pool
+
+
+@pytest.mark.parametrize("pool", ["@", "@bad name", "@@name"])
+def test_resource_overrides_reject_malformed_pool_references(pool: str) -> None:
+    with pytest.raises(SystemExit):
+        viewer._parser().parse_args(["--font", pool])
+
+
+@pytest.mark.parametrize(
     ("option", "value"),
     [
         ("--min-font-size", "0"),

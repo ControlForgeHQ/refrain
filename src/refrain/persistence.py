@@ -189,9 +189,9 @@ class DailySnapshot:
                 if (
                     not isinstance(value, (tuple, list))
                     or not value
-                    or any(not isinstance(item, str) or not _IDENTIFIER.fullmatch(item) for item in value)
+                    or any(not isinstance(item, str) for item in value)
                 ):
-                    raise ValueError(f"{field} must contain one or more valid palette identifiers")
+                    raise ValueError(f"{field} must contain one or more palette identifiers or pool references")
                 object.__setattr__(self, field, tuple(value))
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")

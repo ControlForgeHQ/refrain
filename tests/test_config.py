@@ -137,6 +137,195 @@ def test_unusable_decoration_color_pool_falls_back_to_black(tmp_path: Path, capl
     assert "using ['black']" in caplog.text
 
 
+def test_named_pools_expand_recursively_in_order_with_cycle_and_duplicate_handling(tmp_path: Path, caplog) -> None:
+    write_font_bundle(tmp_path / "assets" / "fonts" / "second-font", "second-font")
+    for identifier in ("surface", "surface-alt"):
+        path = tmp_path / "assets" / "backgrounds" / f"{identifier}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 6)).save(path)
+    decoration_root = tmp_path / "assets" / "decorations" / "trim"
+    decoration_root.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(decoration_root / "layer.png")
+    write_asset_manifest(
+        decoration_root,
+        "decoration.yaml",
+        {"format": 1, "id": "trim", "layers": [{"image": "layer.png"}]},
+    )
+    data = configuration_data()
+    data["palette"] = {"sage": "#8B956A", "navy": "#354B63"}
+    data["layout"].update(
+        {
+            "fonts": {
+                "default": ["@favorites", "test-font"],
+                "favorites": ["test-font", "@shared", "test-font"],
+                "shared": ["second-font", "@favorites"],
+                "empty": [],
+            },
+            "backgrounds": {
+                "default": ["@paper", "none"],
+                "paper": ["surface", "@alternate"],
+                "alternate": ["surface-alt", "@paper"],
+            },
+            "decorations": {
+                "default": ["@frames", "none"],
+                "frames": ["trim", "@empty-frames"],
+                "empty-frames": [],
+                "colors": {
+                    "default": ["@accents"],
+                    "accents": ["navy", "@shared-colors", "navy"],
+                    "shared-colors": ["black", "@accents"],
+                },
+            },
+            "text": {
+                "colors": {
+                    "default": ["@accents", "sage"],
+                    "accents": ["sage", "@shared-colors", "sage"],
+                    "shared-colors": ["navy", "@accents"],
+                },
+                "min_font_size": 28,
+                "max_font_size": 100,
+            },
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_fonts == ("test-font", "second-font")
+    assert config.font_pools["empty"] == ()
+    assert config.default_backgrounds == ("surface", "surface-alt", "none")
+    assert config.default_decorations == ("trim", "none")
+    assert config.default_text_colors == ("sage", "navy")
+    assert config.default_decoration_colors == ("navy", "black")
+    assert "circular" not in caplog.text.lower()
+
+
+def test_named_pool_invalid_and_reserved_definitions_are_excluded_independently(tmp_path: Path, caplog) -> None:
+    data = configuration_data()
+    data["layout"]["fonts"] = {
+        "default": ["@loop", "@unknown", "@@", "not-installed", "test-font"],
+        "loop": ["@other", "test-font"],
+        "other": ["@loop", "test-font"],
+        "empty": [],
+        "malformed": "test-font",
+        "bad name": ["test-font"],
+        "builtin": ["not-installed"],
+    }
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_fonts == ("test-font",)
+    assert config.font_pools["empty"] == ()
+    assert config.font_pools["malformed"] == ()
+    assert "layout.fonts.default[1]" in caplog.text
+    assert "pool reference '@@' is malformed" in caplog.text
+    assert "layout.fonts.not-installed" not in caplog.text
+    assert "layout.fonts.builtin" in caplog.text
+    assert "layout.fonts.bad name" in caplog.text
+    assert "circular" not in caplog.text.lower()
+
+
+def test_builtin_pools_follow_successful_bundled_registration_and_exclude_custom_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import refrain.config as config_module
+
+    bundled_root = tmp_path / "package"
+    write_font_bundle(bundled_root / "assets" / "fonts" / "bundled-font", "bundled-font")
+    backgrounds = bundled_root / "assets" / "backgrounds"
+    backgrounds.mkdir(parents=True)
+    Image.new("RGB", (8, 6)).save(backgrounds / "bundled-paper.png")
+    broken = backgrounds / "broken"
+    broken.mkdir()
+    write_asset_manifest(
+        broken,
+        "background.yaml",
+        {"format": 1, "id": "unusable-bundled", "layers": [{"image": "missing.png"}]},
+    )
+    decorations = bundled_root / "assets" / "decorations" / "bundled-frame"
+    decorations.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(decorations / "layer.png")
+    write_asset_manifest(
+        decorations,
+        "decoration.yaml",
+        {"format": 1, "id": "bundled-frame", "layers": [{"image": "layer.png"}]},
+    )
+    monkeypatch.setattr(config_module, "files", lambda _package: bundled_root)
+    (tmp_path / "assets" / "backgrounds").mkdir(parents=True)
+    Image.new("RGB", (8, 6)).save(tmp_path / "assets" / "backgrounds" / "custom-paper.png")
+    data = configuration_data()
+    data["palette"] = {"black": "#123456"}
+    data["layout"].update(
+        {
+            "fonts": {"default": ["@builtin"]},
+            "backgrounds": {"default": ["@builtin", "none"]},
+            "decorations": {"default": ["@builtin", "none"], "colors": {"default": ["@builtin"]}},
+            "text": {"colors": {"default": ["@builtin"]}, "min_font_size": 28, "max_font_size": 100},
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert config.default_fonts == ("bundled-font",)
+    assert config.default_backgrounds == ("bundled-paper", "none")
+    assert config.default_decorations == ("bundled-frame", "none")
+    assert config.default_text_colors == config.default_decoration_colors == ("black",)
+    assert config.palette["black"] == "#123456"
+    assert config.background_pools["builtin"] == ("bundled-paper",)
+    assert "custom-paper" not in config.background_pools["builtin"]
+    assert "unusable-bundled" not in config.backgrounds
+    assert "unusable-bundled" not in config.background_pools["builtin"]
+
+    write_font_bundle(bundled_root / "assets" / "fonts" / "added-font", "added-font")
+    reloaded = load_application_config(tmp_path / "config.yaml")
+    assert reloaded.default_fonts == ("added-font", "bundled-font")
+
+    import shutil
+
+    shutil.rmtree(bundled_root / "assets" / "fonts" / "bundled-font")
+    reloaded = load_application_config(tmp_path / "config.yaml")
+    assert reloaded.default_fonts == ("added-font",)
+
+
+def test_decoration_manifest_pool_preferences_are_retained_for_configuration_resolution(tmp_path: Path) -> None:
+    background = tmp_path / "assets" / "backgrounds" / "surface.png"
+    background.parent.mkdir(parents=True)
+    Image.new("RGB", (8, 6)).save(background)
+    decoration_root = tmp_path / "assets" / "decorations" / "frame"
+    decoration_root.mkdir(parents=True)
+    Image.new("RGBA", (8, 6)).save(decoration_root / "layer.png")
+    write_asset_manifest(
+        decoration_root,
+        "decoration.yaml",
+        {
+            "format": 1,
+            "id": "frame",
+            "layers": [{"image": "layer.png"}],
+            "font": "@preferred-fonts",
+            "background": "@preferred-backgrounds",
+            "text_color": "@text-palette",
+            "decoration_color": ["@tint-palette"],
+        },
+    )
+    data = configuration_data()
+    data["palette"] = {"sage": "#8B956A"}
+    data["layout"].update(
+        {
+            "fonts": {"default": ["test-font"], "preferred-fonts": ["test-font"]},
+            "backgrounds": {"default": ["none"], "preferred-backgrounds": ["surface"]},
+            "decorations": {"default": ["frame"], "colors": {"tint-palette": ["sage"]}},
+            "text": {"colors": {"text-palette": ["sage"]}, "min_font_size": 28, "max_font_size": 100},
+        }
+    )
+
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+    resource = config.decorations["frame"]
+
+    assert resource.font == "@preferred-fonts"
+    assert resource.background == "@preferred-backgrounds"
+    assert resource.text_color == ("@text-palette",)
+    assert resource.decoration_color == ("@tint-palette",)
+
+
 def test_invalid_palette_definitions_are_warned_and_ignored(tmp_path: Path, caplog) -> None:
     data = configuration_data()
     data["palette"] = {"invalid id": "#123456", "bad-hex": "#12345g", "red": "#123"}
