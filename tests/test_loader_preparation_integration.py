@@ -46,7 +46,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(
         yaml.safe_dump(
             {
                 "content": {"directory": "content"},
-                "display": {"backends": [{"type": "window"}]},
+                "destinations": [{"id": "window", "type": "window"}],
                 "layout": {
                     "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
                     "fonts": {"default": [font_identifier]},
@@ -180,7 +180,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
         yaml.safe_dump(
             {
                 "content": {"directory": "content"},
-                "display": {"backends": [{"type": "window"}]},
+                "destinations": [{"id": "window", "type": "window"}],
                 "layout": {
                     "presentation_insets": {"left": 384, "right": 384, "top": 216, "bottom": 216},
                     "fonts": {"default": ["family-serif"]},

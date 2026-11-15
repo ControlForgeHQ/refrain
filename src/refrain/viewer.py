@@ -14,7 +14,6 @@ from PIL import Image, ImageOps
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
-    canonical_destination_identifier,
     load_application_config,
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library, normalize_quotation
@@ -263,7 +262,7 @@ def _resolve_render_destination(
 ) -> tuple[str, ResolvedOutputSpecification]:
     for backend in configuration.display_backends:
         for destination in backend.outputs:
-            if canonical_destination_identifier(backend, destination) == identifier:
+            if destination.identifier == identifier:
                 return backend.type, destination.output_specification
     raise ViewerError(
         f"destination {identifier!r} is not configured in the viewer configuration; "
@@ -414,7 +413,16 @@ def _run_destination_discovery() -> int:
         print("No destinations are configured in the resident Refrain runtime.")
         return 0
 
-    headers = ("Destination", "Aspect", "Resolution", "Transient", "Participation", "Availability", "Withdrawn")
+    headers = (
+        "Destination",
+        "Aspect",
+        "Resolution",
+        "Transient",
+        "Participation",
+        "Delivery",
+        "Publication",
+        "Withdrawn",
+    )
     rows = []
     for destination in destinations:
         specification = destination["output_specification"]
@@ -427,6 +435,7 @@ def _run_destination_discovery() -> int:
                 "yes" if destination["supports_transient"] else "no",
                 "participating" if destination["participating"] else "not participating",
                 "available" if destination["available"] else "unavailable/failed",
+                "accepted" if destination["publication_accepted"] else "not accepted",
                 "yes" if destination["withdrawn"] else "no",
             )
         )
@@ -440,7 +449,7 @@ def _select_push_destinations(
     destinations: Sequence[dict[str, object]],
     target: str,
 ) -> tuple[str, tuple[dict[str, object], ...], dict[str, ResolvedOutputSpecification]]:
-    if target == "all":
+    if target == "@all":
         selected = tuple(
             destination for destination in destinations if destination["participating"] and not destination["withdrawn"]
         )

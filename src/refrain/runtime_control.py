@@ -34,7 +34,7 @@ from .display.coordinator import (
 from .geometry import PresentationGeometryError, ResolvedOutputSpecification
 
 _LOG = logging.getLogger(__name__)
-_VERSION = 1
+_VERSION = 2
 _MAX_METADATA = 65536
 _MAX_IMAGE_BYTES = 32 * 1024 * 1024
 _MAX_TOTAL_BYTES = 192 * 1024 * 1024
@@ -815,7 +815,7 @@ class RuntimeControlServer:
         if set(request) not in (fields, fields | {"preflight"}) or ("preflight" in request and preflight is not True):
             raise RuntimeProtocolError("invalid publication request")
         target = request["target"]
-        if target != "all" and (
+        if target != "@all" and (
             not isinstance(target, list)
             or not 1 <= len(target) <= _MAX_DESTINATIONS
             or any(not isinstance(item, str) or not item or len(item) > 256 for item in target)
@@ -830,7 +830,7 @@ class RuntimeControlServer:
         ):
             raise RuntimeProtocolError("invalid destination specifications")
         specifications = {key: _spec_from_wire(value) for key, value in specifications.items()}
-        selected = None if target == "all" else set(target)
+        selected = None if target == "@all" else set(target)
         if any(
             (selected is None and record["participating"] or selected is not None and record["identifier"] in selected)
             and not _supports_transient_spec(record["output_specification"])
@@ -859,7 +859,7 @@ class RuntimeControlServer:
             raise RuntimeProtocolError("publication exceeds resource limits")
         if set(specifications.values()) != {spec for spec, _ in parsed}:
             raise RuntimeProtocolError("inconsistent image specifications")
-        if target != "all" and set(target) != set(specifications):
+        if target != "@all" and set(target) != set(specifications):
             raise RuntimeProtocolError("inconsistent destinations")
         if preflight:
             _send(connection, {"version": _VERSION, "status": "ready"})
@@ -1018,12 +1018,19 @@ class RuntimeControlClient:
                             "participating",
                             "withdrawn",
                             "available",
+                            "publication_accepted",
                         }
                         or not isinstance(record["identifier"], str)
                         or not 1 <= len(record["identifier"]) <= 256
                         or any(
                             type(record[key]) is not bool
-                            for key in ("supports_transient", "participating", "withdrawn", "available")
+                            for key in (
+                                "supports_transient",
+                                "participating",
+                                "withdrawn",
+                                "available",
+                                "publication_accepted",
+                            )
                         )
                     ):
                         raise RuntimeProtocolError("invalid destination record")
@@ -1044,7 +1051,7 @@ class RuntimeControlClient:
     ) -> PublicationResult:
         target = (
             destinations
-            if destinations == "all"
+            if destinations == "@all"
             else [destinations] if isinstance(destinations, str) else list(destinations)
         )
         if any(not _supports_transient_spec(spec) for spec in specifications.values()):

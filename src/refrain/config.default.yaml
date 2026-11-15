@@ -9,15 +9,14 @@ reveal:
 information_view:
   duration: 60
 
-display:
-  # The image server is loopback-only by default. Configure "window" or
-  # "waveshare-13in3-e" here to use a desktop or attached display instead.
-  backends:
-    - type: "image-server"
-      host: "127.0.0.1"
-      port: 8080
-      outputs:
-        - id: "default"
+destinations:
+  - id: "default"
+    type: "image-server"
+
+# This optional section enables the loopback-only HTTP service.
+image-server:
+  host: "127.0.0.1"
+  port: 8080
 
 layout:
   presentation_insets:

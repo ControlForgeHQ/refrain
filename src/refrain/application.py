@@ -120,6 +120,7 @@ def _default_backend_factory(configuration: DisplayBackendConfiguration) -> Disp
         image_server_host=configuration.host,
         image_server_port=configuration.port,
         image_server_output_ids=tuple(output.identifier for output in configuration.outputs),
+        image_server_enabled=configuration.service_enabled,
     )
 
 
@@ -526,8 +527,7 @@ def run_startup(
                     monotonic_clock=monotonic_clock,
                 )
             coordinator.publish(identity, images)
-            if not coordinator.wait_for_publication(identity):
-                raise ApplicationError("all configured display destinations are unavailable")
+            coordinator.wait_for_publication(identity)
             break
     finally:
         if coordinator is not None:
@@ -594,7 +594,6 @@ def run_application(
             coordinator = DisplayPublicationCoordinator(
                 configuration.display_backends,
                 backend_factory,
-                all_unavailable_event=shutdown,
                 monotonic_clock=monotonic_clock,
             )
             try:
@@ -707,11 +706,8 @@ def run_application(
                     coordinator = DisplayPublicationCoordinator(
                         configuration.display_backends,
                         backend_factory,
-                        all_unavailable_event=shutdown,
                         monotonic_clock=monotonic_clock,
                     )
-                if coordinator.all_unavailable:
-                    raise ApplicationError("all configured display destinations are unavailable")
                 if not information_view_done:
                     current_monotonic = monotonic_clock()
                     if information_view_requested:
@@ -865,8 +861,6 @@ def run_application(
                 for image in information_view_images.values():
                     image.close()
             _LOGGER.info("Continuous presentation stopped")
-    if coordinator is not None and coordinator.all_unavailable:
-        raise ApplicationError("all configured display destinations are unavailable")
 
 
 def run_demo(
@@ -883,9 +877,9 @@ def run_demo(
 ) -> None:
     """Cycle canonical stages using fresh session storage and a fixed eligibility date.
 
-    Viewing durations start at the coordinator's first successful acknowledgement.
-    Tests may supply clocks and an interruptible wait; by default waits use the
-    shutdown event, which also wakes when every display destination is lost.
+    Viewing durations start at the coordinator's first successful acknowledgement,
+    or at the publication attempt when no destination can accept the image.
+    Tests may supply clocks and an interruptible wait.
     """
     if not math.isfinite(interval) or interval <= 0:
         raise ApplicationError("demo interval must be a positive finite number of seconds")
@@ -912,8 +906,6 @@ def run_demo(
         coordinator = DisplayPublicationCoordinator(
             configuration.display_backends,
             backend_factory,
-            all_unavailable_event=shutdown,
-            all_withdrawn_event=shutdown,
             monotonic_clock=monotonic_clock,
         )
         state: PersistentState | None = None
@@ -921,12 +913,11 @@ def run_demo(
         selecting = True
         artifacts: PreparedImageArtifactSet | None = None
         stage = 0
+        stage_requested_at: float | None = None
         retry_delay = 1.0
         last_failure: str | None = None
         while not shutdown.is_set():
             try:
-                if coordinator.all_unavailable:
-                    raise ApplicationError("all configured display destinations are unavailable")
                 if selecting:
                     if pending_selection is None:
                         state = _reload(store)
@@ -968,13 +959,11 @@ def run_demo(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
                     coordinator.publish(identity, images)
-                if not coordinator.wait_for_any_publication(identity, cancellation_event=shutdown):
-                    if not coordinator.has_participating_destinations:
-                        break
-                    continue
+                    stage_requested_at = monotonic_clock()
+                coordinator.wait_for_any_publication(identity, cancellation_event=shutdown)
                 acknowledged_at = coordinator.first_successful_publication_time(identity)
                 if acknowledged_at is None:
-                    continue
+                    acknowledged_at = stage_requested_at if stage_requested_at is not None else monotonic_clock()
                 if last_failure is not None:
                     _LOGGER.info("Demo operation recovered")
                     last_failure = None
@@ -1015,8 +1004,6 @@ def run_demo(
             except OSError as error:
                 _LOGGER.warning("Cannot remove temporary demo storage: %s", error)
             _LOGGER.info("Demo presentation stopped")
-    if coordinator is not None and coordinator.all_unavailable:
-        raise ApplicationError("all configured display destinations are unavailable")
 
 
 __all__ = [

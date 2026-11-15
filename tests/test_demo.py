@@ -29,9 +29,9 @@ content:
 reveal:
   source: "12:00"
   attribution: "18:00"
-display:
-  backends:
-    - type: "window"
+destinations:
+  - id: window
+    type: "window"
 information_view:
   duration: 60
 layout:
@@ -501,10 +501,10 @@ def test_long_interval_uses_bounded_waits_and_shutdown_stops_progression(demo):
     demo.assert_clean()
 
 
-def test_demo_stops_when_every_destination_is_withdrawn(demo):
+def test_demo_progresses_when_every_destination_is_withdrawn(demo):
     demo.entry()
     attempts = []
-    waits = []
+    demo.clock.limit = 1
 
     def withdrawn(coordinator, identity):
         attempts.append(identity)
@@ -512,10 +512,9 @@ def test_demo_stops_when_every_destination_is_withdrawn(demo):
         return False
 
     demo.on_ack = withdrawn
-    demo.clock.wait = lambda timeout=None: waits.append(timeout)
     demo.run()
     assert len(attempts) == 1
-    assert waits == []
+    assert len(demo.clock.waits) == 1 and demo.clock.waits[0] > 0
 
 
 def test_window_withdrawal_wakes_demo_during_viewing_interval(demo, monkeypatch):
@@ -536,15 +535,15 @@ def test_window_withdrawal_wakes_demo_during_viewing_interval(demo, monkeypatch)
 
     def close_window(_timeout):
         callbacks[0]()
-        assert demo.clock.is_set()
+        assert not demo.clock.is_set()
 
     demo.clock.on_wait = close_window
     demo.run(interval=3600, backend_factory=lambda _config: Backend())
-    assert len(demo.clock.waits) == 1
+    assert len(demo.clock.waits) == demo.clock.limit
     assert all(not path.exists() for path in demo.sessions)
 
 
-def test_unacknowledged_stage_neither_waits_interval_nor_selects_again(demo):
+def test_unacknowledged_demo_stages_progress_without_selecting_again(demo):
     demo.entry()
     attempts = []
 
@@ -556,9 +555,9 @@ def test_unacknowledged_stage_neither_waits_interval_nor_selects_again(demo):
 
     demo.on_ack = unacknowledged
     demo.run()
-    assert attempts == [(1, 0)] * 3
+    assert attempts == [(1, 0), (1, 1), (1, 2)]
     assert len(demo.selected) == 1
-    assert len(demo.publications) == 1 and not demo.clock.waits
+    assert len(demo.publications) == 3 and demo.clock.waits
     demo.assert_clean()
 
 
@@ -779,8 +778,8 @@ def test_actual_coordinator_healthy_backend_progresses_independently(demo, monke
     demo.entry()
     demo.config.write_text(
         _CONFIG.replace(
-            '    - type: "window"',
-            '    - type: "window"\n    - type: "image-server"\n      outputs: [{id: "default"}]',
+            '  - id: window\n    type: "window"',
+            '  - id: window\n    type: "window"\n  - id: default\n    type: "image-server"',
         )
     )
     entered = Event()
@@ -859,7 +858,7 @@ def test_actual_coordinator_healthy_backend_progresses_independently(demo, monke
     assert all(not path.exists() for path in demo.sessions)
 
 
-def test_actual_coordinator_all_terminal_backends_stop_selection(demo, monkeypatch):
+def test_actual_coordinator_all_terminal_backends_do_not_stop_demo(demo, monkeypatch):
     demo.entry()
     calls = []
 
@@ -880,11 +879,10 @@ def test_actual_coordinator_all_terminal_backends_stop_selection(demo, monkeypat
         return BrokenBackend()
 
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", DisplayPublicationCoordinator)
-    with pytest.raises(application.ApplicationError, match="all configured display destinations are unavailable"):
-        demo.run(backend_factory=factory)
+    demo.run(backend_factory=factory)
     assert len(demo.selected) == 1 and len(demo.prepared) == 1
     assert calls == ["window", "closed"]
-    assert not demo.clock.waits
+    assert demo.clock.waits
     assert all(not path.exists() for path in demo.sessions)
 
 

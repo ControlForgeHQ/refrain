@@ -147,7 +147,7 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
 ) -> None:
     records = (
         _destination("window"),
-        _destination("image-server:wquxga", participating=False, withdrawn=True),
+        _destination("wquxga", participating=False, withdrawn=True),
         _destination("epaper-destination-with-a-long-name", available=False),
     )
     seen = {}
@@ -172,7 +172,7 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     expected_cells = (
         ("Destination", "Aspect", "Resolution", "Transient", "Participation", "Availability", "Withdrawn"),
         ("window", "16:9", "1920x1080", "yes", "participating", "available", "no"),
-        ("image-server:wquxga", "16:9", "1920x1080", "yes", "not participating", "available", "yes"),
+        ("wquxga", "16:9", "1920x1080", "yes", "not participating", "available", "yes"),
         (
             "epaper-destination-with-a-long-name",
             "16:9",

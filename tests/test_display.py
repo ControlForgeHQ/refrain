@@ -516,8 +516,8 @@ def test_close_before_coordinator_registration_is_not_lost(monkeypatch: pytest.M
     try:
         coordinator.publish((1, 0), {specification: Image.new("RGB", (16, 9))})
         with coordinator._condition:
-            assert coordinator._condition.wait_for(lambda: coordinator._states["window"].withdrawn, timeout=2)
-        assert coordinator.destination_statuses[0]["available"] is True
+            assert coordinator._condition.wait_for(lambda: coordinator._states["default"].withdrawn, timeout=2)
+        assert coordinator.destination_statuses[0]["available"] is False
         assert presented == []
     finally:
         coordinator.close()
@@ -550,7 +550,7 @@ def test_window_close_during_publication_preserves_availability(
             coordinator.publish((1, 1), images)
             operation = None
         elif operation_type == "transient":
-            operation = coordinator.publish_transient("window", {"window": specification}, images)
+            operation = coordinator.publish_transient("default", {"default": specification}, images)
         else:
             operation = coordinator.force_scheduled_publication((1, 0), images)
         assert entered.wait(2)
@@ -558,13 +558,15 @@ def test_window_close_during_publication_preserves_availability(
         release.set()
         if operation is None:
             with coordinator._condition:
-                assert coordinator._condition.wait_for(lambda: coordinator._states["window"].active_identity is None, 2)
+                assert coordinator._condition.wait_for(
+                    lambda: coordinator._states["default"].active_identity is None, 2
+                )
         else:
             result = operation.wait(2)
             assert result.status is PublicationStatus.FAILED
-            assert result.destinations["window"] == (False, "cannot update a closed desktop display")
+            assert result.destinations["default"] == (False, "cannot update a closed desktop display")
         status = coordinator.destination_statuses[0]
-        assert (status["participating"], status["withdrawn"], status["available"]) == (False, True, True)
+        assert (status["participating"], status["withdrawn"], status["available"]) == (False, True, False)
     finally:
         release.set()
         coordinator.close()
@@ -587,10 +589,10 @@ def test_user_close_immediately_withdraws_window_and_restart_restores_it(monkeyp
     try:
         roots[0].close_protocol()
         status = coordinator.destination_statuses[0]
-        assert status["identifier"] == "window"
+        assert status["identifier"] == "default"
         assert status["participating"] is False
         assert status["withdrawn"] is True
-        assert status["available"] is True
+        assert status["available"] is False
     finally:
         coordinator.close()
 

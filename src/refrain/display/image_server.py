@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import io
 import logging
@@ -175,6 +174,7 @@ class ImageServerDisplayBackend:
         host: str = "127.0.0.1",
         port: int = 8080,
         output_ids: tuple[str, ...] = ("default",),
+        service_enabled: bool = True,
     ) -> None:
         if not isinstance(host, str) or not host:
             raise DisplayBackendInitializationError(
@@ -196,76 +196,88 @@ class ImageServerDisplayBackend:
 
         self._state_lock = Lock()
         self._close_lock = Lock()
+        self._service_lock = Lock()
         self._closed = False
+        self._service_enabled = service_enabled
+        self._host = host
+        self._port = port
         self.output_ids = frozenset(output_ids)
         self._representations: dict[str, tuple[bytes, str] | None] = {output_id: None for output_id in output_ids}
+        self._server: _ImageHTTPServer | None = None
+        self._thread: Thread | None = None
+        if self._service_enabled:
+            self._start_service()
 
-        request_handler = type(
-            "_BoundImageRequestHandler",
-            (_ImageRequestHandler,),
-            {"backend": self},
-        )
-        try:
-            addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
-        except OSError as error:
-            raise DisplayBackendInitializationError(
-                f"could not resolve image-server listening address {host!r}: {error}",
-                recoverable=error.errno == socket.EAI_AGAIN,
-            ) from error
+    @property
+    def delivery_available(self) -> bool:
+        """Whether the configured HTTP listener is currently serving representations."""
+        return self._thread is not None and self._thread.is_alive()
 
-        server: _ImageHTTPServer | None = None
-        bind_error: OSError | None = None
-        retry_bind = False
-        for family, _socket_type, _protocol, _canonical_name, address in addresses:
-            candidate: _ImageHTTPServer | None = None
+    def _start_service(self) -> bool:
+        with self._service_lock:
+            if self._closed or not self._service_enabled:
+                return False
+            if self._thread is not None and self._thread.is_alive():
+                return True
+            if self._server is not None:
+                try:
+                    self._server.server_close()
+                except OSError:
+                    _LOGGER.exception("failed to release an unusable image-server listener")
+                self._server = None
+                self._thread = None
+
+            request_handler = type(
+                "_BoundImageRequestHandler",
+                (_ImageRequestHandler,),
+                {"backend": self},
+            )
             try:
-                candidate = _ImageHTTPServer(address, request_handler, family)
-                candidate.server_bind()
-                candidate.server_activate()
+                addresses = socket.getaddrinfo(self._host, self._port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
             except OSError as error:
-                if candidate is not None:
-                    try:
-                        candidate.server_close()
-                    except OSError:
-                        _LOGGER.exception("failed to release an unusable image-server listener")
-                bind_error = error
-                retry_bind |= (
-                    error.errno
-                    in (
-                        errno.EADDRNOTAVAIL,
-                        errno.EADDRINUSE,
-                        errno.ENETDOWN,
-                        errno.ENETUNREACH,
-                        errno.ENODEV,
-                    )
-                    or getattr(error, "winerror", None) == 10013
-                )
-                continue
-            server = candidate
-            break
-        if server is None:
-            raise DisplayBackendInitializationError(
-                f"could not bind image-server to {host}:{port}: {bind_error or 'no usable listening address'}",
-                recoverable=retry_bind,
-            ) from bind_error
+                _LOGGER.warning("image-server listener address resolution failed: %s", error)
+                return False
 
-        self._server = server
-        self._thread = Thread(
-            target=server.serve_forever,
-            kwargs={"poll_interval": 0.1},
-            name="refrain-image-server",
-            daemon=True,
-        )
-        try:
-            self._thread.start()
-        except Exception as error:
+            server: _ImageHTTPServer | None = None
+            bind_error: OSError | None = None
+            for family, _socket_type, _protocol, _canonical_name, address in addresses:
+                candidate: _ImageHTTPServer | None = None
+                try:
+                    candidate = _ImageHTTPServer(address, request_handler, family)
+                    candidate.server_bind()
+                    candidate.server_activate()
+                except OSError as error:
+                    if candidate is not None:
+                        try:
+                            candidate.server_close()
+                        except OSError:
+                            _LOGGER.exception("failed to release an unusable image-server listener")
+                    bind_error = error
+                    continue
+                server = candidate
+                break
+            if server is None:
+                _LOGGER.warning("could not bind image-server to %s:%s: %s", self._host, self._port, bind_error)
+                return False
+
+            thread = Thread(
+                target=server.serve_forever,
+                kwargs={"poll_interval": 0.1},
+                name="refrain-image-server",
+                daemon=True,
+            )
             try:
-                server.server_close()
-            except OSError:
-                _LOGGER.exception("failed to release image-server listener after thread startup failure")
-            raise DisplayBackendInitializationError(
-                f"could not start the image-server thread: {error}", recoverable=False
-            ) from error
+                thread.start()
+            except Exception as error:
+                try:
+                    server.server_close()
+                except OSError:
+                    _LOGGER.exception("failed to release image-server listener after thread startup failure")
+                _LOGGER.warning("could not start the image-server thread: %s", error)
+                return False
+            self._server = server
+            self._thread = thread
+            return True
 
     def update(self, image: Image.Image) -> None:
         """Publish the image when this service has exactly one named output."""
@@ -299,6 +311,7 @@ class ImageServerDisplayBackend:
             if self._closed:
                 raise DisplayBackendUpdateError("cannot update a closed image-server display", recoverable=False)
             self._representations[output_id] = image_bytes, entity_tag
+        self._start_service()
 
     def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
         """Publish the complete image through the selected named output."""
@@ -318,18 +331,20 @@ class ImageServerDisplayBackend:
 
             error: BaseException | None = None
             try:
-                if self._thread.is_alive():
+                if self._server is not None and self._thread is not None and self._thread.is_alive():
                     self._server.shutdown()
             except BaseException as close_error:
                 error = close_error
             finally:
                 try:
-                    self._server.server_close()
+                    if self._server is not None:
+                        self._server.server_close()
                 except BaseException as close_error:
                     error = error or close_error
 
-            self._thread.join(timeout=5)
-            if self._thread.is_alive():
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+            if self._thread is not None and self._thread.is_alive():
                 error = error or RuntimeError("the image-server thread did not stop")
             if error is not None:
                 raise DisplayBackendCloseError(f"could not close the image-server: {error}") from error

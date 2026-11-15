@@ -104,8 +104,8 @@ The first release should be useful in normal household operation without dependi
 - Support the Waveshare 13.3-inch e-Paper HAT+ (E).
 - Operate on Raspberry Pi OS Lite, initially targeting Raspberry Pi 3 B+.
 - Support simultaneous presentation through multiple configured display backends.
-- Allow each supported backend type to be configured at most once.
-- Publish prepared output images to their configured destinations, including named outputs of the image-server backend.
+- Configure destinations independently and group those using the same backend implementation where appropriate.
+- Publish prepared output images to their configured destinations, including each image-server destination.
 - Update display backends independently so that slow or unavailable destinations do not delay other destinations.
 - Isolate backend failures and provide bounded recovery without interrupting otherwise functional destinations.
 - Perform complete display publication at the configured reveal stages and display-day boundary.

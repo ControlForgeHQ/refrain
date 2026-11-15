@@ -33,11 +33,9 @@ general:
   day_start: "06:00"
 content:
   directory: content
-display:
-  backends:
-    - type: image-server
-      outputs:
-        - id: configured-output
+destinations:
+  - id: configured-output
+    type: image-server
 information_view:
   duration: 0
 layout:
@@ -352,8 +350,8 @@ def test_render_as_uses_configured_geometry_and_exports_without_backend_or_runti
         path.write_bytes(content)
     config.write_text(
         _CONFIG.replace(
-            "    - type: image-server\n      outputs:\n        - id: configured-output\n",
-            '    - type: window\n      aspect_ratio: "4:3"\n      resolution: [320, 240]\n',
+            "  - id: configured-output\n    type: image-server\n",
+            '  - id: window\n    type: window\n    aspect_ratio: "4:3"\n    resolution: [320, 240]\n',
         ),
         encoding="utf-8",
     )
@@ -391,11 +389,11 @@ def test_render_as_uses_configured_geometry_and_exports_without_backend_or_runti
     assert {path: path.read_bytes() for path in sentinels} == sentinels
 
 
-def test_render_destination_lookup_uses_canonical_image_server_identifier(tmp_path: Path) -> None:
+def test_render_destination_lookup_uses_configured_destination_identifier(tmp_path: Path) -> None:
     config, _ = _workspace(tmp_path, with_entry=False)
     configuration = load_application_config(config)
 
-    backend_type, specification = viewer._resolve_render_destination(configuration, "image-server:configured-output")
+    backend_type, specification = viewer._resolve_render_destination(configuration, "configured-output")
 
     assert backend_type == "image-server"
     assert specification == ResolvedOutputSpecification("16:10", (3840, 2400))
@@ -407,8 +405,8 @@ def test_render_as_waveshare_exports_processed_pixels_without_hardware(
     config, _ = _workspace(tmp_path, with_entry=False)
     config.write_text(
         _CONFIG.replace(
-            "    - type: image-server\n      outputs:\n        - id: configured-output\n",
-            "    - type: waveshare-13in3-e\n",
+            "  - id: configured-output\n    type: image-server\n",
+            "  - id: configured-output\n    type: waveshare-13in3-e\n",
         ),
         encoding="utf-8",
     )
@@ -1020,7 +1018,7 @@ def _assert_image_closed(image: Image.Image) -> None:
     [
         ["--image", "candidate.png"],
         ["--image", "candidate.png", "--push", "window"],
-        ["--image", "candidate.png", "--push", "all"],
+        ["--image", "candidate.png", "--push", "@all"],
     ],
 )
 def test_finished_image_arguments_parse(arguments: list[str]) -> None:
@@ -1120,12 +1118,12 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
                 "test-frame",
                 "--no-qr",
                 "--push",
-                "image-server:wquxga",
+                "wquxga",
             ]
         )
         == 0
     )
-    assert captured["target"] == "image-server:wquxga"
+    assert captured["target"] == "wquxga"
     assert captured["config_file"] == "custom.yaml"
     assert captured["selector"] == ("johnson-maggie", 6)
     overrides = captured["overrides"]
@@ -1163,7 +1161,7 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
             "unsupported",
         ),
         (
-            "all",
+            "@all",
             (
                 _push_destination(
                     "unsupported",
@@ -1173,9 +1171,9 @@ def test_push_arguments_keep_presentation_selection_and_overrides(
             ),
             "unsupported",
         ),
-        ("all", (), "no resident destinations remain participating"),
+        ("@all", (), "no resident destinations remain participating"),
         (
-            "all",
+            "@all",
             (
                 _push_destination(
                     "withdrawn",
@@ -1336,7 +1334,7 @@ def test_image_push_all_preserves_destination_specs_and_reuses_same_raster(
             return destinations
 
         def publish_transient(self, target, destination_specs, images, *, on_accepted):
-            assert target == "all"
+            assert target == "@all"
             assert destination_specs == specifications
             assert set(images) == set(specifications.values())
             assert images[specifications["available"]] is images[specifications["unavailable"]]
@@ -1361,7 +1359,7 @@ def test_image_push_all_preserves_destination_specs_and_reuses_same_raster(
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
     monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
 
-    assert viewer.main(["--image", str(image_path), "--push", "all"]) == 0
+    assert viewer.main(["--image", str(image_path), "--push", "@all"]) == 0
     assert "Push accepted; publication has begun." in capsys.readouterr().out
     _assert_image_closed(loaded_images[0])
 
@@ -1400,7 +1398,7 @@ def test_image_push_all_mismatch_rejects_every_destination_before_submission(
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "_load_finished_image", track_image)
 
-    assert viewer.main(["--image", str(image_path), "--push", "all"]) == 1
+    assert viewer.main(["--image", str(image_path), "--push", "@all"]) == 1
     diagnostic = capsys.readouterr().err
     assert "destination 'different' requires 320x180" in diagnostic
     _assert_image_closed(loaded_images[0])
@@ -1450,7 +1448,7 @@ def test_image_push_rejects_unknown_destination_before_loading_image(
             "unsupported",
         ),
         (
-            "all",
+            "@all",
             _push_destination(
                 "unsupported",
                 ResolvedOutputSpecification("4:3", (320, 240)),
@@ -1557,8 +1555,8 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
     destinations = (
         _push_destination("window", specs[0]),
         _push_destination("failed:display", specs[1], available=False),
-        _push_destination("image-server:first", specs[2]),
-        _push_destination("image-server:second", specs[0]),
+        _push_destination("first", specs[2]),
+        _push_destination("second", specs[0]),
         _push_destination(
             "withdrawn",
             ResolvedOutputSpecification("16:9", (640, 360)),
@@ -1582,12 +1580,12 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
         def publish_transient(self, target, specifications, images, *, on_accepted):
             calls.append("publish")
             captured.update(target=target, specifications=specifications, images=images)
-            assert target == "all"
+            assert target == "@all"
             assert specifications == {
                 "window": specs[0],
                 "failed:display": specs[1],
-                "image-server:first": specs[2],
-                "image-server:second": specs[0],
+                "first": specs[2],
+                "second": specs[0],
             }
             assert set(images) == set(specs)
             assert all(
@@ -1617,7 +1615,7 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
     monkeypatch.setattr(viewer, "load_application_config", load_configuration)
     monkeypatch.setattr(viewer, "render_preview_variants", render)
 
-    assert viewer.main(["--config", str(config_path), "--no-qr", "--push", "all"]) == 0
+    assert viewer.main(["--config", str(config_path), "--no-qr", "--push", "@all"]) == 0
     assert calls == ["discover", "load", "render", "publish"]
     output = capsys.readouterr().out
     assert "Push accepted; publication has begun." in captured["accepted_output"]

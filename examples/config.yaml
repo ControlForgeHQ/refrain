@@ -14,18 +14,19 @@ reveal:
 information_view:
   duration: 5
 
-display:
-  backends:
-    - type: "window"
-      aspect_ratio: "16:9"
-      resolution: [1920, 1080]
-    - type: "image-server"
-      host: "127.0.0.1"
-      port: 8080
-      outputs:
-        - id: "default"
-          aspect_ratio: "16:10"
-          resolution: [3840, 2400]
+destinations:
+  - id: "desktop"
+    type: "window"
+    aspect_ratio: "16:9"
+    resolution: [1920, 1080]
+  - id: "default"
+    type: "image-server"
+    aspect_ratio: "16:10"
+    resolution: [3840, 2400]
+
+image-server:
+  host: "127.0.0.1"
+  port: 8080
 
 layout:
   presentation_insets:

@@ -45,7 +45,7 @@ def write_font_bundle(directory: Path, identifier: str = "test-font") -> Path:
 def write_configuration(path: Path, **settings: object) -> Path:
     write_font_bundle(path.parent / "assets" / "fonts" / "test-font")
     data = {
-        "display": {"backends": [{"type": "window"}]},
+        "destinations": [{"id": "window", "type": "window"}],
         "layout": {
             "fonts": {"default": ["test-font"]},
             "text": {"min_font_size": 28, "max_font_size": 100},
