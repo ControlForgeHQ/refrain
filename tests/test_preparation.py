@@ -1766,6 +1766,53 @@ def test_unusable_explicit_font_uses_configured_default_pool(tmp_path, caplog, m
     assert "broken" in caplog.text
 
 
+def test_unusable_font_retries_same_explicit_pool_before_lower_precedence(tmp_path) -> None:
+    broken_path = tmp_path / "broken.ttf"
+    broken_path.write_bytes(b"not a font")
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain"),),
+        False,
+        font="@decoration-font",
+    )
+    configuration = replace(
+        _configuration(
+            {
+                "broken": FontResource("broken", broken_path, bundled=False),
+                "usable": FontResource("usable", _REGULAR_FONT, bundled=True),
+                "decoration-font": FontResource("decoration-font", _REGULAR_FONT, bundled=True),
+                "global-font": FontResource("global-font", _REGULAR_FONT, bundled=True),
+            },
+            default_fonts=("global-font",),
+        ),
+        font_pools={
+            "entry-fonts": ("broken", "usable"),
+            "decoration-font": ("decoration-font",),
+        },
+    )
+
+    class FirstChoice:
+        def __init__(self) -> None:
+            self.pools: list[tuple[str, ...]] = []
+
+        def choice(self, values):
+            pool = tuple(values)
+            self.pools.append(pool)
+            return pool[0]
+
+    chooser = FirstChoice()
+    fonts = preparation._resolve_fonts(
+        make_snapshot("@entry-fonts"),
+        configuration,
+        decoration,
+        chooser,
+        PresentationOverrides(),
+    )
+
+    assert fonts["quotation"].identifier == "usable"
+    assert chooser.pools == [("broken", "usable"), ("usable",)]
+
+
 def test_composition_that_cannot_fit_fails_without_mutation(embedded_font: str) -> None:
     snapshot = make_snapshot(embedded_font, source=None, attribution=None)
     original_snapshot = snapshot

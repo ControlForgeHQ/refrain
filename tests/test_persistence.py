@@ -81,6 +81,28 @@ def make_snapshot(
     )
 
 
+@pytest.mark.parametrize("field", ["text_color", "decoration_color"])
+def test_snapshot_accepts_valid_color_pool_references(field: str) -> None:
+    snapshot = replace(make_snapshot("A quotation."), **{field: ("@muted-colors", "burnt-orange")})
+
+    assert getattr(snapshot, field) == ("@muted-colors", "burnt-orange")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("text_color", ("@",)),
+        ("text_color", ("@not valid",)),
+        ("text_color", ("bad color",)),
+        ("decoration_color", ("@@pool",)),
+        ("decoration_color", ("not/valid",)),
+    ],
+)
+def test_snapshot_rejects_malformed_color_identifiers_and_pool_references(field: str, value: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError, match=f"{field} must contain one or more palette identifiers or pool references"):
+        replace(make_snapshot("A quotation."), **{field: value})
+
+
 def commit(store: PersistentStateStore, text: str, display_date: date = date(2026, 10, 26)):
     previous = store.load()
     history = frozenset() if previous is None else previous.repetition_history

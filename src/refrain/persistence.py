@@ -189,7 +189,11 @@ class DailySnapshot:
                 if (
                     not isinstance(value, (tuple, list))
                     or not value
-                    or any(not isinstance(item, str) for item in value)
+                    or any(
+                        not isinstance(item, str)
+                        or not _IDENTIFIER.fullmatch(item[1:] if item.startswith("@") else item)
+                        for item in value
+                    )
                 ):
                     raise ValueError(f"{field} must contain one or more palette identifiers or pool references")
                 object.__setattr__(self, field, tuple(value))

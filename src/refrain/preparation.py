@@ -820,36 +820,34 @@ def _resolve_fonts(
         except Exception as error:
             raise DailyImagePreparationError(f"explicit font {identifier!r} is unusable: {error}") from error
         resolved_bundle = resource
-    candidates = (
-        [
-            (source, chooser.choice(candidate_ids))
-            for source, preference in preferences
-            if (candidate_ids := _preference_candidates(preference, configuration.font_pools, source))
-        ]
-        if overrides.font is None
-        else []
-    )
-    for source, identifier in (() if overrides.font is not None else candidates):
-        tried.add(identifier)
-        resource = configuration.fonts.get(identifier)
-        if resource is None:
-            _LOGGER.warning(
-                "Requested font %r from %s is unavailable; checking the next preference",
-                identifier,
-                source,
-            )
-            continue
-        try:
-            regular = _read_font(resource)
-            resolved_bundle = resource
-            break
-        except Exception as error:
-            _LOGGER.warning(
-                "Requested font %r from %s is unusable; checking the next preference: %s",
-                identifier,
-                source,
-                error,
-            )
+    if overrides.font is None:
+        for source, preference in preferences:
+            pool = list(_preference_candidates(preference, configuration.font_pools, source))
+            while pool:
+                identifier = chooser.choice(pool)
+                pool.remove(identifier)
+                tried.add(identifier)
+                resource = configuration.fonts.get(identifier)
+                if resource is None:
+                    _LOGGER.warning(
+                        "Requested font %r from %s is unavailable; checking the next candidate or preference",
+                        identifier,
+                        source,
+                    )
+                    continue
+                try:
+                    regular = _read_font(resource)
+                    resolved_bundle = resource
+                    break
+                except Exception as error:
+                    _LOGGER.warning(
+                        "Requested font %r from %s is unusable; checking the next candidate or preference: %s",
+                        identifier,
+                        source,
+                        error,
+                    )
+            if resolved_bundle is not None:
+                break
 
     if resolved_bundle is None:
         pool = tuple(identifier for identifier in configuration.default_fonts if identifier not in tried)

@@ -1291,11 +1291,11 @@ A decoration may also specify a preferred font.
 
 During image preparation, font selection follows this precedence:
 
-1. Resolve an explicit content-entry pool reference at that preference level and select one available, usable font from its expanded candidates; otherwise use its available, usable direct font preference.
-2. Otherwise, resolve and select one available, usable font from the selected decoration's preferred font pool or use its direct font preference.
+1. Resolve the content-entry font preference. For a pool reference, try its distinct expanded candidates in random order without replacement until one is usable; for a direct preference, try that font.
+2. Only if the content-entry preference has no usable font, resolve the selected decoration's preferred font pool the same way, or try its direct preference.
 3. Otherwise, select from the effective default font pool.
 
-An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning and proceeds to the next bundle-selection preference.
+An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning for each unavailable candidate and exhausts that preference level before proceeding to the next bundle-selection preference. Lower-priority preferences are not randomly selected before they are reached.
 
 After selecting the bundle, Refrain independently resolves the `quotation`, `source`, and `attribution` faces within that bundle. For each role, the first defined preference wins in this order: content entry, selected decoration, selected bundle manifest, global `layout.fonts.font_faces`, then implicit `regular`. An explicit `regular` is defined and overrides lower-priority values. If the winning face is unavailable or unusable, that role falls directly to the selected bundle's `regular` face with an actionable warning; lower-priority face preferences are not consulted. No role selects another bundle. Decoration face preferences apply to the selected bundle even when an entry overrides the decoration's bundle preference.
 
