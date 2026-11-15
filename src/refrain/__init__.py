@@ -39,6 +39,7 @@ from .config import (
     load_decoration_layer_image,
 )
 from .content import (
+    ContentAction,
     ContentDiagnostic,
     ContentEntry,
     ContentLibraryError,
@@ -133,6 +134,7 @@ __all__ = [
     "DisplayBackendConfiguration",
     "DisplayOutputConfiguration",
     "ContentDiagnostic",
+    "ContentAction",
     "ContentEntry",
     "ContentLibraryError",
     "DailySnapshot",
