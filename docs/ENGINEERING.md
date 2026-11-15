@@ -416,6 +416,8 @@ Validate discovered backgrounds individually against the PNG requirements in `do
 
 Validate content independently by source file and, where supported, by entry. Preserve accepted entries when other entries fail validation.
 
+A malformed entry-level action is a recoverable item-level warning: discard that action and continue validating the remaining actions without rejecting the content entry. Keep action diagnostics separate from entry-fatal diagnostics. Preserve valid action order and exact opaque payload strings, enforce the documented action-count and UTF-8 payload limits, and represent actions as immutable values in entries and committed snapshots.
+
 A nonempty effective content library may be used for new selections even when individual sources were rejected.
 
 Do not treat missing or inaccessible sources, unsuccessful discovery, or an empty effective content library as successful content removal for repetition-history cleanup.
@@ -477,9 +479,9 @@ Do not require a global-history append to succeed before recognizing a committed
 
 Persistent operational state must be validated when loaded. Incomplete, invalid, or integrity-check-failing state must not be silently accepted. An interrupted state publication must not produce a partially committed selection or inconsistent repetition history. A failure after selection commitment must preserve the committed quotation. Global-history failures must not prevent operational recovery, and global history must not be used to reconstruct repetition state or determine the next revision.
 
-Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location, without silently replacing selected content or modifying the file. For the platform-standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a state path configured outside that standard location, it must identify the path and direct the operator to stop Refrain, back up the file, and manually quarantine or remove only that file; `--reset` does not manage custom paths.
+Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. The snapshot's `actions` field is optional when reading this same version-1 schema so valid pre-action snapshots recover with an empty action sequence; newly written snapshots include the field. If present, persisted actions must be validated strictly, and invalid action data must follow ordinary persistent-state recovery errors rather than content-loader warning-and-drop behavior. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location, without silently replacing selected content or modifying the file. For the platform-standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a state path configured outside that standard location, it must identify the path and direct the operator to stop Refrain, back up the file, and manually quarantine or remove only that file; `--reset` does not manage custom paths.
 
-The current state need only preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Do not persist derived rendering geometry, selected fonts or face identifiers, resolved colors, selected image resources, tinting decisions, QR placement, or layer transformation plans solely to reproduce pixels.
+The current state need only preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, the complete ordered action sequence, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Preserve each action's type, declared audiences, and payload without consumer-specific interpretation. Do not persist derived rendering geometry, selected fonts or face identifiers, resolved colors, selected image resources, tinting decisions, QR placement, or layer transformation plans solely to reproduce pixels.
 
 Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries. Valid current-format state must remain recoverable across restarts.
 
@@ -1352,6 +1354,7 @@ Automated testing should cover:
 - explicit background preferences, `"none"` suppression, and unavailable-preference fallback;
 - content, background, and decoration text-color and decoration-color preferences, exact precedence, unavailable members, and duplicate-free selection;
 - content-file parsing failures and independent rejection of invalid entries;
+- entry-level action envelope validation, warning-and-drop behavior, supported audiences, opaque payload preservation, UTF-8 payload sizing, action-count limits, duplicate/order preservation, and entry-level inheritance;
 - partial content-library acceptance with valid entries preserved;
 - duplicate entry identifiers and deterministic conflict handling;
 - missing, inaccessible, and empty content libraries;
@@ -1359,9 +1362,9 @@ Automated testing should cover:
 - preservation of repetition history when content discovery fails or no valid quotations remain;
 - recovery of valid current-format daily selections independently of current content-library availability;
 - clear rejection of incompatible current state without modifying the state file; diagnostics for platform-standard paths may direct the operator to stop Refrain and run `refrain --reset`, while diagnostics for configured paths outside the standard location identify that path and require manual backup and quarantine/removal of only that file;
-- current selection-record round trips containing selected content, effective schedule, day context, and required repetition/reveal state, without derived rendering decisions;
+- current selection-record round trips containing selected content, effective schedule, day context, ordered actions, and required repetition/reveal state, without derived rendering decisions; recovery of valid version-1 snapshots with no actions field and rejection of invalid persisted action data;
 - recovery of the selected quotation and monotonic reveal progress after image preparation or cache failure;
-- no legacy development-schema readers, migrations, normalization, or historical-format recovery tests;
+- no legacy development-schema readers, migrations, normalization, or historical-format recovery tests beyond the explicitly supported missing-actions field in version 1;
 - stable entry and quotation identities;
 - normalized quotation matching;
 - date-specificity precedence;

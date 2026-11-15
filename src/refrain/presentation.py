@@ -31,6 +31,7 @@ def build_presentation_snapshot(
         decoration=entry.decoration,
         text_color=entry.text_color,
         decoration_color=entry.decoration_color,
+        actions=entry.actions,
         reveal_schedule={
             "quotation": configuration.day_start.strftime("%H:%M"),
             "source": (reveal.source or configuration.reveal.source).strftime("%H:%M"),

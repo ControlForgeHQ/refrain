@@ -210,7 +210,7 @@ The flow describes responsibility and ownership, not a required class hierarchy,
 
 Selection identifies the individual quotation to be displayed during the next presentation interval.
 
-The selected quotation inherits the eligibility, priority, reveal configuration, and presentation metadata of its containing content entry.
+The selected quotation inherits the eligibility, priority, reveal configuration, presentation metadata, and declared actions of its containing content entry.
 
 A new selection becomes authoritative only when its daily selection record, updated repetition history, selection revision, initial reveal progress, and required scheduling context have been durably committed as one consistent operational state.
 
@@ -265,11 +265,12 @@ The initial model distinguishes:
 - optional attribution information;
 - an optional integer priority;
 - eligibility and scheduling metadata;
-- optional reveal-schedule overrides.
+- optional reveal-schedule overrides;
+- an optional ordered sequence of opaque actions.
 
 Each content entry must contain at least one valid quotation.
 
-Source, attribution, priority, eligibility, and reveal configuration belong to the content entry and apply to every quotation it contains.
+Source, attribution, priority, eligibility, reveal configuration, and actions belong to the content entry and apply to every quotation it contains. Actions are opaque declarations; Refrain does not interpret or execute them.
 
 Individual quotations do not have independent configuration overrides.
 
@@ -628,7 +629,7 @@ For each new daily selection:
 10. Retain candidates having the highest priority.
 11. Randomly select one remaining distinct quotation identity.
 12. Resolve the selected occurrence and its inherited metadata.
-13. Preserve the selected occurrence's semantic metadata, effective reveal schedule, presentation style, and declared content preferences needed to interpret or present the quotation.
+13. Preserve the selected occurrence's semantic metadata, effective reveal schedule, presentation style, declared content preferences, and complete ordered action sequence needed to interpret or present the quotation.
 14. Prepare the daily selection record.
 15. Atomically commit the daily selection record, updated repetition history, next selection revision, initial reveal progression, and required scheduling context as authoritative operational state.
 16. Record the committed selection in global history on a best-effort basis.
@@ -657,6 +658,7 @@ Refrain maintains sufficient durable operational state to preserve:
 - the display date associated with that selection;
 - the selected quotation's original text;
 - the selected content identity, optional source and attribution, and content properties needed to interpret or present the quotation;
+- the selected entry's complete ordered action sequence;
 - the effective reveal schedule and scheduling context needed to resume it;
 - active repetition history;
 - the highest reveal stage reached for the current selection;
@@ -669,11 +671,11 @@ After commitment, the active selection must not require access to the original Y
 
 ### Daily selection record
 
-The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library.
+The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library. It also captures the selected entry's complete ordered action sequence as opaque semantic data.
 
-It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, and any selected content preferences needed to interpret or present the quotation. These captured preferences remain authoritative for this selection; later edits to the source entry do not replace them, and recovery never rereads that entry to obtain them. The record does not contain other quotations from the entry.
+It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, any selected content preferences needed to interpret or present the quotation, and the entry's immutable ordered actions. These captured values remain authoritative for this selection; later edits to the source entry do not replace them, and recovery never rereads that entry to obtain them. The record does not contain other quotations from the entry.
 
-The record is not a serialized rendering plan. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. The captured content-level preferences are resolved against current application configuration and available assets when images are prepared.
+The record is not a serialized rendering plan. Actions are not rendering inputs. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. The captured content-level preferences are resolved against current application configuration and available assets when images are prepared.
 
 Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location; it must not silently replace the selected content or modify the state file. For a platform-standard state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state path outside the standard location, identify that path and direct the operator to stop Refrain and manually back up and remove or quarantine only that file; `--reset` does not manage custom paths.
 

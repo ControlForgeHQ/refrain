@@ -66,6 +66,165 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert all(entry.file is not None for entry in entries)
 
 
+def test_actions_default_to_empty_and_preserve_order_duplicates_and_opaque_payloads(tmp_path: Path, caplog) -> None:
+    payloads = (
+        "",
+        "  leading whitespace\n\ntrailing whitespace \n",
+        '{"opaque": ["json", 1]}',
+        "key: [yaml, opaque]",
+        "<opaque>xml</opaque>",
+        "AAEC/w==",
+    )
+    actions = [
+        {"type": "future-Action_2", "visibility": ["private"], "payload": payloads[0]},
+        {"type": "same", "visibility": ["public", "private"], "payload": payloads[1]},
+        {"type": "same", "visibility": ["public", "private"], "payload": payloads[1]},
+        *(
+            {"type": f"opaque-{index}", "visibility": ["public"], "payload": payload}
+            for index, payload in enumerate(payloads[2:], start=2)
+        ),
+    ]
+    write_entry(tmp_path / "empty.yaml", entry_data(id="empty"))
+    write_entry(tmp_path / "actions.yaml", entry_data(id="actions", actions=actions))
+
+    entries = load_content_library(tmp_path)
+    empty = next(item for item in entries if item.id == "empty")
+    entry = next(item for item in entries if item.id == "actions")
+
+    assert empty.actions == ()
+    assert isinstance(entry.actions, tuple)
+    assert [(action.type, action.visibility, action.payload) for action in entry.actions] == [
+        (action["type"], tuple(action["visibility"]), action["payload"]) for action in actions
+    ]
+    assert entry.actions[1] == entry.actions[2]
+    assert entry.actions[1].payload == payloads[1]
+    with pytest.raises(AttributeError):
+        entry.actions[0].payload = "changed"
+    assert "actions" not in caplog.text
+
+
+@pytest.mark.parametrize("visibility", [["public"], ["private"], ["public", "private"], ["private", "public"]])
+def test_actions_accept_explicit_visibility_audiences(tmp_path: Path, visibility: list[str]) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(actions=[{"type": "unknown-but-valid", "visibility": visibility}]),
+    )
+
+    action = load_content_library(tmp_path)[0].actions[0]
+
+    assert action.type == "unknown-but-valid"
+    assert action.visibility == tuple(visibility)
+    assert action.payload == ""
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        None,
+        [],
+        {"visibility": ["public"]},
+        {"type": "play"},
+        {"type": "", "visibility": ["private"]},
+        {"type": "bad type", "visibility": ["private"]},
+        {"type": "é", "visibility": ["private"]},
+        {"type": "play", "visibility": []},
+        {"type": "play", "visibility": "private"},
+        {"type": "play", "visibility": None},
+        {"type": "play", "visibility": ["public", "public"]},
+        {"type": "play", "visibility": ["private", "private"]},
+        {"type": "play", "visibility": ["public", "unknown"]},
+        {"type": "play", "visibility": ["unknown"]},
+        {"type": "play", "visibility": ["public"], "payload": None},
+        {"type": "play", "visibility": ["public"], "payload": {"opaque": "mapping"}},
+        {"type": "play", "visibility": ["public"], "payload": ["opaque", "sequence"]},
+        {"type": "play", "visibility": ["public"], "extra": "unsupported"},
+    ],
+)
+def test_malformed_actions_are_dropped_without_rejecting_entry(tmp_path: Path, caplog, action: object) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(actions=[action, {"type": "retained", "visibility": ["private"]}]),
+    )
+
+    entries = load_content_library(tmp_path)
+
+    assert len(entries) == 1
+    assert [item.type for item in entries[0].actions] == ["retained"]
+    pool = build_eligible_quotation_pool(entries, date(2026, 11, 5))
+    assert len(pool.candidates) == 1
+    assert "entry.yaml: actions[0]" in caplog.text
+    assert "entry is excluded" not in caplog.text
+
+
+@pytest.mark.parametrize("actions", [None, "not a sequence", {"type": "play", "visibility": ["private"]}])
+def test_malformed_action_collection_warns_and_keeps_entry_without_actions(
+    tmp_path: Path, caplog, actions: object
+) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(actions=actions))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.actions == ()
+    assert "entry.yaml: actions:" in caplog.text
+
+
+@pytest.mark.parametrize("payload", ["a" * 10_240, "a" * 10_238 + "é"])
+def test_action_payload_at_utf8_byte_limit_is_preserved(tmp_path: Path, payload: str) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(actions=[{"type": "within-limit", "visibility": ["public"], "payload": payload}]),
+    )
+
+    action = load_content_library(tmp_path)[0].actions[0]
+
+    assert len(action.payload.encode("utf-8")) == 10_240
+    assert action.payload == payload
+
+
+@pytest.mark.parametrize("payload", ["a" * 10_241, "a" * 10_239 + "é"])
+def test_action_payload_over_utf8_byte_limit_is_dropped(tmp_path: Path, payload: str, caplog) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(actions=[{"type": "too-large", "visibility": ["public"], "payload": payload}]),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.actions == ()
+    assert "10,240 UTF-8 bytes" in caplog.text
+
+
+def test_action_limit_counts_valid_items_and_warns_after_first_100(tmp_path: Path, caplog) -> None:
+    actions = [{"type": f"action-{index}", "visibility": ["private"]} for index in range(99)]
+    actions.extend(
+        [
+            {"type": "", "visibility": ["private"]},
+            {"type": "action-99", "visibility": ["private"]},
+            {"type": "ignored", "visibility": ["private"]},
+        ]
+    )
+    write_entry(tmp_path / "entry.yaml", entry_data(actions=actions))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert len(entry.actions) == 100
+    assert entry.actions[-1].type == "action-99"
+    assert "first 100 valid actions are ignored" in caplog.text
+    assert "actions[99]" in caplog.text
+
+
+def test_exactly_100_valid_actions_do_not_warn(tmp_path: Path, caplog) -> None:
+    write_entry(
+        tmp_path / "entry.yaml",
+        entry_data(actions=[{"type": f"action-{index}", "visibility": ["public"]} for index in range(100)]),
+    )
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert len(entry.actions) == 100
+    assert "actions after" not in caplog.text
+
+
 def test_role_face_preferences_are_preserved_without_bundle_lookup(tmp_path: Path) -> None:
     preferences = {"quotation": "handwritten", "source": "regular", "attribution": "italic"}
     write_entry(tmp_path / "entry.yaml", entry_data(font_faces=preferences))

@@ -21,6 +21,7 @@ from ._yaml import load_yaml, yaml_error_location
 _ENTRY_FIELDS = {
     "id",
     "quotations",
+    "actions",
     "source",
     "attribution",
     "priority",
@@ -40,6 +41,9 @@ _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _PRESENTATION_STYLES = {"centered", "left-aligned"}
+_ACTION_VISIBILITIES = {"public", "private"}
+_MAX_ACTIONS = 100
+_MAX_ACTION_PAYLOAD_BYTES = 10_240
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -69,6 +73,35 @@ class Quotation:
 
     text: str
     identity: str
+
+
+@dataclass(frozen=True)
+class ContentAction:
+    """An opaque, entry-level action declaration."""
+
+    type: str
+    visibility: tuple[str, ...]
+    payload: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.type, str) or not _IDENTIFIER.fullmatch(self.type):
+            raise ValueError("type must be a nonempty ASCII identifier")
+        if not isinstance(self.visibility, (list, tuple)) or not self.visibility:
+            raise ValueError("visibility must be a nonempty sequence")
+        visibility = tuple(self.visibility)
+        if any(not isinstance(item, str) or item not in _ACTION_VISIBILITIES for item in visibility):
+            raise ValueError("visibility values must be 'public' or 'private'")
+        if len(set(visibility)) != len(visibility):
+            raise ValueError("visibility values must not contain duplicates")
+        object.__setattr__(self, "visibility", visibility)
+        if not isinstance(self.payload, str):
+            raise ValueError("payload must be a string")
+        try:
+            payload_size = len(self.payload.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise ValueError("payload must be valid UTF-8 text") from error
+        if payload_size > _MAX_ACTION_PAYLOAD_BYTES:
+            raise ValueError(f"payload must not exceed {_MAX_ACTION_PAYLOAD_BYTES:,} UTF-8 bytes")
 
 
 @dataclass(frozen=True)
@@ -112,6 +145,14 @@ class ContentEntry:
     font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     text_color: tuple[str, ...] | None = None
     decoration_color: tuple[str, ...] | None = None
+    actions: tuple[ContentAction, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.actions, (tuple, list)) or any(
+            not isinstance(action, ContentAction) for action in self.actions
+        ):
+            raise TypeError("actions must be a sequence of ContentAction values")
+        object.__setattr__(self, "actions", tuple(self.actions))
 
 
 def normalize_quotation(text: str) -> str:
@@ -128,9 +169,9 @@ def _log_diagnostic_once(message: str, level: int, file_state: tuple[int, int] |
     _LOGGER.log(level, "%s", message)
 
 
-def _log_diagnostic(diagnostic: ContentDiagnostic, level: int) -> None:
+def _log_diagnostic(diagnostic: ContentDiagnostic, level: int, *, entry_excluded: bool = True) -> None:
     message = str(diagnostic)
-    if level == logging.WARNING and "excluded" not in diagnostic.message:
+    if level == logging.WARNING and entry_excluded and "excluded" not in diagnostic.message:
         message += "; this entry is excluded"
     try:
         stat = diagnostic.file.stat()
@@ -138,6 +179,76 @@ def _log_diagnostic(diagnostic: ContentDiagnostic, level: int) -> None:
     except OSError:
         file_state = None
     _log_diagnostic_once(message, level, file_state)
+
+
+def _validate_actions(value: object, file: Path) -> tuple[ContentAction, ...]:
+    if not isinstance(value, list):
+        _log_diagnostic(
+            ContentDiagnostic(file, "actions", "must be a sequence; all actions are ignored"),
+            logging.WARNING,
+            entry_excluded=False,
+        )
+        return ()
+
+    actions: list[ContentAction] = []
+    for index, member in enumerate(value):
+        if len(actions) == _MAX_ACTIONS:
+            _log_diagnostic(
+                ContentDiagnostic(
+                    file,
+                    "actions",
+                    f"actions after the first {_MAX_ACTIONS} valid actions are ignored",
+                ),
+                logging.WARNING,
+                entry_excluded=False,
+            )
+            break
+        field_name = f"actions[{index}]"
+        if not isinstance(member, Mapping):
+            _log_diagnostic(
+                ContentDiagnostic(file, field_name, "must be a mapping; this action is ignored"),
+                logging.WARNING,
+                entry_excluded=False,
+            )
+            continue
+
+        supported_fields = {"type", "visibility", "payload"}
+        unsupported_fields = [key for key in member if not isinstance(key, str) or key not in supported_fields]
+        missing_fields = {"type", "visibility"} - member.keys()
+        if unsupported_fields or missing_fields:
+            details = []
+            if missing_fields:
+                details.append(f"missing fields: {', '.join(sorted(missing_fields))}")
+            if unsupported_fields:
+                details.append(f"unsupported fields: {', '.join(sorted(unsupported_fields, key=repr))}")
+            _log_diagnostic(
+                ContentDiagnostic(file, field_name, f"{'; '.join(details)}; this action is ignored"),
+                logging.WARNING,
+                entry_excluded=False,
+            )
+            continue
+
+        visibility = member["visibility"]
+        if not isinstance(visibility, list):
+            reason = "visibility must be a nonempty sequence"
+        else:
+            try:
+                action = ContentAction(
+                    type=member["type"],  # type: ignore[arg-type]
+                    visibility=tuple(visibility),
+                    payload=member.get("payload", ""),  # type: ignore[arg-type]
+                )
+            except (TypeError, ValueError) as error:
+                reason = str(error)
+            else:
+                actions.append(action)
+                continue
+        _log_diagnostic(
+            ContentDiagnostic(file, field_name, f"{reason}; this action is ignored"),
+            logging.WARNING,
+            entry_excluded=False,
+        )
+    return tuple(actions)
 
 
 def _validate_calendar_rule(
@@ -374,6 +485,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
     font_faces = (
         _validate_font_faces(data["font_faces"], file, diagnostics) if "font_faces" in data else MappingProxyType({})
     )
+    actions = _validate_actions(data["actions"], file) if "actions" in data else ()
 
     if len(diagnostics) != initial_diagnostic_count:
         return None
@@ -393,6 +505,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         font_faces=font_faces,  # type: ignore[arg-type]
         text_color=text_color,
         decoration_color=decoration_color,
+        actions=actions,
     )
 
 

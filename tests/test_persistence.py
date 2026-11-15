@@ -9,9 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import refrain.persistence as persistence
 from refrain import (
+    ContentAction,
     ContentEntry,
     DailySnapshot,
     EligibilityRule,
@@ -161,6 +163,94 @@ def test_semantic_snapshot_roundtrips_without_rendering_values(tmp_path: Path) -
 
     assert recovered == committed
     assert recovered.snapshot.quotation_text == "Legacy typography."
+
+
+def test_ordered_actions_and_opaque_payloads_survive_recovery_and_reveal_updates(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    actions = (
+        ContentAction("future-action", ("private",), "  opaque\n\npayload \n"),
+        ContentAction("same", ("public", "private"), '{"unparsed": true}'),
+        ContentAction("same", ("public", "private"), '{"unparsed": true}'),
+    )
+    snapshot = replace(make_snapshot("Committed actions."), actions=actions)
+    proposal = make_proposal("Committed actions.")
+
+    committed = store.commit(proposal, snapshot)
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    persisted_actions = document["state"]["snapshot"]["actions"]
+    recovered = PersistentStateStore(store.path).load()
+
+    assert persisted_actions == [
+        {"type": action.type, "visibility": list(action.visibility), "payload": action.payload} for action in actions
+    ]
+    assert recovered.snapshot.actions == actions
+    assert recovered == committed
+    advanced = store.advance_reveal_progress(committed.revision, 1)
+    assert advanced.snapshot.actions == actions
+    assert store.commit(proposal, snapshot) == advanced
+    assert PersistentStateStore(store.path).load() == advanced
+
+
+def test_pre_action_version_one_snapshot_recovers_with_empty_actions(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Pre-action selection.")
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    document["state"]["snapshot"].pop("actions")
+    _write_document(store.path, document)
+
+    recovered = PersistentStateStore(store.path).load()
+
+    assert recovered.snapshot.actions == ()
+    assert recovered.revision == 1
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        None,
+        ["not an action object"],
+        [{"type": "play", "visibility": ["private"]}],
+        [{"type": "play", "visibility": ["private", "private"], "payload": ""}],
+        [{"type": "play", "visibility": ["private"], "payload": None}],
+        [{"type": "play", "visibility": ["private"], "payload": "", "extra": 1}],
+    ],
+)
+def test_invalid_persisted_actions_follow_state_recovery_error_policy(tmp_path: Path, actions: object) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Invalid persisted actions.")
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    document["state"]["snapshot"]["actions"] = actions
+    _write_document(store.path, document)
+
+    with pytest.raises(StateRecoveryError, match="invalid persistent state"):
+        store.load()
+
+
+def test_committed_actions_are_independent_of_later_content_edits(tmp_path: Path) -> None:
+    content_directory = tmp_path / "content"
+    content_directory.mkdir()
+    content_file = content_directory / "entry.yaml"
+    original = {
+        "id": "action-entry",
+        "quotations": ["Committed quotation."],
+        "actions": [{"type": "original", "visibility": ["private"], "payload": "original payload"}],
+    }
+    content_file.write_text(yaml.safe_dump(original, sort_keys=False), encoding="utf-8")
+    entry = load_content_library(content_directory)[0]
+    snapshot = replace(make_snapshot("Committed quotation."), actions=entry.actions)
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = store.commit(make_proposal("Committed quotation."), snapshot)
+
+    updated = {
+        **original,
+        "actions": [{"type": "replacement", "visibility": ["public"], "payload": "changed"}],
+    }
+    content_file.write_text(yaml.safe_dump(updated, sort_keys=False), encoding="utf-8")
+
+    recovered = PersistentStateStore(store.path).load()
+
+    assert load_content_library(content_directory)[0].actions != committed.snapshot.actions
+    assert recovered.snapshot.actions == committed.snapshot.actions
 
 
 def test_semantic_role_face_preferences_survive_restart(tmp_path: Path) -> None:

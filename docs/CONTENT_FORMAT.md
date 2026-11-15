@@ -1008,6 +1008,7 @@ Each quotation is a separate selection candidate.
 |---|---|---|---|
 | `id` | String | Yes | None |
 | `quotations` | Nonempty sequence of strings | Yes | None |
+| `actions` | Sequence of action mappings | No | Empty sequence |
 | `source` | String | No | Absent |
 | `attribution` | String | No | Absent |
 | `priority` | Integer | No | `0` |
@@ -1023,9 +1024,44 @@ Each quotation is a separate selection candidate.
 
 No other entry-level fields are defined for Version 0.1.
 
-All quotations in an entry inherit the entry's metadata, priority, font preference, background preference, decoration preference, presentation style, eligibility, and reveal configuration.
+All quotations in an entry inherit the entry's metadata, actions, priority, font preference, background preference, decoration preference, presentation style, eligibility, and reveal configuration.
 
-Individual quotations do not have independent overrides.
+Individual quotations do not have independent overrides or actions. An entry's action sequence applies unchanged to every quotation in that entry. A quotation requiring different actions must be placed in a separate content entry.
+
+### Actions
+
+Actions are optional, ordered, opaque declarations owned by a content entry. Refrain validates and preserves their generic envelope but does not recognize action types, interpret payloads, execute actions, or publish them. Future consumers decide what an action means and whether they support it.
+
+```yaml
+actions:
+  - type: play
+    visibility: [private]
+
+  - type: custom_action
+    visibility: [public, private]
+    payload: |
+      { "opaque": "consumer-defined text" }
+```
+
+Each action mapping supports exactly these fields:
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `type` | String | Yes | None |
+| `visibility` | Nonempty sequence of audience strings | Yes | None |
+| `payload` | String | No | `""` |
+
+`type` uses the same case-sensitive ASCII identifier syntax as an entry ID: it begins with an ASCII letter or digit and contains only ASCII letters, digits, hyphens, and underscores. Any syntactically valid type is accepted; Refrain does not maintain a type registry.
+
+`visibility` must explicitly list one or both supported audiences: `public` and `private`. The audiences are independent: each grants permission only for the audience named. Values must not be repeated. There is no default visibility.
+
+`payload` is an opaque string. Refrain does not parse embedded formats, validate consumer-specific fields, interpret URLs or encodings, normalize whitespace, or execute commands. An explicitly supplied non-string value invalidates that action. The parsed string is preserved exactly, including its meaningful whitespace and newlines; its UTF-8 encoded length must not exceed 10,240 bytes. An omitted payload is the empty string.
+
+Actions retain declaration order, and duplicate types or identical actions are permitted and preserved. No action identifiers, merging, sorting, deduplication, or dependencies are defined. A maximum of 100 valid actions is accepted per entry. Malformed actions do not consume this limit; after 100 valid actions, later actions are ignored with a warning.
+
+A malformed action—including a non-mapping member, missing or invalid required field, duplicate or unsupported visibility, non-string payload, unsupported envelope field, or oversized payload—is discarded with a warning. A malformed top-level `actions` value is warned about and treated as an empty sequence. These recoverable action errors do not invalidate the content entry or its quotations; validation continues with other actions. Invalid YAML syntax and malformed required entry fields retain their ordinary file or entry rejection behavior.
+
+Actions are captured with the selected quotation in the committed daily selection and persist independently of later edits to the source file. Existing valid version-1 snapshots without an `actions` field recover with an empty sequence. This feature does not include destination classification or filtering, metadata publication, or action execution.
 
 ### Text-color preference
 

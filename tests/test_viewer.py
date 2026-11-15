@@ -15,6 +15,7 @@ import refrain.display
 import refrain.preparation as preparation
 import refrain.viewer as viewer
 from refrain.config import ApplicationConfiguration, load_application_config
+from refrain.content import load_content_library
 from refrain.display.coordinator import PublicationResult, PublicationStatus
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.preparation import PresentationOverrides, prepare_daily_images
@@ -991,6 +992,37 @@ def test_runtime_and_viewer_share_presentation_construction_and_resolution(
     assert resolutions[0] == PresentationOverrides()
     assert resolutions[1] == PresentationOverrides(style="left-aligned", min_font_size=48, max_font_size=120)
     assert layout_bounds == [(2, 8), (4, 10)]
+
+
+def test_presentation_snapshots_capture_shared_entry_actions(tmp_path: Path) -> None:
+    config_path, content_directory = _workspace(tmp_path, with_entry=False)
+    configuration = load_application_config(config_path)
+    content_file = content_directory / "actions.yaml"
+    content_file.write_text(
+        """\
+id: action-entry
+actions:
+  - type: opaque-action
+    visibility: [private]
+    payload: |
+      first line
+        indented line
+quotations:
+  - First quotation.
+  - Second quotation.
+""",
+        encoding="utf-8",
+    )
+    entry = load_content_library(content_directory)[0]
+
+    snapshots = tuple(
+        build_presentation_snapshot(configuration, entry, quotation, date(2026, 11, 15))
+        for quotation in entry.quotations
+    )
+
+    assert len(snapshots) == 2
+    assert all(snapshot.actions == entry.actions for snapshot in snapshots)
+    assert all(snapshot.actions[0].payload == "first line\n  indented line\n" for snapshot in snapshots)
 
 
 def _push_destination(

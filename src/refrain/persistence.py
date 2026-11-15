@@ -16,7 +16,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from .content import normalize_quotation
+from .content import ContentAction, normalize_quotation
 from .paths import ApplicationPathError, resolve_application_paths
 from .selection import SelectionProposal
 
@@ -153,6 +153,7 @@ class DailySnapshot:
     decoration_color: tuple[str, ...] | None
     reveal_schedule: Mapping[str, Any]
     scheduling: SchedulingContext
+    actions: tuple[ContentAction, ...] = ()
 
     def __post_init__(self) -> None:
         _nonempty_string(self.entry_id, "entry_id")
@@ -199,6 +200,11 @@ class DailySnapshot:
                 object.__setattr__(self, field, tuple(value))
         if not isinstance(self.scheduling, SchedulingContext):
             raise TypeError("scheduling must be a SchedulingContext")
+        if not isinstance(self.actions, (tuple, list)) or any(
+            not isinstance(action, ContentAction) for action in self.actions
+        ):
+            raise TypeError("actions must be a sequence of ContentAction values")
+        object.__setattr__(self, "actions", tuple(self.actions))
         if not isinstance(self.reveal_schedule, Mapping):
             raise TypeError("reveal_schedule must be a mapping")
         schedule = dict(self.reveal_schedule)
@@ -493,11 +499,16 @@ def _validate_reveal_stage(stage: object) -> None:
         raise ValueError("highest_reveal_stage must be a nonnegative integer")
 
 
-def _require_mapping(value: object, field: str, fields: set[str]) -> dict[str, object]:
+def _require_mapping(
+    value: object,
+    field: str,
+    fields: set[str],
+    optional_fields: set[str] | None = None,
+) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be an object")
     missing = fields - value.keys()
-    extra = value.keys() - fields
+    extra = value.keys() - fields - (optional_fields or set())
     if missing or extra:
         details = []
         if missing:
@@ -506,6 +517,29 @@ def _require_mapping(value: object, field: str, fields: set[str]) -> dict[str, o
             details.append(f"unsupported fields: {', '.join(sorted(extra))}")
         raise ValueError(f"{field}: {'; '.join(details)}")
     return value
+
+
+def _decode_actions(value: object) -> tuple[ContentAction, ...]:
+    if not isinstance(value, list):
+        raise ValueError("snapshot.actions must be an array")
+    actions: list[ContentAction] = []
+    for index, item in enumerate(value):
+        field = f"snapshot.actions[{index}]"
+        data = _require_mapping(item, field, {"type", "visibility", "payload"})
+        visibility = data["visibility"]
+        if not isinstance(visibility, list):
+            raise ValueError(f"{field}.visibility must be an array")
+        try:
+            actions.append(
+                ContentAction(
+                    type=data["type"],  # type: ignore[arg-type]
+                    visibility=tuple(visibility),
+                    payload=data["payload"],  # type: ignore[arg-type]
+                )
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{field}: {error}") from error
+    return tuple(actions)
 
 
 def _parse_date(value: object, field: str) -> date:
@@ -540,6 +574,7 @@ def _decode_snapshot(value: object) -> DailySnapshot:
             "reveal_schedule",
             "scheduling",
         },
+        optional_fields={"actions"},
     )
     scheduling_data = _require_mapping(
         data["scheduling"],
@@ -565,6 +600,7 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         decoration_color=data["decoration_color"],
         reveal_schedule=data["reveal_schedule"],
         scheduling=scheduling,
+        actions=_decode_actions(data.get("actions", [])),
     )
 
 
@@ -634,6 +670,14 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
             "text_color": _thaw_json(snapshot.text_color),
             "decoration_color": _thaw_json(snapshot.decoration_color),
             "reveal_schedule": _thaw_json(snapshot.reveal_schedule),
+            "actions": [
+                {
+                    "type": action.type,
+                    "visibility": list(action.visibility),
+                    "payload": action.payload,
+                }
+                for action in snapshot.actions
+            ],
             "scheduling": {
                 "display_date": snapshot.display_date.isoformat(),
                 "day_start": snapshot.scheduling.day_start,
