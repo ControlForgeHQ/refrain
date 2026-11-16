@@ -21,6 +21,7 @@ from PIL import Image
 from resource_helpers import write_font_bundle
 
 import refrain.application as application
+import refrain.recovery as recovery
 from refrain import (
     ApplicationError,
     ArtifactWriteError,
@@ -209,6 +210,77 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
     assert result.result.status is PublicationStatus.SUCCEEDED
     assert workspace.state.read_bytes() == state_before
     assert workspace.history.read_bytes() == history_before
+
+
+def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_reselection(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ordinary(workspace)
+    first, _ = workspace.run(at(10, 13))
+    state_bytes = workspace.state.read_bytes()
+    history_bytes = workspace.history.read_bytes()
+    configuration = application.load_application_config(workspace.config)
+    old_manifest_path = workspace.artifacts / f"revision-{first.state.revision}" / "manifest.json"
+    old_manifest = old_manifest_path.read_bytes()
+    metadata_paths = sorted(old_manifest_path.parent.glob("images-*/variant-*/stage-*.json"))
+    expected_metadata_count = 3 * len(configuration.required_output_specifications)
+    assert len(metadata_paths) == expected_metadata_count
+
+    class RejectingChooser:
+        def choice(self, _values):
+            pytest.fail("valid restart cache must not select content or artistic resources")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            recovery,
+            "prepare_daily_images",
+            lambda *_args, **_kwargs: pytest.fail("valid restart cache must not rerender"),
+        )
+        restarted = run_startup(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            history_path=workspace.history,
+            now=at(10, 13),
+            random_source=RejectingChooser(),
+            backend_factory=lambda _configuration: FakeDisplay(),
+        )
+
+    assert restarted.state == first.state
+    assert workspace.state.read_bytes() == state_bytes
+    assert workspace.history.read_bytes() == history_bytes
+
+    metadata_paths[1].unlink()
+    render_calls = []
+    prepare_daily_images = recovery.prepare_daily_images
+
+    def count_rendering(*args, **kwargs):
+        render_calls.append(True)
+        return prepare_daily_images(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(application, "_select_snapshot", lambda *_args, **_kwargs: pytest.fail("must not reselect"))
+        patch.setattr(recovery, "prepare_daily_images", count_rendering)
+        regenerated = run_startup(
+            workspace.config,
+            workspace.state,
+            workspace.artifacts,
+            history_path=workspace.history,
+            now=at(10, 13),
+            random_source=Random(1),
+            backend_factory=lambda _configuration: FakeDisplay(),
+        )
+
+    new_manifest = old_manifest_path.read_bytes()
+    payload_directory = old_manifest_path.parent / json.loads(new_manifest)["artifacts"]["image_directory"]
+    replacement_metadata = sorted(payload_directory.glob("variant-*/stage-*.json"))
+    assert len(render_calls) == 1
+    assert new_manifest != old_manifest
+    assert regenerated.state == first.state
+    assert workspace.state.read_bytes() == state_bytes
+    assert workspace.history.read_bytes() == history_bytes
+    assert len(replacement_metadata) == expected_metadata_count
+    assert all(path.is_file() for path in replacement_metadata)
 
 
 def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace) -> None:
@@ -2479,9 +2551,9 @@ def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(
     original = PreparedImageArtifactStore.store
     publications = []
 
-    def publish(self, revision, stages, images, **kwargs):
+    def publish(self, revision, stages, images, metadata, **kwargs):
         publications.append(revision)
-        original(self, revision, stages, images, **kwargs)
+        original(self, revision, stages, images, metadata, **kwargs)
         raise ArtifactWriteError("directory sync unconfirmed", published=True)
 
     monkeypatch.setattr(PreparedImageArtifactStore, "store", publish)

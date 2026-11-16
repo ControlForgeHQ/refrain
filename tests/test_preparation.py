@@ -12,6 +12,7 @@ import refrain.preparation as preparation
 from refrain import (
     ApplicationConfiguration,
     CompositionVisibility,
+    ContentAction,
     DailyImagePreparationError,
     DailySnapshot,
     DisplayBackendConfiguration,
@@ -49,6 +50,56 @@ _MULTI_FACE_REGISTRY = {
 @pytest.fixture
 def embedded_font() -> str:
     return "lora"
+
+
+def test_preparation_metadata_records_resolved_font_faces_and_publication_nulls() -> None:
+    snapshot = make_snapshot(
+        "lora",
+        metadata={"presentation_style": "left-aligned", "font_faces": {"source": "italic"}},
+    )
+    snapshot = replace(
+        snapshot,
+        actions=(ContentAction("play", ("private",), "opaque payload"),),
+        text_color=("missing-palette-color",),
+        background="missing-background",
+        decoration="missing-decoration",
+    )
+    configuration = _configuration(_MULTI_FACE_REGISTRY)
+    metadata = {}
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        (CompositionVisibility(), CompositionVisibility(source=True)),
+        configuration,
+        (ResolvedOutputSpecification("16:9", (1920, 1080)),),
+        selection_revision=7,
+        on_metadata=metadata.__setitem__,
+    )
+    try:
+        specification = ResolvedOutputSpecification("16:9", (1920, 1080))
+        documents = metadata[specification]
+        assert len(documents) == 2
+        prepared = documents[1]
+        assert prepared["schema_version"] == 1
+        assert prepared["publication_type"] == "scheduled"
+        assert prepared["publication_id"] is None
+        assert prepared["published_at"] is None
+        assert prepared["destination_id"] is None
+        assert prepared["reconstruction"]["presentation_style"] == "left-aligned"
+        assert prepared["reconstruction"]["fonts"] == {
+            "bundle": "lora",
+            "faces": {"quotation": "regular", "source": "italic", "attribution": "regular"},
+        }
+        assert prepared["presentation"]["reveal_stage_index"] == 1
+        assert prepared["presentation"]["reveal_stage"]["source"] is True
+        assert prepared["actions"] == [{"type": "play", "visibility": ["private"], "payload": "opaque payload"}]
+        assert "actions" not in prepared["reconstruction"]["content_entry"]
+        assert prepared["reconstruction"]["background"] == "none"
+        assert prepared["reconstruction"]["decoration"] == "none"
+        assert prepared["reconstruction"]["colors"]["text"] == "black"
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
 
 
 def test_multi_face_fixture_provides_distinct_regular_and_italic_faces() -> None:
@@ -144,6 +195,29 @@ def _decoration_resource(identifier: str, image_path: Path, bundled: bool = Fals
         bundled,
         **kwargs,
     )
+
+
+def test_metadata_capture_rejects_non_palette_forced_decoration_tints(tmp_path: Path) -> None:
+    layer_path = tmp_path / "frame.png"
+    with Image.new("RGBA", (8, 8), (0, 0, 0, 255)) as layer:
+        layer.save(layer_path)
+    decoration = _decoration_resource("frame", layer_path, tintable=True)
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        decorations={"frame": decoration},
+        default_decorations=("frame",),
+    )
+
+    with pytest.raises(DailyImagePreparationError, match="RGB tint"):
+        _prepare_daily_image_variants(
+            make_snapshot("lora"),
+            (CompositionVisibility(),),
+            configuration,
+            (_DEFAULT_SPECIFICATION,),
+            selection_revision=1,
+            on_metadata=lambda *_: None,
+            forced_decoration_tint=(1, 2, 3),
+        )
 
 
 def prepare_daily_images(
@@ -351,6 +425,7 @@ def test_presentation_choices_are_shared_across_output_specifications(
     resolved_tints: list[tuple[int, int, int] | None] = []
     resolved_text_colors: list[tuple[int, int, int]] = []
     diagnostics = {}
+    metadata = {}
 
     original_layout = preparation.layout_composition
     original_background = preparation._generate_daily_background
@@ -361,9 +436,9 @@ def test_presentation_choices_are_shared_across_output_specifications(
         resolved_fonts.append(font.identifier)
         return original_layout(composition, font, *args, **kwargs)
 
-    def capture_background(size, identifier, registry):
+    def capture_background(size, identifier, registry, **kwargs):
         resolved_backgrounds.append(identifier)
-        return original_background(size, identifier, registry)
+        return original_background(size, identifier, registry, **kwargs)
 
     def capture_decoration(background, identifier, registry, tint_rgb=None, **kwargs):
         resolved_decorations.append(identifier)
@@ -385,6 +460,8 @@ def test_presentation_choices_are_shared_across_output_specifications(
         configuration,
         specifications,
         chooser=chooser,
+        selection_revision=11,
+        on_metadata=metadata.__setitem__,
         on_diagnostics=diagnostics.__setitem__,
     )
     try:
@@ -402,6 +479,19 @@ def test_presentation_choices_are_shared_across_output_specifications(
         assert set(chooser.counts.values()) == {1}
         assert diagnostics[ResolvedOutputSpecification("4:3", (80, 60))].qr_placement is None
         assert diagnostics[ResolvedOutputSpecification("16:10", (3840, 2400))].qr_placement is not None
+        small_metadata = metadata[ResolvedOutputSpecification("4:3", (80, 60))][0]
+        large_metadata = metadata[ResolvedOutputSpecification("16:10", (3840, 2400))][0]
+        assert small_metadata["reconstruction"]["qr"] == {"enabled": True, "available": False}
+        assert large_metadata["reconstruction"]["qr"] == {"enabled": True, "available": True}
+        assert small_metadata["reconstruction"]["background"] == resolved_backgrounds[0]
+        assert small_metadata["reconstruction"]["decoration"] == resolved_decorations[0]
+        assert small_metadata["reconstruction"]["fonts"]["bundle"] == resolved_fonts[0].split(":", 1)[0]
+        text_identifier = small_metadata["reconstruction"]["colors"]["text"]
+        text_hex = configuration.palette[text_identifier]
+        assert resolved_text_colors[0] == tuple(int(text_hex[offset : offset + 2], 16) for offset in (1, 3, 5))
+        decoration_identifier = small_metadata["reconstruction"]["colors"]["decoration"]
+        decoration_hex = configuration.palette[decoration_identifier]
+        assert resolved_tints[0] == tuple(int(decoration_hex[offset : offset + 2], 16) for offset in (1, 3, 5))
         assert {
             layer.condition for layer in diagnostics[ResolvedOutputSpecification("4:3", (80, 60))].active_layers
         } == {"no-qr"}
@@ -859,6 +949,7 @@ def test_explicit_tint_does_not_make_non_tintable_decoration_tintable() -> None:
     )
 
     assert choices.decoration_tint is None
+    assert choices.decoration_color_identifier is None
 
 
 def test_background_preferences_precede_decoration_preferences_for_both_colors() -> None:

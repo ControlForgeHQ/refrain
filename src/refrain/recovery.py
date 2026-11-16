@@ -63,6 +63,7 @@ def recover_prepared_daily_images(
             state.revision,
             ordered_stages,
             output_specifications,
+            state.snapshot,
         )
     except ArtifactValidationError:
         existing = None
@@ -70,9 +71,16 @@ def recover_prepared_daily_images(
         return existing
 
     presentation_canvas_literary_bounds: dict[ResolvedOutputSpecification, PixelBounds] = {}
+    prepared_metadata: dict[ResolvedOutputSpecification, tuple[dict[str, object], ...]] = {}
 
     def remember_bounds(output_specification: ResolvedOutputSpecification, bounds: PixelBounds) -> None:
         presentation_canvas_literary_bounds[output_specification] = bounds
+
+    def remember_metadata(
+        output_specification: ResolvedOutputSpecification,
+        metadata: tuple[dict[str, object], ...],
+    ) -> None:
+        prepared_metadata[output_specification] = metadata
 
     prepared_variants = prepare_daily_images(
         state.snapshot,
@@ -80,6 +88,8 @@ def recover_prepared_daily_images(
         configuration,
         output_specifications,
         chooser=chooser,
+        selection_revision=state.revision,
+        on_metadata=remember_metadata,
         on_resolved_bounds=remember_bounds,
     )
     try:
@@ -87,6 +97,7 @@ def recover_prepared_daily_images(
             state.revision,
             ordered_stages,
             prepared_variants,
+            prepared_metadata,
         )
         artifact_variants = dict(artifact_set.variants)
         for output_specification, bounds in presentation_canvas_literary_bounds.items():

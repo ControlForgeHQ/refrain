@@ -140,12 +140,20 @@ def artifact_store(tmp_path: Path) -> PreparedImageArtifactStore:
 
 
 def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
-    images = _prepare_variants(state.snapshot, stages, _CONFIGURATION)[_OUTPUT_SPECIFICATION]
+    metadata = {}
+    variants = _prepare_variants(
+        state.snapshot,
+        stages,
+        _CONFIGURATION,
+        selection_revision=state.revision,
+        on_metadata=lambda specification, documents: metadata.__setitem__(specification, documents),
+    )
     try:
-        return store.store(state.revision, stages, {_OUTPUT_SPECIFICATION: images})
+        return store.store(state.revision, stages, variants, metadata)
     finally:
-        for image in images:
-            image.close()
+        for images in variants.values():
+            for image in images:
+                image.close()
 
 
 def _variant(artifact_set):
@@ -154,6 +162,21 @@ def _variant(artifact_set):
 
 def _load(store, revision, stages):
     return store.load(revision, stages, (_OUTPUT_SPECIFICATION,))
+
+
+def _metadata_for(state, stages, configuration=_CONFIGURATION):
+    metadata = {}
+    variants = _prepare_variants(
+        state.snapshot,
+        stages,
+        configuration,
+        selection_revision=state.revision,
+        on_metadata=lambda specification, documents: metadata.__setitem__(specification, documents),
+    )
+    for images in variants.values():
+        for image in images:
+            image.close()
+    return metadata
 
 
 def _assert_images_closed(images: tuple[Image.Image, ...]) -> None:
@@ -177,6 +200,30 @@ def test_missing_preference_falls_back_without_changing_committed_selection(
     with result.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
         assert image.getpixel((0, 0)) == (255, 255, 255)
     assert "Requested background 'removed-paper' from content entry is unavailable" in caplog.text
+    assert result.variant_for(_OUTPUT_SPECIFICATION).load_metadata(0)["reconstruction"]["background"] == "none"
+
+
+def test_unusable_selected_background_is_recorded_as_the_actual_white_fallback(
+    committed_state, artifact_store, tmp_path: Path
+) -> None:
+    state, state_path = committed_state
+    snapshot = replace(state.snapshot, background="paper")
+    state = replace(state, snapshot=snapshot)
+    broken_background = tmp_path / "paper.png"
+    broken_background.write_bytes(b"not an image")
+    configuration = replace(
+        _CONFIGURATION,
+        backgrounds={"paper": BackgroundResource("paper", broken_background, bundled=False)},
+        default_backgrounds=("none",),
+    )
+    before = state_path.read_bytes()
+
+    result = _recover(state, artifact_store, _STAGES, configuration)
+
+    assert result.variant_for(_OUTPUT_SPECIFICATION).load_metadata(0)["reconstruction"]["background"] == "none"
+    with result.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert state_path.read_bytes() == before
 
 
 def test_presentation_canvas_bounds_are_preserved_on_the_raster_variant(
@@ -222,7 +269,12 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
     )
     images = _prepare_images(snapshot, _STAGES, configured)
     try:
-        prepared = artifact_store.store(state.revision, _STAGES, {_OUTPUT_SPECIFICATION: images})
+        prepared = artifact_store.store(
+            state.revision,
+            _STAGES,
+            {_OUTPUT_SPECIFICATION: images},
+            _metadata_for(state, _STAGES, configured),
+        )
     finally:
         for image in images:
             image.close()
@@ -318,6 +370,9 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
         "missing-stage",
         "corrupted-stage",
         "truncated-stage",
+        "missing-metadata",
+        "corrupted-metadata",
+        "mismatched-metadata",
         "missing-manifest",
         "invalid-manifest",
         "old-manifest",
@@ -344,6 +399,29 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
             _variant(old_set).stage_paths[1].write_bytes(b"not a PNG")
         elif damage == "truncated-stage":
             _variant(old_set).stage_paths[1].write_bytes(_variant(old_set).stage_paths[1].read_bytes()[:45])
+        elif damage == "missing-metadata":
+            _variant(old_set).metadata_paths[1].unlink()
+        elif damage == "corrupted-metadata":
+            _variant(old_set).metadata_paths[1].write_bytes(b"not JSON")
+        elif damage == "mismatched-metadata":
+            variant = _variant(old_set)
+            stage_zero = variant.metadata_paths[0].read_bytes()
+            variant.metadata_paths[1].write_bytes(stage_zero)
+            path = old_set.directory / "manifest.json"
+            manifest = json.loads(path.read_bytes())
+            manifest["artifacts"]["variants"][0]["stages"][1]["metadata_sha256"] = hashlib.sha256(
+                stage_zero
+            ).hexdigest()
+            manifest["sha256"] = hashlib.sha256(
+                json.dumps(
+                    manifest["artifacts"],
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            path.write_text(json.dumps(manifest), encoding="utf-8")
         elif damage == "missing-manifest":
             (old_set.directory / "manifest.json").unlink()
         elif damage == "invalid-manifest":
@@ -371,6 +449,7 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
     stage_paths = _variant(result).stage_paths
     assert len(stage_paths) == len(_STAGES)
     assert all(path.is_file() for path in stage_paths)
+    assert all(path.is_file() for path in _variant(result).metadata_paths)
     assert all(path.name == f"stage-{index}.png" for index, path in enumerate(stage_paths))
     expected_images = _prepare_images(state.snapshot, _STAGES, _CONFIGURATION)
     try:
@@ -392,14 +471,38 @@ def test_repeated_recovery_uses_reloaded_artifacts_without_rewriting(
     committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state, _ = committed_state
-    first = _recover(state, artifact_store, _STAGES)
+
+    class CountingChooser:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def choice(self, values):
+            self.calls += 1
+            return values[0]
+
+    chooser = CountingChooser()
+    first = _recover(state, artifact_store, _STAGES, chooser=chooser)
+    assert chooser.calls > 0
     manifest = (first.directory / "manifest.json").read_bytes()
+    metadata_before = tuple(_variant(first).load_metadata(index) for index in range(len(_STAGES)))
+    assert tuple(document["presentation"]["reveal_stage_index"] for document in metadata_before) == (0, 1, 2)
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
-    second = _recover(state, PreparedImageArtifactStore(artifact_store.root), _STAGES)
+
+    class RejectingChooser:
+        def choice(self, _values):
+            pytest.fail("unexpected artistic resource selection")
+
+    second = _recover(
+        state,
+        PreparedImageArtifactStore(artifact_store.root),
+        _STAGES,
+        chooser=RejectingChooser(),
+    )
 
     assert second == first
     assert (second.directory / "manifest.json").read_bytes() == manifest
+    assert tuple(_variant(second).load_metadata(index) for index in range(len(_STAGES))) == metadata_before
 
 
 @pytest.mark.parametrize(
@@ -467,7 +570,13 @@ def test_storage_failure_is_preserved_and_closes_generated_images(
         Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color) for color in ("white", "gray", "black")
     )
     error = ArtifactWriteError("injected storage failure", published=published)
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: {_OUTPUT_SPECIFICATION: images})
+
+    def prepare(*args, **kwargs):
+        metadata = _metadata_for(state, _STAGES)
+        kwargs["on_metadata"](_OUTPUT_SPECIFICATION, metadata[_OUTPUT_SPECIFICATION])
+        return {_OUTPUT_SPECIFICATION: images}
+
+    monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
     monkeypatch.setattr(artifact_store, "store", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
 
     with pytest.raises(ArtifactWriteError) as raised:
@@ -488,7 +597,13 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
     images = tuple(
         Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color) for color in ("white", "gray", "black")
     )
-    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_, **__: {_OUTPUT_SPECIFICATION: images})
+
+    def prepare(*args, **kwargs):
+        metadata = _metadata_for(state, _STAGES)
+        kwargs["on_metadata"](_OUTPUT_SPECIFICATION, metadata[_OUTPUT_SPECIFICATION])
+        return {_OUTPUT_SPECIFICATION: images}
+
+    monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
 
     result = _recover(state, artifact_store, _STAGES)
     reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state.revision, _STAGES)
@@ -522,8 +637,10 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
     monkeypatch.setattr(artifact_store, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
     prepared = []
 
-    def prepare(snapshot, stages, configuration, output_specifications, **_kwargs):
+    def prepare(snapshot, stages, configuration, output_specifications, **kwargs):
         prepared.append(tuple(stages))
+        metadata = _metadata_for(state, stages)
+        kwargs["on_metadata"](_OUTPUT_SPECIFICATION, metadata[_OUTPUT_SPECIFICATION])
         return {
             specification: tuple(Image.new("RGB", specification.requested_output_size, "white") for _ in stages)
             for specification in output_specifications

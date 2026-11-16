@@ -33,6 +33,7 @@ from .geometry import (
     round_half_up,
 )
 from .persistence import DailySnapshot, ResolvedFont
+from .publication_metadata import build_prepared_metadata, content_entry
 from .qr import (
     PRODUCTION_QR_PARAMETERS,
     QRCodeGenerationError,
@@ -107,7 +108,9 @@ class _PresentationChoices:
     strict_background: bool
     strict_decoration: bool
     text_color: tuple[int, int, int]
+    text_color_identifier: str
     decoration_tint: tuple[int, int, int] | None
+    decoration_color_identifier: str | None
     fonts: Mapping[str, ResolvedFont]
     presentation_style: str
     qr_enabled: bool
@@ -135,7 +138,26 @@ def _resolve_presentation_choices(
         else _resolve_background(snapshot, decoration, configuration, chooser, overrides.background)
     )
     background = configuration.backgrounds.get(background_identifier)
-    text_color = _resolve_text_color(configuration, snapshot, decoration, background, chooser, overrides.text_color)
+    text_color_identifier = "black"
+    decoration_color_identifier: str | None = None
+
+    def remember_text_color(identifier: str) -> None:
+        nonlocal text_color_identifier
+        text_color_identifier = identifier
+
+    def remember_decoration_color(identifier: str) -> None:
+        nonlocal decoration_color_identifier
+        decoration_color_identifier = identifier
+
+    text_color = _resolve_text_color(
+        configuration,
+        snapshot,
+        decoration,
+        background,
+        chooser,
+        overrides.text_color,
+        on_resolved_identifier=remember_text_color,
+    )
     tint_identifier = (
         None
         if overrides.tint is None
@@ -149,6 +171,7 @@ def _resolve_presentation_choices(
     )
     if tint_identifier is not None and tint_identifier not in configuration.palette:
         raise DailyImagePreparationError(f"explicit decoration tint color {tint_identifier!r} is not in the palette")
+    decoration_color_identifier = tint_identifier
     decoration_tint = _resolve_decoration_tint(
         configuration,
         snapshot,
@@ -157,7 +180,10 @@ def _resolve_presentation_choices(
         () if decoration is None else decoration.layers,
         (_palette_color(configuration, tint_identifier) if tint_identifier is not None else forced_decoration_tint),
         background,
+        on_resolved_identifier=remember_decoration_color,
     )
+    if decoration_tint is None:
+        decoration_color_identifier = None
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, overrides)
     style = snapshot.presentation_style if overrides.style is None else overrides.style
     if style not in {"centered", "left-aligned"}:
@@ -171,7 +197,9 @@ def _resolve_presentation_choices(
         overrides.background is not None and not force_white_background,
         overrides.decoration is not None and overrides.decoration != "none",
         text_color,
+        text_color_identifier,
         decoration_tint,
+        decoration_color_identifier,
         MappingProxyType(fonts),
         style,
         configuration.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled,
@@ -305,6 +333,8 @@ def _resolve_text_color(
     background: BackgroundResource | None,
     chooser: random.Random,
     override: str | None = None,
+    *,
+    on_resolved_identifier: Callable[[str], None] | None = None,
 ) -> tuple[int, int, int]:
     if override is not None:
         identifier = _strict_pool_override(
@@ -316,6 +346,8 @@ def _resolve_text_color(
         )
         if identifier not in configuration.palette:
             raise DailyImagePreparationError(f"explicit text color {identifier!r} is not in the palette")
+        if on_resolved_identifier is not None:
+            on_resolved_identifier(identifier)
         return _palette_color(configuration, identifier)
     identifier, color = _resolve_palette_preference(
         configuration,
@@ -336,6 +368,8 @@ def _resolve_text_color(
         chooser,
     )
     _LOGGER.debug("Resolved literary text color %s", identifier)
+    if on_resolved_identifier is not None:
+        on_resolved_identifier(identifier)
     return color
 
 
@@ -347,6 +381,8 @@ def _resolve_decoration_tint(
     layers: Sequence[DecorationLayerResource],
     forced_tint: tuple[int, int, int] | None = None,
     background: BackgroundResource | None = None,
+    *,
+    on_resolved_identifier: Callable[[str], None] | None = None,
 ) -> tuple[int, int, int] | None:
     if decoration is None or not any(decoration.tintable and layer.tintable for layer in layers):
         return None
@@ -372,6 +408,8 @@ def _resolve_decoration_tint(
         chooser,
     )
     _LOGGER.debug("Resolved decoration color %s", identifier)
+    if on_resolved_identifier is not None:
+        on_resolved_identifier(identifier)
     return color
 
 
@@ -381,6 +419,7 @@ def _generate_daily_background(
     registry: Mapping[str, BackgroundResource],
     *,
     strict: bool = False,
+    on_fallback: Callable[[], None] | None = None,
 ) -> Image.Image:
     base = Image.new("RGB", design_canvas_size, _BACKGROUND_COLOR)
     if identifier == "none":
@@ -390,6 +429,8 @@ def _generate_daily_background(
         if strict:
             raise DailyImagePreparationError(f"explicit background {identifier!r} is unavailable")
         _LOGGER.warning("Committed background %r is unavailable; using the paper-white base", identifier)
+        if on_fallback is not None:
+            on_fallback()
         return base
     try:
         if resource.layers:
@@ -416,6 +457,8 @@ def _generate_daily_background(
             identifier,
             error,
         )
+        if on_fallback is not None:
+            on_fallback()
         return Image.new("RGB", design_canvas_size, _BACKGROUND_COLOR)
     return base
 
@@ -1002,6 +1045,8 @@ def _prepare_daily_images_for_specification(
     choices: _PresentationChoices,
     overrides: PresentationOverrides,
     *,
+    selection_revision: int | None = None,
+    on_metadata: Callable[[ResolvedOutputSpecification, tuple[dict[str, object], ...]], None] | None = None,
     strict_decoration: bool = False,
     on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
     qr_disabled_reason: str | None = None,
@@ -1055,6 +1100,11 @@ def _prepare_daily_images_for_specification(
     qr_parameters = PRODUCTION_QR_PARAMETERS
     decoration_tint = choices.decoration_tint
     nine_slice_guides: list[NineSliceGuide] = []
+    effective_background_identifier = choices.background_identifier
+
+    def remember_background_fallback() -> None:
+        nonlocal effective_background_identifier
+        effective_background_identifier = "none"
 
     def collect_nine_slice_guide(
         layer: DecorationLayerResource, x_bounds: tuple[int, ...], y_bounds: tuple[int, ...]
@@ -1072,7 +1122,7 @@ def _prepare_daily_images_for_specification(
         background = (
             _generate_daily_background(*background_arguments, strict=True)
             if choices.strict_background
-            else _generate_daily_background(*background_arguments)
+            else _generate_daily_background(*background_arguments, on_fallback=remember_background_fallback)
         )
         try:
             background = _apply_daily_decoration(
@@ -1130,6 +1180,67 @@ def _prepare_daily_images_for_specification(
                 if on_presentation_image is not None:
                     for image in images:
                         on_presentation_image(output_specification, image, diagnostics)
+                if on_metadata is not None:
+                    if selection_revision is None:
+                        raise DailyImagePreparationError("selection_revision is required when capturing metadata")
+                    if choices.decoration_tint is not None and choices.decoration_color_identifier is None:
+                        raise DailyImagePreparationError(
+                            "cannot capture publication metadata for an RGB tint without a palette identifier"
+                        )
+                    actual_insets = (
+                        configuration.presentation_insets
+                        if decoration is None or decoration.presentation_insets is None
+                        else decoration.presentation_insets
+                    )
+                    font_faces = {
+                        role: (resolved.identifier.split(":", 1)[1] if ":" in resolved.identifier else "regular")
+                        for role, resolved in fonts.items()
+                    }
+                    reconstruction = {
+                        "content_entry": content_entry(snapshot),
+                        "presentation_style": style,
+                        "background": effective_background_identifier,
+                        "decoration": decoration_identifier,
+                        "fonts": {
+                            "bundle": fonts["quotation"].identifier.split(":", 1)[0],
+                            "faces": font_faces,
+                        },
+                        "colors": {
+                            "text": choices.text_color_identifier,
+                            "decoration": choices.decoration_color_identifier,
+                        },
+                        "qr": {"enabled": choices.qr_enabled, "available": qr_placement is not None},
+                        "font_size_range": {
+                            "minimum": (
+                                configuration.min_font_size
+                                if overrides.min_font_size is None
+                                else overrides.min_font_size
+                            ),
+                            "maximum": (
+                                configuration.max_font_size
+                                if overrides.max_font_size is None
+                                else overrides.max_font_size
+                            ),
+                        },
+                        "insets": {
+                            "left": actual_insets.left,
+                            "right": actual_insets.right,
+                            "top": actual_insets.top,
+                            "bottom": actual_insets.bottom,
+                        },
+                    }
+                    metadata = tuple(
+                        build_prepared_metadata(
+                            selection_revision=selection_revision,
+                            snapshot=snapshot,
+                            output_specification=output_specification,
+                            stage_index=index,
+                            visibility=stage,
+                            reconstruction=reconstruction,
+                        )
+                        for index, stage in enumerate(stages)
+                    )
+                    on_metadata(output_specification, metadata)
                 return tuple(_resize_presentation_to_output(image, geometry.requested_output_size) for image in images)
             except Exception:
                 for image in images:
@@ -1153,6 +1264,8 @@ def prepare_daily_images(
     output_specifications: Sequence[ResolvedOutputSpecification],
     *,
     chooser: random.Random | None = None,
+    selection_revision: int | None = None,
+    on_metadata: Callable[[ResolvedOutputSpecification, tuple[dict[str, object], ...]], None] | None = None,
     strict_decoration: bool = False,
     on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
     force_white_background: bool = False,
@@ -1171,6 +1284,8 @@ def prepare_daily_images(
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
     if not isinstance(configuration, ApplicationConfiguration):
         raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
+    if on_metadata is not None and (type(selection_revision) is not int or selection_revision <= 0):
+        raise DailyImagePreparationError("metadata capture requires a positive selection_revision")
     if not isinstance(output_specifications, Sequence) or isinstance(output_specifications, (str, bytes)):
         raise DailyImagePreparationError("output_specifications must be a nonempty sequence")
     if not output_specifications or any(
@@ -1203,6 +1318,8 @@ def prepare_daily_images(
                 output_specification,
                 choices,
                 effective_overrides,
+                selection_revision=selection_revision,
+                on_metadata=on_metadata,
                 strict_decoration=strict_decoration,
                 on_resolved_bounds=on_resolved_bounds,
                 qr_disabled_reason=qr_disabled_reason,
