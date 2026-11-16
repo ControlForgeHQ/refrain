@@ -462,15 +462,95 @@ def test_publication_root_rejects_protected_overlap_before_creation(tmp_path: Pa
     assert not protected.exists()
 
 
+def test_custom_root_cannot_be_inside_a_standard_purge_tree(tmp_path: Path) -> None:
+    paths = _paths(tmp_path / "installation")
+    custom_root = Path(paths.operational_directory) / "family-publications"
+    store = PublicationStore(custom_root, application_paths=paths)
+
+    with _image() as image, pytest.raises(PublicationStorageError, match="purge-owned directory"):
+        store.publish("screen", image, _metadata("publication-1"), audience="private")
+
+    assert not custom_root.exists()
+
+
+@pytest.mark.parametrize("use_standard_root", [True, False], ids=["standard", "external-custom"])
+def test_standard_and_external_custom_roots_are_accepted(tmp_path: Path, use_standard_root: bool) -> None:
+    paths = _paths(tmp_path / "installation")
+    root = Path(paths.publish_directory) if use_standard_root else tmp_path / "family-publications"
+    store = PublicationStore(root, application_paths=paths)
+
+    with _image() as image:
+        store.publish("screen", image, _metadata("publication-1"), audience="private")
+
+    assert store.read_current("screen").manifest.publication_id == "publication-1"
+
+
 def test_custom_root_cannot_be_nested_under_standard_publication_storage(tmp_path: Path) -> None:
     paths = _paths(tmp_path / "installation")
     custom_root = Path(paths.publish_directory) / "custom"
     store = PublicationStore(custom_root, application_paths=paths)
 
-    with _image() as image, pytest.raises(PublicationStorageError, match="overlaps protected"):
+    with _image() as image, pytest.raises(PublicationStorageError, match="purge-owned directory"):
         store.publish("screen", image, _metadata("publication-1"), audience="private")
 
     assert not paths.publish_directory.exists()
+
+
+def test_cleanup_validates_all_candidates_before_deleting_any(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "publish"
+    destination = root / "screen"
+    destination.mkdir(parents=True)
+    obsolete = destination / "obsolete.png"
+    obsolete.write_bytes(b"keep until all candidates validate")
+    unexpected = destination / "notes.txt"
+    unexpected.write_text("unowned", encoding="utf-8")
+    store = _store(root)
+    original_iterdir = Path.iterdir
+
+    def ordered_iterdir(path: Path):
+        if path == destination:
+            return iter((obsolete, unexpected))
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", ordered_iterdir)
+
+    with pytest.raises(PublicationStorageError, match="unrecognized"):
+        store._cleanup_contents(destination, {"manifest.json"})
+
+    assert obsolete.read_bytes() == b"keep until all candidates validate"
+
+
+def test_cleanup_rejects_a_destination_outside_its_publication_root(tmp_path: Path) -> None:
+    store = _store(tmp_path / "publish")
+    outside = tmp_path / "outside" / "screen"
+    outside.mkdir(parents=True)
+    sentinel = outside / "obsolete.png"
+    sentinel.write_bytes(b"outside")
+
+    with pytest.raises(PublicationStorageError, match="direct child"):
+        store._cleanup_contents(outside, set())
+
+    assert sentinel.read_bytes() == b"outside"
+
+
+def test_create_directory_does_not_attempt_mkdir_on_existing_components(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    existing_parent = tmp_path / "existing"
+    existing_parent.mkdir()
+    target = existing_parent / "created"
+    original_mkdir = Path.mkdir
+
+    def deny_mkdir_on_existing(path: Path, *args, **kwargs) -> None:
+        if path.exists():
+            raise PermissionError(f"attempted mkdir on existing path: {path}")
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", deny_mkdir_on_existing)
+
+    publication_storage_module._create_directory(target)
+
+    assert target.is_dir()
 
 
 def test_publication_root_cannot_overlap_another_configured_publish_path(tmp_path: Path) -> None:

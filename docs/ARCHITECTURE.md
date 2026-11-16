@@ -1771,7 +1771,6 @@ identifiers, resolved font identifier and role-specific faces, applicable
 palette identifiers, presentation style, effective QR setting, and other
 resolved settings needed for reconstruction. The embedded entry conforms to
 the authoritative [content-entry format](CONTENT_FORMAT.md#content-entries).
-Viewer reconstruction is not implemented.
 
 Capture resolved artistic choices from the same image-preparation operation
 that produces the image; do not repeat random resource selection independently.

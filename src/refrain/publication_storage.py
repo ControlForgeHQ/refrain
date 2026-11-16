@@ -199,6 +199,19 @@ def _overlaps(first: Path, second: Path) -> bool:
     return first == second or first in second.parents or second in first.parents
 
 
+def _standard_purge_roots(paths: ApplicationPaths) -> tuple[Path, ...]:
+    candidates = tuple(
+        dict.fromkeys(
+            Path(path) for path in (paths.config_directory, paths.operational_directory, paths.cache_directory)
+        )
+    )
+    return tuple(
+        candidate
+        for candidate in candidates
+        if not any(candidate != other and candidate.is_relative_to(other) for other in candidates)
+    )
+
+
 def publication_protected_paths(
     paths: ApplicationPaths,
     configuration: ApplicationConfiguration | None = None,
@@ -249,6 +262,14 @@ def validate_publication_root(
     """Fail closed if a publication root overlaps protected data or traverses a redirect."""
     root_path = _absolute(root)
     paths = application_paths or resolve_application_paths()
+    standard_publication_root = _absolute(paths.publish_directory)
+    if root_path != standard_publication_root and any(
+        root_path.is_relative_to(purge_root) for purge_root in _standard_purge_roots(paths)
+    ):
+        raise PublicationStorageError(
+            f"custom publication root {root_path} is inside a standard purge-owned directory; "
+            "choose a directory outside the standard Refrain installation"
+        )
     protected = set(publication_protected_paths(paths, configuration))
     protected.update(Path(path) for path in protected_paths)
     _check_path_components(root_path)
@@ -310,14 +331,24 @@ def validate_publication_tree(root: str | os.PathLike[str], *, application_paths
 
 
 def _create_directory(path: Path) -> None:
-    if path.parent != path:
-        _create_directory(path.parent)
     try:
-        path.mkdir()
-    except FileExistsError:
-        pass
+        status = path.lstat()
+    except FileNotFoundError:
+        if path.parent != path:
+            _create_directory(path.parent)
+        try:
+            path.mkdir()
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise PublicationStorageError(f"cannot create publication directory {path}: {error}") from error
     except OSError as error:
-        raise PublicationStorageError(f"cannot create publication directory {path}: {error}") from error
+        raise PublicationStorageError(f"cannot inspect publication directory {path}: {error}") from error
+    else:
+        if _is_redirect(path, status):
+            raise PublicationStorageError(f"refusing to follow a filesystem link or reparse point at {path}")
+        if not stat.S_ISDIR(status.st_mode):
+            raise PublicationStorageError(f"publication path is not a directory: {path}")
     _check_path_components(path)
     try:
         status = path.lstat()
@@ -560,13 +591,27 @@ class PublicationStore:
         return _generated_publication_name(name)
 
     def _cleanup_contents(self, destination: Path, keep: set[str]) -> None:
+        root = self._validate_root()
+        if destination.parent != root:
+            raise PublicationStorageError("publication cleanup target must be a direct child of the publication root")
+        _check_path_components(destination)
+        try:
+            destination_status = destination.lstat()
+        except OSError as error:
+            raise PublicationStorageError(f"cannot inspect publication destination {destination}: {error}") from error
+        if _is_redirect(destination, destination_status) or not stat.S_ISDIR(destination_status.st_mode):
+            raise PublicationStorageError(f"refusing to clean an unsafe publication destination: {destination}")
         try:
             children = tuple(destination.iterdir())
         except OSError as error:
             raise PublicationStorageError(f"cannot inspect publication destination {destination}: {error}") from error
+        obsolete: list[Path] = []
         for child in children:
+            if child.parent != destination:
+                raise PublicationStorageError(f"publication cleanup candidate escapes its destination: {child}")
             if child.name in keep:
                 continue
+            _check_path_components(child)
             try:
                 status = child.lstat()
             except OSError as error:
@@ -577,6 +622,15 @@ class PublicationStore:
                 raise PublicationStorageError(f"refusing to clean an unexpected publication object: {child}")
             if not (self._generated_name(child.name) or _TEMPORARY.fullmatch(child.name)):
                 raise PublicationStorageError(f"refusing to remove an unrecognized publication file: {child}")
+            obsolete.append(child)
+        for child in obsolete:
+            _check_path_components(child)
+            try:
+                status = child.lstat()
+            except OSError as error:
+                raise PublicationStorageError(f"cannot re-inspect publication file {child}: {error}") from error
+            if _is_redirect(child, status) or not stat.S_ISREG(status.st_mode):
+                raise PublicationStorageError(f"refusing to remove a changed publication object: {child}")
             try:
                 child.unlink()
             except OSError as error:

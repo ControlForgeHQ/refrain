@@ -21,6 +21,7 @@ from refrain.installation import (
     reset_installation,
 )
 from refrain.paths import ApplicationPathError, ApplicationPaths, resolve_application_paths, resolve_publication_root
+from refrain.publication_storage import validate_publication_root
 
 
 def _paths(root: Path) -> ApplicationPaths:
@@ -703,6 +704,11 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     tmp_path: Path, symlink_or_skip
 ) -> None:
     paths = _paths(tmp_path)
+    custom_publication_root = tmp_path / "custom-publications"
+    validate_publication_root(custom_publication_root, application_paths=paths)
+    custom_publication_file = custom_publication_root / "screen" / "manifest.json"
+    custom_publication_file.parent.mkdir(parents=True)
+    custom_publication_file.write_text("custom publication", encoding="utf-8")
     paths.config_directory.mkdir(parents=True)
     paths.state_directory.mkdir(parents=True)
     paths.cache_directory.mkdir(parents=True)
@@ -738,6 +744,7 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     assert not paths.state_directory.exists()
     assert not paths.cache_directory.exists()
     assert not paths.publish_directory.exists()
+    assert custom_publication_file.read_text(encoding="utf-8") == "custom publication"
     assert not paths.assets_directory.exists()
     assert paths.config_directory.parent.is_dir()
     assert paths.state_directory.parent.is_dir()
