@@ -208,7 +208,7 @@ def test_metadata_capture_rejects_non_palette_forced_decoration_tints(tmp_path: 
         default_decorations=("frame",),
     )
 
-    with pytest.raises(DailyImagePreparationError, match="RGB decoration tint"):
+    with pytest.raises(DailyImagePreparationError, match="RGB tint"):
         _prepare_daily_image_variants(
             make_snapshot("lora"),
             (CompositionVisibility(),),
