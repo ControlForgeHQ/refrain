@@ -26,6 +26,7 @@ class ApplicationPaths:
     history_file: PurePath
     cache_directory: PurePath
     artifacts_directory: PurePath
+    publish_directory: PurePath
 
     @property
     def ownership_file(self) -> PurePath:
@@ -99,6 +100,7 @@ def resolve_application_paths(
         state_directory = operational_directory
         cache_directory = cache_base / "refrain"
         artifacts_directory = cache_directory / "artifacts"
+        publish_directory = operational_directory / "publish"
     elif platform == "win32":
         path_type = Path if os.name == "nt" else PureWindowsPath
         roaming_value = environ.get("APPDATA", "")
@@ -114,6 +116,7 @@ def resolve_application_paths(
         state_directory = operational_directory / "State"
         cache_directory = operational_directory / "Cache"
         artifacts_directory = cache_directory / "artifacts"
+        publish_directory = operational_directory / "Publish"
     elif platform == "darwin":
         path_type = Path
         home_directory = _home_directory(home, path_type)
@@ -123,6 +126,7 @@ def resolve_application_paths(
         state_directory = operational_directory / "State"
         cache_directory = home_directory / "Library" / "Caches" / "Refrain"
         artifacts_directory = cache_directory / "artifacts"
+        publish_directory = operational_directory / "Publish"
     else:
         raise ApplicationPathError(f"standard per-user paths are not defined for platform {platform!r}")
 
@@ -136,4 +140,10 @@ def resolve_application_paths(
         history_file=state_directory / "global-history.jsonl",
         cache_directory=cache_directory,
         artifacts_directory=artifacts_directory,
+        publish_directory=publish_directory,
     )
+
+
+def resolve_publication_root(configured_path: PurePath | None, paths: ApplicationPaths) -> PurePath:
+    """Return configured publication storage or its platform-standard default."""
+    return paths.publish_directory if configured_path is None else configured_path

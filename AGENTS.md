@@ -21,6 +21,8 @@ These documents have distinct responsibilities:
 - `docs/ENGINEERING.md` defines implementation standards, dependency practices, testing, deployment, and review requirements.
 - `docs/CLI.md` defines public command syntax, argument behavior, command-mode conflicts, exit/result semantics, and user-facing CLI diagnostics.
 - `docs/CONTENT_FORMAT.md` defines the public YAML configuration and content-entry schemas.
+- `docs/PUBLICATION_MANIFEST.md` defines the filesystem publication manifest schema.
+- `docs/PUBLICATION_METADATA.md` defines the prepared and completed publication metadata schema.
 - `docs/DECORATION_AUTHORING.md` defines the visual-design, authoring, validation, and delivery guidance for Refrain decoration assets.
 
 The architecture owns the runtime semantics behind commands documented in `docs/CLI.md`; Engineering owns their implementation and testing guidance. Decoration Authoring owns design-process guidance and does not redefine decoration schema or rendering behavior.

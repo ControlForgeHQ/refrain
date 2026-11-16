@@ -32,7 +32,7 @@ See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progres
 refrain --initialize
 ```
 
-Initialization is noninteractive and repeatable. It creates or reuses the standard per-user installation and does not start the resident runtime. It operates on standard installation paths; runtime storage settings do not redirect it. A conflicting resident owner prevents the operation and produces an actionable diagnostic. Successful initialization leaves existing user configuration and content intact according to the [installation contract](ARCHITECTURE.md#application-paths-and-initialization); failures report the affected operation and path.
+Initialization is noninteractive and repeatable. It creates or reuses the standard per-user installation, including the standard publication root without replacing existing contents, and does not start the resident runtime. It operates on standard installation paths; runtime storage settings do not redirect it. A conflicting resident owner prevents the operation and produces an actionable diagnostic. Successful initialization leaves existing user configuration and content intact according to the [installation contract](ARCHITECTURE.md#application-paths-and-initialization); failures report the affected operation and path.
 
 The public contract does not establish whether `--config PATH` is accepted alongside `--initialize`; the selected configuration does not redirect the standard installation targets. Initialization's success exit code and exact diagnostic wording are not specified here.
 
@@ -42,7 +42,7 @@ The public contract does not establish whether `--config PATH` is accepted along
 refrain --reset
 ```
 
-Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. It requires the exact confirmation described by [Engineering](ENGINEERING.md#installation-approach); there is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Architecture](ARCHITECTURE.md#application-paths-and-initialization).
+Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. It requires the exact confirmation described by [Engineering](ENGINEERING.md#installation-approach); there is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset preserves publication storage and does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Architecture](ARCHITECTURE.md#application-paths-and-initialization).
 
 The public contract does not establish whether `--config PATH` is accepted alongside `--reset`; configuration selection does not redirect the standard deletion targets. Exact prompt text, exit codes, and diagnostic wording are not specified here.
 

@@ -23,7 +23,7 @@ from .installation import (
     reset_installation,
 )
 from .ownership import InstallationOwnership, OwnershipError
-from .paths import ApplicationPathError, ApplicationPaths, resolve_application_paths
+from .paths import ApplicationPathError, ApplicationPaths, resolve_application_paths, resolve_publication_root
 from .runtime_control import (
     RuntimeAuthenticationError,
     RuntimeControlClient,
@@ -51,6 +51,7 @@ def _installation_ownership(paths: ApplicationPaths) -> InstallationOwnership:
             paths.artifacts_directory,
             paths.state_file,
             paths.history_file,
+            paths.publish_directory,
         )
     )
     return ownership
@@ -86,11 +87,13 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
         state_path = Path(configuration.storage.state or paths.state_file).absolute()
         artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
         history_path = Path(configuration.storage.history or paths.history_file).absolute()
-        ownership.ensure_outside((state_path, artifacts_path, history_path))
+        publish_path = Path(resolve_publication_root(configuration.storage.publish, paths)).absolute()
+        ownership.ensure_outside((state_path, artifacts_path, history_path, publish_path))
         _LOGGER.info("Effective configuration path: %s", configuration.file)
         _LOGGER.info("Effective state path: %s", state_path)
         _LOGGER.info("Effective artifacts path: %s", artifacts_path)
         _LOGGER.info("Effective history path: %s", history_path)
+        _LOGGER.info("Effective publication root: %s", publish_path)
     else:
         _LOGGER.info(
             "Effective configuration path: %s; %s",
@@ -268,7 +271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "PURGE REFRAIN",
                     "WARNING: this permanently removes configuration, content, and user-provided files "
                     "within the standard Refrain locations, including custom fonts, backgrounds, and decorations "
-                    "in the standard assets directory.",
+                    "in the standard assets directory, plus publication data. Custom storage paths are preserved.",
                     tuple(
                         dict.fromkeys(
                             Path(path)
@@ -281,6 +284,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 paths.state_directory,
                                 paths.cache_directory,
                                 paths.artifacts_directory,
+                                paths.publish_directory,
                             )
                         )
                     ),

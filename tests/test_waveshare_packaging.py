@@ -208,7 +208,8 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                     cache = base / "cache" / "refrain"
                     paths = ApplicationPaths(
                         config, config / "config.yaml", config / "content", state, state,
-                        state / "state.json", state / "global-history.jsonl", cache, cache / "artifacts"
+                        state / "state.json", state / "global-history.jsonl", cache, cache / "artifacts",
+                        state / "publish"
                     )
                     initialize_installation(paths)
                     loaded = load_application_config(paths.config_file)

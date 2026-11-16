@@ -283,7 +283,7 @@ image-server:
   port: 8080
 ```
 
-The currently supported Version 0.1 destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service. Filesystem `publish` destinations and their presentation overrides are not yet implemented or supported by this configuration schema; see the planned architecture in [Architecture](ARCHITECTURE.md#filesystem-publication-target-planned).
+The currently supported Version 0.1 destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service. Filesystem `publish` destination configuration and presentation overrides are not yet supported; the independent filesystem writer and `storage.publish` root do not register or activate a destination backend. See the [planned backend architecture](ARCHITECTURE.md#filesystem-publication-target-backend-integration-planned).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -373,9 +373,15 @@ The optional top-level `storage` mapping groups file locations. The locations re
 | `storage.state` | Path string | No | Platform-standard operational-state file |
 | `storage.history` | Path string | No | Platform-standard global-history file |
 | `storage.artifacts` | Path string | No | Platform-standard prepared-artifact directory |
+| `storage.publish` | Path string | No | Platform-standard publication root |
 
-`storage.publish` is part of the planned filesystem-publication architecture,
-not the currently supported Version 0.1 configuration schema.
+The standard publication root is `$XDG_STATE_HOME/refrain/publish` on Linux
+(using the established per-user fallback), `%LOCALAPPDATA%\\Refrain\\Publish`
+on Windows, and `~/Library/Application Support/Refrain/Publish` on macOS.
+The filesystem writer stores each destination in a direct child directory
+named only from its validated destination ID. The destination does not supply
+an arbitrary directory path. The exact manifest contract is defined in
+[Publication Manifest](PUBLICATION_MANIFEST.md).
 
 Content is author-maintained input and is never eligible for deletion by operational cleanup commands. Operational state and global history remain authoritative application data with independent lifecycles. Prepared artifacts are regenerable application data. Setting one field does not change the default location or lifecycle of another.
 

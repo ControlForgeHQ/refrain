@@ -1299,6 +1299,7 @@ def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
     assert config.storage.state is None
     assert config.storage.history is None
     assert config.storage.artifacts is None
+    assert config.storage.publish is None
 
 
 @pytest.mark.parametrize(
@@ -1307,6 +1308,7 @@ def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
         ("state", "runtime/state.json"),
         ("history", "runtime/global-history.jsonl"),
         ("artifacts", "runtime/artifacts"),
+        ("publish", "runtime/publish"),
     ],
 )
 def test_each_configured_storage_path_resolves_relative_to_config_file(tmp_path: Path, field: str, value: str) -> None:
@@ -1323,6 +1325,7 @@ def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: 
         "state": tmp_path / "state.json",
         "history": tmp_path / "global-history.jsonl",
         "artifacts": tmp_path / "artifacts",
+        "publish": tmp_path / "publish",
     }
 
     config = load_application_config(
@@ -1338,7 +1341,7 @@ def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: 
     assert config.storage.artifacts == configured["artifacts"]
 
 
-@pytest.mark.parametrize("field", ["state", "history", "artifacts"])
+@pytest.mark.parametrize("field", ["state", "history", "artifacts", "publish"])
 @pytest.mark.parametrize("value", [None, 1, True, "", []])
 def test_invalid_storage_path_values_are_errors(tmp_path: Path, field: str, value: object) -> None:
     data = configuration_data(storage={field: value})
@@ -1389,6 +1392,7 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.qr_enabled is True
     assert config.storage.state is config.storage.history is config.storage.artifacts is None
+    assert config.storage.publish is None
 
     snapshot = DailySnapshot(
         entry_id="shipped-config",

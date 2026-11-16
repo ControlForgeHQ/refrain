@@ -261,6 +261,7 @@ def test_normal_cli_uses_standard_persistence_paths_without_arguments(tmp_path, 
         history_file=history,
         cache_directory=tmp_path / "cache",
         artifacts_directory=artifacts,
+        publish_directory=tmp_path / "state" / "publish",
     )
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
