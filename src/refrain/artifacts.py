@@ -17,6 +17,13 @@ from types import MappingProxyType
 from PIL import Image
 
 from .geometry import ResolvedOutputSpecification
+from .persistence import DailySnapshot
+from .publication_metadata import (
+    PublicationMetadataError,
+    action_declarations,
+    content_entry,
+    validate_publication_metadata,
+)
 from .renderer import CompositionVisibility
 
 _MODES = {"1", "L", "LA", "RGB", "RGBA"}
@@ -25,6 +32,7 @@ _TEMPORARY = re.compile(r"\.tmp-revision-[1-9][0-9]*-[0-9a-f]{32}\Z")
 _PAYLOAD = re.compile(r"images-[0-9a-f]{32}\Z")
 _VARIANT_DIRECTORY = re.compile(r"variant-[0-9]+-[0-9]+-[1-9][0-9]*x[1-9][0-9]*\Z")
 _STAGE = re.compile(r"stage-(0|[1-9][0-9]*)\.png\Z")
+_METADATA_STAGE = re.compile(r"stage-(0|[1-9][0-9]*)\.json\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -161,7 +169,9 @@ class PreparedImageArtifactVariant:
     output_specification: ResolvedOutputSpecification
     mode: str
     stage_paths: tuple[Path, ...]
+    metadata_paths: tuple[Path, ...]
     _digests: tuple[str, ...]
+    _metadata_digests: tuple[str, ...]
     presentation_canvas_literary_bounds: tuple[int, int, int, int] | None = field(
         default=None, compare=False, repr=False
     )
@@ -209,6 +219,38 @@ class PreparedImageArtifactVariant:
             raise ArtifactValidationError(f"invalid prepared stage {path}: {error}") from error
         except (ValueError, SyntaxError, Image.DecompressionBombError) as error:
             raise ArtifactValidationError(f"invalid prepared stage {path}: {error}") from error
+
+    def load_metadata(self, stage: int) -> dict[str, object]:
+        """Return one validated publication-schema metadata document."""
+        if type(stage) is not int or not 0 <= stage < len(self.metadata_paths):
+            raise ValueError(f"stage must be an integer from 0 to {len(self.metadata_paths) - 1}")
+        path = self.metadata_paths[stage]
+        try:
+            for directory in (path.parent, *path.parent.parents):
+                _require_directory(directory)
+            _require_file(path)
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != self._metadata_digests[stage]:
+                raise ValueError("metadata checksum does not match manifest")
+            document = json.loads(raw, object_pairs_hook=_unique_object)
+            validate_publication_metadata(document, stage="preparation")
+            output = document["output_specification"]
+            if (
+                output["aspect_ratio"] != self.output_specification.aspect_ratio
+                or tuple(output["requested_output_size"]) != self.requested_output_size
+            ):
+                raise ValueError("metadata output specification does not match its image")
+            if document["presentation"]["reveal_stage_index"] != stage:
+                raise ValueError("metadata reveal stage does not match its image")
+            return document
+        except FileNotFoundError as error:
+            raise ArtifactValidationError(f"invalid prepared metadata {path}: {error}") from error
+        except OSError as error:
+            if error.errno is not None:
+                raise ArtifactAccessError(f"cannot access prepared metadata {path}: {error}") from error
+            raise ArtifactValidationError(f"invalid prepared metadata {path}: {error}") from error
+        except (ValueError, RecursionError) as error:
+            raise ArtifactValidationError(f"invalid prepared metadata {path}: {error}") from error
 
 
 @dataclass(frozen=True)
@@ -264,19 +306,46 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         variants: Mapping[ResolvedOutputSpecification, Sequence[Image.Image]],
+        metadata: Mapping[ResolvedOutputSpecification, Sequence[dict[str, object]]],
     ) -> PreparedImageArtifactSet:
         """Publish all explicit variants and stages losslessly; inputs remain caller-owned."""
         expected_stages = _inputs(revision, stages)
         if not isinstance(variants, Mapping) or not variants:
             raise ValueError("variants must be a nonempty mapping of output specifications to image sequences")
         specifications = _output_specifications(tuple(variants))
+        if not isinstance(metadata, Mapping) or set(metadata) != set(specifications):
+            raise ValueError("metadata must contain exactly the output specifications being stored")
         images_by_specification: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]] = {}
+        metadata_by_specification: dict[ResolvedOutputSpecification, tuple[dict[str, object], ...]] = {}
         for specification in specifications:
             images = variants[specification]
             if not isinstance(images, Sequence) or isinstance(images, (str, bytes)) or not images:
                 raise ValueError(f"images for {specification!r} must be a nonempty sequence of complete Pillow images")
             if len(images) != len(expected_stages):
                 raise ValueError(f"images for {specification!r} must match the expected reveal-stage sequence")
+            documents = metadata[specification]
+            if (
+                not isinstance(documents, Sequence)
+                or isinstance(documents, (str, bytes))
+                or len(documents) != len(expected_stages)
+            ):
+                raise ValueError(f"metadata for {specification!r} must match the expected reveal-stage sequence")
+            for index, (document, visibility) in enumerate(zip(documents, expected_stages, strict=True)):
+                try:
+                    validate_publication_metadata(document, stage="preparation")
+                    output = document["output_specification"]
+                    presentation = document["presentation"]
+                    if (
+                        output["aspect_ratio"] != specification.aspect_ratio
+                        or output["requested_output_size"] != list(specification.requested_output_size)
+                        or presentation["selection_revision"] != revision
+                        or presentation["reveal_stage_index"] != index
+                        or presentation["reveal_stage"] != visibility
+                    ):
+                        raise ValueError("metadata association does not match revision, output, or reveal stage")
+                except (PublicationMetadataError, KeyError, TypeError) as error:
+                    raise ValueError(f"metadata stage {index} for {specification!r} is invalid: {error}") from error
+            metadata_by_specification[specification] = tuple(documents)
             requested_output_size = specification.requested_output_size
             mode = images[0].mode if isinstance(images[0], Image.Image) else None
             for index, image in enumerate(images):
@@ -311,7 +380,11 @@ class PreparedImageArtifactStore:
                 variant_directory = temporary / variant_directory_name
                 variant_directory.mkdir()
                 digests = []
-                for index, image in enumerate(images):
+                metadata_digests = []
+                metadata_paths = []
+                for index, (image, metadata_document) in enumerate(
+                    zip(images, metadata_by_specification[specification], strict=True)
+                ):
                     path = variant_directory / f"stage-{index}.png"
                     with path.open("xb") as stream:
                         image.save(stream, format="PNG")
@@ -319,14 +392,28 @@ class PreparedImageArtifactStore:
                         os.fsync(stream.fileno())
                     with path.open("rb") as stream:
                         digests.append(hashlib.file_digest(stream, "sha256").hexdigest())
+                    metadata_path = variant_directory / f"stage-{index}.json"
+                    metadata_bytes = _canonical_json(metadata_document) + b"\n"
+                    with metadata_path.open("xb") as stream:
+                        stream.write(metadata_bytes)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    metadata_digests.append(hashlib.sha256(metadata_bytes).hexdigest())
+                    metadata_paths.append(payload / variant_directory_name / metadata_path.name)
                 variant_metadata.append(
                     {
                         "aspect_ratio": specification.aspect_ratio,
                         "requested_output_size": list(specification.requested_output_size),
                         "mode": images[0].mode,
                         "stages": [
-                            {"visibility": visibility, "sha256": digest}
-                            for visibility, digest in zip(expected_stages, digests)
+                            {
+                                "visibility": visibility,
+                                "sha256": digest,
+                                "metadata_sha256": metadata_digest,
+                            }
+                            for visibility, digest, metadata_digest in zip(
+                                expected_stages, digests, metadata_digests, strict=True
+                            )
                         ],
                     }
                 )
@@ -334,7 +421,9 @@ class PreparedImageArtifactStore:
                     specification,
                     images[0].mode,
                     tuple(payload / variant_directory_name / f"stage-{i}.png" for i in range(len(images))),
+                    tuple(metadata_paths),
                     tuple(digests),
+                    tuple(metadata_digests),
                 )
             metadata = {
                 "revision": revision,
@@ -374,6 +463,7 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         output_specifications: Sequence[ResolvedOutputSpecification],
+        snapshot: DailySnapshot | None = None,
     ) -> PreparedImageArtifactSet | None:
         """Validate a whole expected set sequentially, retaining no decoded images."""
         expected_stages = _inputs(revision, stages)
@@ -440,25 +530,37 @@ class PreparedImageArtifactStore:
                 for stage_index, stage in enumerate(variant_stages):
                     if (
                         not isinstance(stage, dict)
-                        or set(stage) != {"visibility", "sha256"}
+                        or set(stage) != {"visibility", "sha256", "metadata_sha256"}
                         or stage["visibility"] != expected_stages[stage_index]
                         or not isinstance(stage["sha256"], str)
                         or not _DIGEST.fullmatch(stage["sha256"])
+                        or not isinstance(stage["metadata_sha256"], str)
+                        or not _DIGEST.fullmatch(stage["metadata_sha256"])
                     ):
                         raise ValueError(
                             f"manifest variant {variant_index} stage {stage_index} "
                             "has invalid visibility or checksum"
                         )
                     digests.append(stage["sha256"])
+                metadata_digests = [stage["metadata_sha256"] for stage in variant_stages]
                 variant_directory = payload / _variant_directory_name(specification)
                 _require_directory(variant_directory)
                 paths = tuple(variant_directory / f"stage-{i}.png" for i in range(stage_count))
-                if {path.name for path in variant_directory.iterdir()} != {path.name for path in paths}:
+                metadata_paths = tuple(variant_directory / f"stage-{i}.json" for i in range(stage_count))
+                if {path.name for path in variant_directory.iterdir()} != {
+                    *(path.name for path in paths),
+                    *(path.name for path in metadata_paths),
+                }:
                     raise ValueError(
                         f"image directory for variant {variant_index} does not contain exactly the expected stages"
                     )
                 loaded_variants[specification] = PreparedImageArtifactVariant(
-                    specification, variant["mode"], paths, tuple(digests)
+                    specification,
+                    variant["mode"],
+                    paths,
+                    metadata_paths,
+                    tuple(digests),
+                    tuple(metadata_digests),
                 )
             result = PreparedImageArtifactSet(revision, directory, MappingProxyType(loaded_variants))
             for specification in expected_specifications:
@@ -466,6 +568,19 @@ class PreparedImageArtifactStore:
                 for index in range(stage_count):
                     with variant.load_stage(index):
                         pass
+                    metadata_document = variant.load_metadata(index)
+                    presentation = metadata_document["presentation"]
+                    if (
+                        presentation["reveal_stage"] != expected_stages[index]
+                        or presentation["selection_revision"] != revision
+                    ):
+                        raise ValueError("metadata selection or reveal stage does not match manifest")
+                    if snapshot is not None and (
+                        presentation["display_date"] != snapshot.display_date.isoformat()
+                        or metadata_document["reconstruction"]["content_entry"] != content_entry(snapshot)
+                        or metadata_document["actions"] != action_declarations(snapshot)
+                    ):
+                        raise ValueError("metadata does not match the committed selection")
             return result
         except FileNotFoundError as error:
             raise ArtifactValidationError(f"invalid prepared images at {directory}: {error}") from error
@@ -521,7 +636,9 @@ def _owned_tree(directory: Path, *, payload: bool) -> bool:
     for path in directory.iterdir():
         if _is_link(path):
             return False
-        if path.is_file() and (path.name == "manifest.json" or _STAGE.fullmatch(path.name)):
+        if path.is_file() and (
+            path.name == "manifest.json" or _STAGE.fullmatch(path.name) or _METADATA_STAGE.fullmatch(path.name)
+        ):
             continue
         if not payload and _PAYLOAD.fullmatch(path.name) and path.is_dir() and _owned_tree(path, payload=True):
             continue

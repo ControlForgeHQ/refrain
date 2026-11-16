@@ -1727,6 +1727,8 @@ identity and actual output specification; applicable display date, selection
 identity and actual reveal stage; optional reconstruction data; and an ordered,
 audience-filtered action sequence. Publication type is `scheduled` or
 `transient`. Use explicit `null` values for inapplicable structured fields.
+The exact scheduled-publication field names, types, and preparation/completion
+validation stages are defined in [Publication Metadata](PUBLICATION_METADATA.md).
 
 Scheduled metadata contains sufficient reconstruction data for the installed
 `refrain-viewer` to render the destination's presentation at another requested
