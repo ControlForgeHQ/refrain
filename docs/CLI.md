@@ -76,9 +76,7 @@ Refresh is a standalone control-client mode and uses the already-running residen
 refrain-viewer
 ```
 
-In ordinary inspection and export modes, the viewer does not use configured display backends or runtime persistence.
-
-The publication-metadata reconstruction input described in the [architecture](ARCHITECTURE.md#filesystem-publication-target-planned) is planned and is not currently a supported viewer option.
+In ordinary inspection, export, and publication-reconstruction modes, the viewer does not use configured display backends or runtime persistence.
 
 ### Finished-image input
 
@@ -164,6 +162,58 @@ For example:
 refrain-viewer --entry johnson-maggie:6 --decoration simple-border
 refrain-viewer --min-font-size 48 --max-font-size 120
 ```
+
+### Publication reconstruction
+
+Reconstruct a presentation from one completed scheduled-publication metadata
+document with:
+
+```text
+refrain-viewer --publication PATH [--config PATH] [presentation overrides...] [local output controls...]
+```
+
+For example:
+
+```text
+refrain-viewer --publication publication.json \
+  --aspect 16:9 --resolution 3840 2160 --no-qr --output custom.png
+```
+
+The viewer requires a valid completed publication document and accepts only
+`publication_type: scheduled`. It rejects preparation-stage, incomplete,
+malformed, unsupported-version, transient, or structurally invalid metadata.
+The shared publication metadata schema and validator define the document
+contract; the viewer does not finalize or repair metadata.
+
+The committed quotation, source, attribution, presentation style, and resolved
+resource identifiers in the document supply the rendering input. The original
+content library, audience, destination configuration, actions, operational
+state, selection history, prepared-image cache, and resident runtime are not
+used. Actions are validated as metadata but never interpreted or executed.
+`--config` selects only the installed rendering resources, fonts, and palette;
+it does not replace the publication's literary content or resolved artistic
+choices.
+
+All presentation overrides in the preceding table remain available and
+override only their corresponding published choice. Unspecified choices
+remain those recorded by the publication. QR availability is reevaluated for
+the requested output and selected decoration; the recorded QR policy is the
+baseline, while the original availability flag does not constrain a new
+output.
+
+Publication reconstruction accepts `--aspect`, `--resolution`, `--output`,
+`--window`, and `--debug-layout`. When omitted, aspect defaults to `16:10` and
+resolution uses the full design canvas for that aspect. The normal design-,
+presentation-, and output-image geometry rules apply. `--output` writes the
+reconstructed PNG without opening a window unless `--window` is also supplied;
+without `--output`, the viewer opens its local window by default.
+
+`--publication` is mutually exclusive with `--entry`, `--image`, `--push`,
+`--render-as`, and `--list-destinations`. It does not infer or emulate the
+publication's original destination. Missing or unreadable files, invalid
+metadata, unavailable published resources, unusable published font faces, and
+invalid reconstruction geometry produce an actionable nonzero CLI error.
+Publication metadata input is limited to 16 MiB.
 
 ### Local inspection and export
 

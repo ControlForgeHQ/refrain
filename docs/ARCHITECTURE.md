@@ -1834,35 +1834,54 @@ Information-view images use this same transient metadata representation:
 ```
 
 The normal publication envelope still supplies publication identity,
-destination, timestamp, and output specification. A future `refrain-viewer
---publication` mode must reject this and every other transient publication.
-The planned `publish` backend receives the image and corresponding finalized
-metadata from the application; it does not inspect operational state to infer
-presentation semantics.
+destination, timestamp, and output specification. The implemented
+`refrain-viewer --publication` mode rejects this and every other transient
+publication. The planned `publish` backend receives the image and
+corresponding finalized metadata from the application; it does not inspect
+operational state to infer presentation semantics.
 
-#### Viewer reconstruction
+#### Viewer publication reconstruction (implemented)
 
-The planned `refrain-viewer --publication PATH` mode accepts a complete
-publication metadata document directly, for example:
+`refrain-viewer --publication PATH` accepts a complete publication metadata
+document directly, for example:
 
 ```bash
 refrain-viewer --publication publication.json \
   --aspect 16:9 --resolution 3840 2160 --no-qr --output custom.png
 ```
 
-It strictly validates the completed metadata schema, accepts only completed
-scheduled publications, and explicitly rejects prepared metadata (including
-documents with null or otherwise incomplete publication-envelope fields) and
-`publication_type: transient`. A non-null publication ID alone does not make
-prepared or malformed data a completed publication. Viewer reconstruction
-must never finalize preparation metadata. Published content and resolved
-artistic choices are its baseline; explicit command-line presentation
-overrides replace only the options they specify. Unspecified
-options preserve published choices. Render fully revealed by default and
-recalculate geometry through the existing renderer. This mode does not select
-from the content library, require resident runtime or operational state, or
-acquire the resident ownership lock. Untrusted metadata is never interpreted as
-an unrestricted filesystem path or executable instruction.
+It uses the shared completed-stage metadata validator, accepts only scheduled
+publications, and rejects prepared metadata (including null or incomplete
+publication-envelope fields), transient documents, and malformed or
+unsupported-version documents. A non-null publication ID alone does not make
+prepared or malformed data a completed publication. The viewer never finalizes
+preparation metadata.
+
+The embedded single-quotation content entry and captured resolved artistic
+choices are the rendering baseline. Explicit command-line overrides replace
+only their corresponding values; otherwise the viewer does not rerun
+content-entry, decoration, or global resource selection. It renders all
+literary fields fully revealed by default and recalculates text layout,
+wrapping, QR viability, and raster geometry through the shared preparation
+pipeline for the requested output specification. Published insets and
+font-size bounds remain in design-canvas units unless a supported font-size
+override is supplied. The original QR availability and output specification
+describe the source publication; neither restricts a new output.
+
+Resource identifiers and font faces are resolved only through the validated
+installed registries and palette. Missing or unusable published requirements
+fail rather than silently selecting substitutes. Metadata values do not supply
+arbitrary file paths or executable instructions, and the viewer bounds
+publication metadata input to 16 MiB. The viewer does not load the
+original content library, access resident runtime or operational state,
+history, prepared-image cache, initialize a backend, or acquire the resident
+ownership lock. `--config` supplies rendering resources only; reconstruction
+does not infer an audience or original destination, and actions are never
+executed.
+
+The future filesystem `publish` destination, publication datasets and
+manifests, resident publication integration, and independent consumer services
+remain unimplemented.
 
 #### Independent consumer services
 

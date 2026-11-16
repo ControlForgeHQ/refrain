@@ -21,17 +21,22 @@ from .display.coordinator import PublicationResult, PublicationStatus
 from .display.postprocessing import post_process_destination_image
 from .geometry import (
     SUPPORTED_PRESENTATION_ASPECTS,
+    PresentationInsets,
     ResolvedOutputSpecification,
     design_canvas_for_aspect,
 )
 from .paths import ApplicationPathError, resolve_application_paths
+from .persistence import DailySnapshot, SchedulingContext
 from .preparation import (
     DailyImagePreparationError,
     PresentationOverrides,
+    ResolvedPresentation,
     prepare_daily_images,
 )
 from .presentation import build_presentation_snapshot
 from .presentation_diagnostics import overlay_presentation_diagnostics
+from .publication_metadata import PublicationMetadataError, parse_publication_metadata
+from .renderer import CompositionVisibility
 from .runtime_control import (
     RuntimeAuthenticationError,
     RuntimeControlClient,
@@ -45,6 +50,7 @@ from .scheduling import resolve_reveal_stages
 
 _ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_MAX_PUBLICATION_METADATA_BYTES = 16 * 1024 * 1024
 
 _PREVIEW_ENTRY = ContentEntry(
     id="@preview",
@@ -176,6 +182,122 @@ def render_preview(
             image.close()
         return processed_image
     return image
+
+
+def _read_publication_metadata(path: str | Path) -> dict[str, object]:
+    publication_path = Path(path)
+    try:
+        with publication_path.open("rb") as source:
+            contents = source.read(_MAX_PUBLICATION_METADATA_BYTES + 1)
+    except OSError as error:
+        raise ViewerError(f"cannot read publication metadata {str(publication_path)!r}: {error}") from error
+    if len(contents) > _MAX_PUBLICATION_METADATA_BYTES:
+        raise ViewerError(
+            f"publication metadata {str(publication_path)!r} exceeds the "
+            f"{_MAX_PUBLICATION_METADATA_BYTES:,}-byte input limit"
+        )
+    try:
+        document = parse_publication_metadata(contents, stage="completed")
+    except PublicationMetadataError as error:
+        raise ViewerError(f"invalid publication metadata: {error}") from error
+    if document["publication_type"] != "scheduled":
+        raise ViewerError("publication reconstruction requires a completed scheduled publication")
+    return document
+
+
+def _publication_render_inputs(
+    document: Mapping[str, object],
+) -> tuple[DailySnapshot, ResolvedPresentation]:
+    presentation = document["presentation"]
+    reconstruction = document["reconstruction"]
+    if not isinstance(presentation, dict) or not isinstance(reconstruction, dict):
+        raise ViewerError("completed scheduled publication is missing its reconstruction data")
+    entry = reconstruction["content_entry"]
+    if not isinstance(entry, dict):
+        raise ViewerError("completed scheduled publication has invalid reconstruction content")
+    quotations = entry["quotations"]
+    if not isinstance(quotations, list):
+        raise ViewerError("completed scheduled publication has invalid reconstruction content")
+    reveal_schedule = presentation["reveal_schedule"]
+    if not isinstance(reveal_schedule, dict):
+        raise ViewerError("completed scheduled publication has invalid reveal schedule")
+    try:
+        display_date = date.fromisoformat(presentation["display_date"])
+        snapshot = DailySnapshot(
+            entry_id=entry["id"],
+            quotation_text=quotations[0],
+            quotation_identity=presentation["quotation_identity"],
+            source=entry.get("source"),
+            attribution=entry.get("attribution"),
+            presentation_style=reconstruction["presentation_style"],
+            font=None,
+            font_faces={},
+            background=None,
+            decoration=None,
+            text_color=None,
+            decoration_color=None,
+            reveal_schedule=reveal_schedule,
+            scheduling=SchedulingContext(display_date, reveal_schedule["quotation"]),
+        )
+        font_size_range = reconstruction["font_size_range"]
+        insets = reconstruction["insets"]
+        fonts = reconstruction["fonts"]
+        colors = reconstruction["colors"]
+        qr = reconstruction["qr"]
+        resolved = ResolvedPresentation(
+            background=reconstruction["background"],
+            decoration=reconstruction["decoration"],
+            font_bundle=fonts["bundle"],
+            font_faces=fonts["faces"],
+            text_color=colors["text"],
+            decoration_color=colors["decoration"],
+            presentation_style=reconstruction["presentation_style"],
+            qr_enabled=qr["enabled"],
+            min_font_size=font_size_range["minimum"],
+            max_font_size=font_size_range["maximum"],
+            insets=PresentationInsets(
+                left=insets["left"],
+                right=insets["right"],
+                top=insets["top"],
+                bottom=insets["bottom"],
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ViewerError(f"cannot use publication reconstruction data: {error}") from error
+    return snapshot, resolved
+
+
+def render_publication(
+    configuration: ApplicationConfiguration,
+    document: Mapping[str, object],
+    output_specification: ResolvedOutputSpecification,
+    *,
+    overrides: PresentationOverrides | None = None,
+    debug_layout: bool = False,
+) -> Image.Image:
+    """Render a fully revealed presentation from validated completed metadata."""
+    snapshot, resolved_presentation = _publication_render_inputs(document)
+
+    def annotate_diagnostics(_specification, image, diagnostics) -> None:
+        annotated = overlay_presentation_diagnostics(image, diagnostics)
+        if annotated is not image:
+            image.paste(annotated)
+            annotated.close()
+
+    try:
+        prepared = prepare_daily_images(
+            snapshot,
+            (CompositionVisibility(quotation=True, source=True, attribution=True),),
+            configuration,
+            (output_specification,),
+            overrides=PresentationOverrides() if overrides is None else overrides,
+            resolved_presentation=resolved_presentation,
+            on_presentation_image=annotate_diagnostics if debug_layout else None,
+        )
+    except (ValueError, TypeError) as error:
+        raise ViewerError(f"cannot reconstruct publication {document['publication_id']!r}: {error}") from error
+    images = prepared[output_specification]
+    return images[0]
 
 
 def render_preview_variants(
@@ -367,6 +489,54 @@ def run_viewer(
         overrides=PresentationOverrides() if overrides is None else overrides,
         debug_layout=debug_layout,
         destination_type=destination_type,
+    )
+    try:
+        if output is not None:
+            try:
+                image.save(output, format="PNG")
+            except OSError as error:
+                raise ViewerError(f"cannot write PNG output {str(output)!r}: {error}") from error
+        if window or output is None:
+            show_preview_window(image)
+    finally:
+        image.close()
+
+
+def run_publication_viewer(
+    publication_file: str | Path,
+    *,
+    config_file: str | Path | None = None,
+    aspect: str | None = None,
+    resolution: tuple[int, int] | None = None,
+    output: str | Path | None = None,
+    window: bool = False,
+    overrides: PresentationOverrides | None = None,
+    debug_layout: bool = False,
+) -> None:
+    """Load rendering resources and reconstruct one completed scheduled publication."""
+    if config_file is None:
+        try:
+            config_file = resolve_application_paths().config_file
+        except ApplicationPathError as error:
+            raise ViewerError(str(error)) from error
+    config_path = Path(config_file).absolute()
+    if not config_path.is_file():
+        raise ViewerError(
+            f"configuration file does not exist: {config_path}; initialize Refrain or provide an existing file with "
+            "--config"
+        )
+    try:
+        configuration = load_application_config(config_path)
+    except ApplicationConfigurationError as error:
+        raise ViewerError(f"application configuration is invalid: {error}") from error
+    document = _read_publication_metadata(publication_file)
+    specification = _output_specification("16:10" if aspect is None else aspect, resolution)
+    image = render_publication(
+        configuration,
+        document,
+        specification,
+        overrides=PresentationOverrides() if overrides is None else overrides,
+        debug_layout=debug_layout,
     )
     try:
         if output is not None:
@@ -704,6 +874,22 @@ def _validate_push_arguments(parser: argparse.ArgumentParser, arguments: argpars
         parser.error("--push is mutually exclusive with " + ", ".join(conflicts))
 
 
+def _validate_publication_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    conflicts = [
+        option
+        for option, value in (
+            ("--entry", arguments.entry),
+            ("--image", arguments.image),
+            ("--push", arguments.push),
+            ("--render-as", arguments.render_as),
+            ("--list-destinations", arguments.list_destinations),
+        )
+        if value is not None and value is not False
+    ]
+    if conflicts:
+        parser.error("--publication is mutually exclusive with " + ", ".join(conflicts))
+
+
 def _validate_render_as_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
     conflicts = [
         option
@@ -749,6 +935,12 @@ def _parser() -> argparse.ArgumentParser:
         description="Inspect a Refrain presentation or a supplied finished PNG.",
     )
     parser.add_argument("--image", type=Path, metavar="PATH", help="inspect or publish a finished RGB PNG unchanged")
+    parser.add_argument(
+        "--publication",
+        type=Path,
+        metavar="PATH",
+        help="reconstruct a completed scheduled publication metadata document",
+    )
     parser.add_argument("--config", help="application configuration YAML file")
     parser.add_argument("--entry", type=parse_entry_selector, metavar="ENTRY_ID[:N]")
     parser.add_argument("--font", type=_resource_preference, metavar="FONT_ID|@POOL")
@@ -802,6 +994,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
+    if arguments.publication is not None:
+        _validate_publication_arguments(parser, arguments)
     if arguments.list_destinations:
         _validate_discovery_arguments(parser, arguments)
         return _run_destination_discovery()
@@ -850,6 +1044,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         qr_enabled=arguments.qr_enabled,
     )
     resolution = None if arguments.resolution is None else tuple(arguments.resolution)
+    if arguments.publication is not None:
+        try:
+            run_publication_viewer(
+                arguments.publication,
+                config_file=arguments.config,
+                aspect=arguments.aspect,
+                resolution=resolution,
+                output=arguments.output,
+                window=arguments.window,
+                overrides=overrides,
+                debug_layout=arguments.debug_layout,
+            )
+        except (ApplicationPathError, ViewerError, DailyImagePreparationError) as error:
+            print(f"refrain-viewer: {error}", file=sys.stderr)
+            return 1
+        return 0
     if arguments.push is not None:
         return _run_push(
             arguments.push,

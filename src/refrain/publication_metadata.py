@@ -490,9 +490,12 @@ def parse_publication_metadata(
         raise PublicationMetadataError("publication metadata JSON must be text or UTF-8 bytes")
     try:
         document = json.loads(contents, object_pairs_hook=unique_object, parse_constant=reject_constant)
-    except (UnicodeError, json.JSONDecodeError) as error:
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
         raise PublicationMetadataError(f"invalid publication metadata JSON: {error}") from error
-    validate_publication_metadata(document, stage=stage, audience=audience)
+    try:
+        validate_publication_metadata(document, stage=stage, audience=audience)
+    except RecursionError as error:
+        raise PublicationMetadataError("publication metadata JSON is nested too deeply") from error
     return document
 
 

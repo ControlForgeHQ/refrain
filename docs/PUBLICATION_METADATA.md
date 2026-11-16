@@ -171,16 +171,18 @@ repair data or fill values from runtime state.
 Serialization is deterministic JSON using UTF-8 text, sorted object keys,
 compact separators, and preserved sequence order. Parsing validates the same
 schema and stage as serialization. Completed scheduled serialization cannot
-omit the audience check. The future `refrain-viewer --publication` workflow
-must require completed scheduled-document validation and reject null
-publication identity, missing completion fields, unsupported versions, and
-transient documents. No Python-specific persistence format or
-runtime/content-library dependency is used.
+omit the audience check. The `refrain-viewer --publication` workflow requires
+completed scheduled-document validation and rejects null publication identity,
+missing completion fields, unsupported versions, and transient documents.
+Viewer validation is context-independent and does not require the audience.
+No Python-specific persistence format or runtime/content-library dependency is
+used.
 
 Schema version `1` is shared by preparation and completed publication; there
 is no second completed-publication schema. A future incompatible format change
 requires an explicitly versioned schema rather than silently changing the
 meaning of existing fields.
 
-The filesystem publisher, publication manifest, and viewer reconstruction are
-not implemented by this metadata contract.
+The metadata contract defines no filesystem publisher or publication manifest;
+viewer reconstruction consumes the same schema without introducing another
+metadata format.
