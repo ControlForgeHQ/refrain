@@ -949,6 +949,7 @@ def test_explicit_tint_does_not_make_non_tintable_decoration_tintable() -> None:
     )
 
     assert choices.decoration_tint is None
+    assert choices.decoration_color_identifier is None
 
 
 def test_background_preferences_precede_decoration_preferences_for_both_colors() -> None:

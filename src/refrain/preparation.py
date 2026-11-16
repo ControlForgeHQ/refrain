@@ -182,6 +182,8 @@ def _resolve_presentation_choices(
         background,
         on_resolved_identifier=remember_decoration_color,
     )
+    if decoration_tint is None:
+        decoration_color_identifier = None
     fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, overrides)
     style = snapshot.presentation_style if overrides.style is None else overrides.style
     if style not in {"centered", "left-aligned"}:
