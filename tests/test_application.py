@@ -2479,9 +2479,9 @@ def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(
     original = PreparedImageArtifactStore.store
     publications = []
 
-    def publish(self, revision, stages, images, **kwargs):
+    def publish(self, revision, stages, images, metadata, **kwargs):
         publications.append(revision)
-        original(self, revision, stages, images, **kwargs)
+        original(self, revision, stages, images, metadata, **kwargs)
         raise ArtifactWriteError("directory sync unconfirmed", published=True)
 
     monkeypatch.setattr(PreparedImageArtifactStore, "store", publish)

@@ -1181,6 +1181,10 @@ def _prepare_daily_images_for_specification(
                 if on_metadata is not None:
                     if selection_revision is None:
                         raise DailyImagePreparationError("selection_revision is required when capturing metadata")
+                    if choices.decoration_tint is not None and choices.decoration_color_identifier is None:
+                        raise DailyImagePreparationError(
+                            "cannot capture publication metadata for an RGB tint without a palette identifier"
+                        )
                     actual_insets = (
                         configuration.presentation_insets
                         if decoration is None or decoration.presentation_insets is None

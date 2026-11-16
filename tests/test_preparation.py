@@ -197,6 +197,29 @@ def _decoration_resource(identifier: str, image_path: Path, bundled: bool = Fals
     )
 
 
+def test_metadata_capture_rejects_non_palette_forced_decoration_tints(tmp_path: Path) -> None:
+    layer_path = tmp_path / "frame.png"
+    with Image.new("RGBA", (8, 8), (0, 0, 0, 255)) as layer:
+        layer.save(layer_path)
+    decoration = _decoration_resource("frame", layer_path, tintable=True)
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        decorations={"frame": decoration},
+        default_decorations=("frame",),
+    )
+
+    with pytest.raises(DailyImagePreparationError, match="RGB decoration tint"):
+        _prepare_daily_image_variants(
+            make_snapshot("lora"),
+            (CompositionVisibility(),),
+            configuration,
+            (_DEFAULT_SPECIFICATION,),
+            selection_revision=1,
+            on_metadata=lambda *_: None,
+            forced_decoration_tint=(1, 2, 3),
+        )
+
+
 def prepare_daily_images(
     snapshot: DailySnapshot,
     stages,
