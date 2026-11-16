@@ -770,6 +770,8 @@ For each output specification, the prepared images form an ordered reveal-stage 
 
 Prepared images are persisted on disk and associated with the committed selection and their output specifications.
 
+When reconstruction-capable publication is implemented, its prepared image collections also carry associated preparation metadata using the same versioned publication-metadata schema that is ultimately serialized. This metadata belongs to the exact image collection and compatible preparation group; it is not a separate prepared-presentation descriptor, rendering snapshot, or authoritative selection state. Capture the committed quotation and applicable semantic information together with all resolved artistic choices that produced the images. Publication-event fields that do not yet exist during preparation remain unassigned or explicitly nullable as that schema specifies; do not invent publication IDs or timestamps. The current Version 0.1 runtime does not yet produce or publish this metadata.
+
 The preceding sharing rules describe the current Version 0.1 model, which has no
 destination-specific presentation overrides. Under the planned override model,
 the required variants are keyed by both output specification and effective
@@ -1048,13 +1050,15 @@ Every decoration PNG is behind all literary text and QR output. This pipeline do
 
 #### Background layers
 
-Packaged backgrounds contain an ordered, nonempty sequence of PNG layers. Layers are composited over the paper-white base in declaration order using normal alpha composition. A standalone PNG remains a single centered-cover background. Backgrounds and decorations use the same underlying layer transformation and alpha-composition machinery, so `contain`, `cover`, and `nine-slice` geometry cannot diverge by resource type.
+Packaged backgrounds contain an ordered, nonempty sequence of PNG layers. Layers are composited over the paper-white base in declaration order using normal alpha composition. A standalone PNG remains a single centered-cover background. Backgrounds and decorations use the same underlying layer transformation and alpha-composition machinery, so `contain`, `cover`, `nine-slice`, and constrained `anchor` alignment cannot diverge by resource type.
 
-Background layers support `contain`, `cover`, and `nine-slice`; their method defaults to `cover`. They do not have decoration conditions, tintability, or other decoration metadata.
+Packaged background layers support `contain`, `cover`, `nine-slice`, and `anchor`; `method` is optional and defaults to `cover`. They do not have decoration conditions, tintability, or other decoration metadata. A standalone PNG background is not a packaged layer and continues to use centered `cover`.
 
 #### Decoration layers
 
-A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, a required rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. The decoration-layer default remains `contain`. Layers are composed in manifest order on the design canvas. The shared methods are `contain`, which aspect-preservingly scales the image to fit that canvas; `cover`, which aspect-preservingly scales the source directly to cover that canvas and crops excess artwork symmetrically around its center; and `nine-slice`, which adapts an image using four explicit source-image pixel distances. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness. No alternate reference coordinate system or independent positioning is defined.
+A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, an optional rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. The decoration-layer default remains `contain`. Layers are composed in manifest order on the design canvas. The shared methods are `contain`, which aspect-preservingly scales the image to fit that canvas; `cover`, which aspect-preservingly scales the source directly to cover that canvas and crops excess artwork symmetrically around its center; `nine-slice`, which adapts an image using four explicit source-image pixel distances; and `anchor`, which scales according to a declared axis and aligns to constrained horizontal and vertical canvas anchors. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters; use `anchor` for its explicitly constrained alignment behavior. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness.
+
+The complete manifest fields, method parameters, and category-specific defaults are defined in [Content Format](CONTENT_FORMAT.md#decoration-manifests) and [Background registry](CONTENT_FORMAT.md#discovered-backgrounds).
 
 For `nine-slice`, the configured `left`, `right`, `top`, and `bottom` distances partition the source image directly into nine regions in its actual source-pixel coordinates. Reject non-integer, negative, overlapping, or out-of-bounds boundaries. Do not first scale the source into the reference envelope or scale its slice boundaries through that envelope. The configured distances are also the preserved edge thicknesses on the design canvas, numerically 1:1, regardless of the source image's overall dimensions.
 
@@ -1122,7 +1126,7 @@ Discovery establishes availability by stable identifier only. After discovery, c
 
 Asset manifests are safely parsed and their references are confined to their owning package. Invalid resources are isolated with diagnostics. Custom identifiers cannot shadow identifiers claimed by packaged resources, and every custom resource in an intra-category collision is excluded deterministically.
 
-Application configuration retains the resolved concrete candidates for each named pool and a default selection pool for each resource type. Pool references are category-local. Expansion is depth-first in declaration order, preserves the first occurrence of each usable identifier, and silently skips references to pools on the active recursion path. Expansion does not choose randomly; each distinct candidate receives equal probability at the later selection point. Invalid, unavailable, malformed, and unknown references are diagnosed and excluded without discarding other candidates. Empty pools do not have an internal fallback. Background and decoration pools may contain the reserved value `"none"`, representing the intentional absence of that resource.
+Application configuration retains the actual resolved concrete membership of each named pool, including an empty pool. Pool references are category-local. Expansion is depth-first in declaration order, preserves the first occurrence of each usable identifier, and silently skips references to pools on the active recursion path. Expansion does not choose randomly; each distinct candidate receives equal probability at the later selection point. Invalid, unavailable, malformed, and unknown references are diagnosed and excluded without discarding other candidates. Automatic background and decoration selection may use the category's `"none"` fallback when the effective default pool has no usable members, but this never inserts `"none"` into any named pool. An explicitly referenced empty pool, including `@default`, remains empty and follows ordinary preference fallthrough; strict viewer overrides referencing an empty pool fail. Background and decoration pools may explicitly contain the reserved value `"none"`, representing the intentional absence of that resource.
 
 An omitted resource configuration preserves the plain paper-white, undecorated presentation.
 
@@ -1132,7 +1136,7 @@ For each selected quotation, Refrain resolves the decoration first:
 
 1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit decoration when available.
 2. An explicit decoration value of `"none"` suppresses decoration selection.
-3. Otherwise, select from the effective default decoration pool.
+3. Otherwise, select from the effective default decoration pool, using the automatic `"none"` fallback if that pool has no usable members. The fallback does not change the pool's membership.
 
 The selected decoration may provide preferred font and background values and a complete literary-inset override.
 
@@ -1147,7 +1151,7 @@ Background selection follows this precedence:
 1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit background when available.
 2. An explicit background value of `"none"` suppresses all background selection, including a decoration's preferred background.
 3. Otherwise, resolve and select one candidate from the selected decoration's preferred background pool when specified and available.
-4. Otherwise, select from the effective default background pool.
+4. Otherwise, select from the effective default background pool, using the automatic `"none"` fallback if that pool has no usable members. The fallback does not change the pool's membership.
 
 A decoration may explicitly prefer `"none"` as its background. This suppresses automatic background selection unless the content entry supplies its own background preference.
 
@@ -1159,7 +1163,7 @@ Invalid decoration registrations must not make unrelated fonts, backgrounds, or 
 
 Each effective background and decoration default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
 
-Font, background, decoration, color, layout, and QR decisions are resolved from current configuration and available resources during image preparation. They are not part of quotation identity or repetition history and are not persisted as daily selection decisions.
+Font, background, decoration, color, layout, and QR decisions are resolved from current configuration and available resources during image preparation. They are not part of quotation identity or repetition history and are not persisted in authoritative daily-selection state. When reconstruction-capable publication is implemented, the actual resolved choices are retained with their prepared images in derived publication metadata.
 
 After selecting the background, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected background's `text_color`, the selected decoration's `text_color`, the effective `text.colors.pools` pool, then built-in `black`. Pool references expand in the text-color namespace. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
 
@@ -1173,7 +1177,7 @@ The registries, valid identifiers, image requirements, pool configuration, and c
 
 Preparation resolves current configuration and available visual resources for the complete required variant collection. Presentation-wide resource choices remain coherent across variants prepared together; output-specification-dependent geometry, QR availability, transformations, and other raster-dependent results are resolved separately for each specification. It applies the documented fallback and diagnostic policies to unavailable or invalid resources without changing the committed quotation or its reveal progression.
 
-Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation composites packaged background layers in order using the same deterministic `contain`, centered `cover`, and `nine-slice` transformations as decoration layers; a standalone PNG uses centered `cover`. All layers composite over the paper-white base while preserving source alpha. A missing or invalid packaged-background layer makes that selected background unusable, and normal fallback behavior uses paper-white without changing the committed background identifier. Background and decoration slice coordinates and transformations do not determine the literary insets.
+Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation composites packaged background layers in order using their declared `contain`, `cover`, `nine-slice`, or `anchor` methods; the optional method defaults to `cover`. A standalone PNG uses centered `cover`. All layers composite over the paper-white base while preserving source alpha. A missing or invalid packaged-background layer makes that selected background unusable, and normal fallback behavior uses paper-white without changing the committed quotation, captured preferences, selection identity, or reveal progression. Any derived preparation or publication metadata describes the background actually rendered, including the paper-white fallback. Background and decoration slice coordinates and transformations do not determine the literary insets.
 
 A missing or invalid optional visual resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required selection data or an unrenderable literary composition, remain errors.
 
@@ -1232,6 +1236,8 @@ When the duration expires, Refrain determines the currently required daily prese
 An information-view preparation or publication failure must not invalidate the committed selection or prevent ordinary daily presentation when a functional display destination remains available.
 
 The information view may be requested independently of automatic startup behavior, but it is not one of the defined runtime-control operations.
+
+When publication metadata is produced, an information-view image is a transient publication, like any other pushed transient image. It uses the minimal transient metadata representation and has no association with the committed daily quotation, scheduled-selection metadata, literary reconstruction data, or actions. Its publication envelope still identifies the publication, destination, timestamp, and output specification. Its transient classification does not make the internally scheduled startup view an external IPC request or change its publication priority, duration, or restoration behavior.
 
 ### Initial visual design
 
@@ -1748,6 +1754,26 @@ resources or rendering behavior change. Metadata records the actual reveal
 stage, while reconstruction has the complete committed quotation and renders
 fully revealed by default.
 
+Preparation caches the reconstruction metadata with the exact compatible
+image collection using this same publication-metadata schema. A complete
+compatible cache therefore includes valid images and valid associated
+metadata. Reusing the images reuses their original resolved artistic choices;
+do not repeat random resource selection or infer choices from finished pixels
+to reconstruct missing metadata. Missing, damaged, inconsistent, or
+incompatible required metadata makes that collection unusable for
+reconstruction-capable publication. Regenerate its compatible images and
+metadata together from the committed selection, without changing its identity,
+history, or reveal progression. The cache remains disposable derived storage.
+
+Destination publication starts from the cached metadata and derives an
+independent destination-specific instance. Finalize publication identity and
+timestamp, actual destination and output specification, actual reveal stage,
+and audience-filtered actions. Preserve the committed literary identity and
+artistic choices that produced the image. Ensure the completed metadata is
+valid before serialization. Never mutate shared cached metadata in place;
+distinct destinations may derive different completed documents from the same
+compatible preparation.
+
 Each destination declares exactly one audience: `public` or `private`.
 Visibility is nonhierarchical: a public destination includes actions declaring
 `public`; a private destination includes actions declaring `private`; an action
@@ -1766,6 +1792,24 @@ sequence is always empty. Transient publication is an image-delivery event, not
 a reconstructable presentation. Do not extend transient IPC to transfer
 literary or rendering metadata.
 
+Information-view images use this same transient metadata representation:
+
+```json
+{
+  "publication_type": "transient",
+  "presentation": null,
+  "reconstruction": null,
+  "actions": []
+}
+```
+
+The normal publication envelope still supplies publication identity,
+destination, timestamp, and output specification. `refrain-viewer
+--publication` rejects this and every other transient publication. The planned
+`publish` backend receives the image and corresponding metadata from the
+application; it does not inspect operational state to infer presentation
+semantics.
+
 #### Viewer reconstruction
 
 The planned `refrain-viewer --publication PATH` mode accepts a complete
@@ -1773,7 +1817,7 @@ publication metadata document directly, for example:
 
 ```bash
 refrain-viewer --publication publication.json \
-  --aspect 16:9 --resolution 3840x2160 --no-qr --output custom.png
+  --aspect 16:9 --resolution 3840 2160 --no-qr --output custom.png
 ```
 
 It strictly validates the metadata schema, accepts only scheduled
@@ -1973,7 +2017,7 @@ The session determines its eligibility display date once from host-local time an
 
 Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each daily selection is committed before its complete required output-variant set is prepared or reused from cache. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
 
-The initial stage is requested as soon as it is ready. Each stage receives the requested minimum monotonic viewing interval beginning at its first successful backend acknowledgement, or at its publication attempt when none is available. After the final stage's interval, the controller commits another selection. Failed preparation or publication does not complete a stage or authorize reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
+The initial stage is requested as soon as it is ready. Each valid prepared stage may progress even when no destination accepts its image. Its requested minimum monotonic viewing interval begins at the first successful backend acknowledgement, or at the publication attempt when none is available. Publication failure alone does not complete a stage or advance the demo; the controller's interval governs progression. Expiration completes the stage even when destinations are unavailable, failed, or withdrawn. After the final stage's interval, the controller may commit another selection. Preparation or image-loading failure leaves the stage pending and does not authorize progression or reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
 
 Operational state, prepared artifacts, and global history are isolated in fresh temporary session storage using their existing formats. Configured and platform-standard production persistence locations are never used or modified in demo mode. The committed quotation, captured content preferences, and reveal progression remain authoritative within the session. A complete valid prepared set remains stable while reused; after cache loss or invalidation, preparation may resolve current configuration and available resources according to the ordinary regeneration rules. The session continues selection and reveal progression when destinations are unavailable, failed, or withdrawn. Shutdown releases session resources; demo sessions are neither retained nor resumed.
 
@@ -2140,6 +2184,6 @@ The following must remain true as the project evolves:
 29. Ordinary operation does not require internet access or external services.
 30. Public presentation does not grant privileged local control.
 31. Future integrations must not become prerequisites for displaying ordinary quotations.
-32. Filesystem publication is the sole non-direct destination mechanism; consumers read Refrain-owned publication data without modifying it or sharing the resident's lifecycle.
+32. In the planned filesystem-publication architecture, filesystem publication is the sole non-direct destination mechanism; consumers read Refrain-owned publication data without modifying it or sharing the resident's lifecycle. The current integrated `image-server` is transitional and remains in place until its independent consumer replacement is implemented and validated.
 
 Architectural changes must be evaluated against these invariants before implementation work is accepted.
