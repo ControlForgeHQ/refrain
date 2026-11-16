@@ -698,15 +698,23 @@ The cache store must not modify authoritative selection state. Cache errors are 
 ### Filesystem publication storage
 
 The hardware-independent filesystem writer stores one current dataset per
-validated destination ID. The `publish` destination backend and resident
-integration remain planned. Follow the ownership and commit behavior in
-[Architecture](ARCHITECTURE.md#filesystem-publication-target-backend-integration-planned),
+validated destination ID. The resident-owned `publish` destination backend
+uses the existing per-backend coordinator and writes already-finalized metadata
+with its matching complete image. Follow the ownership and commit behavior in
+[Architecture](ARCHITECTURE.md#filesystem-publication-target-backend-integration-implemented),
 the root setting in [Content Format](CONTENT_FORMAT.md#storage-settings), the
 exact [manifest contract](PUBLICATION_MANIFEST.md), and the independent
 [metadata contract](PUBLICATION_METADATA.md). Use `pathlib` for path
 construction, keep every destination as a direct child of the effective
 publication root, and derive its name only from a validated destination ID.
 Destination configuration must not accept an arbitrary path to delete.
+
+Scheduled publication metadata must be loaded from the compatible prepared
+variant associated with the selected image, then finalized independently for
+each destination and audience. Transient publications use minimal metadata and
+must preserve submitted image pixels. Acknowledge scheduled publication only
+after the writer's manifest commit is verified; do not persist a second
+acknowledgement state or introduce a filesystem retry worker.
 
 Validate root and destination ownership before any destructive operation.
 Reject symbolic links, Windows junctions, reparse points, traversal, unexpected
@@ -1080,8 +1088,11 @@ run without a resident process, display hardware, network service, systemd, or
 publication directory. Filesystem publication, manifest handling, and viewer
 reconstruction are separate capabilities; viewer reconstruction consumes this
 schema through the shared renderer, and the filesystem writer validates this
-completed metadata against its independent manifest contract. Destination
-backend and resident publication integration remain planned.
+completed metadata against its independent manifest contract. The resident
+`publish` backend supplies the image and exact compatible preparation metadata
+to the finalizer and writer; hardware-independent end-to-end coverage verifies
+manifest integrity, audience isolation, transient behavior, and viewer
+reconstruction independently of the content library.
 
 ### Viewer publication reconstruction
 
@@ -1114,8 +1125,10 @@ and unexpected-field inputs; committed-content independence; resolved-choice
 preservation and strict resource failures; explicit overrides; fully revealed
 rendering; output geometry and export/window behavior; QR re-evaluation; and
 absence of content-library, resident-state, cache, backend, and action access.
-Filesystem publication is not available for Stage 2B end-to-end testing and
-must not be claimed as validated.
+End-to-end resident publication tests must additionally verify the current
+manifest and hashes, destination-specific audiences and reveal stages,
+reconstruction from the published metadata without the content library, and
+rendering at the original and a different supported geometry.
 
 ## Display backend
 
@@ -1143,7 +1156,7 @@ Use explicit mappings or conditional construction for supported built-in impleme
 
 The configuration must contain at least one destination. Destination IDs must be globally unique. Multiple destinations may use the same backend type when that type supports them; enforce each type's declared destination capacity before constructing or initializing its backend. A destination declaration is not itself a backend instance: destinations supported by one shared backend use that instance and its lifecycle.
 
-`window` and `waveshare-13in3-e` each support one configured destination. The current integrated `image-server` supports multiple destinations through one shared backend instance. The planned `publish` backend also supports multiple destinations. These explicit capacities do not imply a generic backend-instantiation or plugin framework.
+`window` and `waveshare-13in3-e` each support one configured destination. The current integrated `image-server` and filesystem `publish` backends support multiple destinations through one shared backend instance. These explicit capacities do not imply a generic backend-instantiation or plugin framework.
 
 A recognized but unimplemented backend must produce an actionable diagnostic.
 
@@ -1358,7 +1371,7 @@ Include hardware-independent tests covering:
 - Configured destinations receiving the prepared variant matching their output specification, with variants shared only for identical specifications.
 - Globally duplicate destination-ID rejection.
 - Capacity violations for `window` and `waveshare-13in3-e`, and valid repeated destination types for `image-server` through one shared backend instance.
-- Valid repeated backend types being distinguished from the number of constructed backend instances; planned `publish` destinations support multiple destinations.
+- Valid repeated backend types being distinguished from the number of constructed backend instances; `publish` destinations support multiple destinations.
 - Independent initialization and failure reporting.
 - One backend continuing while another is blocked or slow.
 - No overlapping updates to an individual backend.

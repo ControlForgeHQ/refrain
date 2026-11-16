@@ -22,7 +22,13 @@ from ..config import (
     PreparedImageVariantKey,
 )
 from ..geometry import ResolvedOutputSpecification
-from . import DisplayBackend, DisplayBackendError, WithdrawableDisplayBackend, create_display_backend
+from . import (
+    DisplayBackend,
+    DisplayBackendError,
+    PublicationDisplayBackend,
+    WithdrawableDisplayBackend,
+    create_display_backend,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_RETRY_DELAY = 60.0
@@ -45,6 +51,7 @@ class StagedTransientImages(dict[ResolvedOutputSpecification, Path]):
 class _Presentation:
     identity: tuple[int, int]
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]
+    metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None
     references: int = 1
 
 
@@ -101,6 +108,7 @@ class _OneShotPublication:
     operation: PublicationOperation
     identity: tuple[int, int] | None
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | StagedTransientImages
+    metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None
     destinations: tuple[str, ...]
     outcomes: dict[str, tuple[bool, str | None]]
     retry_at: dict[str, float]
@@ -158,6 +166,10 @@ class DisplayPublicationCoordinator:
             for configuration in configurations
             for destination in configuration.outputs
         }
+        self._publication_metadata: dict[
+            tuple[int, int],
+            Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+        ] = {}
         expected_destinations = sum(len(configuration.outputs) for configuration in configurations)
         if len(self._states) != expected_destinations:
             raise ValueError("configured display destinations must have unique identifiers")
@@ -261,6 +273,7 @@ class DisplayPublicationCoordinator:
     ) -> None:
         """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
+            metadata = self._publication_metadata.pop(identity, None)
             if self._stopping or self._draining:
                 self._close_images(images)
                 raise RuntimeError("display publication coordinator is stopping")
@@ -279,7 +292,7 @@ class DisplayPublicationCoordinator:
                 self._close_images(images)
                 raise ValueError(f"publication is missing output variants for destinations: {missing}")
 
-            presentation = _Presentation(identity, images)
+            presentation = _Presentation(identity, images, metadata)
             for state in self._states.values():
                 state.desired_identity = identity
                 if state.terminal or state.withdrawn:
@@ -291,6 +304,21 @@ class DisplayPublicationCoordinator:
                 state.retry_delay = 1.0
             self._release(presentation)
             self._condition.notify_all()
+
+    def publish_with_metadata(
+        self,
+        identity: tuple[int, int],
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+        metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+    ) -> None:
+        """Publish scheduled images with the metadata from their prepared variants."""
+        with self._condition:
+            self._publication_metadata[identity] = metadata
+        try:
+            self.publish(identity, images)
+        finally:
+            with self._condition:
+                self._publication_metadata.pop(identity, None)
 
     def withdraw_destination(self, identifier: str) -> bool:
         """Withdraw a configured destination for the rest of this runtime."""
@@ -364,6 +392,7 @@ class DisplayPublicationCoordinator:
         including when validation or admission fails.
         """
         with self._condition:
+            metadata = self._publication_metadata.pop(identity, None)
             selected = tuple(key for key, state in self._states.items() if not state.withdrawn)
             if not selected:
                 self._close_images(images)
@@ -391,7 +420,22 @@ class DisplayPublicationCoordinator:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.BUSY, selected)
             self._renew_recovery(self._states[key] for key in selected)
-            return self._admit_one_shot(selected, images, identity=identity, forced=True)
+            return self._admit_one_shot(selected, images, identity=identity, forced=True, metadata=metadata)
+
+    def force_scheduled_publication_with_metadata(
+        self,
+        identity: tuple[int, int],
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+        metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+    ) -> PublicationOperation:
+        """Force scheduled publication with the metadata from its prepared variants."""
+        with self._condition:
+            self._publication_metadata[identity] = metadata
+        try:
+            return self.force_scheduled_publication(identity, images)
+        finally:
+            with self._condition:
+                self._publication_metadata.pop(identity, None)
 
     @staticmethod
     def _scheduled_image(
@@ -486,6 +530,7 @@ class DisplayPublicationCoordinator:
         *,
         identity: tuple[int, int] | None,
         forced: bool,
+        metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None,
     ) -> PublicationOperation:
         if isinstance(images, StagedTransientImages):
             owned_images = images
@@ -504,6 +549,7 @@ class DisplayPublicationCoordinator:
             operation=operation,
             identity=identity,
             images=owned_images,
+            metadata=metadata,
             destinations=destinations,
             outcomes={},
             retry_at={key: 0.0 for key in destinations},
@@ -926,7 +972,12 @@ class DisplayPublicationCoordinator:
                             Image.open(one_shot.images[ready.destination.output_specification], formats=["PNG"])
                         ) as image:
                             image.load()
-                            backend.publish(ready.destination, image)
+                            self._publish_backend_image(
+                                backend,
+                                ready.destination,
+                                image,
+                                transient=True,
+                            )
                     elif one_shot is not None:
                         image = (
                             self._scheduled_image(one_shot.images, ready.destination)
@@ -934,12 +985,33 @@ class DisplayPublicationCoordinator:
                             else one_shot.images[ready.destination.output_specification]
                         )
                         assert image is not None
-                        backend.publish(ready.destination, image)
+                        prepared_metadata = (
+                            None
+                            if one_shot.metadata is None
+                            else one_shot.metadata.get(ready.destination.prepared_image_key)
+                        )
+                        self._publish_backend_image(
+                            backend,
+                            ready.destination,
+                            image,
+                            prepared_metadata=prepared_metadata,
+                            transient=not one_shot.forced,
+                        )
                     else:
                         assert presentation is not None
                         image = self._scheduled_image(presentation.images, ready.destination)
                         assert image is not None
-                        backend.publish(ready.destination, image)
+                        prepared_metadata = (
+                            None
+                            if presentation.metadata is None
+                            else presentation.metadata.get(ready.destination.prepared_image_key)
+                        )
+                        self._publish_backend_image(
+                            backend,
+                            ready.destination,
+                            image,
+                            prepared_metadata=prepared_metadata,
+                        )
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
@@ -1032,6 +1104,23 @@ class DisplayPublicationCoordinator:
             backend.close()
         except Exception as error:
             _LOGGER.warning("Display backend %s cleanup failed: %s", backend_type, error)
+
+    @staticmethod
+    def _publish_backend_image(
+        backend: DisplayBackend,
+        destination: DisplayOutputConfiguration,
+        image: Image.Image,
+        *,
+        prepared_metadata: dict[str, object] | None = None,
+        transient: bool = False,
+    ) -> None:
+        if isinstance(backend, PublicationDisplayBackend):
+            if transient or prepared_metadata is None:
+                backend.publish_transient(destination, image)
+            else:
+                backend.publish_scheduled(destination, image, prepared_metadata)
+            return
+        backend.publish(destination, image)
 
     def _signal_all_unavailable(self) -> None:
         participating = [state for state in self._states.values() if not state.withdrawn]

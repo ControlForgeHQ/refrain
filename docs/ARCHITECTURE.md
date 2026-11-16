@@ -1410,9 +1410,9 @@ Normal scheduled updates select among prepared images rather than invoking image
 
 ## Display output
 
-The built-in destinations below describe the current Version 0.1 implementation. The
-planned filesystem-publication architecture later in this section is a target, not a
-claim that its backend, metadata, viewer mode, or consumer services are implemented.
+The built-in destinations below describe the current implementation. Filesystem
+publication and viewer reconstruction are implemented; independent consumer
+services remain planned.
 
 ### Backend responsibility
 
@@ -1599,27 +1599,26 @@ images all use the same minimal transient representation. Classification does
 not alter information-view scheduling, publication priority, duration, or
 acknowledgement behavior.
 
-The finalizer and JSON validator are available as hardware-independent
-application operations. The resident's current display flows do not yet
-finalize or persist publication metadata. The hardware-independent filesystem
-writer and manifest validation are implemented independently of runtime
-publication; any future destination backend must receive already-finalized
-metadata associated with its image rather than reconstructing semantics from
-resident state.
+The finalizer and JSON validator are hardware-independent application
+operations used by resident filesystem publication. Scheduled publication
+loads metadata from the same compatible prepared-image collection as the
+selected image, then independently finalizes it for each destination. Transient
+and information-view images use the minimal transient representation and do not
+read scheduled preparation or selection state.
 
-### Filesystem publication target (backend integration planned)
+### Filesystem publication target (backend integration implemented)
 
 Refrain remains responsible for content selection, scheduling, image preparation,
 and publication to directly attached displays. `window` and
 `waveshare-13in3-e` remain resident-owned direct-display backends. The built-in
-`publish` backend becomes the sole non-direct destination mechanism. The resident
+`publish` backend is the sole non-direct destination mechanism. The resident
 does not host HTTP services and does not require network availability. Stage 3A
-implements reusable storage, manifest validation, and maintenance behavior;
-destination registration, backend construction, and resident publication
-coordination remain planned Stage 3B work.
+provides reusable storage, manifest validation, and maintenance behavior;
+Stage 3B registers the backend and integrates publication with the resident's
+existing destination coordinator and runtime-control path.
 
-Each `publish` destination has its own validated ID, output specification,
-publication audience, presentation overrides, and directory. It publishes the
+Each `publish` destination has its own validated ID, explicitly declared output
+specification, publication audience, presentation overrides, and directory. It publishes the
 destination-specific presentation prepared by Refrain. Scheduled preparation
 groups destinations only when their effective presentation requirements match;
 within a group, presentation-wide artistic choices are resolved once and kept
@@ -1798,16 +1797,16 @@ reconstruction-capable publication. Regenerate its compatible images and
 metadata together from the committed selection, without changing its identity,
 history, or reveal progression. The cache remains disposable derived storage.
 
-The implemented Stage 2A finalizer starts from cached metadata and derives an
-independent destination-specific instance. It finalizes publication identity
-and timestamp, actual destination and output specification, actual reveal
-stage, and audience-filtered actions. It preserves the committed literary
-identity and artistic choices that produced the image, validates the completed
-document before serialization, and never mutates shared cached metadata.
-Distinct destinations may derive different completed documents from the same
-compatible preparation. The Stage 3A filesystem writer validates and stores
-these completed documents with their corresponding images; integration with
-resident display flows is not implemented.
+The Stage 2A finalizer starts from cached metadata and derives an independent
+destination-specific instance. It finalizes publication identity and timestamp,
+actual destination and output specification, actual reveal stage, and
+audience-filtered actions. It preserves the committed literary identity and
+artistic choices that produced the image, validates the completed document
+before serialization, and never mutates shared cached metadata. Distinct
+destinations may derive different completed documents from the same compatible
+preparation. The resident passes each completed document and its corresponding
+image to the Stage 3A filesystem writer; successful acknowledgement follows
+manifest commit.
 
 Each configured destination declares exactly one audience: `public` or
 `private`. The application obtains this policy from the validated destination
@@ -1848,9 +1847,9 @@ Information-view images use this same transient metadata representation:
 The normal publication envelope still supplies publication identity,
 destination, timestamp, and output specification. The implemented
 `refrain-viewer --publication` mode rejects this and every other transient
-publication. The planned `publish` backend receives the image and
-corresponding finalized metadata from the application; it does not inspect
-operational state to infer presentation semantics.
+publication. The `publish` backend receives the image and corresponding finalized metadata
+from the application; it does not inspect operational state to infer
+presentation semantics.
 
 #### Viewer publication reconstruction (implemented)
 
@@ -1891,9 +1890,9 @@ ownership lock. `--config` supplies rendering resources only; reconstruction
 does not infer an audience or original destination, and actions are never
 executed.
 
-The filesystem writer and manifest contract are implemented, but the
-`publish` destination backend, resident publication integration, and independent
-consumer services remain planned.
+The filesystem writer, manifest contract, `publish` destination backend, and
+resident publication integration are implemented. The independent consumer
+services remain planned.
 
 #### Independent consumer services
 
@@ -2249,6 +2248,6 @@ The following must remain true as the project evolves:
 29. Ordinary operation does not require internet access or external services.
 30. Public presentation does not grant privileged local control.
 31. Future integrations must not become prerequisites for displaying ordinary quotations.
-32. In the planned filesystem-publication architecture, filesystem publication is the sole non-direct destination mechanism; consumers read Refrain-owned publication data without modifying it or sharing the resident's lifecycle. The current integrated `image-server` is transitional and remains in place until its independent consumer replacement is implemented and validated.
+32. Filesystem publication is the sole non-direct destination mechanism; consumers read Refrain-owned publication data without modifying it or sharing the resident's lifecycle. The current integrated `image-server` is transitional and remains in place until its independent consumer replacement is implemented and validated.
 
 Architectural changes must be evaluated against these invariants before implementation work is accepted.

@@ -51,6 +51,7 @@ from refrain.display.coordinator import (
     PublicationStatus,
 )
 from refrain.information_view import InformationViewPreparationError
+from refrain.publication_storage import PublicationStore
 
 _ZONE = ZoneInfo("America/Toronto")
 _CONFIG = """\
@@ -189,9 +190,10 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
     class Coordinator:
         desired_identity = (1, 1)
 
-        def force_scheduled_publication(self, identity, images):
+        def force_scheduled_publication(self, identity, images, metadata):
             assert identity == self.desired_identity
             assert set(images) == set(configuration.required_output_specifications)
+            assert set(metadata) == set(configuration.required_prepared_image_keys)
             for specification, image in images.items():
                 assert image.size == specification.requested_output_size
                 image.close()
@@ -211,6 +213,129 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
     assert result.result.status is PublicationStatus.SUCCEEDED
     assert workspace.state.read_bytes() == state_before
     assert workspace.history.read_bytes() == history_before
+
+
+def test_resident_publication_is_hash_verified_and_reconstructs_without_content(workspace: Workspace) -> None:
+    workspace.background("paper", (245, 240, 230))
+    workspace.entry(
+        "publication",
+        """\
+source: "A Book"
+attribution: "An Author"
+actions:
+  - type: public-action
+    visibility: [public]
+    payload: public
+  - type: private-action
+    visibility: [private]
+    payload: private
+quotations:
+  - "A complete published quotation."
+""",
+    )
+    publication_root = workspace.root.parent / f"{workspace.root.name}-publications"
+    data = yaml.safe_load(workspace.config.read_text(encoding="utf-8"))
+    data["destinations"] = [
+        {
+            "id": "web-public",
+            "type": "publish",
+            "audience": "public",
+            "aspect_ratio": "16:10",
+            "resolution": [640, 400],
+        },
+        {
+            "id": "web-private",
+            "type": "publish",
+            "audience": "private",
+            "aspect_ratio": "16:10",
+            "resolution": [640, 400],
+        },
+        {
+            "id": "web-custom",
+            "type": "publish",
+            "audience": "private",
+            "aspect_ratio": "16:10",
+            "resolution": [640, 400],
+            "presentation": {"background": "paper"},
+        },
+    ]
+    data["storage"] = {"publish": str(publication_root)}
+    workspace.config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    result = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        history_path=workspace.history,
+        now=at(10, 13),
+        random_source=Random(1),
+    )
+
+    configuration = application.load_application_config(workspace.config)
+    store = PublicationStore.from_configuration(configuration)
+    published = {
+        identifier: store.read_current(identifier) for identifier in ("web-public", "web-private", "web-custom")
+    }
+    assert result.presented_stage == 1
+    assert len({dataset.manifest.publication_id for dataset in published.values()}) == 3
+    assert published["web-public"].metadata["presentation"]["reveal_stage_index"] == 1
+    assert [action["type"] for action in published["web-public"].metadata["actions"]] == ["public-action"]
+    assert [action["type"] for action in published["web-private"].metadata["actions"]] == ["private-action"]
+    assert published["web-private"].metadata["reconstruction"] != published["web-custom"].metadata["reconstruction"]
+    assert published["web-custom"].metadata["destination_id"] == "web-custom"
+
+    class RejectingChooser:
+        def choice(self, _values):
+            pytest.fail("valid restart cache must not reselect content or artistic resources")
+
+    restarted = run_startup(
+        workspace.config,
+        workspace.state,
+        workspace.artifacts,
+        history_path=workspace.history,
+        now=at(10, 13),
+        random_source=RejectingChooser(),
+    )
+    republished = {
+        identifier: store.read_current(identifier) for identifier in ("web-public", "web-private", "web-custom")
+    }
+    assert restarted.state == result.state
+    assert all(
+        republished[identifier].manifest.publication_id != published[identifier].manifest.publication_id
+        for identifier in published
+    )
+    assert all(
+        republished[identifier].metadata["presentation"]["reveal_stage_index"] == 1 for identifier in republished
+    )
+    metadata_path = publication_root / "web-public" / f"{republished['web-public'].manifest.publication_id}.json"
+
+    shutil.rmtree(workspace.content)
+    from refrain.viewer import main as viewer_main
+
+    for aspect, width, height, output in (
+        ("16:10", 640, 400, workspace.root / "reconstructed-original.png"),
+        ("16:9", 640, 360, workspace.root / "reconstructed-alternate.png"),
+    ):
+        assert (
+            viewer_main(
+                [
+                    "--publication",
+                    str(metadata_path),
+                    "--config",
+                    str(workspace.config),
+                    "--aspect",
+                    aspect,
+                    "--resolution",
+                    str(width),
+                    str(height),
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        with Image.open(output) as image:
+            assert image.size == (width, height)
 
 
 def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_reselection(
@@ -298,7 +423,8 @@ def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace
     class Coordinator:
         desired_identity = (1, 1)
 
-    def admit(_identity, images):
+    def admit(_identity, images, metadata):
+        assert metadata
         for image in images.values():
             image.close()
         return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
@@ -331,7 +457,7 @@ def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: 
     class Coordinator:
         desired_identity = (1, 0)
 
-        def force_scheduled_publication(self, identity, images):
+        def force_scheduled_publication(self, identity, images, metadata):
             pytest.fail("stale refresh must not be admitted")
 
     result = application._refresh_scheduled(

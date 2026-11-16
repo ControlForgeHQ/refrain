@@ -47,6 +47,7 @@ from .persistence import (
 )
 from .preparation import DailyImagePreparationError
 from .presentation import build_presentation_snapshot
+from .publication_storage import PublicationStore
 from .recovery import recover_prepared_daily_images
 from .runtime_control import RuntimeControlServer, TransientAdmissionGuard
 from .scheduling import (
@@ -115,14 +116,28 @@ class _InformationPublicationWakeEvent:
         return self.is_set()
 
 
-def _default_backend_factory(configuration: DisplayBackendConfiguration) -> DisplayBackend:
+def _default_backend_factory(
+    configuration: DisplayBackendConfiguration,
+    *,
+    publication_store: PublicationStore | None = None,
+) -> DisplayBackend:
     return create_display_backend(
         configuration.type,
         image_server_host=configuration.host,
         image_server_port=configuration.port,
         image_server_output_ids=tuple(output.identifier for output in configuration.outputs),
         image_server_enabled=configuration.service_enabled,
+        publication_store=publication_store,
     )
+
+
+def _configured_backend_factory(configuration: ApplicationConfiguration, factory: BackendFactory) -> BackendFactory:
+    if factory is not _default_backend_factory or not any(
+        backend.type == "publish" for backend in configuration.display_backends
+    ):
+        return factory
+    publication_store = PublicationStore.from_configuration(configuration)
+    return lambda backend: _default_backend_factory(backend, publication_store=publication_store)
 
 
 def _select_snapshot(
@@ -256,6 +271,31 @@ def _load_stage_variants(
     return images
 
 
+def _load_stage_metadata(
+    artifacts: PreparedImageArtifactSet,
+    output_specifications: tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...],
+    stage: int,
+) -> dict[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]]:
+    """Load each stage's metadata from the same compatible artifact variants as its images."""
+    return {
+        specification: artifacts.variant_for(specification).load_metadata(stage)
+        for specification in output_specifications
+    }
+
+
+def _publish_scheduled(
+    coordinator: DisplayPublicationCoordinator,
+    identity: tuple[int, int],
+    images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+    metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+) -> None:
+    publish_with_metadata = getattr(coordinator, "publish_with_metadata", None)
+    if callable(publish_with_metadata):
+        publish_with_metadata(identity, images, metadata)
+    else:
+        coordinator.publish(identity, images)
+
+
 def _destination_variant_images(
     configuration: ApplicationConfiguration,
     images: Mapping[ResolvedOutputSpecification, Image.Image],
@@ -299,7 +339,11 @@ def _refresh_scheduled(
     shutdown: Event,
     state_lock: Lock,
     admit: Callable[
-        [tuple[int, int], Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]],
+        [
+            tuple[int, int],
+            Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+            Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+        ],
         PublicationOperation,
     ],
     remember_artifacts: Callable[[int, PreparedImageArtifactSet], None] | None = None,
@@ -326,6 +370,7 @@ def _refresh_scheduled(
         images = _load_stage_variants(artifacts, configuration.required_prepared_image_keys, identity[1])
         transferred = False
         try:
+            metadata = _load_stage_metadata(artifacts, configuration.required_prepared_image_keys, identity[1])
             with state_lock:
                 current = _reload(store)
                 decision = evaluate_scheduling(wall_clock(), configuration, current)
@@ -342,7 +387,7 @@ def _refresh_scheduled(
                         image.close()
                     return rejected(PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.INVALID)
                 transferred = True
-                return admit(identity, images)
+                return admit(identity, images, metadata)
         except BaseException:
             if not transferred:
                 for image in images.values():
@@ -423,6 +468,7 @@ def run_startup(
     ``now`` defaults to the current UTC time and exists so tests can control scheduling.
     """
     configuration = _load_configuration(config_file)
+    backend_factory = _configured_backend_factory(configuration, backend_factory)
     store = PersistentStateStore(Path(state_path).absolute())
     history_store = _create_history_store(store.path, history_path)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
@@ -516,14 +562,20 @@ def run_startup(
                 configuration,
                 chooser,
             )
+            images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
             try:
                 images = _load_stage_variants(
                     artifacts,
                     configuration.required_prepared_image_keys,
                     stage,
                 )
+                metadata = _load_stage_metadata(artifacts, configuration.required_prepared_image_keys, stage)
             except ArtifactStoreError as error:
+                if images is not None:
+                    for image in images.values():
+                        image.close()
                 raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
+            assert images is not None
             try:
                 final_decision = evaluate_scheduling(read_current_time(), configuration, state)
             except SchedulingEvaluationError as error:
@@ -544,7 +596,7 @@ def run_startup(
                     retry=False,
                     monotonic_clock=monotonic_clock,
                 )
-            coordinator.publish(identity, images)
+            _publish_scheduled(coordinator, identity, images, metadata)
             coordinator.wait_for_publication(identity)
             break
     finally:
@@ -578,6 +630,7 @@ def run_application(
     ``wait(timeout)`` and monotonic elapsed time, independently of wall-clock changes.
     """
     configuration = _load_configuration(config_file)
+    backend_factory = _configured_backend_factory(configuration, backend_factory)
     store = PersistentStateStore(Path(state_path).absolute())
     history_store = _create_history_store(store.path, history_path)
     artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
@@ -808,25 +861,35 @@ def run_application(
                         )
                         continue
                 if coordinator.desired_identity != identity:
+                    images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
                     try:
                         images = _load_stage_variants(
                             current_artifacts,
                             configuration.required_prepared_image_keys,
                             stage,
                         )
+                        metadata = _load_stage_metadata(
+                            current_artifacts,
+                            configuration.required_prepared_image_keys,
+                            stage,
+                        )
                     except ArtifactStoreError as error:
+                        if images is not None:
+                            for image in images.values():
+                                image.close()
                         with state_lock:
                             if artifacts is current_artifacts:
                                 artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared image for stage {stage}: {error}"
                         ) from error
+                    assert images is not None
                     with state_lock:
                         if artifacts is not current_artifacts:
                             for image in images.values():
                                 image.close()
                             continue
-                        coordinator.publish(identity, images)
+                        _publish_scheduled(coordinator, identity, images, metadata)
                     continue
                 if last_failure is not None:
                     _LOGGER.info("Application operation recovered")
@@ -905,6 +968,7 @@ def run_demo(
     if not math.isfinite(interval) or interval <= 0:
         raise ApplicationError("demo interval must be a positive finite number of seconds")
     configuration = _load_configuration(config_file)
+    backend_factory = _configured_backend_factory(configuration, backend_factory)
     try:
         session = TemporaryDirectory(prefix="refrain-demo-")
     except OSError as error:
@@ -968,18 +1032,28 @@ def run_demo(
                     state = _persist_reveal_progress(store, state, stage)
                 identity = (state.revision, stage)
                 if coordinator.desired_identity != identity:
+                    images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
                     try:
                         images = _load_stage_variants(
                             artifacts,
                             configuration.required_prepared_image_keys,
                             stage,
                         )
+                        metadata = _load_stage_metadata(
+                            artifacts,
+                            configuration.required_prepared_image_keys,
+                            stage,
+                        )
                     except ArtifactStoreError as error:
+                        if images is not None:
+                            for image in images.values():
+                                image.close()
                         artifacts = None
                         raise _RetryableApplicationError(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
-                    coordinator.publish(identity, images)
+                    assert images is not None
+                    _publish_scheduled(coordinator, identity, images, metadata)
                     stage_requested_at = monotonic_clock()
                 coordinator.wait_for_any_publication(identity, cancellation_event=shutdown)
                 acknowledged_at = coordinator.first_successful_publication_time(identity)

@@ -23,6 +23,24 @@ class DisplayBackend(Protocol):
 
 
 @runtime_checkable
+class PublicationDisplayBackend(Protocol):
+    """Optionally store completed publication metadata alongside destination images."""
+
+    def publish_scheduled(
+        self,
+        destination: DisplayOutputConfiguration,
+        image: Image.Image,
+        prepared_metadata: dict[str, object],
+    ) -> None:
+        """Finalize and publish one scheduled image using its associated preparation metadata."""
+        ...
+
+    def publish_transient(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
+        """Publish one complete transient image without deriving presentation metadata."""
+        ...
+
+
+@runtime_checkable
 class WithdrawableDisplayBackend(Protocol):
     """Optionally report intentional user withdrawal of a backend's destinations."""
 
@@ -62,6 +80,7 @@ def create_display_backend(
     image_server_port: int = 8080,
     image_server_output_ids: tuple[str, ...] = ("default",),
     image_server_enabled: bool = True,
+    publication_store: object | None = None,
 ) -> DisplayBackend:
     """Construct an explicitly selected built-in display backend."""
     if backend == "window":
@@ -81,8 +100,15 @@ def create_display_backend(
             output_ids=image_server_output_ids,
             service_enabled=image_server_enabled,
         )
+    if backend == "publish":
+        from .publication import FilesystemPublicationDisplayBackend
+
+        if publication_store is None:
+            raise DisplayBackendInitializationError("publish backend requires a configured publication store")
+        return FilesystemPublicationDisplayBackend(publication_store)
     raise DisplayBackendError(
-        f"unsupported display backend {backend!r}; choose 'window', 'waveshare-13in3-e', or 'image-server'"
+        f"unsupported display backend {backend!r}; choose "
+        "'window', 'waveshare-13in3-e', 'image-server', or 'publish'"
     )
 
 
@@ -93,5 +119,6 @@ __all__ = [
     "DisplayBackendInitializationError",
     "DisplayBackendUnavailableError",
     "DisplayBackendUpdateError",
+    "PublicationDisplayBackend",
     "create_display_backend",
 ]

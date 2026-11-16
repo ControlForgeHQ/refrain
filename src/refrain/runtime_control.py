@@ -628,7 +628,9 @@ class RuntimeControlServer:
                 _ensure_connected(connection)
 
                 def admit_refresh(
-                    identity: tuple[int, int], images: Mapping[ResolvedOutputSpecification, Image.Image]
+                    identity: tuple[int, int],
+                    images: Mapping[ResolvedOutputSpecification, Image.Image],
+                    metadata: Mapping[ResolvedOutputSpecification, dict[str, object]] | None = None,
                 ) -> PublicationOperation:
                     with self._lock:
                         if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
@@ -639,6 +641,13 @@ class RuntimeControlServer:
                         except (OSError, EOFError, RuntimeProtocolError) as error:
                             DisplayPublicationCoordinator._close_images(images)
                             raise RuntimeAdmissionRejected("control client disconnected before admission") from error
+                        publish_with_metadata = getattr(
+                            self._coordinator,
+                            "force_scheduled_publication_with_metadata",
+                            None,
+                        )
+                        if metadata is not None and callable(publish_with_metadata):
+                            return publish_with_metadata(identity, images, metadata)
                         return self._coordinator.force_scheduled_publication(identity, images)
 
                 publication = self._refresh(admit_refresh)
