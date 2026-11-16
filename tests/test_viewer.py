@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import struct
 import zlib
-from datetime import date
+from collections.abc import Callable
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +22,11 @@ from refrain.display.coordinator import PublicationResult, PublicationStatus
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.preparation import PresentationOverrides, prepare_daily_images
 from refrain.presentation import build_presentation_snapshot
+from refrain.publication_metadata import (
+    finalize_publication_metadata,
+    serialize_publication_metadata,
+)
+from refrain.renderer import CompositionVisibility
 from refrain.runtime_control import (
     RuntimeAuthenticationError,
     RuntimeProtocolError,
@@ -76,6 +83,59 @@ def _workspace(root: Path, *, with_entry: bool = True) -> tuple[Path, Path]:
     if with_entry:
         (content / "entry.yaml").write_text(_ENTRY, encoding="utf-8")
     return config, content
+
+
+def _completed_publication(
+    root: Path,
+    *,
+    stage: CompositionVisibility = CompositionVisibility(),
+    specification: ResolvedOutputSpecification | None = None,
+    entry_text: str = _ENTRY,
+    configuration_text: str = _CONFIG,
+    overrides: PresentationOverrides | None = None,
+    resource_setup: Callable[[Path], None] | None = None,
+) -> tuple[Path, Path, Path, dict[str, object]]:
+    config_path, content_directory = _workspace(root)
+    config_path.write_text(configuration_text, encoding="utf-8")
+    (content_directory / "entry.yaml").write_text(entry_text, encoding="utf-8")
+    if resource_setup is not None:
+        resource_setup(root)
+    configuration = load_application_config(config_path)
+    entry, quotation = viewer._select_entry(configuration, ("requested-entry", 2))
+    snapshot = build_presentation_snapshot(configuration, entry, quotation, date(2026, 11, 16))
+    output = specification or ResolvedOutputSpecification("16:10", (320, 200))
+    captured: dict[str, tuple[dict[str, object], ...]] = {}
+    images = prepare_daily_images(
+        snapshot,
+        (stage,),
+        configuration,
+        (output,),
+        selection_revision=1,
+        on_metadata=lambda _specification, documents: captured.update(documents=documents),
+        overrides=overrides,
+    )
+    try:
+        prepared = captured["documents"][0]
+    finally:
+        for variant in images.values():
+            for image in variant:
+                image.close()
+    completed = finalize_publication_metadata(
+        prepared,
+        publication_type="scheduled",
+        publication_id="test-publication",
+        published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
+        destination_id="test-destination",
+        output_specification=output,
+        audience="private",
+        reveal_stage_index=prepared["presentation"]["reveal_stage_index"],
+    )
+    publication_path = root / "publication.json"
+    publication_path.write_text(
+        serialize_publication_metadata(completed, stage="completed", audience="private"),
+        encoding="utf-8",
+    )
+    return config_path, content_directory, publication_path, completed
 
 
 def _capture_rendered_bounds(
@@ -244,6 +304,627 @@ def test_entry_selection_rejects_missing_entry_and_out_of_range_quote(tmp_path: 
         viewer._select_entry(configuration, ("missing-entry", 1))
     with pytest.raises(viewer.ViewerError, match="out of range"):
         viewer._select_entry(configuration, ("requested-entry", 3))
+
+
+def test_publication_reconstruction_uses_committed_content_and_resolved_choices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, content_directory, publication_path, completed = _completed_publication(
+        tmp_path, stage=CompositionVisibility(quotation=True)
+    )
+    (content_directory / "entry.yaml").unlink()
+    write_font_bundle(tmp_path / "assets" / "fonts" / "other-font", "other-font")
+    config_path.write_text(_CONFIG.replace('default: ["test-font"]', 'default: ["other-font"]'))
+    sentinels = {
+        tmp_path / "state.json": b"state sentinel",
+        tmp_path / "history.jsonl": b"history sentinel",
+        tmp_path / "artifacts": b"artifact sentinel",
+    }
+    for path, content in sentinels.items():
+        path.write_bytes(content)
+    output = tmp_path / "reconstructed.png"
+    captured: dict[str, object] = {}
+    prepare = viewer.prepare_daily_images
+    resolve_choices = preparation._resolve_presentation_choices
+
+    def capture(snapshot, stages, configuration, specifications, **kwargs):
+        captured.update(
+            snapshot=snapshot,
+            stages=stages,
+            resolved=kwargs["resolved_presentation"],
+            overrides=kwargs["overrides"],
+        )
+        return prepare(snapshot, stages, configuration, specifications, **kwargs)
+
+    def capture_choices(*args, **kwargs):
+        choices = resolve_choices(*args, **kwargs)
+        captured["choices"] = choices
+        return choices
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    monkeypatch.setattr(preparation, "_resolve_presentation_choices", capture_choices)
+    monkeypatch.setattr(viewer, "load_content_library", lambda *_: pytest.fail("content library was consulted"))
+    monkeypatch.setattr(
+        refrain.display,
+        "create_display_backend",
+        lambda *_args, **_kwargs: pytest.fail("a configured display backend was initialized"),
+    )
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--publication",
+                str(publication_path),
+                "--aspect",
+                "4:3",
+                "--resolution",
+                "800",
+                "600",
+                "--no-qr",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    snapshot = captured["snapshot"]
+    assert snapshot.quotation_text == "Second quotation."
+    assert snapshot.source == "A source"
+    assert snapshot.attribution == "An author"
+    assert captured["stages"] == (CompositionVisibility(quotation=True, source=True, attribution=True),)
+    resolved = captured["resolved"]
+    reconstruction = completed["reconstruction"]
+    assert resolved.font_bundle == reconstruction["fonts"]["bundle"] == "test-font"
+    assert captured["choices"].fonts["quotation"].identifier == "test-font"
+    assert resolved.background == reconstruction["background"] == "none"
+    assert resolved.decoration == reconstruction["decoration"] == "none"
+    assert resolved.text_color == reconstruction["colors"]["text"]
+    assert resolved.qr_enabled is completed["reconstruction"]["qr"]["enabled"] is True
+    assert captured["overrides"].qr_enabled is False
+    assert resolved.min_font_size == reconstruction["font_size_range"]["minimum"]
+    assert resolved.max_font_size == reconstruction["font_size_range"]["maximum"]
+    assert resolved.insets.left == reconstruction["insets"]["left"]
+    with Image.open(output) as image:
+        assert image.size == (800, 600)
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
+
+
+@pytest.mark.parametrize(
+    ("source", "attribution"),
+    [
+        (None, None),
+        ("A source", None),
+        (None, "An author"),
+        ("A source", "An author"),
+    ],
+)
+def test_publication_reconstructs_only_available_literary_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str | None,
+    attribution: str | None,
+) -> None:
+    entry_text = _ENTRY
+    for field, value in (("source", source), ("attribution", attribution)):
+        if value is None:
+            text = "A source" if field == "source" else "An author"
+            entry_text = entry_text.replace(f'{field}: "{text}"\n', "")
+    config_path, _content, publication_path, _completed = _completed_publication(tmp_path, entry_text=entry_text)
+    configuration = load_application_config(config_path)
+    document = viewer._read_publication_metadata(publication_path)
+    rendered_stages: list[tuple[CompositionVisibility, ...]] = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, stages, selected_configuration, specifications, **kwargs):
+        rendered_stages.append(tuple(stages))
+        return prepare(snapshot, stages, selected_configuration, specifications, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    image = viewer.render_publication(
+        configuration,
+        document,
+        ResolvedOutputSpecification("16:10", (320, 200)),
+    )
+    image.close()
+
+    assert rendered_stages == [
+        (
+            CompositionVisibility(
+                quotation=True,
+                source=source is not None,
+                attribution=attribution is not None,
+            ),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic"),
+    [
+        (lambda document: document.update(publication_id=None), "publication_id"),
+        (lambda document: document.pop("destination_id"), "every supported publication field"),
+        (lambda document: document.update(schema_version=99), "unsupported publication metadata schema version"),
+        (
+            lambda document: document["reconstruction"]["content_entry"].update(quotations=["", "extra"]),
+            "exactly one quotation",
+        ),
+        (lambda document: document.update(audience="private"), "every supported publication field"),
+    ],
+)
+def test_publication_input_rejects_invalid_completed_documents(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation,
+    diagnostic: str,
+) -> None:
+    config_path, _content, publication_path, completed = _completed_publication(tmp_path)
+    mutation(completed)
+    publication_path.write_text(json.dumps(completed), encoding="utf-8")
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--publication",
+                str(publication_path),
+                "--output",
+                str(tmp_path / "out.png"),
+            ]
+        )
+        == 1
+    )
+    assert diagnostic in capsys.readouterr().err
+
+
+def test_publication_input_rejects_prepared_and_transient_documents(tmp_path: Path) -> None:
+    config_path, _content, publication_path, completed = _completed_publication(tmp_path)
+    prepared = dict(completed)
+    prepared.update(publication_id=None, published_at=None, destination_id=None)
+    publication_path.write_text(json.dumps(prepared), encoding="utf-8")
+    with pytest.raises(viewer.ViewerError, match="publication_id"):
+        viewer._read_publication_metadata(publication_path)
+
+    transient = finalize_publication_metadata(
+        None,
+        publication_type="transient",
+        publication_id="transient-publication",
+        published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
+        destination_id="test-destination",
+        output_specification=ResolvedOutputSpecification("16:10", (320, 200)),
+    )
+    publication_path.write_text(
+        serialize_publication_metadata(transient, stage="completed"),
+        encoding="utf-8",
+    )
+    with pytest.raises(viewer.ViewerError, match="completed scheduled publication"):
+        viewer._read_publication_metadata(publication_path)
+
+
+@pytest.mark.parametrize("contents", [b"{", b"\xff\xfe", b'{"a": "\\ud800"}'])
+def test_publication_input_rejects_malformed_json_and_unicode(tmp_path: Path, contents: bytes) -> None:
+    path = tmp_path / "publication.json"
+    path.write_bytes(contents)
+
+    with pytest.raises(viewer.ViewerError, match="invalid publication metadata"):
+        viewer._read_publication_metadata(path)
+
+
+def test_publication_input_reports_missing_and_unreadable_files(tmp_path: Path) -> None:
+    with pytest.raises(viewer.ViewerError, match="cannot read publication metadata"):
+        viewer._read_publication_metadata(tmp_path / "missing.json")
+    directory = tmp_path / "directory.json"
+    directory.mkdir()
+    with pytest.raises(viewer.ViewerError, match="cannot read publication metadata"):
+        viewer._read_publication_metadata(directory)
+
+
+def test_publication_input_rejects_oversized_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "publication.json"
+    path.write_bytes(b"12345")
+    monkeypatch.setattr(viewer, "_MAX_PUBLICATION_METADATA_BYTES", 4)
+
+    with pytest.raises(viewer.ViewerError, match="exceeds the 4-byte input limit"):
+        viewer._read_publication_metadata(path)
+
+
+def test_publication_input_converts_deep_json_recursion_to_cli_error(tmp_path: Path) -> None:
+    path = tmp_path / "publication.json"
+    nested = b"[" * 10000 + b"0" + b"]" * 10000
+    path.write_bytes(
+        b'{"schema_version":1,"publication_id":'
+        + nested
+        + b',"publication_type":"scheduled","published_at":null,"destination_id":null,'
+        + b'"output_specification":{},"presentation":null,"reconstruction":null,"actions":[]}'
+    )
+
+    with pytest.raises(viewer.ViewerError, match="invalid publication metadata JSON"):
+        viewer._read_publication_metadata(path)
+
+
+@pytest.mark.parametrize(
+    "conflict",
+    [
+        ["--entry", "requested-entry"],
+        ["--image", "image.png"],
+        ["--push", "window"],
+        ["--render-as", "window"],
+        ["--list-destinations"],
+    ],
+)
+def test_publication_mode_rejects_incompatible_viewer_modes(
+    conflict: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        viewer.main(["--publication", "publication.json", *conflict])
+
+    assert error.value.code == 2
+    assert "--publication is mutually exclusive" in capsys.readouterr().err
+
+
+def test_publication_mode_reports_unavailable_published_resources(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path, _content, publication_path, completed = _completed_publication(tmp_path)
+    completed["reconstruction"]["fonts"]["bundle"] = "missing-font"
+    publication_path.write_text(json.dumps(completed), encoding="utf-8")
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--publication",
+                str(publication_path),
+                "--output",
+                str(tmp_path / "out.png"),
+            ]
+        )
+        == 1
+    )
+    assert "explicit font 'missing-font' is not registered" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic"),
+    [
+        (
+            lambda reconstruction: reconstruction.update(background="missing-background"),
+            "published background 'missing-background' is unavailable",
+        ),
+        (
+            lambda reconstruction: reconstruction.update(decoration="missing-decoration"),
+            "published decoration 'missing-decoration' is unavailable",
+        ),
+        (
+            lambda reconstruction: reconstruction["colors"].update(text="missing-color"),
+            "published text color 'missing-color' is unavailable",
+        ),
+        (
+            lambda reconstruction: reconstruction["colors"].update(decoration="missing-color"),
+            "published decoration tint color 'missing-color' is unavailable",
+        ),
+        (
+            lambda reconstruction: reconstruction["fonts"]["faces"].update(quotation="missing-face"),
+            "explicit quotation face 'missing-face' is unavailable",
+        ),
+    ],
+)
+def test_publication_reconstruction_fails_for_unavailable_resolved_choices(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation,
+    diagnostic: str,
+) -> None:
+    config_path, _content, publication_path, completed = _completed_publication(tmp_path)
+    mutation(completed["reconstruction"])
+    publication_path.write_text(json.dumps(completed), encoding="utf-8")
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--publication",
+                str(publication_path),
+                "--resolution",
+                "320",
+                "200",
+                "--output",
+                str(tmp_path / "out.png"),
+            ]
+        )
+        == 1
+    )
+    assert diagnostic in capsys.readouterr().err
+
+
+def test_explicit_viewer_overrides_take_precedence_over_only_the_published_values_they_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, _content, publication_path, completed = _completed_publication(tmp_path)
+    reconstruction = completed["reconstruction"]
+    reconstruction["fonts"]["bundle"] = "missing-font"
+    reconstruction["fonts"]["faces"] = {
+        "quotation": "missing-face",
+        "source": "missing-face",
+        "attribution": "missing-face",
+    }
+    reconstruction["background"] = "missing-background"
+    reconstruction["decoration"] = "missing-decoration"
+    reconstruction["colors"] = {"text": "missing-text", "decoration": "missing-tint"}
+    publication_path.write_text(json.dumps(completed), encoding="utf-8")
+    choices: list[object] = []
+    resolve_choices = preparation._resolve_presentation_choices
+
+    def capture_choices(*args, **kwargs):
+        selected = resolve_choices(*args, **kwargs)
+        choices.append(selected)
+        return selected
+
+    monkeypatch.setattr(preparation, "_resolve_presentation_choices", capture_choices)
+
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--publication",
+                str(publication_path),
+                "--font",
+                "test-font",
+                "--quotation-face",
+                "regular",
+                "--source-face",
+                "regular",
+                "--attribution-face",
+                "regular",
+                "--background",
+                "none",
+                "--decoration",
+                "none",
+                "--text-color",
+                "black",
+                "--tint",
+                "black",
+                "--style",
+                "left-aligned",
+                "--no-qr",
+                "--min-font-size",
+                "32",
+                "--max-font-size",
+                "90",
+                "--resolution",
+                "320",
+                "200",
+                "--output",
+                str(tmp_path / "overridden.png"),
+            ]
+        )
+        == 0
+    )
+
+    selected = choices[0]
+    assert selected.fonts["quotation"].identifier == "test-font"
+    assert selected.background_identifier == "none"
+    assert selected.decoration_identifier == "none"
+    assert selected.text_color_identifier == "black"
+    assert selected.presentation_style == "left-aligned"
+    assert selected.qr_enabled is False
+
+
+def test_publication_default_geometry_uses_full_16_by_10_design_canvas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, _content, publication_path, _completed = _completed_publication(tmp_path)
+    captured: dict[str, object] = {}
+    windows: list[tuple[int, int]] = []
+
+    def render(_configuration, _document, specification, **_kwargs):
+        captured["specification"] = specification
+        return Image.new("RGB", (20, 10))
+
+    monkeypatch.setattr(viewer, "render_publication", render)
+    monkeypatch.setattr(viewer, "show_preview_window", lambda image: windows.append(image.size))
+
+    assert viewer.main(["--config", str(config_path), "--publication", str(publication_path)]) == 0
+
+    assert captured["specification"] == ResolvedOutputSpecification("16:10", (3840, 2400))
+    assert windows == [(20, 10)]
+
+
+def test_publication_rechecks_qr_viability_instead_of_reusing_original_availability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, _content, _publication_path, completed = _completed_publication(tmp_path)
+    completed["reconstruction"]["qr"]["enabled"] = True
+    completed["reconstruction"]["qr"]["available"] = False
+    configuration = load_application_config(config_path)
+    resolve = preparation.resolve_qr_placement
+    placements = []
+
+    def capture_placement(*args, **kwargs):
+        placement = resolve(*args, **kwargs)
+        placements.append(placement)
+        return placement
+
+    monkeypatch.setattr(preparation, "resolve_qr_placement", capture_placement)
+    image = viewer.render_publication(
+        configuration,
+        completed,
+        ResolvedOutputSpecification("16:10", (1600, 1000)),
+    )
+    image.close()
+
+    assert len(placements) == 1
+
+
+def test_publication_preserves_registered_background_decoration_and_insets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def register_resources(root: Path) -> None:
+        backgrounds = root / "assets" / "backgrounds"
+        backgrounds.mkdir(parents=True)
+        with Image.new("RGB", (4, 4), (240, 230, 220)) as background:
+            background.save(backgrounds / "test-paper.png")
+        decoration = root / "assets" / "decorations" / "test-frame"
+        decoration.mkdir(parents=True)
+        with Image.new("RGBA", (4, 4), (0, 0, 0, 0)) as layer:
+            layer.save(decoration / "frame.png")
+        (decoration / "decoration.yaml").write_text(
+            "format: 1\n"
+            "id: test-frame\n"
+            "presentation_insets:\n"
+            "  left: 120\n"
+            "  right: 121\n"
+            "  top: 122\n"
+            "  bottom: 123\n"
+            "tintable: false\n"
+            "layers:\n"
+            "  - image: frame.png\n"
+            "    method: contain\n",
+            encoding="utf-8",
+        )
+
+    config_text = _CONFIG + (
+        'backgrounds:\n  pools:\n    default: ["none"]\ndecorations:\n  pools:\n    default: ["none"]\n'
+    )
+    config_path, _content, _publication_path, completed = _completed_publication(
+        tmp_path,
+        configuration_text=config_text,
+        overrides=PresentationOverrides(background="test-paper", decoration="test-frame"),
+        resource_setup=register_resources,
+    )
+    configuration = load_application_config(config_path)
+    selected_choices: list[object] = []
+    resolve_choices = preparation._resolve_presentation_choices
+
+    def capture_choices(*args, **kwargs):
+        selected = resolve_choices(*args, **kwargs)
+        selected_choices.append(selected)
+        return selected
+
+    monkeypatch.setattr(preparation, "_resolve_presentation_choices", capture_choices)
+    image = viewer.render_publication(
+        configuration,
+        completed,
+        ResolvedOutputSpecification("16:10", (640, 400)),
+    )
+    image.close()
+
+    reconstruction = completed["reconstruction"]
+    selected = selected_choices[0]
+    assert reconstruction["background"] == selected.background_identifier == "test-paper"
+    assert reconstruction["decoration"] == selected.decoration_identifier == "test-frame"
+    assert reconstruction["insets"] == {"left": 120, "right": 121, "top": 122, "bottom": 123}
+    assert selected.decoration_tint is None
+
+
+def test_publication_preserves_each_resolved_font_face(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def add_faces(root: Path) -> None:
+        manifest = root / "assets" / "fonts" / "test-font" / "font.yaml"
+        manifest.write_text(
+            "format: 1\nid: test-font\nfaces:\n  regular: Regular.ttf\n  italic: Regular.ttf\n  bold: Regular.ttf\n",
+            encoding="utf-8",
+        )
+
+    config_path, _content, _publication_path, completed = _completed_publication(
+        tmp_path,
+        overrides=PresentationOverrides(font_faces={"quotation": "italic", "source": "bold"}),
+        resource_setup=add_faces,
+    )
+    configuration = load_application_config(config_path)
+    selected_choices: list[object] = []
+    resolve_choices = preparation._resolve_presentation_choices
+
+    def capture_choices(*args, **kwargs):
+        selected = resolve_choices(*args, **kwargs)
+        selected_choices.append(selected)
+        return selected
+
+    monkeypatch.setattr(preparation, "_resolve_presentation_choices", capture_choices)
+    image = viewer.render_publication(
+        configuration,
+        completed,
+        ResolvedOutputSpecification("16:10", (320, 200)),
+    )
+    image.close()
+
+    assert completed["reconstruction"]["fonts"]["faces"] == {
+        "quotation": "italic",
+        "source": "bold",
+        "attribution": "regular",
+    }
+    fonts = selected_choices[0].fonts
+    assert fonts["quotation"].identifier == "test-font:italic"
+    assert fonts["source"].identifier == "test-font:bold"
+    assert fonts["attribution"].identifier == "test-font"
+
+
+def test_publication_reconstruction_pixels_match_fully_revealed_preparation(
+    tmp_path: Path,
+) -> None:
+    config_path, _content, publication_path, _completed = _completed_publication(
+        tmp_path,
+        stage=CompositionVisibility(quotation=True),
+    )
+    configuration = load_application_config(config_path)
+    entry, quotation = viewer._select_entry(configuration, ("requested-entry", 2))
+    snapshot = build_presentation_snapshot(configuration, entry, quotation, date(2026, 11, 16))
+    document = viewer._read_publication_metadata(publication_path)
+    reconstruction_snapshot, resolved = viewer._publication_render_inputs(document)
+    specification = ResolvedOutputSpecification("16:10", (320, 200))
+    prepared = prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(quotation=True, source=True, attribution=True),),
+        configuration,
+        (specification,),
+        resolved_presentation=resolved,
+    )
+    reconstructed = viewer.render_publication(configuration, document, specification)
+    try:
+        expected = prepared[specification][0]
+        assert reconstruction_snapshot.quotation_text == snapshot.quotation_text
+        assert expected.mode == reconstructed.mode
+        assert expected.size == reconstructed.size
+        assert expected.tobytes() == reconstructed.tobytes()
+    finally:
+        reconstructed.close()
+        for images in prepared.values():
+            for image in images:
+                image.close()
+
+
+def test_publication_actions_remain_opaque_and_are_never_executed(tmp_path: Path) -> None:
+    action_target = tmp_path / "must-not-be-created"
+    payload = json.dumps(str(action_target))
+    entry_text = _ENTRY.replace(
+        "priority: 100",
+        f"actions:\n  - type: file-operation\n    visibility: [private]\n    payload: {payload}\npriority: 100",
+    )
+    config_path, _content, publication_path, completed = _completed_publication(tmp_path, entry_text=entry_text)
+
+    assert completed["actions"][0]["payload"] == str(action_target)
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config_path),
+                "--publication",
+                str(publication_path),
+                "--resolution",
+                "320",
+                "200",
+                "--output",
+                str(tmp_path / "out.png"),
+            ]
+        )
+        == 0
+    )
+    assert not action_target.exists()
 
 
 def test_png_export_uses_shared_presentation_without_persistence_or_backend_access(

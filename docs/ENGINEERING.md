@@ -1049,7 +1049,43 @@ public/private filtering and privacy leakage, order and duplicate preservation,
 transient metadata, and shared-preparation immutability. These operations must
 run without a resident process, display hardware, network service, systemd, or
 publication directory. Filesystem publication, manifest handling, and viewer
-reconstruction remain separate, unimplemented work.
+reconstruction are separate capabilities; viewer reconstruction consumes this
+schema through the shared renderer, while filesystem publication and manifest
+handling remain unimplemented.
+
+### Viewer publication reconstruction
+
+Implement `refrain-viewer --publication` by parsing and validating the supplied
+document with the shared completed-stage publication metadata API. Do not
+finalize preparation metadata, load the original content library, access
+operational state or prepared artifacts, initialize a destination backend, or
+interpret action payloads. Treat the embedded content and resolved stable
+resource identifiers as structured rendering inputs, never as file paths or
+instructions.
+
+Pass published choices into the existing shared presentation preparation
+machinery. Resolve resource identifiers and font faces through the validated
+configuration registries; preserve explicit published values and report
+unavailable requirements instead of falling back to preference pools. Apply
+typed viewer overrides within that shared machinery. Keep published
+font-size bounds and insets in design-canvas units, use the requested output
+geometry, render fully revealed, and reevaluate QR viability for each new
+output. Bound the caller-supplied metadata read and turn malformed or deeply
+nested JSON into an actionable CLI error. Close generated images and decoded
+resources according to the existing image-ownership rules.
+
+Hardware-independent tests must construct valid completed scheduled documents
+through the Stage 2A APIs: capture preparation metadata from deterministic
+image preparation, finalize it with a synthetic publication event, destination,
+audience, and actual output specification, then serialize it with the required
+audience. Use mutated documents only for negative validation tests. Cover
+completed, preparation-stage, transient, incomplete, malformed, unsupported,
+and unexpected-field inputs; committed-content independence; resolved-choice
+preservation and strict resource failures; explicit overrides; fully revealed
+rendering; output geometry and export/window behavior; QR re-evaluation; and
+absence of content-library, resident-state, cache, backend, and action access.
+Filesystem publication is not available for Stage 2B end-to-end testing and
+must not be claimed as validated.
 
 ## Display backend
 
@@ -1463,6 +1499,17 @@ Test default and explicit `@preview` selection, exact normal-entry selection, om
 Verify `refrain-viewer --debug-layout` uses the shared presentation diagnostics without enabling overlays in normal runtime or demo preparation.
 
 Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline for local inspection/export, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. For local inspection/export, use sentinel persistence locations and backend factories to verify the viewer never accesses configured backends or runtime persistence. For push, verify it never constructs, initializes, or directly accesses configured backends, but does exercise the resident runtime-control publication path using discovered output specifications. Verify that a destination reported as not supporting transient publication is rejected before rendering, both when selected directly and when included by `--push @all`. Verify that a literal destination ID `all` is routed as a named destination and never treated as the all-participating selector. Do not treat mocked window behavior as graphical-session validation.
+
+For `--publication`, construct completed test documents using the actual
+preparation, finalization, and serialization APIs. Verify strict shared-schema
+validation and transient rejection, reconstruction from committed metadata
+without content-library or runtime-state access, fully revealed output,
+resolved resource and font-face preservation, strict missing-resource
+diagnostics, override precedence, QR viability for the requested geometry,
+and PNG/window behavior. Verify `--publication` conflicts with `--entry`,
+`--image`, `--push`, `--render-as`, and `--list-destinations`. Do not test by
+hand-authoring a valid completed metadata schema or by introducing a test-only
+publication backend.
 
 ### Core test coverage
 

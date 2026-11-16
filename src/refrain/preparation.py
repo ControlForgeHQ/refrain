@@ -30,6 +30,7 @@ from .geometry import (
     PixelBounds,
     PresentationGeometry,
     PresentationGeometryError,
+    PresentationInsets,
     ResolvedOutputSpecification,
     resolve_presentation_geometry,
     round_half_up,
@@ -103,6 +104,29 @@ class PresentationOverrides:
 
 
 @dataclass(frozen=True)
+class ResolvedPresentation:
+    """Stable published presentation choices to resolve against installed resources."""
+
+    background: str
+    decoration: str
+    font_bundle: str
+    font_faces: Mapping[str, str]
+    text_color: str
+    decoration_color: str | None
+    presentation_style: str
+    qr_enabled: bool
+    min_font_size: int
+    max_font_size: int
+    insets: PresentationInsets
+
+    def __post_init__(self) -> None:
+        faces = dict(self.font_faces)
+        if set(faces) != {"quotation", "source", "attribution"}:
+            raise ValueError("resolved presentation must provide all literary font faces")
+        object.__setattr__(self, "font_faces", MappingProxyType(faces))
+
+
+@dataclass(frozen=True)
 class _PresentationChoices:
     decoration_identifier: str
     decoration: DecorationResource | None
@@ -128,12 +152,22 @@ def _resolve_presentation_choices(
     forced_decoration_tint: tuple[int, int, int] | None,
     overrides: PresentationOverrides,
     destination_presentation: DestinationPresentation = DestinationPresentation(),
+    resolved_presentation: ResolvedPresentation | None = None,
 ) -> _PresentationChoices:
     if not isinstance(overrides, PresentationOverrides):
         raise DailyImagePreparationError("overrides must be PresentationOverrides")
     invalid_roles = set(overrides.font_faces) - {"quotation", "source", "attribution"}
     if invalid_roles:
         raise DailyImagePreparationError(f"unsupported explicit font face roles: {', '.join(sorted(invalid_roles))}")
+    if resolved_presentation is not None:
+        return _resolve_published_presentation_choices(
+            snapshot,
+            configuration,
+            chooser,
+            overrides,
+            resolved_presentation,
+            force_white_background=force_white_background,
+        )
     decoration_identifier, decoration = _resolve_decoration(
         snapshot,
         configuration,
@@ -229,6 +263,116 @@ def _resolve_presentation_choices(
     )
 
 
+def _resolve_published_presentation_choices(
+    snapshot: DailySnapshot,
+    configuration: ApplicationConfiguration,
+    chooser: random.Random,
+    overrides: PresentationOverrides,
+    resolved: ResolvedPresentation,
+    *,
+    force_white_background: bool,
+) -> _PresentationChoices:
+    if resolved.decoration == "none" and overrides.decoration is None:
+        decoration_identifier, decoration = "none", None
+    elif overrides.decoration is not None:
+        decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser, overrides.decoration)
+    else:
+        decoration = configuration.decorations.get(resolved.decoration)
+        if decoration is None:
+            raise DailyImagePreparationError(
+                f"published decoration {resolved.decoration!r} is unavailable; install or register that resource"
+            )
+        decoration_identifier = resolved.decoration
+
+    if force_white_background:
+        background_identifier = "none"
+        strict_background = False
+    elif overrides.background is not None:
+        background_identifier = _resolve_background(snapshot, decoration, configuration, chooser, overrides.background)
+        strict_background = True
+    elif resolved.background == "none":
+        background_identifier = "none"
+        strict_background = True
+    else:
+        if resolved.background not in configuration.backgrounds:
+            raise DailyImagePreparationError(
+                f"published background {resolved.background!r} is unavailable; install or register that resource"
+            )
+        background_identifier = resolved.background
+        strict_background = True
+    if overrides.text_color is not None:
+        text_color_identifier = _strict_pool_override(
+            overrides.text_color,
+            configuration.text_color_pools,
+            configuration.palette,
+            "text color",
+            chooser,
+        )
+    else:
+        text_color_identifier = resolved.text_color
+    if text_color_identifier not in configuration.palette:
+        source = "explicit" if overrides.text_color is not None else "published"
+        raise DailyImagePreparationError(
+            f"{source} text color {text_color_identifier!r} is unavailable in the configured palette"
+        )
+    text_color = _palette_color(configuration, text_color_identifier)
+
+    if overrides.tint is not None:
+        decoration_color_identifier = _strict_pool_override(
+            overrides.tint,
+            configuration.decoration_color_pools,
+            configuration.palette,
+            "decoration tint color",
+            chooser,
+        )
+        if decoration_color_identifier not in configuration.palette:
+            raise DailyImagePreparationError(
+                f"explicit decoration tint color {decoration_color_identifier!r} is not in the palette"
+            )
+    else:
+        decoration_color_identifier = resolved.decoration_color
+        if decoration_color_identifier is not None and decoration_color_identifier not in configuration.palette:
+            raise DailyImagePreparationError(
+                f"published decoration tint color {decoration_color_identifier!r} is unavailable in the "
+                "configured palette"
+            )
+    tintable = decoration is not None and any(decoration.tintable and layer.tintable for layer in decoration.layers)
+    decoration_tint = (
+        _palette_color(configuration, decoration_color_identifier)
+        if tintable and decoration_color_identifier is not None
+        else None
+    )
+
+    faces = dict(resolved.font_faces)
+    faces.update(overrides.font_faces)
+    font_overrides = PresentationOverrides(
+        font=overrides.font if overrides.font is not None else resolved.font_bundle,
+        font_faces=faces,
+    )
+    fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, font_overrides)
+    style = resolved.presentation_style if overrides.style is None else overrides.style
+    if style not in {"centered", "left-aligned"}:
+        raise DailyImagePreparationError(f"unsupported presentation style: {style!r}")
+    qr_enabled = resolved.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled
+    if type(qr_enabled) is not bool:
+        raise DailyImagePreparationError("resolved QR policy must be a boolean")
+    return _PresentationChoices(
+        decoration_identifier,
+        decoration,
+        background_identifier,
+        strict_background,
+        decoration is not None,
+        text_color,
+        text_color_identifier,
+        decoration_tint,
+        decoration_color_identifier if tintable else None,
+        MappingProxyType(fonts),
+        style,
+        qr_enabled,
+        overrides.qr_enabled is not None,
+    )
+
+
 def _resolve_presentation(
     snapshot: DailySnapshot,
     configuration: ApplicationConfiguration,
@@ -236,6 +380,7 @@ def _resolve_presentation(
     output_specification: ResolvedOutputSpecification,
     presentation_style: str,
     overrides: PresentationOverrides,
+    resolved_presentation: ResolvedPresentation | None = None,
 ) -> tuple[LiteraryComposition, PresentationGeometry, int, int, str]:
     composition = LiteraryComposition(
         quotation=snapshot.quotation_text,
@@ -243,16 +388,26 @@ def _resolve_presentation(
         attribution=snapshot.attribution,
     )
     insets = (
-        configuration.presentation_insets
-        if decoration is None or decoration.presentation_insets is None
-        else decoration.presentation_insets
+        resolved_presentation.insets
+        if resolved_presentation is not None
+        else (
+            configuration.presentation_insets
+            if decoration is None or decoration.presentation_insets is None
+            else decoration.presentation_insets
+        )
     )
     try:
         geometry = resolve_presentation_geometry(output_specification, insets)
     except PresentationGeometryError as error:
         raise DailyImagePreparationError(f"cannot resolve literary presentation geometry: {error}") from error
-    min_design_font_size = configuration.min_font_size if overrides.min_font_size is None else overrides.min_font_size
-    max_design_font_size = configuration.max_font_size if overrides.max_font_size is None else overrides.max_font_size
+    min_font_size = (
+        configuration.min_font_size if resolved_presentation is None else resolved_presentation.min_font_size
+    )
+    max_font_size = (
+        configuration.max_font_size if resolved_presentation is None else resolved_presentation.max_font_size
+    )
+    min_design_font_size = min_font_size if overrides.min_font_size is None else overrides.min_font_size
+    max_design_font_size = max_font_size if overrides.max_font_size is None else overrides.max_font_size
     for field_name, font_size in (
         ("min_font_size", min_design_font_size),
         ("max_font_size", max_design_font_size),
@@ -1087,6 +1242,7 @@ def _prepare_daily_images_for_specification(
     overrides: PresentationOverrides,
     variant_key: ResolvedOutputSpecification | PreparedImageVariantKey,
     *,
+    resolved_presentation: ResolvedPresentation | None = None,
     selection_revision: int | None = None,
     on_metadata: (
         Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[dict[str, object], ...]], None] | None
@@ -1117,7 +1273,13 @@ def _prepare_daily_images_for_specification(
     decoration_identifier = choices.decoration_identifier
     decoration = choices.decoration
     composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-        snapshot, configuration, decoration, output_specification, choices.presentation_style, overrides
+        snapshot,
+        configuration,
+        decoration,
+        output_specification,
+        choices.presentation_style,
+        overrides,
+        resolved_presentation,
     )
     presentation_canvas_size = geometry.presentation_canvas_size
     qr_placement: QRCodePlacement | None = None
@@ -1321,6 +1483,7 @@ def prepare_daily_images(
     force_white_background: bool = False,
     forced_decoration_tint: tuple[int, int, int] | None = None,
     overrides: PresentationOverrides | None = None,
+    resolved_presentation: ResolvedPresentation | None = None,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
     on_presentation_image: (
@@ -1334,6 +1497,8 @@ def prepare_daily_images(
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
     if not isinstance(configuration, ApplicationConfiguration):
         raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
+    if resolved_presentation is not None and not isinstance(resolved_presentation, ResolvedPresentation):
+        raise DailyImagePreparationError("resolved_presentation must be ResolvedPresentation")
     if on_metadata is not None and (type(selection_revision) is not int or selection_revision <= 0):
         raise DailyImagePreparationError("metadata capture requires a positive selection_revision")
     if not isinstance(output_specifications, Sequence) or isinstance(output_specifications, (str, bytes)):
@@ -1363,6 +1528,7 @@ def prepare_daily_images(
                 force_white_background=force_white_background,
                 forced_decoration_tint=forced_decoration_tint,
                 overrides=effective_overrides,
+                resolved_presentation=resolved_presentation,
                 destination_presentation=destination_presentation,
             )
             for output_specification in sorted(
@@ -1382,6 +1548,7 @@ def prepare_daily_images(
                     choices,
                     effective_overrides,
                     variant_key,
+                    resolved_presentation=resolved_presentation,
                     selection_revision=selection_revision,
                     on_metadata=on_metadata,
                     strict_decoration=strict_decoration,
@@ -1403,5 +1570,6 @@ __all__ = [
     "NineSliceGuide",
     "PreparationDiagnostics",
     "PresentationOverrides",
+    "ResolvedPresentation",
     "prepare_daily_images",
 ]
