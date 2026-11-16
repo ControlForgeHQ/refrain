@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from refrain import (
+    DestinationPresentation,
     DisplayBackendConfiguration,
     DisplayOutputConfiguration,
     ResolvedOutputSpecification,
@@ -49,6 +50,7 @@ class SimulatedBackend:
         self.closed = False
         self.destinations: list[str] = []
         self.images: list[Image.Image] = []
+        self.publications: list[tuple[str, int]] = []
 
     def update(self, image: Image.Image) -> None:
         value = image.getpixel((0, 0))[0]
@@ -63,6 +65,7 @@ class SimulatedBackend:
     def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
         self.destinations.append(destination.identifier)
         self.images.append(image)
+        self.publications.append((destination.identifier, image.getpixel((0, 0))[0]))
         self.update(image)
 
     def update_output(self, _output_id: str, image: Image.Image) -> None:
@@ -105,6 +108,36 @@ def test_withdrawal_wakes_publication_waiters(wait_method: str) -> None:
     finally:
         release.set()
         waiter.join(2)
+        coordinator.close()
+
+
+def test_scheduled_group_routing_is_destination_specific_but_transients_remain_specification_only() -> None:
+    specification = ResolvedOutputSpecification("16:9", (8, 4))
+    first = DisplayOutputConfiguration("first", specification, DestinationPresentation(background="none"))
+    second = DisplayOutputConfiguration("second", specification, DestinationPresentation(qr_enabled=False))
+    configuration_with_groups = DisplayBackendConfiguration("image-server", outputs=(first, second))
+    updates = {"image-server": []}
+    backend = SimulatedBackend("image-server", updates)
+    coordinator = DisplayPublicationCoordinator((configuration_with_groups,), lambda _config: backend, retry=False)
+    scheduled = {
+        first.prepared_image_key: Image.new("RGB", (8, 4), (21, 0, 0)),
+        second.prepared_image_key: Image.new("RGB", (8, 4), (42, 0, 0)),
+    }
+
+    try:
+        coordinator.publish((7, 0), scheduled)
+        assert coordinator.wait_for_publication((7, 0), timeout=2)
+        assert backend.publications == [("first", 21), ("second", 42)]
+
+        transient = Image.new("RGB", (8, 4), (63, 0, 0))
+        operation = coordinator.publish_transient(
+            "first",
+            {"first": specification},
+            {specification: transient},
+        )
+        assert operation.wait(2).status is PublicationStatus.SUCCEEDED
+        assert backend.publications[-1] == ("first", 63)
+    finally:
         coordinator.close()
 
 

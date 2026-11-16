@@ -641,19 +641,18 @@ Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
 #### Complete-set cache
 
-The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, expected output specifications, ordered reveal stages, and required preparation groups. For reconstruction-capable publication, cache the resolved preparation metadata alongside its exact image collection using the same versioned publication-metadata schema used for completed publication. Do not define a separate prepared-presentation descriptor, rendering snapshot type, or intermediate translation schema. The schema fields and preparation-stage validation contract are defined in [Publication Metadata](PUBLICATION_METADATA.md). Persist stage metadata and image integrity associations in the same complete-set transaction. The preparation metadata records the committed quotation and applicable semantic information plus the resolved artistic choices that produced the images; publication-event fields that do not yet exist remain explicitly nullable as that schema specifies. It must not invent publication IDs or timestamps. Every required stage for every output specification and preparation group must be present with valid associated metadata. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate image/metadata association, collection completeness, and integrity, detecting missing, damaged, truncated, mismatched, or inconsistent files.
+The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, effective presentation requirements/compatible preparation groups, output specifications, and ordered reveal stages. Cache the resolved preparation metadata alongside its exact image collection using the existing versioned publication-metadata schema. Do not define a separate prepared-presentation descriptor, rendering snapshot type, or intermediate translation schema. The schema fields and preparation-stage validation contract are defined in [Publication Metadata](PUBLICATION_METADATA.md). Persist stage metadata and image integrity associations in the same complete-set transaction. The preparation metadata records the committed quotation and applicable semantic information plus the actual resolved artistic choices that produced the images, including resolved resource and palette identifiers, font bundle and role-specific faces, and effective QR behavior. Publication-event fields that do not yet exist remain explicitly nullable as that schema specifies; do not invent publication IDs or timestamps. Every required stage for every output specification and preparation group must be present with valid associated metadata. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate image/metadata association, collection completeness, and integrity, detecting missing, damaged, truncated, mismatched, or inconsistent files.
 
 Reuse a complete compatible cached collection and its original resolved choices after restart. Do not repeat random resource selection or infer choices from finished pixels to reconstruct metadata for existing images. Missing, damaged, inconsistent, or incompatible metadata makes a reconstruction-capable collection unusable; regenerate the compatible images and metadata together from the committed selection, without changing its identity, history, or reveal progression. The metadata remains disposable derived presentation data.
 
-For the current Version 0.1 model, the output specification distinguishes image
-variants. Under the planned destination-override model, associate variants with
-the effective presentation requirements as well as output specification and
-selection revision. Destinations with different effective overrides must not
-reuse one another's cached images, even when their output specifications match.
-Keep matching requirements in a coherent preparation group so that random
-presentation-wide choices are resolved once and remain shared across that
-group's output specifications. This distinguishes required override inputs
-without requiring a fingerprint of every resolved rendering decision.
+Associate variants with effective presentation requirements as well as output
+specification and selection revision. Destinations with different effective
+overrides must not reuse one another's cached images, even when their output
+specifications match. Keep matching requirements in a coherent preparation
+group so that random presentation-wide choices are resolved once and remain
+shared across that group's output specifications. This distinguishes required
+override inputs without requiring a fingerprint of every resolved rendering
+decision or every installed asset.
 
 In the current Version 0.1 model, reuse a complete valid set during ordinary
 operation without checking whether configuration, fonts, palette, or image
@@ -663,11 +662,14 @@ required variant collection together. Publish the replacement safely only
 after the complete new collection is ready. A replacement may look different
 from the prior set.
 
-In the planned destination-override model, changes to effective destination
-overrides change the required variant identity, so an image prepared for
-different requirements must not be treated as a cache hit. Changes to installed
-assets or rendering behavior alone do not promise archival reproduction; only
-missing or invalid required artifacts trigger regeneration.
+Changes to effective destination overrides change the required variant
+identity, so an image prepared for different requirements must not be treated
+as a cache hit. Changes to installed assets or rendering behavior alone do not
+promise archival reproduction; only missing or invalid required artifacts
+trigger regeneration. Regenerate a missing or invalid compatible collection's
+images and metadata together, without changing committed selection or reveal
+progression. Preserve and reuse other valid preparation groups when only one
+group is incompatible or incomplete.
 
 ### Prerelease implementation simplification
 
@@ -1503,7 +1505,7 @@ Where practical, test recovery using a newly initialized application instance ra
 
 ### Rendering tests
 
-Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. In the current Version 0.1 model, all reveal stages for one output specification have identical output dimensions and destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. In the planned destination-override model, verify that different effective overrides produce separate prepared variants even at identical output specifications, while matching requirements share coherent presentation-wide choices. Verify that the prepared variant set covers each unique output-specification/effective-requirements combination.
+Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification and preparation group have identical output dimensions. Destinations share prepared images only when both their output specification and effective presentation requirements match. Do not require variants for different output specifications to have identical dimensions. Verify that different effective overrides produce separate prepared variants at identical output specifications, while matching requirements share coherent presentation-wide choices. Verify that the prepared variant set covers each unique output-specification/effective-requirements combination.
 
 For reconstruction-capable publication, verify that preparation metadata uses the exact publication metadata schema and remains associated with its compatible image collection after cache reuse and process restart. Cover missing or corrupted metadata, mismatched image and metadata collections, compatible destinations sharing prepared images, destinations with different presentation overrides, and adding a `publish` destination that can reuse compatible cached images. Verify destination-specific finalization creates independent complete metadata without mutating shared cached metadata or another destination's result.
 

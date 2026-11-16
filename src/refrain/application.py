@@ -21,6 +21,7 @@ from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
     DisplayBackendConfiguration,
+    PreparedImageVariantKey,
     load_application_config,
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library
@@ -240,11 +241,11 @@ def _load_configuration(config_file: str | Path | ApplicationConfiguration) -> A
 
 def _load_stage_variants(
     artifacts: PreparedImageArtifactSet,
-    output_specifications: tuple[ResolvedOutputSpecification, ...],
+    output_specifications: tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...],
     stage: int,
-) -> dict[ResolvedOutputSpecification, Image.Image]:
-    """Load one output image for each unique required specification."""
-    images: dict[ResolvedOutputSpecification, Image.Image] = {}
+) -> dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]:
+    """Load one output image for each required preparation-group variant."""
+    images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] = {}
     try:
         for specification in output_specifications:
             images[specification] = artifacts.load_stage(specification, stage)
@@ -253,6 +254,18 @@ def _load_stage_variants(
             image.close()
         raise
     return images
+
+
+def _destination_variant_images(
+    configuration: ApplicationConfiguration,
+    images: Mapping[ResolvedOutputSpecification, Image.Image],
+) -> dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]:
+    """Share a view's specification-only raster across each destination's preparation key."""
+    return {
+        output.prepared_image_key: images[output.output_specification]
+        for backend in configuration.display_backends
+        for output in backend.outputs
+    }
 
 
 def _recover_images(
@@ -267,7 +280,7 @@ def _recover_images(
             artifact_store,
             resolve_reveal_stages(state.snapshot),
             configuration,
-            configuration.required_output_specifications,
+            configuration.required_prepared_image_keys,
             chooser=chooser,
         )
     except DailyImagePreparationError as error:
@@ -285,7 +298,10 @@ def _refresh_scheduled(
     wall_clock: Callable[[], datetime],
     shutdown: Event,
     state_lock: Lock,
-    admit: Callable[[tuple[int, int], Mapping[ResolvedOutputSpecification, Image.Image]], PublicationOperation],
+    admit: Callable[
+        [tuple[int, int], Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]],
+        PublicationOperation,
+    ],
     remember_artifacts: Callable[[int, PreparedImageArtifactSet], None] | None = None,
     artifact_lock: Lock | None = None,
 ) -> PublicationOperation:
@@ -307,7 +323,7 @@ def _refresh_scheduled(
 
     with artifact_lock if artifact_lock is not None else Lock():
         artifacts = _recover_images(state, artifact_store, configuration, chooser)
-        images = _load_stage_variants(artifacts, configuration.required_output_specifications, identity[1])
+        images = _load_stage_variants(artifacts, configuration.required_prepared_image_keys, identity[1])
         transferred = False
         try:
             with state_lock:
@@ -458,7 +474,9 @@ def run_startup(
                     retry=False,
                     monotonic_clock=monotonic_clock,
                 )
-                coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_images)
+                coordinator.publish(
+                    _INFORMATION_VIEW_IDENTITY, _destination_variant_images(configuration, information_images)
+                )
                 information_images_transferred = True
                 pending_information_images = None
                 if coordinator.wait_for_any_publication(
@@ -501,7 +519,7 @@ def run_startup(
             try:
                 images = _load_stage_variants(
                     artifacts,
-                    configuration.required_output_specifications,
+                    configuration.required_prepared_image_keys,
                     stage,
                 )
             except ArtifactStoreError as error:
@@ -693,7 +711,7 @@ def run_application(
                             chooser,
                         )
                         try:
-                            artifact_store.cleanup(state.revision)
+                            artifact_store.cleanup(state.revision, configuration.required_prepared_image_keys)
                         except ArtifactStoreError as error:
                             _LOGGER.warning("Cannot clean obsolete prepared images: %s", error)
                         with state_lock:
@@ -755,7 +773,10 @@ def run_application(
                     if not information_view_done and not information_view_requested:
                         assert information_view_images is not None
                         with state_lock:
-                            coordinator.publish(_INFORMATION_VIEW_IDENTITY, information_view_images)
+                            coordinator.publish(
+                                _INFORMATION_VIEW_IDENTITY,
+                                _destination_variant_images(configuration, information_view_images),
+                            )
                         information_view_images = None
                         information_view_requested = True
                         information_view_attempt_started = monotonic_clock()
@@ -790,7 +811,7 @@ def run_application(
                     try:
                         images = _load_stage_variants(
                             current_artifacts,
-                            configuration.required_output_specifications,
+                            configuration.required_prepared_image_keys,
                             stage,
                         )
                     except ArtifactStoreError as error:
@@ -939,7 +960,7 @@ def run_demo(
                         chooser,
                     )
                     try:
-                        artifact_store.cleanup(state.revision)
+                        artifact_store.cleanup(state.revision, configuration.required_prepared_image_keys)
                     except ArtifactStoreError as error:
                         _LOGGER.warning("Cannot clean obsolete demo images: %s", error)
                     continue
@@ -950,7 +971,7 @@ def run_demo(
                     try:
                         images = _load_stage_variants(
                             artifacts,
-                            configuration.required_output_specifications,
+                            configuration.required_prepared_image_keys,
                             stage,
                         )
                     except ArtifactStoreError as error:

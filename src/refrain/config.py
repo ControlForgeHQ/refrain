@@ -175,11 +175,54 @@ class RevealSchedule:
 
 
 @dataclass(frozen=True)
+class DestinationPresentation:
+    """Destination-local preferences that define a compatible preparation group."""
+
+    background: str | None = None
+    decoration: str | None = None
+    font: str | None = None
+    text_color: tuple[str, ...] | None = None
+    decoration_color: tuple[str, ...] | None = None
+    qr_enabled: bool | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        """Return whether this declaration leaves all normal presentation preferences intact."""
+        return all(
+            value is None
+            for value in (
+                self.background,
+                self.decoration,
+                self.font,
+                self.text_color,
+                self.decoration_color,
+                self.qr_enabled,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class PreparedImageVariantKey:
+    """Identify a raster variant within its destination-independent preparation group."""
+
+    output_specification: ResolvedOutputSpecification
+    presentation: DestinationPresentation
+
+
+@dataclass(frozen=True)
 class DisplayOutputConfiguration:
     """Validated identity and output specification for one display destination."""
 
     identifier: str
     output_specification: ResolvedOutputSpecification
+    presentation: DestinationPresentation = field(default_factory=DestinationPresentation)
+
+    @property
+    def prepared_image_key(self) -> ResolvedOutputSpecification | PreparedImageVariantKey:
+        """Return the shared raster key, including destination presentation requirements when set."""
+        if self.presentation.is_empty:
+            return self.output_specification
+        return PreparedImageVariantKey(self.output_specification, self.presentation)
 
 
 @dataclass(frozen=True)
@@ -242,6 +285,21 @@ class ApplicationConfiguration:
                 key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
             )
         )
+
+    @property
+    def required_prepared_image_keys(self) -> tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...]:
+        """Return the unique destination-compatible raster variants required by the runtime."""
+        keys = {output.prepared_image_key for backend in self.display_backends for output in backend.outputs}
+
+        def sort_key(key: ResolvedOutputSpecification | PreparedImageVariantKey) -> tuple[object, ...]:
+            specification = key.output_specification if isinstance(key, PreparedImageVariantKey) else key
+            return (
+                specification.aspect_ratio,
+                specification.requested_output_size,
+                repr(key.presentation) if isinstance(key, PreparedImageVariantKey) else "",
+            )
+
+        return tuple(sorted(keys, key=sort_key))
 
 
 def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
@@ -650,6 +708,65 @@ def _parse_presentation(
     return insets, duration, qr_enabled
 
 
+def _parse_destination_presentation(
+    value: object,
+    field: str,
+    report: Callable[..., None],
+) -> DestinationPresentation:
+    if not isinstance(value, dict):
+        report(field, "must be a mapping", logging.ERROR)
+        return DestinationPresentation()
+
+    _known_fields(
+        value,
+        {"background", "decoration", "font", "text_color", "decoration_color", "qr"},
+        field,
+        report,
+    )
+    resolved: dict[str, object] = {}
+    for name in ("background", "decoration", "font"):
+        if name not in value:
+            continue
+        preference = value[name]
+        if not isinstance(preference, str) or not preference.strip():
+            report(f"{field}.{name}", "must be a nonempty resource identifier or pool reference", logging.ERROR)
+        else:
+            resolved[name] = preference
+
+    for name in ("text_color", "decoration_color"):
+        if name not in value:
+            continue
+        preference = value[name]
+        if isinstance(preference, str) and preference.strip():
+            resolved[name] = (preference,)
+        elif (
+            isinstance(preference, list)
+            and preference
+            and all(isinstance(identifier, str) and identifier.strip() for identifier in preference)
+        ):
+            resolved[name] = tuple(preference)
+        else:
+            report(
+                f"{field}.{name}",
+                "must be a palette identifier or a nonempty sequence of palette identifiers",
+                logging.ERROR,
+            )
+
+    if "qr" in value:
+        qr = value["qr"]
+        if not isinstance(qr, dict):
+            report(f"{field}.qr", "must be a mapping", logging.ERROR)
+        else:
+            _known_fields(qr, {"enabled"}, f"{field}.qr", report)
+            if "enabled" in qr:
+                if type(qr["enabled"]) is bool:
+                    resolved["qr_enabled"] = qr["enabled"]
+                else:
+                    report(f"{field}.qr.enabled", "must be a YAML boolean", logging.ERROR)
+
+    return DestinationPresentation(**resolved)
+
+
 def _parse_destinations(
     data: dict[str, object],
     report: Callable[..., None],
@@ -695,7 +812,12 @@ def _parse_destinations(
             if not isinstance(value, dict):
                 report(field, "must be a destination mapping", logging.ERROR)
                 continue
-            _known_fields(value, {"id", "type", "aspect_ratio", "resolution"}, field, report)
+            _known_fields(value, {"id", "type", "aspect_ratio", "resolution", "presentation"}, field, report)
+            presentation = (
+                _parse_destination_presentation(value["presentation"], f"{field}.presentation", report)
+                if "presentation" in value
+                else DestinationPresentation()
+            )
             identifier = value.get("id")
             if (
                 not isinstance(identifier, str)
@@ -752,7 +874,7 @@ def _parse_destinations(
                         )
                 specification = ResolvedOutputSpecification("4:3", (1600, 1200))
             destination_groups.setdefault(backend_type, []).append(
-                DisplayOutputConfiguration(identifier, specification)
+                DisplayOutputConfiguration(identifier, specification, presentation)
             )
 
     return tuple(

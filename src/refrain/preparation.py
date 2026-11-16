@@ -19,7 +19,9 @@ from .config import (
     CompositionLayerResource,
     DecorationLayerResource,
     DecorationResource,
+    DestinationPresentation,
     FontResource,
+    PreparedImageVariantKey,
     load_background_image,
     load_composition_layer_image,
     load_decoration_layer_image,
@@ -125,17 +127,31 @@ def _resolve_presentation_choices(
     force_white_background: bool,
     forced_decoration_tint: tuple[int, int, int] | None,
     overrides: PresentationOverrides,
+    destination_presentation: DestinationPresentation = DestinationPresentation(),
 ) -> _PresentationChoices:
     if not isinstance(overrides, PresentationOverrides):
         raise DailyImagePreparationError("overrides must be PresentationOverrides")
     invalid_roles = set(overrides.font_faces) - {"quotation", "source", "attribution"}
     if invalid_roles:
         raise DailyImagePreparationError(f"unsupported explicit font face roles: {', '.join(sorted(invalid_roles))}")
-    decoration_identifier, decoration = _resolve_decoration(snapshot, configuration, chooser, overrides.decoration)
+    decoration_identifier, decoration = _resolve_decoration(
+        snapshot,
+        configuration,
+        chooser,
+        overrides.decoration,
+        destination_presentation.decoration,
+    )
     background_identifier = (
         "none"
         if force_white_background
-        else _resolve_background(snapshot, decoration, configuration, chooser, overrides.background)
+        else _resolve_background(
+            snapshot,
+            decoration,
+            configuration,
+            chooser,
+            overrides.background,
+            destination_presentation.background,
+        )
     )
     background = configuration.backgrounds.get(background_identifier)
     text_color_identifier = "black"
@@ -156,6 +172,7 @@ def _resolve_presentation_choices(
         background,
         chooser,
         overrides.text_color,
+        destination_presentation.text_color,
         on_resolved_identifier=remember_text_color,
     )
     tint_identifier = (
@@ -180,11 +197,12 @@ def _resolve_presentation_choices(
         () if decoration is None else decoration.layers,
         (_palette_color(configuration, tint_identifier) if tint_identifier is not None else forced_decoration_tint),
         background,
+        destination_presentation.decoration_color,
         on_resolved_identifier=remember_decoration_color,
     )
     if decoration_tint is None:
         decoration_color_identifier = None
-    fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, overrides)
+    fonts = _resolve_fonts(snapshot, configuration, decoration, chooser, overrides, destination_presentation)
     style = snapshot.presentation_style if overrides.style is None else overrides.style
     if style not in {"centered", "left-aligned"}:
         raise DailyImagePreparationError(f"unsupported presentation style: {style!r}")
@@ -202,8 +220,12 @@ def _resolve_presentation_choices(
         decoration_color_identifier,
         MappingProxyType(fonts),
         style,
-        configuration.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled,
-        overrides.qr_enabled is not None,
+        (
+            destination_presentation.qr_enabled
+            if overrides.qr_enabled is None and destination_presentation.qr_enabled is not None
+            else configuration.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled
+        ),
+        overrides.qr_enabled is not None or destination_presentation.qr_enabled is not None,
     )
 
 
@@ -333,6 +355,7 @@ def _resolve_text_color(
     background: BackgroundResource | None,
     chooser: random.Random,
     override: str | None = None,
+    destination_preference: tuple[str, ...] | None = None,
     *,
     on_resolved_identifier: Callable[[str], None] | None = None,
 ) -> tuple[int, int, int]:
@@ -352,6 +375,7 @@ def _resolve_text_color(
     identifier, color = _resolve_palette_preference(
         configuration,
         (
+            ("destination presentation", destination_preference, configuration.text_color_pools),
             ("content entry", snapshot.text_color, configuration.text_color_pools),
             (
                 "selected background",
@@ -381,6 +405,7 @@ def _resolve_decoration_tint(
     layers: Sequence[DecorationLayerResource],
     forced_tint: tuple[int, int, int] | None = None,
     background: BackgroundResource | None = None,
+    destination_preference: tuple[str, ...] | None = None,
     *,
     on_resolved_identifier: Callable[[str], None] | None = None,
 ) -> tuple[int, int, int] | None:
@@ -392,6 +417,7 @@ def _resolve_decoration_tint(
     identifier, color = _resolve_palette_preference(
         configuration,
         (
+            ("destination presentation", destination_preference, configuration.decoration_color_pools),
             ("content entry", snapshot.decoration_color, configuration.decoration_color_pools),
             (
                 "selected background",
@@ -837,8 +863,11 @@ def _resolve_fonts(
     decoration: DecorationResource | None,
     chooser: random.Random,
     overrides: PresentationOverrides,
+    destination_presentation: DestinationPresentation = DestinationPresentation(),
 ) -> dict[str, ResolvedFont]:
     preferences: list[tuple[str, str]] = []
+    if destination_presentation.font is not None:
+        preferences.append(("destination presentation", destination_presentation.font))
     if snapshot.font is not None:
         preferences.append(("content entry", snapshot.font))
     if decoration is not None and decoration.font is not None:
@@ -955,6 +984,7 @@ def _resolve_decoration(
     configuration: ApplicationConfiguration,
     chooser: random.Random,
     override: str | None = None,
+    destination_preference: str | None = None,
 ) -> tuple[str, DecorationResource | None]:
     if override is not None:
         identifier = _strict_pool_override(
@@ -970,18 +1000,27 @@ def _resolve_decoration(
         if resource is None:
             raise DailyImagePreparationError(f"explicit decoration {identifier!r} is not registered")
         return identifier, resource
-    preferred = snapshot.decoration
-    if preferred == "none":
-        return "none", None
-    if preferred is not None:
-        candidates = _preference_candidates(preferred, configuration.decoration_pools, "content entry")
+    for source, preferred in (
+        ("destination presentation", destination_preference),
+        ("content entry", snapshot.decoration),
+    ):
+        if preferred is None:
+            continue
+        if preferred == "none":
+            return "none", None
+        candidates = _preference_candidates(preferred, configuration.decoration_pools, source)
         usable = tuple(
             identifier for identifier in candidates if identifier == "none" or identifier in configuration.decorations
         )
         if usable:
             identifier = chooser.choice(usable)
             return identifier, configuration.decorations.get(identifier)
-        _LOGGER.warning("Requested decoration %r is unavailable; using the default decoration pool", preferred)
+        if source == "content entry":
+            _LOGGER.warning("Requested decoration %r is unavailable; using the default decoration pool", preferred)
+        else:
+            _LOGGER.warning(
+                "Requested decoration %r from %s is unavailable; checking the next preference", preferred, source
+            )
     if not configuration.default_decorations:
         raise DailyImagePreparationError(
             "no usable decoration remains; add an available decoration preference or configure "
@@ -997,6 +1036,7 @@ def _resolve_background(
     configuration: ApplicationConfiguration,
     chooser: random.Random,
     override: str | None = None,
+    destination_preference: str | None = None,
 ) -> str:
     if override is not None:
         identifier = _strict_pool_override(
@@ -1012,6 +1052,7 @@ def _resolve_background(
             raise DailyImagePreparationError(f"explicit background {identifier!r} is not registered")
         return identifier
     preferences = (
+        ("destination presentation", destination_preference),
         ("content entry", snapshot.background),
         ("selected decoration", None if decoration is None else decoration.background),
     )
@@ -1044,11 +1085,16 @@ def _prepare_daily_images_for_specification(
     output_specification: ResolvedOutputSpecification,
     choices: _PresentationChoices,
     overrides: PresentationOverrides,
+    variant_key: ResolvedOutputSpecification | PreparedImageVariantKey,
     *,
     selection_revision: int | None = None,
-    on_metadata: Callable[[ResolvedOutputSpecification, tuple[dict[str, object], ...]], None] | None = None,
+    on_metadata: (
+        Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[dict[str, object], ...]], None] | None
+    ) = None,
     strict_decoration: bool = False,
-    on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
+    on_resolved_bounds: (
+        Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, PixelBounds], None] | None
+    ) = None,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
     on_presentation_image: (
@@ -1095,7 +1141,7 @@ def _prepare_daily_images_for_specification(
         qr_unavailable_reason = f"decoration {decoration.identifier!r} is not marked qr_ready"
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
     if on_resolved_bounds is not None:
-        on_resolved_bounds(output_specification, geometry.presentation_literary_bounds)
+        on_resolved_bounds(variant_key, geometry.presentation_literary_bounds)
     text_color = choices.text_color
     qr_parameters = PRODUCTION_QR_PARAMETERS
     decoration_tint = choices.decoration_tint
@@ -1240,7 +1286,7 @@ def _prepare_daily_images_for_specification(
                         )
                         for index, stage in enumerate(stages)
                     )
-                    on_metadata(output_specification, metadata)
+                    on_metadata(variant_key, metadata)
                 return tuple(_resize_presentation_to_output(image, geometry.requested_output_size) for image in images)
             except Exception:
                 for image in images:
@@ -1261,13 +1307,17 @@ def prepare_daily_images(
     snapshot: DailySnapshot,
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
-    output_specifications: Sequence[ResolvedOutputSpecification],
+    output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
     *,
     chooser: random.Random | None = None,
     selection_revision: int | None = None,
-    on_metadata: Callable[[ResolvedOutputSpecification, tuple[dict[str, object], ...]], None] | None = None,
+    on_metadata: (
+        Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[dict[str, object], ...]], None] | None
+    ) = None,
     strict_decoration: bool = False,
-    on_resolved_bounds: Callable[[ResolvedOutputSpecification, PixelBounds], None] | None = None,
+    on_resolved_bounds: (
+        Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, PixelBounds], None] | None
+    ) = None,
     force_white_background: bool = False,
     forced_decoration_tint: tuple[int, int, int] | None = None,
     overrides: PresentationOverrides | None = None,
@@ -1276,8 +1326,8 @@ def prepare_daily_images(
     on_presentation_image: (
         Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
     ) = None,
-) -> Mapping[ResolvedOutputSpecification, tuple[Image.Image, ...]]:
-    """Prepare complete reveal-stage image variants for all required output specifications."""
+) -> Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]]:
+    """Prepare complete reveal-stage image variants for all required destination groups."""
     if not isinstance(snapshot, DailySnapshot):
         raise DailyImagePreparationError("snapshot must be a DailySnapshot")
     if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
@@ -1289,43 +1339,57 @@ def prepare_daily_images(
     if not isinstance(output_specifications, Sequence) or isinstance(output_specifications, (str, bytes)):
         raise DailyImagePreparationError("output_specifications must be a nonempty sequence")
     if not output_specifications or any(
-        not isinstance(specification, ResolvedOutputSpecification) for specification in output_specifications
+        not isinstance(specification, (ResolvedOutputSpecification, PreparedImageVariantKey))
+        for specification in output_specifications
     ):
-        raise DailyImagePreparationError("output_specifications must contain resolved specifications")
-    unique_specifications = tuple(
-        sorted(
-            set(output_specifications),
-            key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
-        )
-    )
-    results: dict[ResolvedOutputSpecification, tuple[Image.Image, ...]] = {}
+        raise DailyImagePreparationError("output_specifications must contain resolved specifications or variant keys")
+    group_specifications: dict[DestinationPresentation, set[ResolvedOutputSpecification]] = {}
+    for key in output_specifications:
+        if isinstance(key, PreparedImageVariantKey):
+            if key.presentation.is_empty:
+                raise DailyImagePreparationError("prepared variant keys must have nonempty presentation requirements")
+            group_specifications.setdefault(key.presentation, set()).add(key.output_specification)
+        else:
+            group_specifications.setdefault(DestinationPresentation(), set()).add(key)
+    results: dict[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]] = {}
     chooser = chooser if chooser is not None else random.Random()
     effective_overrides = PresentationOverrides() if overrides is None else overrides
-    choices = _resolve_presentation_choices(
-        snapshot,
-        configuration,
-        chooser,
-        force_white_background=force_white_background,
-        forced_decoration_tint=forced_decoration_tint,
-        overrides=effective_overrides,
-    )
     try:
-        for output_specification in unique_specifications:
-            results[output_specification] = _prepare_daily_images_for_specification(
+        for destination_presentation, specifications in group_specifications.items():
+            choices = _resolve_presentation_choices(
                 snapshot,
-                stages,
                 configuration,
-                output_specification,
-                choices,
-                effective_overrides,
-                selection_revision=selection_revision,
-                on_metadata=on_metadata,
-                strict_decoration=strict_decoration,
-                on_resolved_bounds=on_resolved_bounds,
-                qr_disabled_reason=qr_disabled_reason,
-                on_diagnostics=on_diagnostics,
-                on_presentation_image=on_presentation_image,
+                chooser,
+                force_white_background=force_white_background,
+                forced_decoration_tint=forced_decoration_tint,
+                overrides=effective_overrides,
+                destination_presentation=destination_presentation,
             )
+            for output_specification in sorted(
+                specifications,
+                key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
+            ):
+                variant_key = (
+                    output_specification
+                    if destination_presentation.is_empty
+                    else PreparedImageVariantKey(output_specification, destination_presentation)
+                )
+                results[variant_key] = _prepare_daily_images_for_specification(
+                    snapshot,
+                    stages,
+                    configuration,
+                    output_specification,
+                    choices,
+                    effective_overrides,
+                    variant_key,
+                    selection_revision=selection_revision,
+                    on_metadata=on_metadata,
+                    strict_decoration=strict_decoration,
+                    on_resolved_bounds=on_resolved_bounds,
+                    qr_disabled_reason=qr_disabled_reason,
+                    on_diagnostics=on_diagnostics,
+                    on_presentation_image=on_presentation_image,
+                )
     except Exception:
         for images in results.values():
             for image in images:

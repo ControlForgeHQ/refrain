@@ -8,11 +8,10 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from .artifacts import (
-    ArtifactValidationError,
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
-from .config import ApplicationConfiguration
+from .config import ApplicationConfiguration, PreparedImageVariantKey
 from .geometry import PixelBounds, ResolvedOutputSpecification
 from .persistence import PersistentState
 from .preparation import DailyImagePreparationError, prepare_daily_images
@@ -24,7 +23,7 @@ def recover_prepared_daily_images(
     artifact_store: PreparedImageArtifactStore,
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
-    output_specifications: Sequence[ResolvedOutputSpecification],
+    output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
     *,
     chooser: random.Random | None = None,
 ) -> PreparedImageArtifactSet:
@@ -58,54 +57,54 @@ def recover_prepared_daily_images(
     except QuotationRenderError as error:
         raise DailyImagePreparationError(str(error)) from error
 
-    try:
-        existing = artifact_store.load(
-            state.revision,
-            ordered_stages,
-            output_specifications,
-            state.snapshot,
-        )
-    except ArtifactValidationError:
-        existing = None
-    if existing is not None:
+    existing, missing = artifact_store.load_groups(
+        state.revision,
+        ordered_stages,
+        output_specifications,
+        state.snapshot,
+    )
+    if not missing:
         return existing
 
-    presentation_canvas_literary_bounds: dict[ResolvedOutputSpecification, PixelBounds] = {}
-    prepared_metadata: dict[ResolvedOutputSpecification, tuple[dict[str, object], ...]] = {}
+    presentation_canvas_literary_bounds: dict[ResolvedOutputSpecification | PreparedImageVariantKey, PixelBounds] = {}
+    prepared_metadata: dict[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[dict[str, object], ...]] = {}
 
-    def remember_bounds(output_specification: ResolvedOutputSpecification, bounds: PixelBounds) -> None:
-        presentation_canvas_literary_bounds[output_specification] = bounds
+    def remember_bounds(
+        variant_key: ResolvedOutputSpecification | PreparedImageVariantKey, bounds: PixelBounds
+    ) -> None:
+        presentation_canvas_literary_bounds[variant_key] = bounds
 
     def remember_metadata(
-        output_specification: ResolvedOutputSpecification,
+        variant_key: ResolvedOutputSpecification | PreparedImageVariantKey,
         metadata: tuple[dict[str, object], ...],
     ) -> None:
-        prepared_metadata[output_specification] = metadata
+        prepared_metadata[variant_key] = metadata
 
     prepared_variants = prepare_daily_images(
         state.snapshot,
         ordered_stages,
         configuration,
-        output_specifications,
+        missing,
         chooser=chooser,
         selection_revision=state.revision,
         on_metadata=remember_metadata,
         on_resolved_bounds=remember_bounds,
     )
     try:
-        artifact_set = artifact_store.store(
+        new_artifacts = artifact_store.store(
             state.revision,
             ordered_stages,
             prepared_variants,
             prepared_metadata,
         )
-        artifact_variants = dict(artifact_set.variants)
+        artifact_variants = dict(existing.variants)
+        artifact_variants.update(new_artifacts.variants)
         for output_specification, bounds in presentation_canvas_literary_bounds.items():
             artifact_variants[output_specification] = replace(
-                artifact_variants[output_specification],
+                new_artifacts.variant_for(output_specification),
                 presentation_canvas_literary_bounds=bounds,
             )
-        return replace(artifact_set, variants=MappingProxyType(artifact_variants))
+        return replace(new_artifacts, variants=MappingProxyType(artifact_variants))
     finally:
         for images in prepared_variants.values():
             for image in images:

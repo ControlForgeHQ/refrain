@@ -20,12 +20,14 @@ from refrain import (
     ContentEntry,
     DailyImagePreparationError,
     DailySnapshot,
+    DestinationPresentation,
     DisplayBackendConfiguration,
     DisplayOutputConfiguration,
     EligibilityRule,
     FontResource,
     PersistentStateStore,
     PreparedImageArtifactStore,
+    PreparedImageVariantKey,
     PresentationInsets,
     Quotation,
     QuotationCandidate,
@@ -80,7 +82,7 @@ def _prepare_variants(snapshot, stages, configuration, **kwargs):
         snapshot,
         stages,
         configuration,
-        configuration.required_output_specifications,
+        configuration.required_prepared_image_keys,
         **kwargs,
     )
 
@@ -95,7 +97,7 @@ def _recover(state, artifact_store, stages, configuration=_CONFIGURATION, **kwar
         artifact_store,
         stages,
         configuration,
-        configuration.required_output_specifications,
+        configuration.required_prepared_image_keys,
         **kwargs,
     )
 
@@ -336,6 +338,81 @@ def test_output_specification_change_requires_a_new_artifact_variant(committed_s
     with recovered.load_stage(recovered.output_specifications[0], 0) as image:
         assert image.size == (3840, 2400)
     assert state_path.read_bytes() == state_bytes
+
+
+def test_changed_override_regenerates_only_its_incompatible_group(
+    committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, state_path = committed_state
+    specification = _OUTPUT_SPECIFICATION
+    shared = DestinationPresentation(qr_enabled=False)
+    original = DestinationPresentation(qr_enabled=True)
+    other_specification = ResolvedOutputSpecification("4:3", (1600, 1200))
+
+    def configuration(second_presentation: DestinationPresentation) -> ApplicationConfiguration:
+        return replace(
+            _CONFIGURATION,
+            display_backends=(
+                DisplayBackendConfiguration(
+                    "image-server",
+                    outputs=(
+                        DisplayOutputConfiguration("shared", specification, shared),
+                        DisplayOutputConfiguration("shared-wide", other_specification, shared),
+                        DisplayOutputConfiguration("other", specification, second_presentation),
+                    ),
+                ),
+            ),
+        )
+
+    initial_configuration = configuration(original)
+    first = _recover_daily_images(
+        state,
+        artifact_store,
+        _STAGES,
+        initial_configuration,
+        initial_configuration.required_prepared_image_keys,
+    )
+    shared_key = PreparedImageVariantKey(specification, shared)
+    original_key = PreparedImageVariantKey(specification, original)
+    shared_paths = first.variant_for(shared_key).stage_paths
+    original_paths = first.variant_for(original_key).stage_paths
+    state_bytes = state_path.read_bytes()
+
+    changed = DestinationPresentation(background="none", qr_enabled=True)
+    changed_configuration = configuration(changed)
+    prepared_groups = []
+    prepare = recovery.prepare_daily_images
+
+    def capture_missing_group(snapshot, stages, config, keys, **kwargs):
+        prepared_groups.append(tuple(keys))
+        return prepare(snapshot, stages, config, keys, **kwargs)
+
+    monkeypatch.setattr(recovery, "prepare_daily_images", capture_missing_group)
+    recovered = _recover_daily_images(
+        state,
+        artifact_store,
+        _STAGES,
+        changed_configuration,
+        changed_configuration.required_prepared_image_keys,
+    )
+    changed_key = PreparedImageVariantKey(specification, changed)
+
+    assert prepared_groups == [(changed_key,)]
+    assert recovered.variant_for(shared_key).stage_paths == shared_paths
+    assert recovered.variant_for(shared_key).stage_paths != original_paths
+    assert recovered.variant_for(changed_key).load_metadata(0)["reconstruction"]["background"] == "none"
+    assert state_path.read_bytes() == state_bytes
+
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args, **_kwargs: pytest.fail("unexpected rendering"))
+    restarted = _recover_daily_images(
+        state,
+        artifact_store,
+        _STAGES,
+        changed_configuration,
+        changed_configuration.required_prepared_image_keys,
+    )
+    assert restarted.variant_for(shared_key).stage_paths == recovered.variant_for(shared_key).stage_paths
+    assert restarted.variant_for(changed_key).stage_paths == recovered.variant_for(changed_key).stage_paths
 
 
 def test_valid_artifacts_are_reused_after_font_resource_changes(
