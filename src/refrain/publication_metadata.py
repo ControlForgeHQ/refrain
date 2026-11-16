@@ -38,8 +38,7 @@ def content_entry(snapshot: Any) -> dict[str, object]:
         "id": snapshot.entry_id,
         "quotations": [snapshot.quotation_text],
         "presentation_style": snapshot.presentation_style,
-        "reveal": dict(snapshot.reveal_schedule),
-        "eligibility": [{"ordinary": True}],
+        "reveal": {field: snapshot.reveal_schedule[field] for field in ("source", "attribution")},
     }
     for field in ("source", "attribution", "font", "background", "decoration"):
         value = getattr(snapshot, field)
@@ -210,7 +209,7 @@ def validate_publication_metadata(document: object, *, stage: str) -> None:
     }
     if (
         not isinstance(entry, dict)
-        or not {"id", "quotations", "presentation_style", "reveal", "eligibility"} <= set(entry)
+        or not {"id", "quotations", "presentation_style", "reveal"} <= set(entry)
         or set(entry) - entry_fields
         or not isinstance(entry.get("id"), str)
         or not _IDENTIFIER.fullmatch(entry["id"])
@@ -235,14 +234,16 @@ def validate_publication_metadata(document: object, *, stage: str) -> None:
     reveal_schedule = entry["reveal"]
     if (
         not isinstance(reveal_schedule, dict)
-        or set(reveal_schedule) != _ROLES
+        or set(reveal_schedule) - {"source", "attribution"}
         or any(not isinstance(value, str) or not _TIME.fullmatch(value) for value in reveal_schedule.values())
     ):
         raise PublicationMetadataError("content_entry.reveal is invalid")
-    if (
+    if "priority" in entry and (type(entry["priority"]) is not int):
+        raise PublicationMetadataError("content_entry.priority must be an integer")
+    if "eligibility" in entry and (
         not isinstance(entry["eligibility"], list)
         or not entry["eligibility"]
-        or any(not isinstance(rule, dict) or not rule for rule in entry["eligibility"])
+        or any(not _valid_eligibility_rule(rule) for rule in entry["eligibility"])
     ):
         raise PublicationMetadataError("content_entry.eligibility is invalid")
     if "font_faces" in entry and (
@@ -314,17 +315,50 @@ def validate_publication_metadata(document: object, *, stage: str) -> None:
     actions = document["actions"]
     if not isinstance(actions, list):
         raise PublicationMetadataError("actions must be an ordered sequence")
+    if len(actions) > 100:
+        raise PublicationMetadataError("actions must not exceed the content-entry limit")
     for action in actions:
         if not isinstance(action, dict) or set(action) != {"type", "visibility", "payload"}:
             raise PublicationMetadataError("each action must preserve its complete content-entry declaration")
         if not isinstance(action["type"], str) or not _IDENTIFIER.fullmatch(action["type"]):
             raise PublicationMetadataError("action type must be a nonempty string")
         visibility = action["visibility"]
+        payload = action["payload"]
         if (
             not isinstance(visibility, list)
             or not visibility
             or any(not isinstance(value, str) or value not in {"public", "private"} for value in visibility)
             or len(set(visibility)) != len(visibility)
-            or not isinstance(action["payload"], str)
+            or not isinstance(payload, str)
+            or len(payload.encode("utf-8")) > 10_240
         ):
             raise PublicationMetadataError("action visibility and payload are invalid")
+
+
+def _valid_eligibility_rule(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    fields = set(value)
+    if fields == {"ordinary"}:
+        return value["ordinary"] is True
+    if fields not in ({"year", "month", "day"}, {"month", "day"}, {"day"}, {"month"}):
+        return False
+    for field, member in value.items():
+        if type(member) is not int:
+            return False
+        if field == "year" and member < 1:
+            return False
+        if field == "month" and not 1 <= member <= 12:
+            return False
+        if field == "day" and not 1 <= member <= 31:
+            return False
+    month = value.get("month")
+    day = value.get("day")
+    if month is not None and day is not None:
+        maximum_day = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)[month - 1]
+        year = value.get("year")
+        if month == 2 and year is not None and (year % 4 != 0 or (year % 100 == 0 and year % 400 != 0)):
+            maximum_day = 28
+        if day > maximum_day:
+            return False
+    return True

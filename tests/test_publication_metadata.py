@@ -4,7 +4,9 @@ from datetime import date
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from refrain.content import load_content_library
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.publication_metadata import (
     PUBLICATION_METADATA_VERSION,
@@ -37,8 +39,7 @@ def _document():
             "id": "entry",
             "quotations": ["A thought worth keeping."],
             "presentation_style": "centered",
-            "reveal": {"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-            "eligibility": [{"ordinary": True}],
+            "reveal": {"source": "12:00", "attribution": "18:00"},
         },
         "presentation_style": "centered",
         "background": "none",
@@ -72,6 +73,18 @@ def test_preparation_metadata_uses_explicit_nulls_for_publication_fields() -> No
     assert document["published_at"] is None
     assert document["destination_id"] is None
     assert document["actions"] == []
+    assert "quotation" not in document["reconstruction"]["content_entry"]["reveal"]
+
+
+def test_generated_content_entry_is_accepted_by_authoritative_content_loader(tmp_path) -> None:
+    entry = _document()["reconstruction"]["content_entry"]
+    content_file = tmp_path / "entry.yaml"
+    content_file.write_text(yaml.safe_dump(entry), encoding="utf-8")
+
+    (loaded,) = load_content_library(tmp_path)
+
+    assert loaded.id == "entry"
+    assert len(loaded.quotations) == 1
 
 
 @pytest.mark.parametrize(
@@ -84,6 +97,9 @@ def test_preparation_metadata_uses_explicit_nulls_for_publication_fields() -> No
         lambda value: value["presentation"].update(selection_revision=None),
         lambda value: value["reconstruction"]["fonts"]["faces"].pop("source"),
         lambda value: value["reconstruction"]["colors"].update(text=None),
+        lambda value: value["reconstruction"]["content_entry"].update(eligibility=[{"bogus": True}]),
+        lambda value: value["reconstruction"]["content_entry"].update(eligibility=[{"year": True}]),
+        lambda value: value["reconstruction"]["content_entry"].update(reveal={"quotation": "06:00"}),
     ],
 )
 def test_preparation_validation_rejects_missing_or_inappropriate_values(mutation) -> None:
