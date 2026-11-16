@@ -140,7 +140,7 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Destination Identifier:** The runtime-supplied opaque identifier for one configured output destination. It is used only to route a runtime-control request.
 
-**Prepared Image:** A persisted output image representing one reveal stage of a committed daily selection for one output specification and its effective presentation requirements. Under the current Version 0.1 configuration, destinations with identical output specifications may share it. Under the planned destination-override model, sharing also requires matching effective presentation requirements.
+**Prepared Image:** A persisted output image representing one reveal stage of a committed daily selection for one output specification and its effective presentation requirements. Destinations may share it only when both the output specification and preparation requirements match.
 
 **Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared output images.
 
@@ -762,46 +762,27 @@ The exact storage formats, rotation mechanics, and persistence operations belong
 
 ### Prepared images
 
-After selection commitment, Refrain resolves current presentation configuration, available resources, and the unique output specifications required by configured destinations. It generates every required reveal-stage image for each specification.
+After selection commitment, Refrain resolves current presentation configuration, available resources, and each destination's effective presentation requirements. It groups destinations with compatible requirements independently of their destination IDs and generates every required reveal-stage image for each output specification in each group.
 
-Variants for all required output specifications are a coherent prepared presentation. Presentation-wide choices are resolved consistently across variants; raster-dependent layout and rendering results are resolved independently for each variant.
+Within a preparation group, presentation-wide choices are resolved consistently across all required output specifications; raster-dependent layout and rendering results are resolved independently for each variant. Destination overrides take precedence over ordinary content-entry, decoration, and global preferences for the corresponding fields. Omitted fields retain the existing resolution and fallback rules. An explicit `"none"` background or decoration suppresses artwork selection. QR enablement does not override decoration restrictions or output geometry viability.
 
 For each output specification, the prepared images form an ordered reveal-stage set. Images within that set have the same expected output dimensions and compatible image mode; different output specifications may have different dimensions and raster-dependent results.
 
-Prepared images are persisted on disk and associated with the committed selection and their output specifications.
+Prepared images are persisted on disk and associated with the committed selection revision, compatible preparation group/effective presentation requirements, output specifications, ordered reveal stages, and their resolved publication-schema metadata. Destination identity alone does not partition a group; incompatible requirements cannot share a cached image even when output specifications match.
 
-When reconstruction-capable publication is implemented, its prepared image collections also carry associated preparation metadata using the same versioned publication-metadata schema that is ultimately serialized. This metadata belongs to the exact image collection and compatible preparation group; it is not a separate prepared-presentation descriptor, rendering snapshot, or authoritative selection state. Capture the committed quotation and applicable semantic information together with all resolved artistic choices that produced the images. Publication-event fields that do not yet exist during preparation remain unassigned or explicitly nullable as that schema specifies; do not invent publication IDs or timestamps. The current Version 0.1 runtime does not yet produce or publish this metadata.
-
-The preceding sharing rules describe the current Version 0.1 model, which has no
-destination-specific presentation overrides. Under the planned override model,
-the required variants are keyed by both output specification and effective
-presentation requirements. Destinations with different effective overrides
-must use separate prepared variants even when their output specifications are
-identical. Destinations with matching requirements may share a preparation
-group, including its resolved presentation-wide choices; output-specification-
-dependent layout and rendering are still resolved independently. This target
-extension must not change the committed selection or turn derived rendering
-choices into authoritative operational state.
+The existing versioned publication-metadata schema belongs to the exact prepared collection and compatible preparation group; it is not a separate prepared-presentation descriptor, rendering snapshot, or authoritative selection state. It records actual resolved resource and palette identifiers, font bundle and role-specific faces, effective QR behavior, and other artistic choices used by the images, including applicable destination overrides and fallbacks. Publication-event fields that do not yet exist during preparation remain unassigned or explicitly nullable as that schema specifies; do not invent publication IDs or timestamps.
 
 They are derived artifacts, not independently authoritative application state.
 
 Prepared images must remain associated with the committed selection revision and expected reveal-stage sequence.
 
-In the current Version 0.1 model, a complete, valid set is reused throughout
-ordinary operation and after application restart. Changes to configuration or
-assets do not by themselves invalidate or regenerate it.
-
-In the planned destination-override model, a change to effective overrides
-changes the presentation requirements for that destination and cannot reuse an
-incompatible prepared image. This does not make the cache archival: changes to
-available resources or rendering behavior may change the result when missing or
-otherwise unusable images must be regenerated.
+Complete compatible collections are reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate them. A change to effective destination overrides changes that destination's requirements and prevents reuse of an incompatible collection, while compatible groups remain reusable. This does not make the cache archival: changes to available resources or rendering behavior may change the result when required images are missing or otherwise unusable.
 
 If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation.
 
-All output variants prepared together use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior. Within one output specification, its complete literary composition determines stable geometry for every reveal stage; this does not require different specifications to share geometry.
+All output variants within one compatible preparation group use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior. Within one output specification, its complete literary composition determines stable geometry for every reveal stage; this does not require different specifications to share geometry.
 
-When output requirements change, any newly required variants are prepared from the existing committed selection without changing the quotation or reveal progress. Variants may share preparation-wide choices; if existing cached variants cannot form a consistent required set with new variants, regenerate the required set coherently. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward.
+When output or effective presentation requirements change, any missing compatible variants are prepared from the existing committed selection without changing the quotation or reveal progress. Variants within one preparation group share preparation-wide choices. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward. Finished transient images already prepared for a destination bypass destination presentation overrides.
 
 The runtime must not require all prepared images to remain decoded in memory.
 
@@ -855,7 +836,7 @@ Authoritative operational state owns:
 
 Global history owns chronological historical selection records but does not determine operational behavior.
 
-Prepared images are disposable cache entries derived from the current daily selection, its reveal stages, the required output specifications, and the configuration and resources available when the variants were prepared.
+Prepared images are disposable cache entries derived from the current daily selection, its reveal stages, the required output specifications and compatible preparation groups, and the configuration and resources available when the variants were prepared.
 
 The appropriate reveal stage is initially determined by the committed schedule and current time.
 
@@ -995,7 +976,7 @@ The design canvas is the high-resolution, aspect-specific graphical composition 
 
 Background and decoration layers use the same underlying image-transformation implementation. For `anchor`, the source is first uniformly scaled according to the selected design-canvas dimension, then aligned by its complete scaled rectangle to the declared canvas anchor, clipped at the design-canvas boundary, and alpha-composited. Scaling preserves aspect ratio and uses deterministic nearest-pixel rounding with half-pixel values rounded upward; clipping outside the canvas is normal composition, not a validation failure.
 
-Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested output resolution. Backend-specific configuration and defaults determine these values; do not infer the declared ratio from requested dimensions. The presentation-canvas dimensions are derived from the specification and do not form part of artifact identity. Under the planned destination-override model, prepared-image identity additionally distinguishes the effective presentation requirements applied to a destination. When requested dimensions exactly match the declared ratio, the presentation canvas has those dimensions. Otherwise, it is the nearest positive integer-pixel resolution that exactly matches the declared ratio, using the existing deterministic nearest-raster and tie-breaking rules.
+Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested output resolution. Backend-specific configuration and defaults determine these values; do not infer the declared ratio from requested dimensions. Prepared-image identity also distinguishes the destination's effective presentation requirements. The presentation-canvas dimensions are derived from the output specification and do not form part of artifact identity. When requested dimensions exactly match the declared ratio, the presentation canvas has those dimensions. Otherwise, it is the nearest positive integer-pixel resolution that exactly matches the declared ratio, using the existing deterministic nearest-raster and tie-breaking rules.
 
 For a mismatched request, reduce the declared ratio to integer dimensions `(rw, rh)`, then compute `k = max(1, round_half_up((rw × requested_width + rh × requested_height) / (rw² + rh²)))`. The presentation canvas is `(rw × k, rh × k)`. This projected scale and half-up tie break define the nearest exact-ratio raster deterministically.
 
@@ -1318,9 +1299,10 @@ A decoration may also specify a preferred font.
 
 During image preparation, font selection follows this precedence:
 
-1. Resolve the content-entry font preference. For a pool reference, try its distinct expanded candidates in random order without replacement until one is usable; for a direct preference, try that font.
-2. Only if the content-entry preference has no usable font, resolve the selected decoration's preferred font pool the same way, or try its direct preference.
-3. Otherwise, select from the effective default font pool.
+1. Resolve the destination's font preference when one is configured. For a pool reference, try its distinct expanded candidates in random order without replacement until one is usable; for a direct preference, try that font.
+2. Only if the destination preference has no usable font, resolve the content-entry font preference the same way.
+3. Only if those preferences have no usable font, resolve the selected decoration's preferred font pool the same way, or try its direct preference.
+4. Otherwise, select from the effective default font pool.
 
 An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning for each unavailable candidate and exhausts that preference level before proceeding to the next bundle-selection preference. Lower-priority preferences are not randomly selected before they are reached.
 
@@ -1328,11 +1310,11 @@ After selecting the bundle, Refrain independently resolves the `quotation`, `sou
 
 Each distinct font in an expanded preference or effective default pool has equal selection probability when that preference is used. Repeated identifiers, nested references, and shared subpools do not add weight.
 
-Automatic font selection requires at least one usable member in the effective default font pool. An empty pool is not an error when a usable explicit content-entry or decoration preference applies. If no usable explicit preference applies and the pool is empty, preparation fails with an actionable diagnostic. Refrain must not silently populate the pool with unrelated bundled fonts or use a separate emergency fallback pool; bundled membership is opt-in through `@builtin`.
+Automatic font selection requires at least one usable member in the effective default font pool. An empty pool is not an error when a usable explicit destination, content-entry, or decoration preference applies. If no usable explicit preference applies and the pool is empty, preparation fails with an actionable diagnostic. Refrain must not silently populate the pool with unrelated bundled fonts or use a separate emergency fallback pool; bundled membership is opt-in through `@builtin`.
 
 Font selection is independent for each complete image preparation. Fonts do not have repetition histories, and a font may be used on consecutive days.
 
-Resolve the selected decoration and font bundle, then resolve all role faces once for the complete required output specifications. Preserve those font identities across output images and reveal stages; do not select fonts independently for an output specification or stage.
+Resolve the selected decoration and font bundle, then resolve all role faces once for the complete compatible preparation group. Preserve those font identities across its output images and reveal stages; do not select fonts independently for an output specification or stage.
 
 Reuse a valid complete cached image set without resolving fonts. When regeneration is required, resolve bundle and face preferences from the selected content properties and current decoration, registry, and global configuration, using the precedence and failure behavior above. Font identifiers, paths, face choices, and font contents are not persisted in operational state. Use one consistent bundle and role-face resolution across all variants and stages prepared together.
 
@@ -1492,7 +1474,7 @@ Backend implementations are built-in application components. Version 0.1 does no
 
 For normal scheduled publication, Refrain coordinates publication of the current prepared presentation to every participating configured destination. A backend may manage multiple destinations through one backend instance; each destination has independent identity, geometry, publication state, and acknowledgement. The independent scheduling, coalescing, and acknowledgement behavior in this section applies to normal scheduled publication; transient push and refresh use the admission and completion rules in [Transient publication and refresh](#transient-publication-and-refresh).
 
-Under the current Version 0.1 model, a single committed daily selection and its coherent set of prepared output images are shared by all destinations. Under the planned destination-override model, the committed selection remains shared, but prepared images are shared only within compatible preparation groups whose effective presentation requirements match. Only the selection is authoritative.
+The single committed daily selection remains shared by all destinations, while prepared images are shared only within compatible preparation groups whose effective presentation requirements match. Only the selection is authoritative.
 
 For normal scheduled publication, participating destinations are tracked independently. A destination may remain configured but be intentionally withdrawn from publication for the remainder of the resident runtime. Withdrawal is distinct from failure or unavailability: ordinary scheduled publication skips a withdrawn destination, and later publication requests do not restore it. A failure or unavailable backend does not constitute withdrawal. A slow or failed operation on one backend instance must not delay publication through another backend instance or prevent subsequent scheduling evaluation. Destinations sharing one backend instance share its lifecycle and serialization.
 
@@ -2171,7 +2153,7 @@ The following must remain true as the project evolves:
 14. Selection revisions increase monotonically and are maintained independently of global history.
 15. Global-history recording failures do not invalidate committed selections or prevent ordinary presentation.
 16. A committed daily selection preserves the selected content, captured content-level preferences, and effective reveal schedule independently of subsequent content-library changes.
-17. Every required reveal-stage image is generated for each unique combination of output specification and effective presentation requirements; in the current Version 0.1 model without destination overrides, output specification alone distinguishes variants.
+17. Every required reveal-stage image is generated for each unique combination of output specification and effective presentation requirements.
 18. Presentation-wide choices remain consistent across output specifications within one compatible preparation group, while presentation-canvas layout and rendering results are resolved independently for each specification.
 19. The declared aspect ratio is distinct from requested output resolution: it selects the design canvas and determines the exact-ratio presentation-canvas dimensions for each output specification.
 20. Graphical composition and configured presentation measurements move from the design canvas to the presentation canvas before all literary, QR, and diagnostic composition; only an optional final whole-image resize to the exact requested dimensions may follow.

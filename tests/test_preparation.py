@@ -15,9 +15,11 @@ from refrain import (
     ContentAction,
     DailyImagePreparationError,
     DailySnapshot,
+    DestinationPresentation,
     DisplayBackendConfiguration,
     DisplayOutputConfiguration,
     FontResource,
+    PreparedImageVariantKey,
     PresentationInsets,
     PresentationOverrides,
     ResolvedOutputSpecification,
@@ -498,6 +500,173 @@ def test_presentation_choices_are_shared_across_output_specifications(
         assert {
             layer.condition for layer in diagnostics[ResolvedOutputSpecification("16:10", (3840, 2400))].active_layers
         } == {"qr"}
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
+
+
+def test_destination_presentation_precedence_and_group_coherence(tmp_path: Path) -> None:
+    asset_paths = {}
+    for identifier, color in (
+        ("entry-paper", (220, 220, 220)),
+        ("destination-paper", (230, 230, 230)),
+        ("entry-frame", (0, 0, 0)),
+        ("destination-frame", (20, 20, 20)),
+    ):
+        path = tmp_path / f"{identifier}.png"
+        with Image.new("RGB", (8, 8), color) as image:
+            image.save(path)
+        asset_paths[identifier] = path
+
+    fonts = {
+        "entry-font": FontResource("entry-font", _REGULAR_FONT, bundled=True),
+        "destination-font": FontResource("destination-font", _ITALIC_FONT, bundled=True),
+    }
+
+    def frame(identifier: str, *, qr_ready: bool = True) -> DecorationResource:
+        return DecorationResource(
+            identifier,
+            (DecorationLayerResource(asset_paths[identifier], "contain", tintable=True),),
+            False,
+            tintable=True,
+            qr_ready=qr_ready,
+        )
+
+    configuration = _configuration(
+        fonts,
+        {
+            "entry-paper": BackgroundResource("entry-paper", asset_paths["entry-paper"], False),
+            "destination-paper": BackgroundResource("destination-paper", asset_paths["destination-paper"], False),
+        },
+        {"entry-frame": frame("entry-frame", qr_ready=False), "destination-frame": frame("destination-frame")},
+        qr_enabled=True,
+        insets=PresentationInsets(0, 0, 0, 0),
+    )
+    configuration = replace(
+        configuration,
+        background_pools={"destination-paper-pool": ("destination-paper",)},
+    )
+    snapshot = replace(
+        make_snapshot("entry-font"),
+        font="entry-font",
+        background="entry-paper",
+        decoration="entry-frame",
+        text_color=("blue",),
+        decoration_color=("black",),
+    )
+    requirements = DestinationPresentation(
+        background="@destination-paper-pool",
+        decoration="destination-frame",
+        font="destination-font",
+        text_color=("burnt-orange",),
+        decoration_color=("blue",),
+        qr_enabled=False,
+    )
+    alternate_requirements = DestinationPresentation(qr_enabled=True)
+    no_artwork_requirements = DestinationPresentation(background="none", decoration="none", qr_enabled=False)
+    small = ResolvedOutputSpecification("16:9", (640, 360))
+    large = ResolvedOutputSpecification("4:3", (800, 600))
+    keys = (
+        PreparedImageVariantKey(small, requirements),
+        PreparedImageVariantKey(large, requirements),
+        PreparedImageVariantKey(small, alternate_requirements),
+        PreparedImageVariantKey(small, no_artwork_requirements),
+    )
+    stages = (CompositionVisibility(), CompositionVisibility(source=True))
+    metadata = {}
+
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        stages,
+        configuration,
+        keys,
+        chooser=Random(3),
+        selection_revision=11,
+        on_metadata=metadata.__setitem__,
+    )
+    try:
+        assert len(variants) == 4
+        preferred = metadata[PreparedImageVariantKey(small, requirements)]
+        alternate = metadata[PreparedImageVariantKey(small, alternate_requirements)]
+        no_artwork = metadata[PreparedImageVariantKey(small, no_artwork_requirements)]
+        prepared = preferred[0]["reconstruction"]
+        assert prepared["background"] == "destination-paper"
+        assert prepared["decoration"] == "destination-frame"
+        assert prepared["fonts"]["bundle"] == "destination-font"
+        assert prepared["colors"] == {"text": "burnt-orange", "decoration": "blue"}
+        assert prepared["qr"] == {"enabled": False, "available": False}
+        assert alternate[0]["reconstruction"]["background"] == "entry-paper"
+        assert alternate[0]["reconstruction"]["decoration"] == "entry-frame"
+        assert alternate[0]["reconstruction"]["fonts"]["bundle"] == "entry-font"
+        assert alternate[0]["reconstruction"]["colors"] == {"text": "blue", "decoration": "black"}
+        assert alternate[0]["reconstruction"]["qr"] == {"enabled": True, "available": False}
+        assert no_artwork[0]["reconstruction"]["background"] == "none"
+        assert no_artwork[0]["reconstruction"]["decoration"] == "none"
+        assert no_artwork[0]["reconstruction"]["qr"] == {"enabled": False, "available": False}
+        assert preferred[0]["reconstruction"] == preferred[1]["reconstruction"]
+
+        large_metadata = metadata[PreparedImageVariantKey(large, requirements)]
+        for field in ("background", "decoration", "fonts", "colors", "presentation_style"):
+            assert large_metadata[0]["reconstruction"][field] == prepared[field]
+        assert variants[PreparedImageVariantKey(small, requirements)][0].size == small.requested_output_size
+        assert variants[PreparedImageVariantKey(large, requirements)][0].size == large.requested_output_size
+
+        disabled_global_metadata = {}
+        disabled_global_variants = _prepare_daily_image_variants(
+            snapshot,
+            stages,
+            replace(configuration, qr_enabled=False),
+            (PreparedImageVariantKey(small, alternate_requirements),),
+            chooser=Random(3),
+            selection_revision=11,
+            on_metadata=disabled_global_metadata.__setitem__,
+        )
+        try:
+            disabled_global_qr = disabled_global_metadata[PreparedImageVariantKey(small, alternate_requirements)][0][
+                "reconstruction"
+            ]["qr"]
+            assert disabled_global_qr == {"enabled": True, "available": False}
+        finally:
+            for images in disabled_global_variants.values():
+                for image in images:
+                    image.close()
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
+
+
+def test_unavailable_destination_resources_fall_through_existing_preferences() -> None:
+    configuration = _configuration(
+        {"regular": FontResource("regular", _REGULAR_FONT, bundled=True)},
+        default_fonts=("regular",),
+        default_backgrounds=("none",),
+        default_decorations=("none",),
+    )
+    requirements = DestinationPresentation(
+        background="missing-background",
+        decoration="missing-decoration",
+        font="missing-font",
+        qr_enabled=False,
+    )
+    key = PreparedImageVariantKey(_DEFAULT_SPECIFICATION, requirements)
+    metadata = {}
+    variants = _prepare_daily_image_variants(
+        make_snapshot("regular"),
+        (CompositionVisibility(),),
+        configuration,
+        (key,),
+        chooser=Random(7),
+        selection_revision=11,
+        on_metadata=metadata.__setitem__,
+    )
+    try:
+        reconstruction = metadata[key][0]["reconstruction"]
+        assert reconstruction["background"] == "none"
+        assert reconstruction["decoration"] == "none"
+        assert reconstruction["fonts"]["bundle"] == "regular"
+        assert reconstruction["qr"]["enabled"] is False
     finally:
         for images in variants.values():
             for image in images:

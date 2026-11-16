@@ -19,6 +19,7 @@ from PIL import Image
 from ..config import (
     DisplayBackendConfiguration,
     DisplayOutputConfiguration,
+    PreparedImageVariantKey,
 )
 from ..geometry import ResolvedOutputSpecification
 from . import DisplayBackend, DisplayBackendError, WithdrawableDisplayBackend, create_display_backend
@@ -43,7 +44,7 @@ class StagedTransientImages(dict[ResolvedOutputSpecification, Path]):
 @dataclass
 class _Presentation:
     identity: tuple[int, int]
-    images: Mapping[ResolvedOutputSpecification, Image.Image]
+    images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]
     references: int = 1
 
 
@@ -99,7 +100,7 @@ class PublicationOperation:
 class _OneShotPublication:
     operation: PublicationOperation
     identity: tuple[int, int] | None
-    images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages
+    images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | StagedTransientImages
     destinations: tuple[str, ...]
     outcomes: dict[str, tuple[bool, str | None]]
     retry_at: dict[str, float]
@@ -256,7 +257,7 @@ class DisplayPublicationCoordinator:
     def publish(
         self,
         identity: tuple[int, int],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
     ) -> None:
         """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
@@ -267,14 +268,16 @@ class DisplayPublicationCoordinator:
                 self._close_images(images)
                 return
             self._renew_recovery(self._states.values())
-            required = {
-                state.destination.output_specification
+            missing = {
+                state.key
                 for state in self._states.values()
-                if not state.terminal and not state.withdrawn
+                if not state.terminal
+                and not state.withdrawn
+                and self._scheduled_image(images, state.destination) is None
             }
-            if required - images.keys():
+            if missing:
                 self._close_images(images)
-                raise ValueError(f"publication is missing output variants: {required - images.keys()}")
+                raise ValueError(f"publication is missing output variants for destinations: {missing}")
 
             presentation = _Presentation(identity, images)
             for state in self._states.values():
@@ -353,7 +356,7 @@ class DisplayPublicationCoordinator:
     def force_scheduled_publication(
         self,
         identity: tuple[int, int],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
     ) -> PublicationOperation:
         """Republish the current scheduled identity to participants.
 
@@ -371,14 +374,13 @@ class DisplayPublicationCoordinator:
             if not isinstance(images, Mapping):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
-            required = {self._states[key].destination.output_specification for key in selected}
-            if required - images.keys():
+            if any(self._scheduled_image(images, self._states[key].destination) is None for key in selected):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
             if any(
-                not isinstance(images[specification], Image.Image)
-                or images[specification].size != specification.requested_output_size
-                for specification in required
+                not isinstance(image := self._scheduled_image(images, self._states[key].destination), Image.Image)
+                or image.size != self._states[key].destination.output_specification.requested_output_size
+                for key in selected
             ):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
@@ -390,6 +392,14 @@ class DisplayPublicationCoordinator:
                 return self._rejected_operation(PublicationStatus.BUSY, selected)
             self._renew_recovery(self._states[key] for key in selected)
             return self._admit_one_shot(selected, images, identity=identity, forced=True)
+
+    @staticmethod
+    def _scheduled_image(
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+        destination: DisplayOutputConfiguration,
+    ) -> Image.Image | None:
+        """Return the image for one destination's preparation-group variant."""
+        return images.get(destination.prepared_image_key)
 
     def _resolve_destinations(
         self,
@@ -472,12 +482,14 @@ class DisplayPublicationCoordinator:
     def _admit_one_shot(
         self,
         destinations: tuple[str, ...],
-        images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | StagedTransientImages,
         *,
         identity: tuple[int, int] | None,
         forced: bool,
     ) -> PublicationOperation:
         if isinstance(images, StagedTransientImages):
+            owned_images = images
+        elif forced:
             owned_images = images
         else:
             specifications = {self._states[key].destination.output_specification for key in destinations}
@@ -705,7 +717,9 @@ class DisplayPublicationCoordinator:
         return active_threads
 
     @staticmethod
-    def _close_images(images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages) -> None:
+    def _close_images(
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | StagedTransientImages,
+    ) -> None:
         if isinstance(images, StagedTransientImages):
             # The request handler retains the global slot until staging is deleted.
             return
@@ -914,11 +928,17 @@ class DisplayPublicationCoordinator:
                             image.load()
                             backend.publish(ready.destination, image)
                     elif one_shot is not None:
-                        image = one_shot.images[ready.destination.output_specification]
+                        image = (
+                            self._scheduled_image(one_shot.images, ready.destination)
+                            if one_shot.forced
+                            else one_shot.images[ready.destination.output_specification]
+                        )
+                        assert image is not None
                         backend.publish(ready.destination, image)
                     else:
                         assert presentation is not None
-                        image = presentation.images[ready.destination.output_specification]
+                        image = self._scheduled_image(presentation.images, ready.destination)
+                        assert image is not None
                         backend.publish(ready.destination, image)
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry

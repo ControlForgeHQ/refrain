@@ -282,7 +282,43 @@ The currently supported Version 0.1 destination `type` values are `window`, `wav
 
 Destination IDs must match `[A-Za-z0-9][A-Za-z0-9_-]*`, be no longer than 256 characters, and be globally unique across all types. IDs are used unchanged for runtime discovery, publication selection, and image-server resource paths. `all` is an ordinary valid ID; `@all` is reserved for publication selection. Invalid or duplicate IDs and capacity excesses are configuration errors. Backend capacities are checked before backend or service initialization.
 
+An optional destination-local `presentation` mapping overrides selected settings for scheduled image preparation:
+
+```yaml
+destinations:
+  - id: epaper
+    type: waveshare-13in3-e
+    presentation:
+      background: "none"
+      text_color: "black"
+      decoration_color: "black"
+      qr:
+        enabled: false
+
+  - id: hallway
+    type: image-server
+    aspect_ratio: "4:3"
+    resolution: [1600, 1200]
+    presentation:
+      background: "none"
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `presentation.background` | Background identifier or named-pool reference | Overrides background selection. `"none"` intentionally suppresses background artwork. |
+| `presentation.decoration` | Decoration identifier or named-pool reference | Overrides decoration selection. `"none"` intentionally suppresses decoration artwork. |
+| `presentation.font` | Font-bundle identifier or named-pool reference | Overrides font-bundle selection. |
+| `presentation.text_color` | Palette identifier, pool reference, or nonempty sequence of either | Overrides literary text-color selection. |
+| `presentation.decoration_color` | Palette identifier, pool reference, or nonempty sequence of either | Overrides decoration tint-color selection. |
+| `presentation.qr.enabled` | YAML boolean | Overrides the global QR generation policy. |
+
+These fields use the same resource registries, named pools, and strict value types as the corresponding existing presentation preferences. Resource and palette identifiers are resolved during preparation; unavailable preferences follow existing fallback and diagnostic rules. `"none"` is a deliberate no-artwork selection, not an unavailable resource. For colors, an override has precedence over content-entry, background, decoration, and global preferences. For resources, it has precedence over ordinary content-entry and decoration preferences. An unavailable destination resource preference falls through the ordinary selection hierarchy. A selected decoration's `qr_ready: false` restriction and QR geometry viability remain effective even when QR is requested.
+
+Omitting `presentation`, or omitting any individual field, preserves the existing behavior for that destination and field. Unsupported fields are diagnosed as unrecognized and ignored; they do not add rendering controls. These overrides apply only to scheduled preparation, not to finished transient images delivered to a destination. Destination overrides are supported for the three current destination types; the planned filesystem `publish` destination is not implemented.
+
 Each destination resolves an output specification consisting of a declared presentation aspect ratio and requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain prepares one complete set of reveal-stage images for each unique output specification required by configured destinations. Destinations with identical specifications may share prepared variants; destinations with different specifications receive their matching variants.
+
+When destination presentation overrides differ, prepared collections are shared only when both the output specification and effective presentation requirements match. Destinations with equivalent requirements may share presentation-wide artistic choices even when their IDs differ. Different output specifications in one compatible preparation group receive independent raster-dependent variants.
 
 The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` destination defaults to `16:10 @ 3840 × 2400`. Both accept `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
 
@@ -967,7 +1003,7 @@ Decorations may define presentation insets, but content entries reference decora
 
 Additional built-in literary presentation styles may be introduced in future versions without changing the content-entry structure.
 
-Each destination receives the prepared output variant matching its own output specification. Destinations with identical specifications may share variants; destinations with different specifications receive their own variants. A backend may perform only operations explicitly permitted by its contract, such as pixel-format or orientation conversion; it must not geometrically resize, crop, pad, or otherwise adapt another destination's output image.
+Each destination receives the prepared output variant matching its output specification and effective presentation requirements. Destinations may share variants only when both match; destinations with different specifications or incompatible presentation requirements receive their own variants. A backend may perform only operations explicitly permitted by its contract, such as pixel-format or orientation conversion; it must not geometrically resize, crop, pad, or otherwise adapt another destination's output image.
 
 The renderer derives the aspect-specific design canvas by cropping the fixed reference envelope. It applies configured design-canvas insets there and scales the resulting geometry to the presentation canvas, as defined in `ARCHITECTURE.md`.
 

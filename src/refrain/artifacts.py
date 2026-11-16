@@ -16,6 +16,7 @@ from types import MappingProxyType
 
 from PIL import Image
 
+from .config import DestinationPresentation, PreparedImageVariantKey
 from .geometry import ResolvedOutputSpecification
 from .persistence import DailySnapshot
 from .publication_metadata import (
@@ -31,6 +32,7 @@ _REVISION = re.compile(r"revision-([1-9][0-9]*)\Z")
 _TEMPORARY = re.compile(r"\.tmp-revision-[1-9][0-9]*-[0-9a-f]{32}\Z")
 _PAYLOAD = re.compile(r"images-[0-9a-f]{32}\Z")
 _VARIANT_DIRECTORY = re.compile(r"variant-[0-9]+-[0-9]+-[1-9][0-9]*x[1-9][0-9]*\Z")
+_GROUP_DIRECTORY = re.compile(r"group-[0-9a-f]{64}\Z")
 _STAGE = re.compile(r"stage-(0|[1-9][0-9]*)\.png\Z")
 _METADATA_STAGE = re.compile(r"stage-(0|[1-9][0-9]*)\.json\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -114,6 +116,43 @@ def _variant_directory_name(specification: ResolvedOutputSpecification) -> str:
     aspect = specification.aspect_ratio.replace(":", "-")
     width, height = specification.requested_output_size
     return f"variant-{aspect}-{width}x{height}"
+
+
+def _variant_parts(
+    key: ResolvedOutputSpecification | PreparedImageVariantKey,
+) -> tuple[ResolvedOutputSpecification, DestinationPresentation]:
+    if isinstance(key, PreparedImageVariantKey):
+        if key.presentation.is_empty:
+            raise ValueError("prepared variant keys must have nonempty presentation requirements")
+        return key.output_specification, key.presentation
+    if isinstance(key, ResolvedOutputSpecification):
+        return key, DestinationPresentation()
+    raise ValueError("variant keys must contain an output specification and optional presentation requirements")
+
+
+def _presentation_document(presentation: DestinationPresentation) -> dict[str, object]:
+    return {
+        "background": presentation.background,
+        "decoration": presentation.decoration,
+        "font": presentation.font,
+        "text_color": None if presentation.text_color is None else list(presentation.text_color),
+        "decoration_color": None if presentation.decoration_color is None else list(presentation.decoration_color),
+        "qr_enabled": presentation.qr_enabled,
+    }
+
+
+def _group_directory(root: Path, revision: int, presentation: DestinationPresentation) -> Path:
+    directory = root / f"revision-{revision}"
+    if presentation.is_empty:
+        return directory
+    digest = hashlib.sha256(_canonical_json(_presentation_document(presentation))).hexdigest()
+    return directory / f"group-{digest}"
+
+
+def _variant_key(
+    specification: ResolvedOutputSpecification, presentation: DestinationPresentation
+) -> ResolvedOutputSpecification | PreparedImageVariantKey:
+    return specification if presentation.is_empty else PreparedImageVariantKey(specification, presentation)
 
 
 def _is_link(path: Path) -> bool:
@@ -268,21 +307,43 @@ class PreparedImageArtifactSet:
 
     revision: int
     directory: Path
-    variants: Mapping[ResolvedOutputSpecification, PreparedImageArtifactVariant]
+    variants: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, PreparedImageArtifactVariant]
 
     @property
     def output_specifications(self) -> tuple[ResolvedOutputSpecification, ...]:
-        """Return the ordered identities represented by this coherent artifact set."""
+        """Return the unique output specifications represented by this artifact set."""
+        return tuple(
+            sorted(
+                {variant.output_specification for variant in self.variants.values()},
+                key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
+            )
+        )
+
+    @property
+    def variant_keys(self) -> tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...]:
+        """Return the ordered preparation-group and output identities represented by this set."""
         return tuple(self.variants)
 
-    def variant_for(self, output_specification: ResolvedOutputSpecification) -> PreparedImageArtifactVariant:
+    def variant_for(
+        self, output_specification: ResolvedOutputSpecification | PreparedImageVariantKey
+    ) -> PreparedImageArtifactVariant:
         """Return metadata for one exact output specification."""
         try:
             return self.variants[output_specification]
         except KeyError:
+            if isinstance(output_specification, ResolvedOutputSpecification):
+                matches = [
+                    variant
+                    for key, variant in self.variants.items()
+                    if isinstance(key, PreparedImageVariantKey) and key.output_specification == output_specification
+                ]
+                if len(matches) == 1:
+                    return matches[0]
             raise ValueError(f"artifact set does not contain output specification {output_specification!r}") from None
 
-    def load_stage(self, output_specification: ResolvedOutputSpecification, stage: int) -> Image.Image:
+    def load_stage(
+        self, output_specification: ResolvedOutputSpecification | PreparedImageVariantKey, stage: int
+    ) -> Image.Image:
         """Decode one stage of one raster variant."""
         return self.variant_for(output_specification).load_stage(stage)
 
@@ -314,10 +375,48 @@ class PreparedImageArtifactStore:
         self,
         revision: int,
         stages: Sequence[CompositionVisibility],
+        variants: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Sequence[Image.Image]],
+        metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Sequence[dict[str, object]]],
+    ) -> PreparedImageArtifactSet:
+        """Publish complete stage collections per compatible preparation group."""
+        _inputs(revision, stages)
+        if not isinstance(variants, Mapping) or not variants:
+            raise ValueError("variants must be a nonempty mapping of prepared-image keys to image sequences")
+        if not isinstance(metadata, Mapping) or set(metadata) != set(variants):
+            raise ValueError("metadata must contain exactly the prepared-image keys being stored")
+        grouped_variants: dict[DestinationPresentation, dict[ResolvedOutputSpecification, Sequence[Image.Image]]] = {}
+        grouped_metadata: dict[
+            DestinationPresentation, dict[ResolvedOutputSpecification, Sequence[dict[str, object]]]
+        ] = {}
+        for key, images in variants.items():
+            specification, presentation = _variant_parts(key)
+            group_variants = grouped_variants.setdefault(presentation, {})
+            if specification in group_variants:
+                raise ValueError(f"duplicate output specification {specification!r} in one preparation group")
+            group_variants[specification] = images
+            grouped_metadata.setdefault(presentation, {})[specification] = metadata[key]
+        for presentation, group_variants in grouped_variants.items():
+            self._store_group(
+                revision,
+                stages,
+                presentation,
+                group_variants,
+                grouped_metadata[presentation],
+            )
+        result, missing = self.load_groups(revision, stages, tuple(variants))
+        if missing:
+            raise ArtifactValidationError("stored preparation groups are not complete")
+        return result
+
+    def _store_group(
+        self,
+        revision: int,
+        stages: Sequence[CompositionVisibility],
+        presentation: DestinationPresentation,
         variants: Mapping[ResolvedOutputSpecification, Sequence[Image.Image]],
         metadata: Mapping[ResolvedOutputSpecification, Sequence[dict[str, object]]],
     ) -> PreparedImageArtifactSet:
-        """Publish all explicit variants and stages losslessly; inputs remain caller-owned."""
+        """Publish one complete compatible group; image inputs remain caller-owned."""
         expected_stages = _inputs(revision, stages)
         if not isinstance(variants, Mapping) or not variants:
             raise ValueError("variants must be a nonempty mapping of output specifications to image sequences")
@@ -343,13 +442,13 @@ class PreparedImageArtifactStore:
                 try:
                     validate_publication_metadata(document, stage="preparation")
                     output = document["output_specification"]
-                    presentation = document["presentation"]
+                    presentation_context = document["presentation"]
                     if (
                         output["aspect_ratio"] != specification.aspect_ratio
                         or output["requested_output_size"] != list(specification.requested_output_size)
-                        or presentation["selection_revision"] != revision
-                        or presentation["reveal_stage_index"] != index
-                        or not _visibility_matches(presentation["reveal_stage"], visibility)
+                        or presentation_context["selection_revision"] != revision
+                        or presentation_context["reveal_stage_index"] != index
+                        or not _visibility_matches(presentation_context["reveal_stage"], visibility)
                     ):
                         raise ValueError("metadata association does not match revision, output, or reveal stage")
                 except (PublicationMetadataError, KeyError, TypeError) as error:
@@ -371,7 +470,7 @@ class PreparedImageArtifactStore:
                     raise ValueError(f"all stages for {specification!r} must use the same image mode")
             images_by_specification[specification] = tuple(images)
 
-        directory = self.root / f"revision-{revision}"
+        directory = _group_directory(self.root, revision, presentation)
         token = uuid.uuid4().hex
         temporary = self.root / f".tmp-revision-{revision}-{token}"
         payload = directory / f"images-{token}"
@@ -439,6 +538,8 @@ class PreparedImageArtifactStore:
                 "image_directory": payload.name,
                 "variants": variant_metadata,
             }
+            if not presentation.is_empty:
+                metadata["presentation_requirements"] = _presentation_document(presentation)
             document = {"artifacts": metadata, "sha256": hashlib.sha256(_canonical_json(metadata)).hexdigest()}
             with (temporary / "manifest.json").open("xb") as stream:
                 stream.write(_canonical_json(document) + b"\n")
@@ -465,20 +566,96 @@ class PreparedImageArtifactStore:
             raise ArtifactWriteError(
                 f"cannot store prepared images at {directory}: {error}; {status}", published=published
             ) from error
-        return PreparedImageArtifactSet(revision, directory, MappingProxyType(stored_variants))
+        group_variants = {
+            _variant_key(specification, presentation): variant for specification, variant in stored_variants.items()
+        }
+        return PreparedImageArtifactSet(revision, directory, MappingProxyType(group_variants))
 
     def load(
         self,
         revision: int,
         stages: Sequence[CompositionVisibility],
+        output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
+        snapshot: DailySnapshot | None = None,
+    ) -> PreparedImageArtifactSet | None:
+        """Validate every requested preparation group, retaining no decoded images."""
+        groups = self._group_keys(output_specifications)
+        loaded: dict[ResolvedOutputSpecification | PreparedImageVariantKey, PreparedImageArtifactVariant] = {}
+        for presentation, specifications in groups.items():
+            group = self._load_group(revision, stages, presentation, tuple(specifications), snapshot)
+            if group is None:
+                return None
+            loaded.update(group.variants)
+        return PreparedImageArtifactSet(
+            revision,
+            self.root / f"revision-{revision}",
+            MappingProxyType(loaded),
+        )
+
+    def load_groups(
+        self,
+        revision: int,
+        stages: Sequence[CompositionVisibility],
+        variant_keys: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
+        snapshot: DailySnapshot | None = None,
+    ) -> tuple[
+        PreparedImageArtifactSet,
+        tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...],
+    ]:
+        """Reuse every valid complete group and return all keys in missing or invalid groups."""
+        groups = self._group_keys(variant_keys)
+        loaded: dict[ResolvedOutputSpecification | PreparedImageVariantKey, PreparedImageArtifactVariant] = {}
+        missing: list[ResolvedOutputSpecification | PreparedImageVariantKey] = []
+        for presentation, specifications in groups.items():
+            keys = tuple(_variant_key(specification, presentation) for specification in specifications)
+            try:
+                group = self._load_group(revision, stages, presentation, tuple(specifications), snapshot)
+            except ArtifactValidationError:
+                group = None
+            if group is None:
+                missing.extend(keys)
+            else:
+                loaded.update(group.variants)
+        return (
+            PreparedImageArtifactSet(
+                revision,
+                self.root / f"revision-{revision}",
+                MappingProxyType(loaded),
+            ),
+            tuple(missing),
+        )
+
+    @staticmethod
+    def _group_keys(
+        variant_keys: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
+    ) -> dict[DestinationPresentation, set[ResolvedOutputSpecification]]:
+        if not isinstance(variant_keys, Sequence) or isinstance(variant_keys, (str, bytes)) or not variant_keys:
+            raise ValueError("variant_keys must be a nonempty sequence")
+        groups: dict[DestinationPresentation, set[ResolvedOutputSpecification]] = {}
+        for key in variant_keys:
+            specification, presentation = _variant_parts(key)
+            group = groups.setdefault(presentation, set())
+            if specification in group:
+                raise ValueError(
+                    f"output specifications must not contain equivalent duplicates within one preparation group: "
+                    f"{specification!r}"
+                )
+            group.add(specification)
+        return groups
+
+    def _load_group(
+        self,
+        revision: int,
+        stages: Sequence[CompositionVisibility],
+        presentation: DestinationPresentation,
         output_specifications: Sequence[ResolvedOutputSpecification],
         snapshot: DailySnapshot | None = None,
     ) -> PreparedImageArtifactSet | None:
-        """Validate a whole expected set sequentially, retaining no decoded images."""
+        """Validate one complete group, retaining no decoded images."""
         expected_stages = _inputs(revision, stages)
         expected_specifications = _output_specifications(output_specifications)
         stage_count = len(expected_stages)
-        directory = self.root / f"revision-{revision}"
+        directory = _group_directory(self.root, revision, presentation)
         try:
             self._check_root()
             root_exists = _exists(self.root)
@@ -496,8 +673,17 @@ class PreparedImageArtifactStore:
                 raise ValueError("manifest must contain artifacts and sha256")
             metadata = document["artifacts"]
             fields = {"revision", "image_directory", "variants"}
+            if presentation.is_empty:
+                if isinstance(metadata, dict) and "presentation_requirements" in metadata:
+                    raise ValueError("default preparation group must not declare presentation requirements")
+            else:
+                fields.add("presentation_requirements")
             if not isinstance(metadata, dict) or set(metadata) != fields:
                 raise ValueError("manifest artifact fields are missing or unsupported")
+            if not presentation.is_empty and metadata["presentation_requirements"] != _presentation_document(
+                presentation
+            ):
+                raise ValueError("manifest presentation requirements do not match the requested group")
             if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
                 raise ValueError("manifest checksum does not match")
             if type(metadata["revision"]) is not int or metadata["revision"] != revision:
@@ -563,7 +749,7 @@ class PreparedImageArtifactStore:
                     raise ValueError(
                         f"image directory for variant {variant_index} does not contain exactly the expected stages"
                     )
-                loaded_variants[specification] = PreparedImageArtifactVariant(
+                loaded_variants[_variant_key(specification, presentation)] = PreparedImageArtifactVariant(
                     specification,
                     variant["mode"],
                     paths,
@@ -572,24 +758,55 @@ class PreparedImageArtifactStore:
                     tuple(metadata_digests),
                 )
             result = PreparedImageArtifactSet(revision, directory, MappingProxyType(loaded_variants))
+            group_choices: dict[str, object] | None = None
             for specification in expected_specifications:
-                variant = result.variant_for(specification)
+                variant = result.variant_for(_variant_key(specification, presentation))
+                reference_reconstruction: dict[str, object] | None = None
                 for index in range(stage_count):
                     with variant.load_stage(index):
                         pass
                     metadata_document = variant.load_metadata(index)
-                    presentation = metadata_document["presentation"]
+                    presentation_metadata = metadata_document["presentation"]
                     if (
-                        not _visibility_matches(presentation["reveal_stage"], expected_stages[index])
-                        or presentation["selection_revision"] != revision
+                        not _visibility_matches(presentation_metadata["reveal_stage"], expected_stages[index])
+                        or presentation_metadata["selection_revision"] != revision
                     ):
                         raise ValueError("metadata selection or reveal stage does not match manifest")
                     if snapshot is not None and (
-                        presentation["display_date"] != snapshot.display_date.isoformat()
+                        presentation_metadata["display_date"] != snapshot.display_date.isoformat()
                         or metadata_document["reconstruction"]["content_entry"] != content_entry(snapshot)
                         or metadata_document["actions"] != action_declarations(snapshot)
                     ):
                         raise ValueError("metadata does not match the committed selection")
+                    reconstruction = metadata_document["reconstruction"]
+                    if (
+                        presentation.background == "none"
+                        and reconstruction["background"] != "none"
+                        or presentation.decoration == "none"
+                        and reconstruction["decoration"] != "none"
+                        or presentation.qr_enabled is not None
+                        and reconstruction["qr"]["enabled"] is not presentation.qr_enabled
+                    ):
+                        raise ValueError("resolved metadata contradicts an explicit destination override")
+                    if reference_reconstruction is None:
+                        reference_reconstruction = reconstruction
+                    elif reference_reconstruction != reconstruction:
+                        raise ValueError("presentation metadata changes between reveal stages")
+                assert reference_reconstruction is not None
+                current_group_choices = {
+                    "presentation_style": reference_reconstruction["presentation_style"],
+                    "background": reference_reconstruction["background"],
+                    "decoration": reference_reconstruction["decoration"],
+                    "fonts": reference_reconstruction["fonts"],
+                    "colors": reference_reconstruction["colors"],
+                    "qr_enabled": reference_reconstruction["qr"]["enabled"],
+                    "font_size_range": reference_reconstruction["font_size_range"],
+                    "insets": reference_reconstruction["insets"],
+                }
+                if group_choices is None:
+                    group_choices = current_group_choices
+                elif group_choices != current_group_choices:
+                    raise ValueError("preparation-wide metadata differs between output specifications")
             return result
         except FileNotFoundError as error:
             raise ArtifactValidationError(f"invalid prepared images at {directory}: {error}") from error
@@ -598,13 +815,25 @@ class PreparedImageArtifactStore:
         except (ValueError, RecursionError) as error:
             raise ArtifactValidationError(f"invalid prepared images at {directory}: {error}") from error
 
-    def cleanup(self, current_revision: int) -> None:
+    def cleanup(
+        self,
+        current_revision: int,
+        required_variant_keys: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+    ) -> None:
         """Remove recognized stale directories and abandoned root-level transactions.
 
         Preserve the current directory even when invalid. Unknown entries and trees
         containing links are left untouched. Callers must exclude concurrent users.
         """
         _positive_integer(current_revision, "current_revision")
+        active_group_names = (
+            None
+            if required_variant_keys is None
+            else {
+                _group_directory(self.root, current_revision, presentation).name
+                for presentation in self._group_keys(required_variant_keys)
+            }
+        )
         try:
             self._check_root()
             if not self.root.exists():
@@ -618,19 +847,29 @@ class PreparedImageArtifactStore:
                 if revision and int(revision[1]) == current_revision:
                     if _is_link(path) or not path.is_dir():
                         continue
-                    active_payload = _manifest_payload(path, current_revision)
-                    if active_payload is not None:
-                        for candidate in path.iterdir():
+                    for collection in tuple(path.iterdir()):
+                        if not collection.name.startswith("group-"):
+                            continue
+                        if not _GROUP_DIRECTORY.fullmatch(collection.name):
+                            continue
+                        if active_group_names is not None and collection.name not in active_group_names:
                             if (
-                                candidate.name == active_payload
-                                or not _PAYLOAD.fullmatch(candidate.name)
-                                or _is_link(candidate)
-                                or not candidate.is_dir()
-                                or not _owned_tree(candidate, payload=True)
+                                not _is_link(collection)
+                                and collection.is_dir()
+                                and _owned_tree(collection, payload=False)
                             ):
-                                continue
-                            shutil.rmtree(candidate)
+                                shutil.rmtree(collection)
+                                _sync_directory(path)
+                            continue
+                        _cleanup_obsolete_payloads(collection, current_revision)
+                    if active_group_names is not None and path.name not in active_group_names:
+                        active_payload = _manifest_payload(path, current_revision)
+                        if active_payload is not None:
+                            shutil.rmtree(path / active_payload)
+                            (path / "manifest.json").unlink()
                             _sync_directory(path)
+                    else:
+                        _cleanup_obsolete_payloads(path, current_revision)
                     continue
                 if _is_link(path) or not path.is_dir():
                     continue
@@ -651,10 +890,29 @@ def _owned_tree(directory: Path, *, payload: bool) -> bool:
             continue
         if not payload and _PAYLOAD.fullmatch(path.name) and path.is_dir() and _owned_tree(path, payload=True):
             continue
+        if not payload and _GROUP_DIRECTORY.fullmatch(path.name) and path.is_dir() and _owned_tree(path, payload=False):
+            continue
         if payload and _VARIANT_DIRECTORY.fullmatch(path.name) and path.is_dir() and _owned_tree(path, payload=False):
             continue
         return False
     return True
+
+
+def _cleanup_obsolete_payloads(directory: Path, revision: int) -> None:
+    active_payload = _manifest_payload(directory, revision)
+    if active_payload is None:
+        return
+    for candidate in directory.iterdir():
+        if (
+            candidate.name == active_payload
+            or not _PAYLOAD.fullmatch(candidate.name)
+            or _is_link(candidate)
+            or not candidate.is_dir()
+            or not _owned_tree(candidate, payload=True)
+        ):
+            continue
+        shutil.rmtree(candidate)
+        _sync_directory(directory)
 
 
 def _manifest_payload(directory: Path, revision: int) -> str | None:
@@ -666,11 +924,10 @@ def _manifest_payload(directory: Path, revision: int) -> str | None:
         if not isinstance(document, dict) or set(document) != {"artifacts", "sha256"}:
             return None
         metadata = document["artifacts"]
-        if not isinstance(metadata, dict) or set(metadata) != {
-            "revision",
-            "image_directory",
-            "variants",
-        }:
+        if not isinstance(metadata, dict) or set(metadata) not in (
+            {"revision", "image_directory", "variants"},
+            {"revision", "image_directory", "variants", "presentation_requirements"},
+        ):
             return None
         if document["sha256"] != hashlib.sha256(_canonical_json(metadata)).hexdigest():
             return None
