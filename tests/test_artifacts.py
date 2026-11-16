@@ -59,8 +59,14 @@ def _metadata(revision, stages, variants):
                 },
                 "presentation": {
                     "display_date": "2026-10-26",
+                    "quotation_identity": "A thought worth keeping.",
                     "selection_revision": revision,
                     "reveal_stage_index": index,
+                    "reveal_schedule": {
+                        "quotation": "06:00",
+                        "source": "12:00",
+                        "attribution": "18:00",
+                    },
                     "reveal_stage": {
                         "quotation": stage.quotation,
                         "source": stage.source,

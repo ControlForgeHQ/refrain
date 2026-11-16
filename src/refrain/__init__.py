@@ -87,6 +87,14 @@ from .persistence import (
 )
 from .preparation import DailyImagePreparationError, PresentationOverrides, prepare_daily_images
 from .presentation import build_presentation_snapshot
+from .publication_metadata import (
+    PUBLICATION_METADATA_VERSION,
+    PublicationMetadataError,
+    finalize_publication_metadata,
+    parse_publication_metadata,
+    serialize_publication_metadata,
+    validate_publication_metadata,
+)
 from .recovery import recover_prepared_daily_images
 from .renderer import (
     BylineLayout,
@@ -144,6 +152,12 @@ __all__ = [
     "DailySnapshot",
     "DailyImagePreparationError",
     "PresentationOverrides",
+    "PUBLICATION_METADATA_VERSION",
+    "PublicationMetadataError",
+    "finalize_publication_metadata",
+    "parse_publication_metadata",
+    "serialize_publication_metadata",
+    "validate_publication_metadata",
     "build_presentation_snapshot",
     "EligibilityRule",
     "EligibilitySpecificity",

@@ -839,7 +839,7 @@ Use a controlled random source for deterministic testing of automatic font selec
 
 Select one font bundle during image preparation using content-entry, decoration, and default-pool precedence. Resolve each preference only when reached; try distinct candidates from a pool in random order without replacement, exhausting that level before proceeding. Never merge candidates across levels. Then resolve each literary role within the selected bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit preference applies and that pool is empty, preparation fails with an actionable diagnostic. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
-Do not store resolved font choices, font bytes, filesystem paths, or content digests in authoritative daily-selection state. For reconstruction-capable publication, preserve the resolved bundle and face identifiers in the associated derived preparation metadata using the publication metadata schema. Resolve current preferences once per complete preparation and use those faces consistently for all generated stages.
+Do not store resolved font choices, font bytes, filesystem paths, or content digests in authoritative daily-selection state. Preserve the resolved bundle and face identifiers in the associated derived preparation metadata using the publication metadata schema. Resolve current preferences once per complete preparation and use those faces consistently for all generated stages; finalization must reuse these captured identifiers.
 
 Do not independently select fonts for individual reveal stages.
 
@@ -1020,6 +1020,36 @@ Include hardware-independent automated tests covering:
 Inspect representative information-view images at the target resolution to evaluate typography, branding, information density, and visual hierarchy.
 
 The initial implementation needs one application-owned information-view layout. Do not introduce an independent styling system, plugin interface, interactive control service, or general-purpose diagnostic framework.
+
+## Publication metadata
+
+Use the shared versioned schema and exact field contract in
+[Publication Metadata](PUBLICATION_METADATA.md) for both prepared and
+completed documents. Keep finalization, validation, parsing, and serialization
+hardware-independent and based on small JSON-compatible values. Use the
+standard-library JSON module; serialize deterministically as UTF-8 JSON, reject
+duplicate object keys and nonstandard numeric values, and validate both
+preparation and completed stages. Do not use pickle, executable payloads, raw
+resource paths, resource bytes, RGB values, or raster-layout calculations.
+
+The application-level finalizer must receive the publication-event identity
+and timestamp, destination identity, actual output specification, and the
+appropriate prepared metadata and reveal stage for scheduled publication. It
+must receive no scheduled preparation for transient publication. Finalization
+must not select content, resolve resources, render images, access resident
+state or a display backend, mutate cached preparation, or write publication
+files. Validate destination audience filtering before serialization, including
+that public output contains no private-only actions in any nested content.
+Transient documents must contain no scheduled association, reconstruction
+data, or actions.
+
+Automated tests must cover schema-stage validation, Unicode JSON round trips,
+timezone-aware publication timestamps, exact destination/output association,
+public/private filtering and privacy leakage, order and duplicate preservation,
+transient metadata, and shared-preparation immutability. These operations must
+run without a resident process, display hardware, network service, systemd, or
+publication directory. Filesystem publication, manifest handling, and viewer
+reconstruction remain separate, unimplemented work.
 
 ## Display backend
 

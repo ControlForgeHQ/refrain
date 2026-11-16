@@ -1144,7 +1144,7 @@ Invalid decoration registrations must not make unrelated fonts, backgrounds, or 
 
 Each effective background and decoration default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
 
-Font, background, decoration, color, layout, and QR decisions are resolved from current configuration and available resources during image preparation. They are not part of quotation identity or repetition history and are not persisted in authoritative daily-selection state. When reconstruction-capable publication is implemented, the actual resolved choices are retained with their prepared images in derived publication metadata.
+Font, background, decoration, color, layout, and QR decisions are resolved from current configuration and available resources during image preparation. They are not part of quotation identity or repetition history and are not persisted in authoritative daily-selection state. The actual resolved choices are retained with their prepared images in derived publication metadata for destination-specific finalization; they are not re-resolved during finalization.
 
 After selecting the background, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected background's `text_color`, the selected decoration's `text_color`, the effective `text.colors.pools` pool, then built-in `black`. Pool references expand in the text-color namespace. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
 
@@ -1571,6 +1571,41 @@ place during the transition and is retired only after the independent
 `refrain-image-server` consumer has been implemented and validated against the
 filesystem-publication contract below.
 
+### Publication metadata finalization
+
+The shared publication-metadata module defines one version-1 JSON schema for
+prepared scheduled-image metadata and completed scheduled or transient
+publication metadata. Preparation captures the committed quotation identity,
+selection revision, logical display date, effective reveal schedule and stage,
+complete single-quotation reconstruction input, resolved artistic choices,
+actual output specification, and unfiltered ordered actions alongside the
+prepared image.
+
+The application-level finalizer accepts prepared metadata when completing a
+scheduled publication, or no prepared metadata for a transient publication.
+The caller supplies the publication-event ID and timezone-aware event
+timestamp, destination ID, actual output specification, and—when scheduled—
+the image's reveal stage and destination audience. Finalization validates that
+the image corresponds to the prepared output and stage, copies rather than
+mutates shared preparation data, and filters actions for exactly one
+nonhierarchical `public` or `private` audience. It does not choose content,
+resolve artistic resources, render images, inspect committed runtime state,
+access a display, or write files. The publication ID is supplied by the
+publication event owner; it is not generated during preparation.
+
+Transient finalization never reads selection or preparation state. Finished
+images submitted through `--image`, viewer previews, and information-view
+images all use the same minimal transient representation. Classification does
+not alter information-view scheduling, publication priority, duration, or
+acknowledgement behavior.
+
+The finalizer and JSON validator are available as hardware-independent
+application operations. The resident's current display flows do not yet
+finalize or persist publication metadata. Filesystem publication, manifest
+creation, and viewer reconstruction remain planned work; the future publisher
+must receive already-finalized metadata associated with its image rather than
+reconstructing semantics from resident state.
+
 ### Filesystem publication target (planned)
 
 Refrain remains responsible for content selection, scheduling, image preparation,
@@ -1712,15 +1747,16 @@ audience-filtered action sequence. Publication type is `scheduled` or
 The exact scheduled-publication field names, types, and preparation/completion
 validation stages are defined in [Publication Metadata](PUBLICATION_METADATA.md).
 
-Scheduled metadata contains sufficient reconstruction data for the installed
-`refrain-viewer` to render the destination's presentation at another requested
-aspect ratio and resolution. Include a valid generated single-quotation content
-entry derived from the committed selection, the destination's actual resolved
-background and decoration identifiers, resolved font identifier and
-role-specific faces, applicable palette identifiers, presentation style,
-effective QR setting, and other resolved settings needed for faithful
-reconstruction. The embedded entry conforms to the authoritative
-[content-entry format](CONTENT_FORMAT.md#content-entries).
+Scheduled metadata is intended to provide sufficient reconstruction data for
+a future `refrain-viewer` publication mode to render the destination's
+presentation at another requested aspect ratio and resolution. It includes a
+valid generated single-quotation content entry derived from the committed
+selection, the destination's actual resolved background and decoration
+identifiers, resolved font identifier and role-specific faces, applicable
+palette identifiers, presentation style, effective QR setting, and other
+resolved settings needed for reconstruction. The embedded entry conforms to
+the authoritative [content-entry format](CONTENT_FORMAT.md#content-entries).
+Viewer reconstruction is not implemented.
 
 Capture resolved artistic choices from the same image-preparation operation
 that produces the image; do not repeat random resource selection independently.
@@ -1731,12 +1767,11 @@ metadata. These are derived publication data, not additional authoritative
 selection state. Preserve stable resource and palette identifiers rather than
 embedding asset contents or RGB values. Do not persist calculated text
 positions, crop geometry, or other output-dependent layout results.
-Reconstruction recalculates geometry through the existing renderer for the
-requested output specification, using the currently installed Refrain assets
-and palette definitions; it does not promise archival reproduction if those
-resources or rendering behavior change. Metadata records the actual reveal
-stage, while reconstruction has the complete committed quotation and renders
-fully revealed by default.
+Future reconstruction recalculates geometry through the existing renderer for
+the requested output specification, using the currently installed Refrain
+assets and palette definitions; it does not promise archival reproduction if
+those resources or rendering behavior change. Metadata records the actual
+reveal stage, while reconstruction input has the complete committed quotation.
 
 Preparation caches the reconstruction metadata with the exact compatible
 image collection using this same publication-metadata schema. A complete
@@ -1749,14 +1784,15 @@ reconstruction-capable publication. Regenerate its compatible images and
 metadata together from the committed selection, without changing its identity,
 history, or reveal progression. The cache remains disposable derived storage.
 
-Destination publication starts from the cached metadata and derives an
-independent destination-specific instance. Finalize publication identity and
-timestamp, actual destination and output specification, actual reveal stage,
-and audience-filtered actions. Preserve the committed literary identity and
-artistic choices that produced the image. Ensure the completed metadata is
-valid before serialization. Never mutate shared cached metadata in place;
-distinct destinations may derive different completed documents from the same
-compatible preparation.
+The implemented Stage 2A finalizer starts from cached metadata and derives an
+independent destination-specific instance. It finalizes publication identity
+and timestamp, actual destination and output specification, actual reveal
+stage, and audience-filtered actions. It preserves the committed literary
+identity and artistic choices that produced the image, validates the completed
+document before serialization, and never mutates shared cached metadata.
+Distinct destinations may derive different completed documents from the same
+compatible preparation. The future filesystem publisher and its integration
+with resident display flows are not implemented.
 
 Each destination declares exactly one audience: `public` or `private`.
 Visibility is nonhierarchical: a public destination includes actions declaring
@@ -1788,11 +1824,11 @@ Information-view images use this same transient metadata representation:
 ```
 
 The normal publication envelope still supplies publication identity,
-destination, timestamp, and output specification. `refrain-viewer
---publication` rejects this and every other transient publication. The planned
-`publish` backend receives the image and corresponding metadata from the
-application; it does not inspect operational state to infer presentation
-semantics.
+destination, timestamp, and output specification. A future `refrain-viewer
+--publication` mode must reject this and every other transient publication.
+The planned `publish` backend receives the image and corresponding finalized
+metadata from the application; it does not inspect operational state to infer
+presentation semantics.
 
 #### Viewer reconstruction
 
