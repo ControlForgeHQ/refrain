@@ -1539,6 +1539,17 @@ Distinguish assertions on the design canvas, presentation canvas, and output ima
 
 For reconstruction-capable publication, verify that preparation metadata uses the exact publication metadata schema and remains associated with its compatible image collection after cache reuse and process restart. Cover missing or corrupted metadata, mismatched image and metadata collections, compatible destinations sharing prepared images, destinations with different presentation overrides, and adding a `publish` destination that can reuse compatible cached images. Verify destination-specific finalization creates independent complete metadata without mutating shared cached metadata or another destination's result.
 
+Every configured destination must explicitly declare audience `public` or
+`private`; test missing, null, empty, wrong-type, and unsupported values for
+rejection before runtime startup. Verify audience is retained on the
+destination but excluded from publication metadata and prepared-image identity.
+Preparation keeps every committed action declaration unchanged; finalization
+filters by destination audience while preserving action order, duplicates, and
+each included declaration's complete visibility list. Completed scheduled
+serialization must require an audience and reject actions not visible to it.
+Test that prepared metadata cannot be serialized or consumed as a completed
+publication and that blank publication IDs are rejected consistently.
+
 Test destination visual post-processing independently of backend construction. Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output. Verify the Waveshare publication path quantizes exactly once, passes palette indices unchanged through driver rotation and 4-bit packing, and leaves the original RGB image unchanged. Verify the conversion can be imported and exercised without GPIO/SPI dependencies and that the driver and viewer use the same conversion. These tests establish software behavior only, not physical panel validation.
 
 Include an aspect-mismatched output specification with declared aspect 4:3 and requested resolution 1600 × 1190. Assert that the design canvas is 3200 × 2400 and background/decorative composition occurs there; literary geometry and font fitting, QR viability and rasterization, and diagnostic overlays resolve on the 1596 × 1197 presentation canvas; and only the completed image is resized to the 1600 × 1190 output image. This case must not be replaced by tests where presentation-canvas and output-image dimensions happen to match. Also exercise exact-aspect supported configurations. Verify deterministic half-up rounding and rejection of degenerate geometry.

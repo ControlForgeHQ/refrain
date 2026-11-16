@@ -18,7 +18,7 @@ def _config_data(**sections: object) -> dict[str, object]:
         "backgrounds": {"pools": {"default": ["none"]}},
         "decorations": {"pools": {"default": ["none"]}},
         "text": {"min_font_size": 12, "max_font_size": 32},
-        "destinations": [{"id": "window", "type": "window"}],
+        "destinations": [{"id": "window", "type": "window", "audience": "private"}],
     }
     data.update(sections)
     return data

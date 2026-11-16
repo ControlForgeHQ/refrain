@@ -33,6 +33,7 @@ _CONFIG = """\
 destinations:
   - id: configured-output
     type: image-server
+    audience: private
 scheduling:
   day_start: "06:00"
 presentation:
@@ -352,8 +353,9 @@ def test_render_as_uses_configured_geometry_and_exports_without_backend_or_runti
         path.write_bytes(content)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n",
-            '  - id: window\n    type: window\n    aspect_ratio: "4:3"\n    resolution: [320, 240]\n',
+            "  - id: configured-output\n    type: image-server\n    audience: private\n",
+            "  - id: window\n    type: window\n    audience: private\n"
+            '    aspect_ratio: "4:3"\n    resolution: [320, 240]\n',
         ),
         encoding="utf-8",
     )
@@ -407,8 +409,8 @@ def test_render_as_waveshare_exports_processed_pixels_without_hardware(
     config, _ = _workspace(tmp_path, with_entry=False)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n",
-            "  - id: configured-output\n    type: waveshare-13in3-e\n",
+            "  - id: configured-output\n    type: image-server\n    audience: private\n",
+            "  - id: configured-output\n    type: waveshare-13in3-e\n    audience: private\n",
         ),
         encoding="utf-8",
     )

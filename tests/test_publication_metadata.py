@@ -286,8 +286,16 @@ def test_actions_are_filtered_by_audience_without_reordering_or_deduplication() 
     assert [action["type"] for action in public["actions"]] == ["public", "both", "public"]
     assert [action["type"] for action in private["actions"]] == ["private", "both"]
     assert public["actions"][0] == public["actions"][2]
+    assert public["actions"][1]["visibility"] == ["public", "private"]
+    assert private["actions"][1]["visibility"] == ["public", "private"]
     with pytest.raises(PublicationMetadataError, match="not visible to the public"):
         validate_publication_metadata(
+            {**public, "actions": [prepared["actions"][1]]},
+            stage="completed",
+            audience="public",
+        )
+    with pytest.raises(PublicationMetadataError, match="not visible to the public"):
+        serialize_publication_metadata(
             {**public, "actions": [prepared["actions"][1]]},
             stage="completed",
             audience="public",
@@ -342,6 +350,8 @@ def test_transient_publication_uses_minimal_metadata_without_preparation(origin)
         "reconstruction": None,
         "actions": [],
     }
+    assert "audience" not in document
+    serialize_publication_metadata(document, stage="completed")
 
 
 @pytest.mark.parametrize(
@@ -383,6 +393,39 @@ def test_finalization_rejects_prepared_metadata_for_completed_serialization_and_
         )
 
 
+def test_scheduled_serialization_requires_audience_and_metadata_never_contains_it() -> None:
+    completed = _finalized()
+
+    assert "audience" not in _document()
+    assert "audience" not in completed
+    assert "audience" not in completed["reconstruction"]["content_entry"]
+    with pytest.raises(PublicationMetadataError, match="requires a destination audience"):
+        serialize_publication_metadata(completed, stage="completed")
+    for location in ("top-level", "reconstruction"):
+        document = copy.deepcopy(completed)
+        if location == "top-level":
+            document["audience"] = "public"
+        else:
+            document["reconstruction"]["content_entry"]["audience"] = "public"
+        with pytest.raises(PublicationMetadataError):
+            validate_publication_metadata(document, stage="completed", audience="public")
+
+
+@pytest.mark.parametrize("publication_id", ["", " ", "\t\n"])
+def test_completed_publication_id_must_be_nonblank_everywhere(publication_id: str) -> None:
+    with pytest.raises(PublicationMetadataError, match="publication_id"):
+        _finalized(publication_id=publication_id)
+    document = _finalized()
+    document["publication_id"] = publication_id
+
+    with pytest.raises(PublicationMetadataError, match="publication_id"):
+        validate_publication_metadata(document, stage="completed")
+    with pytest.raises(PublicationMetadataError, match="publication_id"):
+        parse_publication_metadata(json.dumps(document), stage="completed", audience="public")
+    with pytest.raises(PublicationMetadataError, match="publication_id"):
+        serialize_publication_metadata(document, stage="completed", audience="public")
+
+
 def test_unicode_metadata_round_trips_as_deterministic_json() -> None:
     prepared = _document()
     prepared["reconstruction"]["content_entry"]["quotations"] = ["雪と café — “thought”"]
@@ -404,6 +447,7 @@ def test_unicode_metadata_round_trips_as_deterministic_json() -> None:
         lambda value: value.update(schema_version=99),
         lambda value: value.pop("destination_id"),
         lambda value: value.update(publication_id=None),
+        lambda value: value.update(audience="public"),
         lambda value: value.update(published_at="2026-10-26T06:00:00"),
         lambda value: value["presentation"].update(quotation_identity=None),
         lambda value: value["presentation"].update(reveal_schedule={"quotation": None}),

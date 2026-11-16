@@ -131,6 +131,7 @@ Content-entry-specific information must not be stored in application configurati
 destinations:
   - id: "default"
     type: "image-server"
+    audience: "private"
 
 image-server:
   host: "127.0.0.1"
@@ -251,25 +252,29 @@ RGB lists and direct RGB values in content entries or decoration manifests are n
 
 ### Display destinations
 
-The required top-level `destinations` field is a nonempty sequence of publication targets. Each destination requires an explicit `id` and `type`:
+The required top-level `destinations` field is a nonempty sequence of publication targets. Each destination requires explicit `id`, `type`, and `audience` fields:
 
 ```yaml
 destinations:
   - id: desktop
     type: window
+    audience: private
     aspect_ratio: "16:9"
     resolution: [1920, 1080]
 
   - id: epaper
     type: waveshare-13in3-e
+    audience: private
 
   - id: kitchen
     type: image-server
+    audience: public
     aspect_ratio: "16:10"
     resolution: [3840, 2400]
 
   - id: hallway
     type: image-server
+    audience: private
     aspect_ratio: "4:3"
     resolution: [1600, 1200]
 
@@ -278,9 +283,17 @@ image-server:
   port: 8080
 ```
 
-The currently supported Version 0.1 destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service. Filesystem `publish` destinations and their planned audience and presentation overrides are not yet implemented or supported by this configuration schema; see the planned architecture in [Architecture](ARCHITECTURE.md#filesystem-publication-target-planned).
+The currently supported Version 0.1 destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service. Filesystem `publish` destinations and their presentation overrides are not yet implemented or supported by this configuration schema; see the planned architecture in [Architecture](ARCHITECTURE.md#filesystem-publication-target-planned).
 
-Destination IDs must match `[A-Za-z0-9][A-Za-z0-9_-]*`, be no longer than 256 characters, and be globally unique across all types. IDs are used unchanged for runtime discovery, publication selection, and image-server resource paths. `all` is an ordinary valid ID; `@all` is reserved for publication selection. Invalid or duplicate IDs and capacity excesses are configuration errors. Backend capacities are checked before backend or service initialization.
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `id` | String | Yes | Globally unique destination identifier |
+| `type` | String | Yes | One of the supported destination backend types |
+| `audience` | String | Yes | Exactly `public` or `private`; destination-owned action-filtering policy |
+
+`audience` must be written explicitly for every destination, including local windows, e-paper displays, and image-server outputs. Missing, null, empty, non-string, or unsupported values are configuration errors. There is no default or fallback. It is not a presentation override and does not participate in prepared-image identity or preparation grouping.
+
+Destination IDs must match `[A-Za-z0-9][A-Za-z0-9_-]*`, be no longer than 256 characters, and be globally unique across all types. IDs are used unchanged for runtime discovery, publication selection, and image-server resource paths. `all` is an ordinary valid ID; `@all` is reserved for publication selection. Invalid or duplicate IDs, invalid audiences, and capacity excesses are configuration errors. Backend capacities are checked before backend or service initialization.
 
 An optional destination-local `presentation` mapping overrides selected settings for scheduled image preparation:
 
@@ -288,6 +301,7 @@ An optional destination-local `presentation` mapping overrides selected settings
 destinations:
   - id: epaper
     type: waveshare-13in3-e
+    audience: private
     presentation:
       background: "none"
       text_color: "black"
@@ -297,6 +311,7 @@ destinations:
 
   - id: hallway
     type: image-server
+    audience: public
     aspect_ratio: "4:3"
     resolution: [1600, 1200]
     presentation:

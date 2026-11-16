@@ -52,7 +52,10 @@ def runtime(tmp_path):
 
     config = DisplayBackendConfiguration(
         "image-server",
-        outputs=(DisplayOutputConfiguration("one", SPEC), DisplayOutputConfiguration("two", SPEC)),
+        outputs=(
+            DisplayOutputConfiguration("one", SPEC, audience="private"),
+            DisplayOutputConfiguration("two", SPEC, audience="private"),
+        ),
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size, (1, 2, 3))})
@@ -329,11 +332,18 @@ def test_staged_three_backend_publication_survives_disconnect_and_cleans_up(tmp_
     waveshare = ResolvedOutputSpecification("4:3", (1600, 1200))
     server_spec = ResolvedOutputSpecification("16:10", (3840, 2400))
     configurations = (
-        DisplayBackendConfiguration("window", outputs=(DisplayOutputConfiguration("window", window),)),
-        DisplayBackendConfiguration("waveshare-13in3-e", outputs=(DisplayOutputConfiguration("waveshare", waveshare),)),
+        DisplayBackendConfiguration(
+            "window", outputs=(DisplayOutputConfiguration("window", window, audience="private"),)
+        ),
+        DisplayBackendConfiguration(
+            "waveshare-13in3-e", outputs=(DisplayOutputConfiguration("waveshare", waveshare, audience="private"),)
+        ),
         DisplayBackendConfiguration(
             "image-server",
-            outputs=(DisplayOutputConfiguration("one", server_spec), DisplayOutputConfiguration("two", server_spec)),
+            outputs=(
+                DisplayOutputConfiguration("one", server_spec, audience="private"),
+                DisplayOutputConfiguration("two", server_spec, audience="private"),
+            ),
         ),
     )
     entered = {name: Event() for name in ("window", "waveshare-13in3-e", "image-server")}
@@ -438,7 +448,7 @@ def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_pat
         def close(self):
             pass
 
-    outputs = tuple(DisplayOutputConfiguration(f"output-{i}", SPEC) for i in range(130))
+    outputs = tuple(DisplayOutputConfiguration(f"output-{i}", SPEC, audience="private") for i in range(130))
     config = DisplayBackendConfiguration("image-server", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
@@ -475,7 +485,9 @@ def test_discovery_destination_identifier_at_limit(tmp_path):
         def close(self):
             pass
 
-    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC),))
+    config = DisplayBackendConfiguration(
+        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="private"),)
+    )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
     assert coordinator.wait_for_publication((1, 0), 5)
@@ -510,7 +522,9 @@ def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, ide
         def close(self):
             pass
 
-    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC),))
+    config = DisplayBackendConfiguration(
+        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="private"),)
+    )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
     assert coordinator.wait_for_publication((1, 0), 5)
@@ -551,7 +565,9 @@ def test_oversized_destination_discovery_and_refresh(tmp_path, size):
         def close(self):
             pass
 
-    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("large", oversized),))
+    config = DisplayBackendConfiguration(
+        "image-server", outputs=(DisplayOutputConfiguration("large", oversized, audience="private"),)
+    )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {oversized: Image.new("RGB", size)})
     assert coordinator.wait_for_publication((1, 0), 5)
@@ -603,7 +619,9 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
 
     large = ResolvedOutputSpecification("16:9", (3841, 1))
     stale = ResolvedOutputSpecification("16:9", (512, 256))
-    config = DisplayBackendConfiguration("image-server", outputs=(DisplayOutputConfiguration("large", large),))
+    config = DisplayBackendConfiguration(
+        "image-server", outputs=(DisplayOutputConfiguration("large", large, audience="private"),)
+    )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     path = tmp_path / "runtime.json"
     server = RuntimeControlServer(coordinator, path, lambda _: None)

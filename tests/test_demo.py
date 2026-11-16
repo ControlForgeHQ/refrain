@@ -25,6 +25,7 @@ _CONFIG = """\
 destinations:
   - id: window
     type: "window"
+    audience: "private"
 scheduling:
   day_start: "06:00"
   reveal:
@@ -779,8 +780,9 @@ def test_actual_coordinator_healthy_backend_progresses_independently(demo, monke
     demo.entry()
     demo.config.write_text(
         _CONFIG.replace(
-            '  - id: window\n    type: "window"',
-            '  - id: window\n    type: "window"\n  - id: default\n    type: "image-server"',
+            '  - id: window\n    type: "window"\n    audience: "private"',
+            '  - id: window\n    type: "window"\n    audience: private\n'
+            '  - id: default\n    type: "image-server"\n    audience: private',
         )
     )
     entered = Event()

@@ -63,7 +63,7 @@ _CONFIGURATION = ApplicationConfiguration(
     display_backends=(
         DisplayBackendConfiguration(
             "window",
-            outputs=(DisplayOutputConfiguration("window", _OUTPUT_SPECIFICATION),),
+            outputs=(DisplayOutputConfiguration("window", _OUTPUT_SPECIFICATION, audience="private"),),
         ),
     ),
     day_start=time(6),
@@ -326,7 +326,7 @@ def test_output_specification_change_requires_a_new_artifact_variant(committed_s
         display_backends=(
             DisplayBackendConfiguration(
                 "window",
-                outputs=(DisplayOutputConfiguration("window", changed_specification),),
+                outputs=(DisplayOutputConfiguration("window", changed_specification, audience="private"),),
             ),
         ),
     )
@@ -356,9 +356,9 @@ def test_changed_override_regenerates_only_its_incompatible_group(
                 DisplayBackendConfiguration(
                     "image-server",
                     outputs=(
-                        DisplayOutputConfiguration("shared", specification, shared),
-                        DisplayOutputConfiguration("shared-wide", other_specification, shared),
-                        DisplayOutputConfiguration("other", specification, second_presentation),
+                        DisplayOutputConfiguration("shared", specification, shared, audience="private"),
+                        DisplayOutputConfiguration("shared-wide", other_specification, shared, audience="private"),
+                        DisplayOutputConfiguration("other", specification, second_presentation, audience="private"),
                     ),
                 ),
             ),

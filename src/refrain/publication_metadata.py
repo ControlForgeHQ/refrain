@@ -136,7 +136,7 @@ def validate_publication_metadata(document: object, *, stage: str, audience: str
                 "publication identity, timestamp, and destination must be null at preparation"
             )
     else:
-        if not isinstance(document["publication_id"], str) or not document["publication_id"]:
+        if not isinstance(document["publication_id"], str) or not document["publication_id"].strip():
             raise PublicationMetadataError("completed metadata requires a publication_id")
         if not isinstance(document["destination_id"], str) or not _IDENTIFIER.fullmatch(document["destination_id"]):
             raise PublicationMetadataError("completed metadata requires a destination_id")
@@ -452,6 +452,9 @@ def serialize_publication_metadata(
     audience: str | None = None,
 ) -> str:
     """Serialize validated publication metadata as deterministic UTF-8 JSON text."""
+    if stage == "completed" and isinstance(document, dict) and document.get("publication_type") == "scheduled":
+        if not isinstance(audience, str) or audience not in {"public", "private"}:
+            raise PublicationMetadataError("scheduled publication serialization requires a destination audience")
     validate_publication_metadata(document, stage=stage, audience=audience)
     try:
         return json.dumps(document, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))

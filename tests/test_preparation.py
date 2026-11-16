@@ -167,7 +167,7 @@ def _configuration(
         display_backends=(
             DisplayBackendConfiguration(
                 "window",
-                outputs=(DisplayOutputConfiguration("window", output_specification),),
+                outputs=(DisplayOutputConfiguration("window", output_specification, audience="private"),),
             ),
         ),
         day_start=time(6),

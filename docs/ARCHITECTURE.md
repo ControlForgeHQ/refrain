@@ -1742,8 +1742,11 @@ a generic serialization of the resident's daily selection. Its versioned JSON
 document contains publication identity, type and timestamp; destination
 identity and actual output specification; applicable display date, selection
 identity and actual reveal stage; optional reconstruction data; and an ordered,
-audience-filtered action sequence. Publication type is `scheduled` or
-`transient`. Use explicit `null` values for inapplicable structured fields.
+audience-filtered action sequence. The destination's required `audience` is
+policy supplied to finalization; it is never a field in preparation or
+completed metadata, including nested reconstruction content. Publication type
+is `scheduled` or `transient`. Use explicit `null` values for inapplicable
+structured fields.
 The exact scheduled-publication field names, types, and preparation/completion
 validation stages are defined in [Publication Metadata](PUBLICATION_METADATA.md).
 
@@ -1794,7 +1797,14 @@ Distinct destinations may derive different completed documents from the same
 compatible preparation. The future filesystem publisher and its integration
 with resident display flows are not implemented.
 
-Each destination declares exactly one audience: `public` or `private`.
+Each configured destination declares exactly one audience: `public` or
+`private`. The application obtains this policy from the validated destination
+configuration and supplies it to finalization; the policy is not inferred or
+copied into metadata. It is independent of each action's visibility and of
+presentation overrides. Destinations with equivalent presentation
+requirements share prepared-image groups and unfiltered metadata even if their
+audiences differ; audience does not affect cache identity.
+
 Visibility is nonhierarchical: a public destination includes actions declaring
 `public`; a private destination includes actions declaring `private`; an action
 declaring both is included for either audience. Preserve eligible actions in
@@ -1840,10 +1850,14 @@ refrain-viewer --publication publication.json \
   --aspect 16:9 --resolution 3840 2160 --no-qr --output custom.png
 ```
 
-It strictly validates the metadata schema, accepts only scheduled
-publications, and explicitly rejects `publication_type: transient`. Published
-content and resolved artistic choices are its baseline; explicit command-line
-presentation overrides replace only the options they specify. Unspecified
+It strictly validates the completed metadata schema, accepts only completed
+scheduled publications, and explicitly rejects prepared metadata (including
+documents with null or otherwise incomplete publication-envelope fields) and
+`publication_type: transient`. A non-null publication ID alone does not make
+prepared or malformed data a completed publication. Viewer reconstruction
+must never finalize preparation metadata. Published content and resolved
+artistic choices are its baseline; explicit command-line presentation
+overrides replace only the options they specify. Unspecified
 options preserve published choices. Render fully revealed by default and
 recalculate geometry through the existing renderer. This mode does not select
 from the content library, require resident runtime or operational state, or

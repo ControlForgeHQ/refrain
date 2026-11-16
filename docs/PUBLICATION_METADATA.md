@@ -4,6 +4,9 @@ This specification defines the single JSON metadata schema used by prepared
 scheduled images and completed publications. Both use schema version `1`.
 Preparation and publication differ only in which publication-envelope fields
 have been populated and whether a transient publication has scheduled payload.
+Destination audience is policy external to this schema. The field `audience`
+is prohibited at every level, including the top-level document and embedded
+content entry.
 Runtime ownership belongs in [Architecture](ARCHITECTURE.md); serialization,
 validation, and testing requirements belong in [Engineering](ENGINEERING.md).
 
@@ -103,13 +106,23 @@ An action contains exactly `type`, `visibility`, and `payload`, using the
 content-entry action field types and constraints. The sequence preserves the
 original order and duplicates.
 
-The supported destination audiences are `public` and `private`. Visibility is
-nonhierarchical: include an action only when its `visibility` explicitly
+The configured destination supplies exactly one audience: `public` or
+`private`. The finalizer receives this value separately from the metadata
+document. Visibility is nonhierarchical: include an action only when its
+`visibility` explicitly
 contains the destination's audience. An action declaring both is included for
 either audience. Do not deduplicate, reorder, merge, reinterpret, or execute
-actions. The completed document does not add a separate audience field; the
-finalizer receives the destination audience and the validator can check the
-expected audience supplied by its caller.
+actions. Preserve each included action's complete original declaration,
+including its original `visibility` sequence. Never add an `audience` field to
+prepared or completed metadata or to embedded reconstruction content.
+
+Context-independent structural validation may be used when the expected
+audience is unavailable, but it does not establish that actions are safe for a
+particular destination. Completed scheduled-publication serialization requires
+an explicit `public` or `private` audience and rejects every action not
+permitted for that audience. A future viewer must validate the completed
+scheduled stage, not accept preparation-stage metadata or attempt to finalize
+it.
 
 Audience filtering is a metadata rule, not a filesystem permission or
 authentication mechanism.
@@ -144,19 +157,24 @@ values. Only `publication_id`, `published_at`, and `destination_id` may be
 null, and `publication_type` must be `"scheduled"`. Prepared metadata is not
 valid as a completed publication.
 
-Completed validation requires a nonempty publication ID and destination ID, a
+Completed validation requires a nonblank publication ID and destination ID, a
 valid UTC RFC-3339 timestamp, and the actual output specification. Scheduled
 documents require valid presentation and reconstruction data, exactly one
 quotation, and audience-filtered actions. Transient documents require null
 presentation and reconstruction plus an empty action sequence. Unsupported
 versions, missing or extra fields, invalid types, inappropriate nulls,
 malformed output specifications, invalid generated entries, duplicate JSON
-object keys, and nonstandard JSON numeric values are rejected. Validation does
-not repair data or fill values from runtime state.
+object keys, and nonstandard JSON numeric values are rejected. In particular,
+any `audience` key is an unexpected field and is rejected. Validation does not
+repair data or fill values from runtime state.
 
 Serialization is deterministic JSON using UTF-8 text, sorted object keys,
 compact separators, and preserved sequence order. Parsing validates the same
-schema and stage as serialization. No Python-specific persistence format or
+schema and stage as serialization. Completed scheduled serialization cannot
+omit the audience check. The future `refrain-viewer --publication` workflow
+must require completed scheduled-document validation and reject null
+publication identity, missing completion fields, unsupported versions, and
+transient documents. No Python-specific persistence format or
 runtime/content-library dependency is used.
 
 Schema version `1` is shared by preparation and completed publication; there
