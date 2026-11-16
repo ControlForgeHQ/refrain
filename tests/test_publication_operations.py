@@ -21,7 +21,10 @@ def _configuration(
     outputs = outputs or ((backend_type, _WIDE),)
     return DisplayBackendConfiguration(
         backend_type,
-        outputs=tuple(DisplayOutputConfiguration(identifier, specification) for identifier, specification in outputs),
+        outputs=tuple(
+            DisplayOutputConfiguration(identifier, specification, audience="private")
+            for identifier, specification in outputs
+        ),
     )
 
 

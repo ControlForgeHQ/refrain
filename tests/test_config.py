@@ -31,7 +31,7 @@ from refrain.geometry import ResolvedOutputSpecification
 
 def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
-        "destinations": [{"id": "desktop", "type": "window"}],
+        "destinations": [{"id": "desktop", "type": "window", "audience": "private"}],
         "fonts": {"pools": {"default": ["test-font"]}},
         "text": {
             "colors": {"pools": {"default": ["black"]}},
@@ -45,6 +45,15 @@ def configuration_data(**overrides: object) -> dict[str, object]:
         },
     }
     data.update(overrides)
+    if "destinations" in overrides and isinstance(overrides["destinations"], list):
+        data["destinations"] = [
+            (
+                {**destination, "audience": destination.get("audience", "private")}
+                if isinstance(destination, dict)
+                else destination
+            )
+            for destination in overrides["destinations"]
+        ]
     return data
 
 
@@ -1000,6 +1009,43 @@ def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
     assert output.identifier == "desktop"
     assert output.output_specification.aspect_ratio == "16:9"
     assert output.output_specification.requested_output_size == (1920, 1080)
+    assert output.audience == "private"
+
+
+@pytest.mark.parametrize(
+    ("backend_type", "audience"),
+    [
+        ("window", "public"),
+        ("window", "private"),
+        ("waveshare-13in3-e", "public"),
+        ("waveshare-13in3-e", "private"),
+        ("image-server", "public"),
+        ("image-server", "private"),
+    ],
+)
+def test_each_destination_type_preserves_explicit_audience(tmp_path: Path, backend_type: str, audience: str) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(destinations=[{"id": "destination", "type": backend_type, "audience": audience}]),
+        )
+    )
+
+    assert config.display_backends[0].outputs[0].audience == audience
+
+
+@pytest.mark.parametrize("audience", [None, "", "internal", 1, True, [], {}])
+def test_invalid_destination_audience_is_a_configuration_error(tmp_path: Path, audience: object) -> None:
+    data = configuration_data(destinations=[{"id": "desktop", "type": "window", "audience": audience}])
+
+    assert "destinations[0].audience" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+
+
+def test_missing_destination_audience_is_a_configuration_error(tmp_path: Path) -> None:
+    data = configuration_data()
+    data["destinations"] = [{"id": "desktop", "type": "window"}]
+
+    assert "destinations[0].audience" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
 def test_destination_presentation_parses_all_supported_overrides(tmp_path: Path) -> None:
@@ -1088,6 +1134,41 @@ def test_equivalent_destination_presentation_groups_ignore_destination_ids(tmp_p
     assert configuration.display_backends[0].outputs[0].prepared_image_key != (
         configuration.display_backends[0].outputs[2].prepared_image_key
     )
+
+
+def test_destination_audience_does_not_change_prepared_image_group(tmp_path: Path) -> None:
+    configuration = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                destinations=[
+                    {
+                        "id": "public",
+                        "type": "image-server",
+                        "audience": "public",
+                        "aspect_ratio": "4:3",
+                        "resolution": [1600, 1200],
+                        "presentation": {"background": "none"},
+                    },
+                    {
+                        "id": "private",
+                        "type": "image-server",
+                        "audience": "private",
+                        "aspect_ratio": "4:3",
+                        "resolution": [1600, 1200],
+                        "presentation": {"background": "none"},
+                    },
+                ]
+            ),
+        )
+    )
+
+    public, private = configuration.display_backends[0].outputs
+    assert public.audience == "public"
+    assert private.audience == "private"
+    assert public.presentation == private.presentation
+    assert public.prepared_image_key == private.prepared_image_key
+    assert len(configuration.required_prepared_image_keys) == 1
 
 
 @pytest.mark.parametrize(

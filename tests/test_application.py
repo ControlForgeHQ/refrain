@@ -57,6 +57,7 @@ _CONFIG = """\
 destinations:
   - id: epaper
     type: "waveshare-13in3-e"
+    audience: "private"
 scheduling:
   day_start: "06:00"
   reveal:
@@ -837,8 +838,9 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"',
-            '  - id: desktop\n    type: "window"\n  - id: default\n    type: "image-server"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            '  - id: desktop\n    type: "window"\n    audience: private\n'
+            '  - id: default\n    type: "image-server"\n    audience: private',
         ),
         encoding="utf-8",
     )
@@ -1210,8 +1212,12 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
     ordinary(workspace)
     workspace.config.write_text(
         _CONFIG.replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"',
-            "  - id: default\n" "    type: image-server\n" '    aspect_ratio: "16:10"\n' "    resolution: [800, 500]",
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            "  - id: default\n"
+            "    type: image-server\n"
+            "    audience: private\n"
+            '    aspect_ratio: "16:10"\n'
+            "    resolution: [800, 500]",
         ),
         encoding="utf-8",
     )
@@ -1250,11 +1256,13 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
 
     workspace.config.write_text(
         _CONFIG.replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"',
-            "  - id: default\n    type: image-server\n"
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            "  - id: default\n    type: image-server\n    audience: private\n"
             '    aspect_ratio: "16:9"\n    resolution: [800, 450]\n'
-            '  - id: kitchen\n    type: image-server\n    aspect_ratio: "4:3"\n    resolution: [640, 480]\n'
-            '  - id: hallway\n    type: image-server\n    aspect_ratio: "16:10"\n    resolution: [800, 500]',
+            "  - id: kitchen\n    type: image-server\n    audience: public\n"
+            '    aspect_ratio: "4:3"\n    resolution: [640, 480]\n'
+            "  - id: hallway\n    type: image-server\n    audience: private\n"
+            '    aspect_ratio: "16:10"\n    resolution: [800, 500]',
         ),
         encoding="utf-8",
     )
@@ -1671,8 +1679,9 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
         workspace.config.read_text(encoding="utf-8")
         .replace("duration: 0", "duration: 2")
         .replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"',
-            '  - id: desktop\n    type: "window"\n  - id: default\n    type: "image-server"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            '  - id: desktop\n    type: "window"\n    audience: private\n'
+            '  - id: default\n    type: "image-server"\n    audience: private',
         ),
         encoding="utf-8",
     )
@@ -1948,8 +1957,9 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
         port = listener.getsockname()[1]
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"',
-            '  - id: desktop\n    type: "window"\n  - id: default\n    type: "image-server"\n'
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            '  - id: desktop\n    type: "window"\n    audience: private\n'
+            '  - id: default\n    type: "image-server"\n    audience: private\n'
             f'image-server:\n  host: "127.0.0.1"\n  port: {port}',
         ),
         encoding="utf-8",

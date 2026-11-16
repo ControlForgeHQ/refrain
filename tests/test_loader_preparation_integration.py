@@ -46,7 +46,7 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(
         yaml.safe_dump(
             {
                 "storage": {"content": "content"},
-                "destinations": [{"id": "window", "type": "window"}],
+                "destinations": [{"id": "window", "type": "window", "audience": "private"}],
                 "presentation": {"insets": {"left": 384, "right": 384, "top": 216, "bottom": 216}},
                 "fonts": {"pools": {"default": [font_identifier]}},
                 "text": {"min_font_size": 12, "max_font_size": 24},
@@ -178,7 +178,7 @@ def test_category_registered_resources_load_through_rendering_pipeline(tmp_path:
         yaml.safe_dump(
             {
                 "storage": {"content": "content"},
-                "destinations": [{"id": "window", "type": "window"}],
+                "destinations": [{"id": "window", "type": "window", "audience": "private"}],
                 "presentation": {"insets": {"left": 384, "right": 384, "top": 216, "bottom": 216}},
                 "fonts": {"pools": {"default": ["family-serif"]}},
                 "backgrounds": {"pools": {"default": ["paper"]}},

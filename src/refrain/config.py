@@ -216,6 +216,11 @@ class DisplayOutputConfiguration:
     identifier: str
     output_specification: ResolvedOutputSpecification
     presentation: DestinationPresentation = field(default_factory=DestinationPresentation)
+    audience: str = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.audience, str) or self.audience not in {"public", "private"}:
+            raise ValueError("audience must be 'public' or 'private'")
 
     @property
     def prepared_image_key(self) -> ResolvedOutputSpecification | PreparedImageVariantKey:
@@ -812,7 +817,13 @@ def _parse_destinations(
             if not isinstance(value, dict):
                 report(field, "must be a destination mapping", logging.ERROR)
                 continue
-            _known_fields(value, {"id", "type", "aspect_ratio", "resolution", "presentation"}, field, report)
+            _known_fields(
+                value, {"id", "type", "aspect_ratio", "resolution", "presentation", "audience"}, field, report
+            )
+            audience = value.get("audience")
+            if not isinstance(audience, str) or audience not in {"public", "private"}:
+                report(f"{field}.audience", "is required and must be 'public' or 'private'", logging.ERROR)
+                continue
             presentation = (
                 _parse_destination_presentation(value["presentation"], f"{field}.presentation", report)
                 if "presentation" in value
@@ -874,7 +885,7 @@ def _parse_destinations(
                         )
                 specification = ResolvedOutputSpecification("4:3", (1600, 1200))
             destination_groups.setdefault(backend_type, []).append(
-                DisplayOutputConfiguration(identifier, specification, presentation)
+                DisplayOutputConfiguration(identifier, specification, presentation, audience=audience)
             )
 
     return tuple(
