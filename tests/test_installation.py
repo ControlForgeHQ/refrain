@@ -20,7 +20,7 @@ from refrain.installation import (
     purge_installation,
     reset_installation,
 )
-from refrain.paths import ApplicationPathError, ApplicationPaths, resolve_application_paths
+from refrain.paths import ApplicationPathError, ApplicationPaths, resolve_application_paths, resolve_publication_root
 
 
 def _paths(root: Path) -> ApplicationPaths:
@@ -37,6 +37,7 @@ def _paths(root: Path) -> ApplicationPaths:
         history_file=state_directory / "global-history.jsonl",
         cache_directory=cache_directory,
         artifacts_directory=cache_directory / "artifacts",
+        publish_directory=state_directory / "publish",
     )
 
 
@@ -54,6 +55,7 @@ def test_linux_default_paths_and_cwd_independence(tmp_path: Path, monkeypatch: p
     assert actual.state_file == home / ".local/state/refrain/state.json"
     assert actual.history_file == home / ".local/state/refrain/global-history.jsonl"
     assert actual.artifacts_directory == home / ".cache/refrain/artifacts"
+    assert actual.publish_directory == home / ".local/state/refrain/publish"
     assert actual.ownership_file == home / ".local/state/.refrain-ownership.lock"
 
 
@@ -74,6 +76,7 @@ def test_linux_paths_respect_absolute_xdg_overrides(tmp_path: Path) -> None:
     assert paths.config_file == config / "refrain/config.yaml"
     assert paths.state_file == state / "refrain/state.json"
     assert paths.artifacts_directory == cache / "refrain/artifacts"
+    assert paths.publish_directory == state / "refrain/publish"
     assert paths.ownership_file == state / ".refrain-ownership.lock"
 
 
@@ -130,6 +133,7 @@ def test_windows_roaming_and_local_paths_are_platform_independent() -> None:
     assert str(paths.state_file) == r"C:\Users\Ada\AppData\Local\Refrain\State\state.json"
     assert str(paths.history_file) == r"C:\Users\Ada\AppData\Local\Refrain\State\global-history.jsonl"
     assert str(paths.artifacts_directory) == r"C:\Users\Ada\AppData\Local\Refrain\Cache\artifacts"
+    assert str(paths.publish_directory) == r"C:\Users\Ada\AppData\Local\Refrain\Publish"
     assert str(paths.ownership_file) == r"C:\Users\Ada\AppData\Local\.refrain-ownership.lock"
 
 
@@ -152,7 +156,16 @@ def test_macos_uses_user_library_locations(tmp_path: Path) -> None:
     assert paths.config_file == home / "Library/Application Support/Refrain/config.yaml"
     assert paths.state_file == home / "Library/Application Support/Refrain/State/state.json"
     assert paths.artifacts_directory == home / "Library/Caches/Refrain/artifacts"
+    assert paths.publish_directory == home / "Library/Application Support/Refrain/Publish"
     assert paths.ownership_file == home / "Library/Application Support/.refrain-ownership.lock"
+
+
+def test_effective_publication_root_uses_configured_or_standard_path(tmp_path: Path) -> None:
+    paths = resolve_application_paths(platform="linux", environ={}, home=tmp_path / "home")
+    custom = tmp_path / "selected-config" / "publish"
+
+    assert resolve_publication_root(None, paths) == paths.publish_directory
+    assert resolve_publication_root(custom, paths) == custom
 
 
 def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp_path: Path) -> None:
@@ -191,6 +204,7 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     }
     assert paths.state_directory.is_dir()
     assert paths.artifacts_directory.is_dir()
+    assert paths.publish_directory.is_dir()
     assert paths.assets_directory.is_dir()
     assert all((paths.assets_directory / category).is_dir() for category in ("fonts", "backgrounds", "decorations"))
     assert not paths.state_file.exists()
@@ -201,6 +215,7 @@ def test_initialization_installs_packaged_defaults_without_empty_state_files(tmp
     assert any("Artifacts:" in message for message in reports)
     assert paths.state_directory in created
     assert paths.artifacts_directory in created
+    assert paths.publish_directory in created
 
 
 def test_initialization_preserves_nonempty_assets_and_does_not_validate_them(tmp_path: Path) -> None:
@@ -329,6 +344,18 @@ def test_existing_state_history_and_artifact_files_are_preserved(tmp_path: Path)
     assert {path: path.read_bytes() for path in expected} == expected
 
 
+def test_initialization_creates_publication_root_without_replacing_contents(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    existing = paths.publish_directory / "screen" / "manifest.json"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"existing publication")
+
+    initialize_installation(paths)
+
+    assert existing.read_bytes() == b"existing publication"
+    assert paths.publish_directory.is_dir()
+
+
 def test_preflight_rejects_unexpected_objects_before_writing(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     paths.config_directory.mkdir(parents=True)
@@ -371,6 +398,22 @@ def test_symlink_destination_is_a_conflict(tmp_path: Path, symlink_or_skip) -> N
     assert str(paths.cache_directory) in str(error.value)
     assert list(unrelated.iterdir()) == []
     assert not paths.config_directory.exists()
+
+
+def test_initialization_rejects_linked_publication_root(tmp_path: Path, symlink_or_skip) -> None:
+    paths = _paths(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep"
+    sentinel.write_text("outside")
+    paths.publish_directory.parent.mkdir(parents=True)
+    symlink_or_skip(paths.publish_directory, external, directory=True)
+
+    with pytest.raises(InitializationError, match="publication storage"):
+        initialize_installation(paths)
+
+    assert sentinel.read_text() == "outside"
+    assert not paths.config_file.exists()
 
 
 def test_symlink_helper_does_not_skip_unrelated_creation_errors(tmp_path: Path, symlink_or_skip) -> None:
@@ -596,6 +639,9 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
         paths.assets_directory / "backgrounds" / "paper" / "custom.png": b"background bytes",
         paths.assets_directory / "decorations" / "custom.png": b"decoration bytes",
     }
+    publication_file = paths.publish_directory / "screen" / "manifest.json"
+    publication_file.parent.mkdir(parents=True)
+    publication_file.write_text("current publication", encoding="utf-8")
     for path, contents in asset_files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(contents)
@@ -622,6 +668,7 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
     assert not (paths.cache_directory / "generated.tmp").exists()
     assert paths.state_directory.is_dir()
     assert paths.artifacts_directory.is_dir()
+    assert publication_file.read_text(encoding="utf-8") == "current publication"
 
 
 def test_reset_is_idempotent_and_does_not_follow_artifact_links(tmp_path: Path, symlink_or_skip) -> None:
@@ -668,6 +715,9 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     )
     (paths.config_directory / "content").mkdir()
     (paths.config_directory / "content" / "entry.yaml").write_text("user content", encoding="utf-8")
+    publication_file = paths.publish_directory / "screen" / "manifest.json"
+    publication_file.parent.mkdir(parents=True)
+    publication_file.write_text("publication", encoding="utf-8")
     assets = {
         paths.assets_directory / "fonts" / "serif" / "custom.ttf": b"custom font",
         paths.assets_directory / "backgrounds" / "paper" / "custom.png": b"custom background",
@@ -687,6 +737,7 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     assert not paths.config_directory.exists()
     assert not paths.state_directory.exists()
     assert not paths.cache_directory.exists()
+    assert not paths.publish_directory.exists()
     assert not paths.assets_directory.exists()
     assert paths.config_directory.parent.is_dir()
     assert paths.state_directory.parent.is_dir()
@@ -695,6 +746,34 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     assert not any(path.exists() for path in assets)
     assert external_resource.read_bytes() == b"external font"
     assert purge_installation(paths) == removed
+
+
+def test_purge_rejects_linked_publication_contents_without_following_them(tmp_path: Path, symlink_or_skip) -> None:
+    paths = _paths(tmp_path)
+    paths.publish_directory.mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep"
+    sentinel.write_text("outside")
+    symlink_or_skip(paths.publish_directory / "linked", external, directory=True)
+
+    with pytest.raises(InstallationOperationError, match="publication storage"):
+        purge_installation(paths)
+
+    assert sentinel.read_text() == "outside"
+    assert paths.publish_directory.is_dir()
+
+
+def test_purge_rejects_unrecognized_publication_contents_before_deletion(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.publish_directory.mkdir(parents=True)
+    unexpected = paths.publish_directory / "notes.txt"
+    unexpected.write_text("not publication data", encoding="utf-8")
+
+    with pytest.raises(InstallationOperationError, match="unexpected publication object"):
+        purge_installation(paths)
+
+    assert unexpected.read_text(encoding="utf-8") == "not publication data"
 
 
 def test_purge_refuses_linked_installation_root(tmp_path: Path, symlink_or_skip) -> None:
@@ -966,6 +1045,7 @@ def test_installation_operations_ignore_configured_storage_paths(
         custom_storage / "state.json",
         custom_storage / "global-history.jsonl",
         custom_storage / "artifacts" / "prepared.png",
+        custom_storage / "publish" / "screen" / "manifest.json",
     ]
     for path in custom_files:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -974,7 +1054,8 @@ def test_installation_operations_ignore_configured_storage_paths(
         "storage:\n"
         f"  state: {custom_files[0]}\n"
         f"  history: {custom_files[1]}\n"
-        f"  artifacts: {custom_files[2].parent}\n",
+        f"  artifacts: {custom_files[2].parent}\n"
+        f"  publish: {custom_files[3].parents[1]}\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
@@ -982,7 +1063,7 @@ def test_installation_operations_ignore_configured_storage_paths(
 
     assert cli.main([operation]) == 0
 
-    assert [path.read_text(encoding="utf-8") for path in custom_files] == ["custom data"] * 3
+    assert [path.read_text(encoding="utf-8") for path in custom_files] == ["custom data"] * 4
 
 
 @pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
@@ -1023,6 +1104,7 @@ def test_initialize_cli_exits_without_starting_application(
     assert str(paths.assets_directory / "fonts") in output
     assert str(paths.state_directory) in output
     assert str(paths.artifacts_directory) in output
+    assert str(paths.publish_directory) in output
 
 
 @pytest.mark.parametrize("operation", ["--reset", "--purge"])
@@ -1067,6 +1149,7 @@ def test_cancelled_purge_preserves_assets_and_describes_their_deletion_scope(
     assert captured["confirmation"] == "PURGE REFRAIN"
     assert "custom fonts, backgrounds, and decorations" in captured["description"]
     assert paths.assets_directory in captured["locations"]
+    assert paths.publish_directory in captured["locations"]
     assert custom_asset.read_bytes() == b"custom font"
 
 

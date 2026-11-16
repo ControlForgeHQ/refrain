@@ -1601,18 +1601,22 @@ acknowledgement behavior.
 
 The finalizer and JSON validator are available as hardware-independent
 application operations. The resident's current display flows do not yet
-finalize or persist publication metadata. Filesystem publication, manifest
-creation, and viewer reconstruction remain planned work; the future publisher
-must receive already-finalized metadata associated with its image rather than
-reconstructing semantics from resident state.
+finalize or persist publication metadata. The hardware-independent filesystem
+writer and manifest validation are implemented independently of runtime
+publication; any future destination backend must receive already-finalized
+metadata associated with its image rather than reconstructing semantics from
+resident state.
 
-### Filesystem publication target (planned)
+### Filesystem publication target (backend integration planned)
 
 Refrain remains responsible for content selection, scheduling, image preparation,
 and publication to directly attached displays. `window` and
 `waveshare-13in3-e` remain resident-owned direct-display backends. The built-in
 `publish` backend becomes the sole non-direct destination mechanism. The resident
-does not host HTTP services and does not require network availability.
+does not host HTTP services and does not require network availability. Stage 3A
+implements reusable storage, manifest validation, and maintenance behavior;
+destination registration, backend construction, and resident publication
+coordination remain planned Stage 3B work.
 
 Each `publish` destination has its own validated ID, output specification,
 publication audience, presentation overrides, and directory. It publishes the
@@ -1637,8 +1641,8 @@ rendering overrides or preparation.
 
 #### Publication storage and ownership
 
-The planned `storage.publish` setting overrides the publication root using the
-existing storage-path semantics: absolute paths are used as specified and
+The optional `storage.publish` setting overrides the publication root using
+the existing storage-path semantics: absolute paths are used as specified and
 relative paths are resolved from the selected configuration file. Its omitted
 default is a platform-standard per-user operational-data path:
 
@@ -1648,10 +1652,11 @@ default is a platform-standard per-user operational-data path:
 | Windows | `%LOCALAPPDATA%\Refrain\Publish` |
 | macOS | `~/Library/Application Support/Refrain/Publish` |
 
-This extends the existing platform-aware path resolver rather than introducing
-a second path-selection mechanism. Standard maintenance commands always target
-the platform-standard installation locations, not a custom `storage.publish`
-override.
+The application-path resolver determines the effective root independently of
+the working directory. This extends the existing platform-aware path resolver
+rather than introducing a second path-selection mechanism. Standard
+maintenance commands always target the platform-standard installation
+locations, not a custom `storage.publish` override.
 
 Before any destructive publication operation, reject a resolved publication
 root that overlaps protected Refrain data: configuration, content, user assets,
@@ -1690,8 +1695,8 @@ Reject unsafe destinations rather than attempting cleanup or repair.
 
 #### Dataset publication and recovery
 
-Each destination directory contains one current complete image in its configured
-output format, one versioned JSON metadata document, and a stable
+Each destination directory contains one current complete single-frame PNG
+image, one versioned JSON metadata document, and a stable
 `manifest.json`. For example:
 
 ```text
@@ -1704,36 +1709,43 @@ output format, one versioned JSON metadata document, and a stable
 └── web-private/
 ```
 
-The manifest has its own schema version and identifies the publication, image
-filename, metadata filename, and SHA-256 hash of each file. The metadata schema
-is versioned independently. Image and metadata filenames derive from a unique
-publication ID. Consumers read the manifest, verify both referenced files and
-their hashes, and accept only a complete matching dataset.
+The exact manifest fields, filename constraints, and version behavior are
+defined in [Publication Manifest](PUBLICATION_MANIFEST.md). The metadata schema
+is versioned independently in [Publication Metadata](PUBLICATION_METADATA.md).
+Image and metadata filenames derive from the publication ID in the completed
+metadata. Consumers read the manifest, verify both referenced files and their
+hashes, and accept only a complete matching dataset.
 
-One publication follows this order:
+The reusable writer receives a completed image and its already-finalized
+metadata. One publication follows this order:
 
-1. Generate a unique publication ID; prepare the image and metadata and compute
-   their hashes.
-2. Write a temporary manifest describing the new publication.
-3. Write and complete the uniquely named image and metadata files.
-4. Atomically replace `manifest.json` with the completed temporary manifest.
-5. Remove obsolete files and any other contents not belonging to the current
-   publication.
+1. Validate their publication and destination identities, metadata contract,
+   and image dimensions.
+2. Write and complete uniquely named image and metadata files, then compute
+   their SHA-256 hashes.
+3. Write and complete a temporary versioned manifest describing those files.
+4. Atomically replace `manifest.json` with the complete temporary manifest.
+5. Remove superseded publication files and recognized temporary contents.
 
 Replacing `manifest.json` is the consumer-visible commit point; atomic
 replacement of a whole directory is not required. Never overwrite the files
 referenced by the current manifest before the replacement. A failure before
-commit must not expose an incomplete dataset as current. Cleanup after commit
-must not invalidate the new publication. Consumers tolerate incomplete,
-superseded, or unavailable publications using bounded retries. A consumer that
-starts after publication recovers solely from the current manifest and its
-referenced files. Do not add publication history, backups, a filesystem
-transaction framework, or a separate publication daemon.
+commit leaves the prior valid dataset current. A failure after commit must not
+invalidate the new publication. A malformed manifest, missing referenced file,
+hash mismatch, unsafe directory object, or uncertain ownership is reported
+without repair or acceptance as a valid dataset. On a subsequent publication,
+the writer removes only recognized stale temporary or superseded files owned
+by the destination. Consumers tolerate incomplete or unavailable reads using
+bounded retries. A consumer that starts after publication recovers solely
+from the current manifest and its referenced files. Do not add publication
+history, backups, a filesystem transaction framework, or a separate
+publication daemon.
 
-Publication failures use the existing per-destination bounded retry and
-eventual-failure behavior; after exhaustion, a later publication opportunity
-permits another attempt. A failed destination does not block publication to
-other destinations or alter committed selection state.
+When Stage 3B integrates this writer, publication failures will use the
+existing per-destination bounded retry and eventual-failure behavior; after
+exhaustion, a later publication opportunity will permit another attempt. This
+storage implementation does not schedule retries or alter committed selection
+state.
 
 #### Destination-specific metadata and audiences
 
@@ -1794,8 +1806,9 @@ stage, and audience-filtered actions. It preserves the committed literary
 identity and artistic choices that produced the image, validates the completed
 document before serialization, and never mutates shared cached metadata.
 Distinct destinations may derive different completed documents from the same
-compatible preparation. The future filesystem publisher and its integration
-with resident display flows are not implemented.
+compatible preparation. The Stage 3A filesystem writer validates and stores
+these completed documents with their corresponding images; integration with
+resident display flows is not implemented.
 
 Each configured destination declares exactly one audience: `public` or
 `private`. The application obtains this policy from the validated destination
@@ -1879,9 +1892,9 @@ ownership lock. `--config` supplies rendering resources only; reconstruction
 does not infer an audience or original destination, and actions are never
 executed.
 
-The future filesystem `publish` destination, publication datasets and
-manifests, resident publication integration, and independent consumer services
-remain unimplemented.
+The filesystem writer and manifest contract are implemented, but the
+`publish` destination backend, resident publication integration, and independent
+consumer services remain planned.
 
 #### Independent consumer services
 
@@ -1967,11 +1980,11 @@ Network clients are responsible for retaining their displayed content during tem
 
 ### Application paths and initialization
 
-The command-line entry point resolves omitted runtime storage paths to the independently defined platform-standard per-user locations, regardless of the current working directory. Optional state, history, and artifact overrides belong to application configuration; each explicit relative path is resolved from the selected configuration file, while each omitted value retains its own platform-standard default. Selecting another configuration file does not itself relocate storage, and a custom state path does not relocate history. The entry point passes effective paths to application and storage components, which do not infer platform locations.
+The command-line entry point resolves omitted runtime storage paths to the independently defined platform-standard per-user locations, regardless of the current working directory. Optional state, history, artifact, and publication-root overrides belong to application configuration; each explicit relative path is resolved from the selected configuration file, while each omitted value retains its own platform-standard default. Selecting another configuration file does not itself relocate storage, and a custom state path does not relocate history. The entry point passes effective paths to application and storage components, which do not infer platform locations.
 
 Normal startup requires the selected configuration file to exist. It does not substitute the packaged default configuration, create an installation directory structure, or copy sample content. Relative content paths remain based on the selected configuration file. Custom visual resources are discovered by category beneath `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/` beside that effective configuration file and are referenced by registered identifier. Manifest image and font references are relative to their containing package and confined to that package. There is no arbitrary absolute-path custom-resource registration interface.
 
-The explicit, noninteractive `--initialize` operation manages only standard per-user destinations and ignores runtime storage settings in configuration. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; ordinary pre-existing nonempty content is left untouched and uninspected. An interrupted sample installation may be resumed only when its installation marker and every existing expected sample file can be positively verified; missing expected files may then be installed without overwriting existing files. Invalid markers, conflicting sample contents, or uncertain ownership require manual inspection rather than automatic repair. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. When filesystem publication is implemented, initialization also creates the standard publication root without replacing or cleaning its existing contents. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
+The explicit, noninteractive `--initialize` operation manages only standard per-user destinations and ignores runtime storage settings in configuration. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; ordinary pre-existing nonempty content is left untouched and uninspected. An interrupted sample installation may be resumed only when its installation marker and every existing expected sample file can be positively verified; missing expected files may then be installed without overwriting existing files. Invalid markers, conflicting sample contents, or uncertain ownership require manual inspection rather than automatic repair. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. It creates the standard publication root without replacing or cleaning its existing contents and rejects unsafe publication paths. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
 
 Configuration and content remain user-owned inputs. Operational state and global history remain authoritative and historical persistence respectively; prepared artifacts remain derived output. Runtime creation of those persistence and artifact files remains owned by their existing components.
 

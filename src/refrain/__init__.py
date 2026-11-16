@@ -95,6 +95,16 @@ from .publication_metadata import (
     serialize_publication_metadata,
     validate_publication_metadata,
 )
+from .publication_storage import (
+    PUBLICATION_MANIFEST_VERSION,
+    PublicationDataset,
+    PublicationManifest,
+    PublicationStorageError,
+    PublicationStore,
+    parse_publication_manifest,
+    serialize_publication_manifest,
+    validate_publication_root,
+)
 from .recovery import recover_prepared_daily_images
 from .renderer import (
     BylineLayout,
@@ -158,6 +168,14 @@ __all__ = [
     "parse_publication_metadata",
     "serialize_publication_metadata",
     "validate_publication_metadata",
+    "PUBLICATION_MANIFEST_VERSION",
+    "PublicationDataset",
+    "PublicationManifest",
+    "PublicationStorageError",
+    "PublicationStore",
+    "parse_publication_manifest",
+    "serialize_publication_manifest",
+    "validate_publication_root",
     "build_presentation_snapshot",
     "EligibilityRule",
     "EligibilitySpecificity",

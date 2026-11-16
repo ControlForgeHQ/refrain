@@ -16,6 +16,7 @@ from typing import Callable, TextIO
 from .config import ApplicationConfigurationError, load_application_config
 from .content import ContentLibraryError, load_content_library
 from .paths import ApplicationPaths
+from .publication_storage import PublicationStorageError, validate_publication_root, validate_publication_tree
 
 
 class InitializationError(Exception):
@@ -222,12 +223,14 @@ def initialize_installation(
             paths.state_directory,
             paths.cache_directory,
             paths.artifacts_directory,
+            paths.publish_directory,
             paths.assets_directory,
             *paths.asset_directories,
         )
     )
     asset_directories = tuple(Path(path) for path in paths.asset_directories)
     try:
+        validate_publication_root(paths.publish_directory, application_paths=paths)
         existing_directories = {directory for directory in directories if _inspect_directory(directory)}
         configuration_exists = _inspect_file(Path(paths.config_file))
         _inspect_file(Path(paths.state_file))
@@ -243,6 +246,8 @@ def initialize_installation(
         )
     except InstallationOperationError as error:
         raise InitializationError(f"initialization cannot safely use the installation paths: {error}") from error
+    except PublicationStorageError as error:
+        raise InitializationError(f"initialization cannot safely use publication storage: {error}") from error
 
     created: list[Path] = []
     try:
@@ -259,6 +264,7 @@ def initialize_installation(
             Path(paths.state_directory),
             Path(paths.cache_directory),
             Path(paths.artifacts_directory),
+            Path(paths.publish_directory),
             Path(paths.assets_directory),
             *asset_directories,
             *content_directories,
@@ -296,6 +302,7 @@ def initialize_installation(
                 created.remove(marker)
         _create_directory(Path(paths.state_directory), created, owned_directories)
         _create_directory(Path(paths.artifacts_directory), created, owned_directories)
+        _create_directory(Path(paths.publish_directory), created, owned_directories)
     except OSError as error:
         created_paths = "\n".join(f"  {path}" for path in created) or "  (none)"
         raise InitializationError(
@@ -315,6 +322,7 @@ def initialize_installation(
         report(f"User {directory.name}: {directory}")
     report(f"State directory: {paths.state_directory}")
     report(f"Artifacts: {paths.artifacts_directory}")
+    report(f"Publication storage: {paths.publish_directory}")
     return tuple(created)
 
 
@@ -457,6 +465,10 @@ def reset_installation(paths: ApplicationPaths) -> None:
 
 def purge_installation(paths: ApplicationPaths) -> tuple[Path, ...]:
     """Remove the complete standard Refrain installation without crossing linked paths."""
+    try:
+        validate_publication_tree(paths.publish_directory, application_paths=paths)
+    except PublicationStorageError as error:
+        raise InstallationOperationError(f"cannot safely purge publication storage: {error}") from error
     candidates = tuple(
         dict.fromkeys(
             Path(path) for path in (paths.config_directory, paths.operational_directory, paths.cache_directory)

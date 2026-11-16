@@ -183,6 +183,7 @@ is no second completed-publication schema. A future incompatible format change
 requires an explicitly versioned schema rather than silently changing the
 meaning of existing fields.
 
-The metadata contract defines no filesystem publisher or publication manifest;
-viewer reconstruction consumes the same schema without introducing another
-metadata format.
+This metadata contract does not define the filesystem manifest. Its independent
+field names and validation rules are specified in
+[Publication Manifest](PUBLICATION_MANIFEST.md); filesystem storage validates
+this completed metadata rather than introducing another metadata schema.

@@ -167,6 +167,14 @@ The content-format specification owns the supported YAML structure, field names,
 
 Changes to the public content format must be documented in that specification.
 
+### Publication format references
+
+`docs/PUBLICATION_METADATA.md` owns the prepared and completed metadata
+schema. `docs/PUBLICATION_MANIFEST.md` owns the independent filesystem
+manifest schema, including its filenames and hashes. Architecture describes
+runtime ownership and commit semantics; this document describes implementation
+and validation requirements.
+
 ### AGENTS.md
 
 `AGENTS.md` routes automated contributors to the authoritative documentation and defines agent-specific guardrails.
@@ -687,15 +695,18 @@ Remove obsolete cache files without disturbing active readers or the complete se
 
 The cache store must not modify authoritative selection state. Cache errors are reported and handled by regeneration from the valid daily selection; they must never authorize reselection or reveal regression.
 
-### Filesystem publication storage (planned)
+### Filesystem publication storage
 
-Implement the publication directory, manifest commit point, independent schema
-versions, and consumer recovery behavior defined in
-[Architecture](ARCHITECTURE.md#filesystem-publication-target-planned). Use
-`pathlib` for path construction, keep every destination as a direct child of the
-effective publication root, and derive its name only from a validated
-destination ID. Destination configuration must not accept an arbitrary path to
-delete.
+The hardware-independent filesystem writer stores one current dataset per
+validated destination ID. The `publish` destination backend and resident
+integration remain planned. Follow the ownership and commit behavior in
+[Architecture](ARCHITECTURE.md#filesystem-publication-target-backend-integration-planned),
+the root setting in [Content Format](CONTENT_FORMAT.md#storage-settings), the
+exact [manifest contract](PUBLICATION_MANIFEST.md), and the independent
+[metadata contract](PUBLICATION_METADATA.md). Use `pathlib` for path
+construction, keep every destination as a direct child of the effective
+publication root, and derive its name only from a validated destination ID.
+Destination configuration must not accept an arbitrary path to delete.
 
 Validate root and destination ownership before any destructive operation.
 Reject symbolic links, Windows junctions, reparse points, traversal, unexpected
@@ -716,15 +727,33 @@ fail before the destructive operation. Standard `--purge` remains limited to
 platform-standard locations and never follows or deletes a custom
 `storage.publish` override.
 
-Write the complete image and metadata under unique publication-derived names
-before making the manifest visible. Close completed files before atomically
-replacing the manifest on the same filesystem. Consumers validate the manifest
-and referenced filenames as untrusted input, verify both SHA-256 hashes, and
-accept only a complete matching dataset. A consumer reads but never rewrites,
-cleans, or claims ownership of publication directories. Keep retries bounded;
-recovery after consumer restart starts from the current manifest, not from
+Validate already-finalized metadata with the shared completed-publication
+contract; verify its publication and destination identities and output
+dimensions against the image. Do not select content, alter metadata, resolve
+resources, or filter actions in storage. Write unique image and metadata files
+and close them before preparing and closing a temporary manifest. Replace the
+stable manifest atomically in the destination directory; this replacement is
+the commit point. Use same-filesystem replacement and synchronize directory
+metadata where supported. On Windows, report replacement failures without
+claiming a commit; if replacement has occurred, retain the new dataset and
+report a post-commit failure distinctly.
+
+Consumers validate the manifest and referenced filenames as untrusted input,
+verify both SHA-256 hashes, validate metadata association, and accept only a
+complete matching dataset. A consumer reads but never rewrites, cleans, or
+claims ownership of publication directories. Keep retries bounded; recovery
+after consumer restart starts from the current manifest, not from
 process-local state or publication history. Do not add a transaction journal,
 backup generations, or an unbounded retry loop.
+
+Automated tests cover initial publication and replacement, manifest and hash
+validation, destination and metadata association, image dimensions, failures
+before and after replacement, stale temporary cleanup, corrupted or missing
+current files, directory isolation, and controlled reader observations across
+manifest replacement. Filesystem validation must also cover protected-path
+overlaps and symbolic links, junctions, and reparse points where supported.
+Run the hardware-independent tests on both Linux and Windows; do not treat
+Linux-only execution as cross-platform validation.
 
 Test interruption and failure before and after the manifest replacement,
 concurrent readers observing replacement, hash mismatch, absent or superseded
@@ -1050,8 +1079,9 @@ transient metadata, and shared-preparation immutability. These operations must
 run without a resident process, display hardware, network service, systemd, or
 publication directory. Filesystem publication, manifest handling, and viewer
 reconstruction are separate capabilities; viewer reconstruction consumes this
-schema through the shared renderer, while filesystem publication and manifest
-handling remain unimplemented.
+schema through the shared renderer, and the filesystem writer validates this
+completed metadata against its independent manifest contract. Destination
+backend and resident publication integration remain planned.
 
 ### Viewer publication reconstruction
 
@@ -1566,13 +1596,21 @@ Use temporary directories and isolated test state.
 
 Test path selection with injected platform and environment information. Exercise category-specific custom-resource discovery independently of the current working directory, including nested package references and manifest confinement, while verifying that content directories retain configuration-relative and explicit-absolute semantics. Exercise repeatable initialization, existing user data and assets, links, exclusive file creation, race-time destinations, marker-verified interrupted sample installation, partial failures, reset preservation, purge deletion, confirmation, and deletion boundaries using temporary locations; do not use developer application-data directories.
 
-For planned filesystem publication, verify that standard and configuration-
-relative or absolute custom publication roots overlapping protected
+For filesystem publication, verify that standard and configuration-relative
+or absolute custom publication roots overlapping protected
 configuration, content, asset, operational-state, history, cache, artifact, or
 other storage targets are rejected before writes or cleanup. Also verify that
 the platform-standard publication root remains valid as a sibling of the
 authoritative state and history files beneath its operational-data parent,
-without overlapping either file path.
+without overlapping either file path. Validate destination identifiers,
+manifest schema and hashes, completed metadata/image association, destination
+isolation, unsafe links and reparse points, and fail-closed handling of
+unexpected publication objects. Use fault injection to cover interrupted
+image, metadata, temporary-manifest, and stable-manifest writes; verify that
+pre-commit failures preserve the previous dataset and post-commit failures
+preserve the new one. Cover stale temporary recovery, corruption and missing
+files, reader behavior during manifest replacement, and initialize/reset/purge
+ownership exclusions on Linux and Windows.
 
 Test persistence failure at meaningful boundaries, including failures before and after commitment.
 
@@ -1716,7 +1754,7 @@ Deployment instructions must identify the supported operating system, system dep
 
 Installation must not depend on the developer's local directory structure.
 
-Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. When implemented, create the standard publication root without replacing its existing contents. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
+Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. Create the standard publication root without replacing its existing contents. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
 
 Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configured runtime storage values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
 
