@@ -430,7 +430,7 @@ A fixed quotation font size is not required.
 
 ### Output specifications and presentation insets
 
-Each configured output destination has an output specification consisting of a declared presentation aspect ratio and a requested resolution. The supported declared landscape aspect ratios are 4:3, 5:3, 16:9, and 16:10. The backend-specific fields and defaults are defined in [Display backends](#display-backends). An aspect ratio and resolution are an inseparable pair where configurable: both are omitted to use that destination's documented defaults, or both are supplied explicitly. Supplying just one is a configuration error. Do not infer the aspect ratio from requested dimensions, infer dimensions from the aspect ratio, or fill one explicit value from the other's default. The fixed Waveshare output accepts neither field.
+Each configured output destination has an output specification consisting of a declared presentation aspect ratio and a requested resolution. The supported declared landscape aspect ratios are 4:3, 5:3, 16:9, and 16:10. The backend-specific fields and defaults are defined in [Display destinations](#display-destinations). An aspect ratio and resolution are an inseparable pair where configurable: both are omitted to use that destination's documented defaults, or both are supplied explicitly. Supplying just one is a configuration error. Do not infer the aspect ratio from requested dimensions, infer dimensions from the aspect ratio, or fill one explicit value from the other's default. The fixed Waveshare output accepts neither field.
 
 Requested dimensions are positive integer pixels in width, height order and need not exactly match the declared aspect ratio. For example, an output specification may declare 4:3 and request `[1600, 1190]`; the architecture resolves the presentation canvas separately and resizes only the completed image to the requested dimensions. The 3840 × 2400 reference envelope does not limit requested output dimensions. Boolean values, non-integer dimensions, zero or negative dimensions, and unsupported aspect ratios are configuration errors. See [the presentation architecture](ARCHITECTURE.md#image-spaces-and-output-geometry) for design-, presentation-, and output-image geometry.
 
@@ -674,7 +674,7 @@ Each member of the effective pool has equal selection probability.
 
 A registered background outside the default pool remains available for explicit selection by a content entry or decoration.
 
-An explicitly configured pool with no usable members falls back to `["none"]` with a warning.
+An explicitly configured pool with no usable members remains empty. Automatic background selection may use `"none"` when the effective default pool has no usable members, without inserting `"none"` into that pool. An explicitly referenced empty pool, including `@default`, remains empty and follows the ordinary preference fallthrough rules; strict viewer overrides that reference it fail as specified in [CLI](CLI.md#presentation-overrides).
 
 Backgrounds have no repetition history or selection weights.
 
@@ -828,7 +828,7 @@ Each member has equal selection probability.
 
 A registered decoration outside the default pool remains available for explicit content-entry selection.
 
-An explicitly configured pool with no usable members falls back to `["none"]` with a warning.
+An explicitly configured pool with no usable members remains empty. Automatic decoration selection may use `"none"` when the effective default pool has no usable members, without inserting `"none"` into that pool. An explicitly referenced empty pool, including `@default`, remains empty and follows the ordinary preference fallthrough rules; strict viewer overrides that reference it fail as specified in [CLI](CLI.md#presentation-overrides).
 
 Decorations have no repetition history or selection weights.
 
@@ -838,13 +838,13 @@ Discovery does not change pool membership. Bundled identifiers cannot be shadowe
 
 The optional `decorations.colors.pools` mapping defines named decoration-color pools. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
 
-Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. If the resolved default pool has no usable identifier, color selection uses `["black"]` as its existing fallback; an empty non-default named pool remains empty. Each distinct usable identifier has equal selection probability.
+Invalid, unavailable, or duplicate identifiers are excluded with diagnostics. The resolved default pool retains its actual membership even when empty. Decoration-color resolution uses the documented built-in `black` fallback when no configured preference or usable default-pool member applies; this does not add `black` to an empty named pool. An empty non-default named pool remains empty. Each distinct usable identifier has equal selection probability.
 
 ### Default text-color pool
 
 The optional `text.colors.pools` mapping defines named text-color pools. When omitted, the effective pool is `["black"]`; `@builtin` resolves to `["black"]`.
 
-The effective pool contains distinct identifiers registered in the effective palette. Invalid, unavailable, or duplicate members are excluded with warnings. If the resolved default pool has no usable member, color selection uses `["black"]` as its existing fallback; an empty non-default named pool remains empty.
+The effective pool contains distinct identifiers registered in the effective palette. Invalid, unavailable, or duplicate members are excluded with warnings. The resolved default pool retains its actual membership even when empty. Text-color resolution uses the documented built-in `black` fallback when no configured preference or usable default-pool member applies; this does not add `black` to an empty named pool. An empty non-default named pool remains empty.
 
 Each effective member has equal selection probability. A configured override of `palette.black` applies whenever selection resolves to `black`.
 
@@ -1640,7 +1640,7 @@ Apply the following rules:
 - An unavailable optional font preference on an otherwise usable decoration is ignored with a warning.
 - A malformed `fonts.faces` mapping in application configuration, or `font_faces` mapping in a decoration manifest or font-bundle manifest, is warned about and ignored without invalidating the containing resource.
 - A missing background or decoration pool defaults to `["none"]`.
-- A configured background or decoration pool with no usable members falls back to `["none"]` with a warning.
+- Every named pool retains its actual expanded membership, including an empty `default` pool; automatic background or decoration selection may use the category's `"none"` fallback without inserting it into that pool.
 - Invalid decoration insets, layer definitions, or nine-slice boundaries exclude that decoration without invalidating unrelated resources.
 - An unavailable optional background preference on an otherwise usable decoration is ignored with a warning.
 

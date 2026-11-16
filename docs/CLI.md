@@ -2,6 +2,60 @@
 
 This document is the authoritative public reference for command syntax, argument behavior, mode conflicts, results, and user-facing command diagnostics. Runtime behavior behind these commands is defined in [the architecture](ARCHITECTURE.md); implementation and testing guidance is in [Engineering](ENGINEERING.md).
 
+## Primary `refrain` application
+
+The primary application has a normal resident mode and the standalone modes below. These modes have distinct ownership and lifecycle behavior; do not combine them in one invocation.
+
+### Normal operation
+
+```text
+refrain [--config PATH]
+```
+
+With no mode option, `refrain` starts the normal resident runtime. `--config PATH` selects the application configuration; when omitted, the standard Refrain configuration path is used. The selected configuration file must exist. Normal startup does not substitute the packaged default configuration, initialize installation directories, or copy sample content.
+
+The resident owns its configured backends and display resources. A second normal or demo invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). Numeric exit codes and a complete list of accepted normal-mode options are not specified here.
+
+### Accelerated demo
+
+```text
+refrain [--config PATH] --demo SECONDS
+```
+
+`--config PATH` selects the application configuration for the demo, or the standard configuration is used when omitted. `SECONDS` requests the minimum monotonic viewing interval for each reveal stage. Demo is a standalone backend-owning mode, but it uses fresh temporary session storage rather than configured or standard production persistence. It uses one eligibility display date for the session, suppresses the startup information view, and continues stage progression when destinations are unavailable, subject to preparation succeeding. The resident ownership rule prevents concurrent normal or demo runtimes.
+
+See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progression and [Engineering](ENGINEERING.md#demo-session-ownership-and-timing) for lifecycle and validation requirements. The public contract does not establish the numeric grammar or bounds for `SECONDS` or demo exit codes; do not infer them from implementation details.
+
+### Initialize
+
+```text
+refrain --initialize
+```
+
+Initialization is noninteractive and repeatable. It creates or reuses the standard per-user installation and does not start the resident runtime. It operates on standard installation paths; runtime storage settings do not redirect it. A conflicting resident owner prevents the operation and produces an actionable diagnostic. Successful initialization leaves existing user configuration and content intact according to the [installation contract](ARCHITECTURE.md#application-paths-and-initialization); failures report the affected operation and path.
+
+The public contract does not establish whether `--config PATH` is accepted alongside `--initialize`; the selected configuration does not redirect the standard installation targets. Initialization's success exit code and exact diagnostic wording are not specified here.
+
+### Reset
+
+```text
+refrain --reset
+```
+
+Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. It requires the exact confirmation described by [Engineering](ENGINEERING.md#installation-approach); there is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Architecture](ARCHITECTURE.md#application-paths-and-initialization).
+
+The public contract does not establish whether `--config PATH` is accepted alongside `--reset`; configuration selection does not redirect the standard deletion targets. Exact prompt text, exit codes, and diagnostic wording are not specified here.
+
+### Purge
+
+```text
+refrain --purge
+```
+
+Purge is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. It requires the exact confirmation described by [Engineering](ENGINEERING.md#installation-approach); there is no noninteractive bypass. Cancellation leaves the installation unchanged. Purge includes the standard user assets and publication root but does not follow configured custom paths. Stop any independent consumer that may read publication data before purging it.
+
+The public contract does not establish whether `--config PATH` is accepted alongside `--purge`; configuration selection does not redirect the standard deletion targets. Exact prompt text, exit codes, and diagnostic wording are not specified here. See [Architecture](ARCHITECTURE.md#application-paths-and-initialization) and [Engineering](ENGINEERING.md#filesystem-locations) for deletion scope and safety.
+
 ## Resident runtime control
 
 ### Refresh
@@ -11,6 +65,8 @@ The primary `refrain --refresh` command requires an already-running normal Refra
 Refresh republishes the runtime's current scheduled presentation and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
 
 Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all participating destinations completes or fails. Exit status zero means every included destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
+
+Refresh is a standalone control-client mode and uses the already-running resident's configuration and destinations; it does not select or start a runtime configuration. The public contract does not establish whether `--config PATH` is accepted alongside `--refresh`.
 
 ## Presentation viewer
 

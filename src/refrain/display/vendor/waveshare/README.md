@@ -75,35 +75,32 @@ Restart that user's session or the systemd service so the new group membership t
 
 ## Physical presentation smoke test
 
-Prepare a PNG with RGB color mode and dimensions of either 1200 × 1600 or 1600 × 1200. From the repository root, run the following, replacing `/path/to/compatible-rgb.png` with that file:
+Run this test through a configured, running Refrain resident with a `waveshare-13in3-e` destination. The panel has a fixed 1600 × 1200 landscape output specification; a 1200 × 1600 image is not compatible.
+
+First discover the exact destination ID:
 
 ```bash
-.venv/bin/python - /path/to/compatible-rgb.png <<'PY'
-import sys
-from PIL import Image
-from refrain.display import create_display_backend
-
-backend = create_display_backend("waveshare-13in3-e")
-try:
-    with Image.open(sys.argv[1]) as image:
-        if image.format != "PNG" or image.mode != "RGB" or image.size not in {(1200, 1600), (1600, 1200)}:
-            raise ValueError("expected an RGB PNG sized 1200 x 1600 or 1600 x 1200")
-        backend.update(image)
-finally:
-    backend.close()
-PY
+refrain-viewer --list-destinations
 ```
 
-`backend.close()` runs even if opening, validating, or presenting the image fails. A successful command confirms that the backend completed its update and cleanup calls; visually inspect the panel to verify image regions and orientation. Mocked tests do not establish physical display operation.
+Prepare a finished, single-frame 8-bit RGB PNG with exactly 1600 × 1200 pixels, then publish it through the resident, replacing `<destination-id>` with the ID reported above:
+
+```bash
+refrain-viewer --image /path/to/compatible-rgb.png --push <destination-id>
+```
+
+The viewer rejects images with different dimensions rather than resizing or rotating them. Successful publication confirms that the resident accepted and completed the backend operation; it does not replace visual inspection of the physical panel for image content and orientation. When the test image should no longer remain displayed, restore the currently scheduled presentation with `refrain --refresh`.
+
+The Waveshare driver is an internal Refrain component, not a separately supported public application interface.
 
 ## Troubleshooting
 
 - **`/dev/spidev0.0` is missing:** Confirm `dtparam=spi=off` is disabled, the overlay is under `[all]`, the `no_miso` spelling is correct, and the Pi was rebooted after editing the config.
 - **`/dev/gpiochip0` is missing or GPIO requests fail:** Check the GPIO character-device interface and device-node permissions. The `/dev/gpiochip0` assumption is validated on the Pi 3B+ only; other Pi models may number GPIO chips differently and have not been tested.
 - **Permission denied:** Check the service user's current supplementary groups and the group/permissions reported by `ls -l /dev/spidev0.0 /dev/gpiochip0`. Restart the service/session after changing group membership.
-- **A GPIO line is busy:** Stop other applications or services that may own the panel's GPIO lines, then retry.
+- **A GPIO line is busy:** Ensure no other application or service is accessing the panel. The running Refrain resident owns the hardware during this smoke test; do not start a second direct hardware test alongside it.
 - **The backend cannot import `spidev` or `gpiod`:** Install the `hardware` extra in the same virtual environment used to run Refrain.
-- **The panel does not show the expected image:** Confirm the panel connection, RGB mode, supported dimensions, SPI overlay, and GPIO permissions. A successful process exit does not replace visual validation on the physical panel.
+- **The panel does not show the expected image:** Confirm the panel connection, RGB mode, exact 1600 × 1200 dimensions, SPI overlay, and GPIO permissions. A successful publication result does not replace visual validation on the physical panel.
 
 ## Upstream provenance
 

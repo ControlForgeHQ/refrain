@@ -641,7 +641,9 @@ Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
 #### Complete-set cache
 
-The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, expected output specifications, and ordered reveal stages; do not fingerprint every visual choice or serialize a rendering plan. Every required stage for every output specification must be present. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate collection completeness and file integrity, detecting missing, damaged, truncated, or inconsistent files.
+The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, expected output specifications, ordered reveal stages, and required preparation groups. For reconstruction-capable publication, cache the resolved preparation metadata alongside its exact image collection using the same versioned publication-metadata schema used for completed publication. Do not define a separate prepared-presentation descriptor, rendering snapshot type, or intermediate translation schema. The preparation metadata records the committed quotation and applicable semantic information plus the resolved artistic choices that produced the images; publication-event fields that do not yet exist remain unassigned or explicitly nullable as that schema specifies. It must not invent publication IDs or timestamps. Every required stage for every output specification and preparation group must be present with valid associated metadata. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate image/metadata association, collection completeness, and integrity, detecting missing, damaged, truncated, mismatched, or inconsistent files.
+
+Reuse a complete compatible cached collection and its original resolved choices after restart. Do not repeat random resource selection or infer choices from finished pixels to reconstruct metadata for existing images. Missing, damaged, inconsistent, or incompatible metadata makes a reconstruction-capable collection unusable; regenerate the compatible images and metadata together from the committed selection, without changing its identity, history, or reveal progression. The metadata remains disposable derived presentation data.
 
 For the current Version 0.1 model, the output specification distinguishes image
 variants. Under the planned destination-override model, associate variants with
@@ -669,9 +671,9 @@ missing or invalid required artifacts trigger regeneration.
 
 ### Prerelease implementation simplification
 
-Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes rendering-plan fields and snapshot validation, snapshot construction devoted to resolved presentation metadata, artifact identities and fingerprints over visual decisions, cache invalidation when settings or assets change, regeneration rules that preserve old font/palette/QR/resource choices, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration.
+Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes authoritative daily-selection fields for resolved artistic choices, artifact identities and fingerprints over visual decisions, cache invalidation when settings or assets change, regeneration rules that preserve old visual choices, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration.
 
-Retain only the machinery needed to atomically commit selected content and scheduling state, protect repetition identity and monotonic reveal progress, associate complete image sets with the right selection and stages, detect damaged cache files, safely replace a complete set, reuse it during ordinary operation, and regenerate all stages after cache failure. Do not introduce replacement abstractions unless implementation evidence demonstrates they are necessary.
+Retain the machinery needed to atomically commit selected content and scheduling state, protect repetition identity and monotonic reveal progress, associate complete image and publication-metadata collections with the right selection, preparation group, output specifications, and stages, detect damaged cache data, safely replace a complete set, reuse it during ordinary operation, and regenerate compatible images and metadata together after cache failure. Resolved artistic choices belong in the required derived preparation metadata, not authoritative daily-selection state. Do not introduce a separate rendering snapshot or metadata translation layer.
 
 #### Artifact publication and cleanup
 
@@ -835,7 +837,7 @@ Use a controlled random source for deterministic testing of automatic font selec
 
 Select one font bundle during image preparation using content-entry, decoration, and default-pool precedence. Resolve each preference only when reached; try distinct candidates from a pool in random order without replacement, exhausting that level before proceeding. Never merge candidates across levels. Then resolve each literary role within the selected bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit preference applies and that pool is empty, preparation fails with an actionable diagnostic. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
-Do not store selected bundle identifiers, effective face identifiers, font bytes, filesystem paths, or content digests in operational state. Resolve current preferences once per complete stage preparation and use those faces consistently for all generated stages.
+Do not store resolved font choices, font bytes, filesystem paths, or content digests in authoritative daily-selection state. For reconstruction-capable publication, preserve the resolved bundle and face identifiers in the associated derived preparation metadata using the publication metadata schema. Resolve current preferences once per complete preparation and use those faces consistently for all generated stages.
 
 Do not independently select fonts for individual reveal stages.
 
@@ -851,7 +853,7 @@ Do not add font downloading. Keep role-specific face resolution limited to quota
 
 Background identifiers, registration requirements, and default-pool validation are defined in [Background registry](CONTENT_FORMAT.md#background-registry). Selection precedence and recovery behavior are defined in [Presentation and rendering](ARCHITECTURE.md#presentation-and-rendering).
 
-Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Use deterministic aspect-preserving centered cover scaling and cropping on the design canvas. Preserve transparency over the paper-white base.
+Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Apply the declared layer transformation on the design canvas and preserve transparency over the paper-white base.
 
 Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background for a complete image-preparation operation, not during selection commitment or independently for reveal stages.
 
@@ -859,17 +861,19 @@ Keep background composition outside the shared quotation renderer. Compose the r
 
 Daily-image preparation accepts the selected content, effective reveal stages, and current resource registries. It resolves a background from current preferences or pool configuration for the whole generated set. A supplied empty registry represents unavailable resources and applies the paper-white fallback policy.
 
-When preparation cannot resolve or decode an optional background, report a warning and continue with paper-white according to the established fallback policy. Do not change the selected quotation or reveal progression. Keep resource reads bounded and close decoded images when no longer needed.
+Treat a standalone PNG background as one centered-cover image. For packaged backgrounds, apply each layer's declared transformation; `method` is optional and its category-specific default is `cover`. Support `contain`, `cover`, `nine-slice`, and `anchor` as defined in [Content Format](CONTENT_FORMAT.md#discovered-backgrounds). Do not require centered cover for a packaged layer that declares another valid method.
+
+When preparation cannot resolve or decode an optional background, report a warning and continue with paper-white according to the established fallback policy. Do not change the committed quotation, captured preferences, selection identity, or reveal progression. Keep resource reads bounded and close decoded images when no longer needed.
 
 ### Decoration loading and composition
 
 Decoration identifiers, the initial ordered-layer manifest schema, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
 
-Resolve presentation-wide choices such as decoration, font, background, palette, and layer preferences consistently for a complete preparation, while resolving output-specification-dependent insets, transforms, and raster results for each specification as defined in `docs/ARCHITECTURE.md`. Resolve effective QR availability separately for each output specification before selecting its conditional decoration layers. Keep selection outside rendering; compose each resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
+Resolve presentation-wide choices such as decoration, font, background, palette, and layer preferences consistently for a complete preparation, while resolving output-specification-dependent insets, transforms, and raster results for each specification as defined in `docs/ARCHITECTURE.md`. Decoration-layer `method` is optional and defaults to `contain`; support the manifest methods and parameters in [Content Format](CONTENT_FORMAT.md#decoration-manifests), including constrained anchor alignment. Resolve effective QR availability separately for each output specification before selecting its conditional decoration layers. Keep selection outside rendering; compose each resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
 
-Test centered cover scaling and cropping directly on the design canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd crop differences, and matching-size sources that need no transform. Test nine-slice source boundaries, 1:1 preservation of configured source-pixel thicknesses on the design canvas, edge `stretch` and centered `crop`, center stretching, alpha preservation, and exact shared boundaries. For example, a 1920 × 1200 source with 20-pixel slices on a 3840 × 2400 design canvas must retain 20-pixel edge/corner thicknesses. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, odd dimensions, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
+Test `contain`, centered `cover`, nine-slice, and anchor methods directly on the design canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd dimensions, clipping/alignment, and matching-size sources that need no transform. Test nine-slice source boundaries, 1:1 preservation of configured source-pixel thicknesses on the design canvas, edge `stretch` and centered `crop`, center stretching, and exact shared boundaries. For example, a 1920 × 1200 source with 20-pixel slices on a 3840 × 2400 design canvas must retain 20-pixel edge/corner thicknesses. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
 
-Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. When any layer is effectively tintable, select one color using content-entry, decoration, global-pool, then built-in black precedence; a successful selection activates tinting. Preserve each layer's source alpha when applying that single preparation-wide decoration color. Artwork retaining authored RGB must explicitly be non-tintable. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
+Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. When any layer is effectively tintable, select one color using the precedence in [Architecture → Decoration tinting](ARCHITECTURE.md#decoration-tinting); a successful selection activates tinting. Preserve each layer's source alpha when applying that single preparation-wide decoration color. Artwork retaining authored RGB must explicitly be non-tintable. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
 
 Image preparation accepts the effective decoration registry independently of the background registry. Reuse a complete valid set before resolving image resources, so registry or file changes do not invalidate it.
 
@@ -979,7 +983,7 @@ Do not include credentials, tokens, private configuration contents, or privilege
 
 Use the existing display publication coordinator to distribute the prepared information-view image to configured backends.
 
-Distinguish information-view publication identity from committed daily presentation identity without exposing view semantics to display backend implementations.
+Treat an information-view image as transient for publication metadata, using the same minimal representation as other transient publications: `publication_type: transient`, `presentation: null`, `reconstruction: null`, and an empty `actions` sequence. It has no committed daily quotation association, scheduled-selection metadata, literary reconstruction data, or actions. Its normal publication envelope still identifies the publication, destination, timestamp, and output specification. Distinguish information-view publication identity from committed daily presentation identity without exposing view semantics to display backend implementations.
 
 The startup information-view interval is transient application state. It does not require durable storage or modification of the committed daily selection.
 
@@ -989,7 +993,7 @@ Bound the initial attempt to obtain a successful information-view publication so
 
 Do not require successful publication by every backend before the information-view interval begins or ends.
 
-When the interval ends, reevaluate the normal scheduling requirements and request the currently appropriate prepared daily image. Preserve independent backend execution, pending-update coalescing, and safe handling of active hardware transfers.
+When the interval ends, reevaluate the normal scheduling requirements and request the currently appropriate prepared daily image. Preserve the scheduled-presentation acknowledgement independently; information-view publication must not replace or invalidate it. Preserve independent backend execution, pending-update coalescing, and safe handling of active hardware transfers.
 
 Do not reset or reconstruct display backends merely to transition between the information and daily views.
 
@@ -1002,6 +1006,8 @@ Include hardware-independent automated tests covering:
 - preparation when optional build, network, or environment information is unavailable;
 - correct use of application-owned literary content independently of the content library;
 - preservation of committed selection, repetition history, and reveal progression;
+- the minimal transient publication metadata for information views, with no scheduled-selection association, reconstruction data, or actions;
+- preservation of normal scheduled-publication acknowledgement when an information view is published;
 - publication to multiple independent backends;
 - timer start after the first successful publication;
 - wall-clock adjustments during the information-view interval;
@@ -1037,7 +1043,9 @@ Construct the configured display backends at application startup.
 
 Use explicit mappings or conditional construction for supported built-in implementations. Import backend-specific dependencies only when the corresponding implementation is selected.
 
-The configuration must contain at least one backend and must not contain duplicate backend types.
+The configuration must contain at least one destination. Destination IDs must be globally unique. Multiple destinations may use the same backend type when that type supports them; enforce each type's declared destination capacity before constructing or initializing its backend. A destination declaration is not itself a backend instance: destinations supported by one shared backend use that instance and its lifecycle.
+
+`window` and `waveshare-13in3-e` each support one configured destination. The current integrated `image-server` supports multiple destinations through one shared backend instance. The planned `publish` backend also supports multiple destinations. These explicit capacities do not imply a generic backend-instantiation or plugin framework.
 
 A recognized but unimplemented backend must produce an actionable diagnostic.
 
@@ -1127,9 +1135,13 @@ Keep HTTP request handling and network-resource ownership within the backend. Th
 
 The service must remain responsive between image replacement operations.
 
-Backend construction must establish that the configured listening address and port are usable before reporting successful initialization. Binding and startup failures must produce actionable diagnostics through the common display-backend error interface.
+Backend construction establishes the configured image-server destinations and their in-memory capability to accept and retain complete image representations. Successful HTTP listener binding is not a prerequisite for this publication capability. If the optional `image-server` listener configuration is omitted, do not attempt to bind a listener; the destinations remain publication-capable while external HTTP delivery is unavailable.
+
+When listener configuration is present, listener startup and binding are independent of destination image publication. A listener startup or binding failure must be reported with an actionable diagnostic and follow the established bounded recovery behavior for external delivery. It must not prevent the backend from accepting and retaining complete image representations.
 
 Encode incoming Pillow images as complete PNG representations before making them available to HTTP clients. Retain the encoded bytes and associated entity tag in backend-owned memory.
+
+A successful destination publication acknowledges that its complete PNG representation and entity tag were retained in memory. It does not assert that a listener is available, that an HTTP client retrieved the image, or that a client displayed it. Report external delivery availability separately from publication acknowledgement.
 
 Replacement of the currently served representation must be synchronized with concurrent HTTP requests. A request must observe one consistent image and its corresponding entity tag, without holding backend state locked during network transmission.
 
@@ -1246,7 +1258,9 @@ Hardware validation must distinguish between driver-call success and visibly cor
 Include hardware-independent tests covering:
 
 - Configured destinations receiving the prepared variant matching their output specification, with variants shared only for identical specifications.
-- Duplicate backend rejection.
+- Globally duplicate destination-ID rejection.
+- Capacity violations for `window` and `waveshare-13in3-e`, and valid repeated destination types for `image-server` through one shared backend instance.
+- Valid repeated backend types being distinguished from the number of constructed backend instances; planned `publish` destinations support multiple destinations.
 - Independent initialization and failure reporting.
 - One backend continuing while another is blocked or slow.
 - No overlapping updates to an individual backend.
@@ -1321,7 +1335,7 @@ Require deterministic hardware-independent tests with explicit current instants 
 
 Reuse the application selection, resource resolution, daily-selection commitment, reveal-progress persistence, image-cache recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the durable daily selection without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
 
-Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement. Measure the viewing interval from `first_successful_publication_time()` when an acknowledgement exists; if no destination accepts the image, start the interval at its publication attempt so reveal progression continues. Use the same monotonic clock supplied to the coordinator. Initialization, preparation, failed publications, and wall-clock adjustments must not alter persisted selection or reveal state. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
+Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement. Measure the viewing interval from `first_successful_publication_time()` when an acknowledgement exists; if no destination accepts the image, start the interval at its publication attempt. A valid prepared stage completes when this interval expires even if destinations are unavailable, failed, or withdrawn; publication failure alone neither completes nor advances a stage. After the final stage's interval, the controller may commit another selection. Preparation or image-loading failure leaves the stage pending and must not authorize progression or reselection. Use the same monotonic clock supplied to the coordinator. Initialization, preparation, publication failures, and wall-clock adjustments do not themselves alter committed selection or reveal state. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
 
 Use the normal independent backend retries and increasing application retry delays from 1 to at most 60 seconds. Do not reset backends between stages or require all destinations to succeed. Continue progression and retry waits while destinations are unavailable, failed, or withdrawn; only shutdown ends the session for those conditions.
 
@@ -1490,6 +1504,8 @@ Where practical, test recovery using a newly initialized application instance ra
 ### Rendering tests
 
 Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. In the current Version 0.1 model, all reveal stages for one output specification have identical output dimensions and destinations with the same output specification share those images. Do not require variants for different output specifications to have identical dimensions. In the planned destination-override model, verify that different effective overrides produce separate prepared variants even at identical output specifications, while matching requirements share coherent presentation-wide choices. Verify that the prepared variant set covers each unique output-specification/effective-requirements combination.
+
+For reconstruction-capable publication, verify that preparation metadata uses the exact publication metadata schema and remains associated with its compatible image collection after cache reuse and process restart. Cover missing or corrupted metadata, mismatched image and metadata collections, compatible destinations sharing prepared images, destinations with different presentation overrides, and adding a `publish` destination that can reuse compatible cached images. Verify destination-specific finalization creates independent complete metadata without mutating shared cached metadata or another destination's result.
 
 Test destination visual post-processing independently of backend construction. Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output. Verify the Waveshare publication path quantizes exactly once, passes palette indices unchanged through driver rotation and 4-bit packing, and leaves the original RGB image unchanged. Verify the conversion can be imported and exercised without GPIO/SPI dependencies and that the driver and viewer use the same conversion. These tests establish software behavior only, not physical panel validation.
 
