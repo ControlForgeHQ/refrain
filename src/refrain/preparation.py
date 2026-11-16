@@ -257,9 +257,7 @@ def _resolve_presentation_choices(
         (
             destination_presentation.qr_enabled
             if overrides.qr_enabled is None and destination_presentation.qr_enabled is not None
-            else configuration.qr_enabled
-            if overrides.qr_enabled is None
-            else overrides.qr_enabled
+            else configuration.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled
         ),
         overrides.qr_enabled is not None or destination_presentation.qr_enabled is not None,
     )
@@ -392,9 +390,11 @@ def _resolve_presentation(
     insets = (
         resolved_presentation.insets
         if resolved_presentation is not None
-        else configuration.presentation_insets
-        if decoration is None or decoration.presentation_insets is None
-        else decoration.presentation_insets
+        else (
+            configuration.presentation_insets
+            if decoration is None or decoration.presentation_insets is None
+            else decoration.presentation_insets
+        )
     )
     try:
         geometry = resolve_presentation_geometry(output_specification, insets)

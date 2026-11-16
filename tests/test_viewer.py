@@ -393,6 +393,55 @@ def test_publication_reconstruction_uses_committed_content_and_resolved_choices(
 
 
 @pytest.mark.parametrize(
+    ("source", "attribution"),
+    [
+        (None, None),
+        ("A source", None),
+        (None, "An author"),
+        ("A source", "An author"),
+    ],
+)
+def test_publication_reconstructs_only_available_literary_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str | None,
+    attribution: str | None,
+) -> None:
+    entry_text = _ENTRY
+    for field, value in (("source", source), ("attribution", attribution)):
+        if value is None:
+            text = "A source" if field == "source" else "An author"
+            entry_text = entry_text.replace(f'{field}: "{text}"\n', "")
+    config_path, _content, publication_path, _completed = _completed_publication(tmp_path, entry_text=entry_text)
+    configuration = load_application_config(config_path)
+    document = viewer._read_publication_metadata(publication_path)
+    rendered_stages: list[tuple[CompositionVisibility, ...]] = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, stages, selected_configuration, specifications, **kwargs):
+        rendered_stages.append(tuple(stages))
+        return prepare(snapshot, stages, selected_configuration, specifications, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    image = viewer.render_publication(
+        configuration,
+        document,
+        ResolvedOutputSpecification("16:10", (320, 200)),
+    )
+    image.close()
+
+    assert rendered_stages == [
+        (
+            CompositionVisibility(
+                quotation=True,
+                source=source is not None,
+                attribution=attribution is not None,
+            ),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
     ("mutation", "diagnostic"),
     [
         (lambda document: document.update(publication_id=None), "publication_id"),
@@ -815,11 +864,46 @@ def test_publication_preserves_each_resolved_font_face(tmp_path: Path, monkeypat
     assert fonts["attribution"].identifier == "test-font"
 
 
+def test_publication_reconstruction_pixels_match_fully_revealed_preparation(
+    tmp_path: Path,
+) -> None:
+    config_path, _content, publication_path, _completed = _completed_publication(
+        tmp_path,
+        stage=CompositionVisibility(quotation=True),
+    )
+    configuration = load_application_config(config_path)
+    entry, quotation = viewer._select_entry(configuration, ("requested-entry", 2))
+    snapshot = build_presentation_snapshot(configuration, entry, quotation, date(2026, 11, 16))
+    document = viewer._read_publication_metadata(publication_path)
+    reconstruction_snapshot, resolved = viewer._publication_render_inputs(document)
+    specification = ResolvedOutputSpecification("16:10", (320, 200))
+    prepared = prepare_daily_images(
+        snapshot,
+        (CompositionVisibility(quotation=True, source=True, attribution=True),),
+        configuration,
+        (specification,),
+        resolved_presentation=resolved,
+    )
+    reconstructed = viewer.render_publication(configuration, document, specification)
+    try:
+        expected = prepared[specification][0]
+        assert reconstruction_snapshot.quotation_text == snapshot.quotation_text
+        assert expected.mode == reconstructed.mode
+        assert expected.size == reconstructed.size
+        assert expected.tobytes() == reconstructed.tobytes()
+    finally:
+        reconstructed.close()
+        for images in prepared.values():
+            for image in images:
+                image.close()
+
+
 def test_publication_actions_remain_opaque_and_are_never_executed(tmp_path: Path) -> None:
     action_target = tmp_path / "must-not-be-created"
+    payload = json.dumps(str(action_target))
     entry_text = _ENTRY.replace(
         "priority: 100",
-        f'actions:\n  - type: file-operation\n    visibility: [private]\n    payload: "{action_target}"\npriority: 100',
+        f"actions:\n  - type: file-operation\n    visibility: [private]\n    payload: {payload}\npriority: 100",
     )
     config_path, _content, publication_path, completed = _completed_publication(tmp_path, entry_text=entry_text)
 

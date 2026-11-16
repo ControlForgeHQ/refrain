@@ -287,7 +287,13 @@ def render_publication(
     try:
         prepared = prepare_daily_images(
             snapshot,
-            (CompositionVisibility(quotation=True, source=True, attribution=True),),
+            (
+                CompositionVisibility(
+                    quotation=True,
+                    source=snapshot.source is not None,
+                    attribution=snapshot.attribution is not None,
+                ),
+            ),
             configuration,
             (output_specification,),
             overrides=PresentationOverrides() if overrides is None else overrides,
