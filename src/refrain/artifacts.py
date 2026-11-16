@@ -84,6 +84,15 @@ def _stage_definitions(stages: Sequence[CompositionVisibility]) -> list[dict[str
     ]
 
 
+def _visibility_matches(value: object, expected: Mapping[str, bool]) -> bool:
+    """Compare persisted visibility fields with a canonical stage definition."""
+    return (
+        isinstance(value, Mapping)
+        and set(value) == {"quotation", "source", "attribution"}
+        and all(type(value[field]) is bool and value[field] is expected[field] for field in expected)
+    )
+
+
 def _inputs(revision: int, stages: Sequence[CompositionVisibility]) -> list[dict[str, bool]]:
     _positive_integer(revision, "revision")
     return _stage_definitions(stages)
@@ -340,7 +349,7 @@ class PreparedImageArtifactStore:
                         or output["requested_output_size"] != list(specification.requested_output_size)
                         or presentation["selection_revision"] != revision
                         or presentation["reveal_stage_index"] != index
-                        or presentation["reveal_stage"] != visibility
+                        or not _visibility_matches(presentation["reveal_stage"], visibility)
                     ):
                         raise ValueError("metadata association does not match revision, output, or reveal stage")
                 except (PublicationMetadataError, KeyError, TypeError) as error:
@@ -531,7 +540,7 @@ class PreparedImageArtifactStore:
                     if (
                         not isinstance(stage, dict)
                         or set(stage) != {"visibility", "sha256", "metadata_sha256"}
-                        or stage["visibility"] != expected_stages[stage_index]
+                        or not _visibility_matches(stage["visibility"], expected_stages[stage_index])
                         or not isinstance(stage["sha256"], str)
                         or not _DIGEST.fullmatch(stage["sha256"])
                         or not isinstance(stage["metadata_sha256"], str)
@@ -571,7 +580,7 @@ class PreparedImageArtifactStore:
                     metadata_document = variant.load_metadata(index)
                     presentation = metadata_document["presentation"]
                     if (
-                        presentation["reveal_stage"] != expected_stages[index]
+                        not _visibility_matches(presentation["reveal_stage"], expected_stages[index])
                         or presentation["selection_revision"] != revision
                     ):
                         raise ValueError("metadata selection or reveal stage does not match manifest")

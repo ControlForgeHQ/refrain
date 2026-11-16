@@ -419,6 +419,7 @@ def test_missing_or_corrupt_manifest_is_rejected(store, snapshot, images, damage
         lambda m: m["variants"][0].update(mode=[]),
         lambda m: m["variants"][0].update(stages=[]),
         lambda m: m["variants"][0]["stages"].reverse(),
+        lambda m: m["variants"][0]["stages"][0]["visibility"].update(quotation=1),
         lambda m: m["variants"][0]["stages"][0].update(path="../outside.png"),
         lambda m: m["variants"][0]["stages"][0].update(sha256="invalid"),
         lambda m: m.update(image_directory="../outside"),

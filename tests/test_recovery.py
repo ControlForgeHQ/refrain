@@ -471,12 +471,34 @@ def test_repeated_recovery_uses_reloaded_artifacts_without_rewriting(
     committed_state, artifact_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state, _ = committed_state
-    first = _recover(state, artifact_store, _STAGES)
+
+    class CountingChooser:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def choice(self, values):
+            self.calls += 1
+            return values[0]
+
+    chooser = CountingChooser()
+    first = _recover(state, artifact_store, _STAGES, chooser=chooser)
+    assert chooser.calls > 0
     manifest = (first.directory / "manifest.json").read_bytes()
     metadata_before = tuple(_variant(first).load_metadata(index) for index in range(len(_STAGES)))
+    assert tuple(document["presentation"]["reveal_stage_index"] for document in metadata_before) == (0, 1, 2)
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
-    second = _recover(state, PreparedImageArtifactStore(artifact_store.root), _STAGES)
+
+    class RejectingChooser:
+        def choice(self, _values):
+            pytest.fail("unexpected artistic resource selection")
+
+    second = _recover(
+        state,
+        PreparedImageArtifactStore(artifact_store.root),
+        _STAGES,
+        chooser=RejectingChooser(),
+    )
 
     assert second == first
     assert (second.directory / "manifest.json").read_bytes() == manifest
