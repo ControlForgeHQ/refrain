@@ -13,7 +13,7 @@ from refrain import DisplayBackendConfiguration, DisplayOutputConfiguration, Res
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 from refrain.publication_metadata import build_prepared_metadata
-from refrain.publication_storage import PublicationStore
+from refrain.publication_storage import PublicationStorageError, PublicationStore
 from refrain.renderer import CompositionVisibility
 
 _WIDE = ResolvedOutputSpecification("16:9", (16, 9))
@@ -224,6 +224,122 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         assert restored.metadata["publication_type"] == "scheduled"
         assert restored.metadata["presentation"]["reveal_stage_index"] == 2
         assert restored.manifest.publication_id != transient.manifest.publication_id
+    finally:
+        coordinator.close()
+
+
+def test_scheduled_publish_without_prepared_metadata_fails_without_acknowledgement(tmp_path) -> None:
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+
+    configuration = _configuration("publish", (("web-public", _WIDE),))
+    store = PublicationStore(tmp_path / "publications")
+    coordinator = DisplayPublicationCoordinator(
+        (configuration,),
+        lambda _configuration: FilesystemPublicationDisplayBackend(store),
+        retry=False,
+    )
+    try:
+        identity = (5, 2)
+        coordinator.publish(identity, {_WIDE: Image.new("RGB", _WIDE.requested_output_size, (1, 2, 3))})
+
+        assert not coordinator.wait_for_publication(identity, timeout=2)
+        assert coordinator.acknowledgements == {"web-public": None}
+        assert coordinator.publication_results(identity)["web-public"][0] is False
+        assert "missing prepared metadata" in coordinator.publication_results(identity)["web-public"][1]
+        with pytest.raises(PublicationStorageError):
+            store.read_current("web-public")
+    finally:
+        coordinator.close()
+
+
+def test_information_view_can_be_explicitly_published_as_transient(tmp_path) -> None:
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+
+    information_identity = (-1, -1)
+    configuration = _configuration("publish", (("web-info", _WIDE),))
+    store = PublicationStore(tmp_path / "publications")
+    coordinator = DisplayPublicationCoordinator(
+        (configuration,),
+        lambda _configuration: FilesystemPublicationDisplayBackend(store),
+        retry=False,
+    )
+    try:
+        coordinator.publish_transient_presentation(
+            information_identity,
+            {_WIDE: Image.new("RGB", _WIDE.requested_output_size, (3, 2, 1))},
+        )
+
+        assert coordinator.wait_for_publication(information_identity, timeout=2)
+        dataset = store.read_current("web-info")
+        assert coordinator.acknowledgements == {"web-info": information_identity}
+        assert dataset.metadata["publication_type"] == "transient"
+        assert dataset.metadata["presentation"] is None
+        assert dataset.metadata["reconstruction"] is None
+        assert dataset.metadata["actions"] == []
+    finally:
+        coordinator.close()
+
+
+def test_filesystem_failure_isolated_and_retried_per_destination(tmp_path, monkeypatch) -> None:
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+
+    outputs = (
+        DisplayOutputConfiguration("web-good", _WIDE, audience="private"),
+        DisplayOutputConfiguration("web-fail", _WIDE, audience="private"),
+    )
+    configuration = DisplayBackendConfiguration("publish", outputs=outputs)
+    store = PublicationStore(tmp_path / "publications")
+    original_publish = store.publish
+    attempts = {"web-good": 0, "web-fail": 0}
+    first_failure = Event()
+    good_committed = Event()
+
+    def controlled_publish(destination_id, image, metadata, *, audience=None):
+        attempts[destination_id] += 1
+        if destination_id == "web-fail" and attempts[destination_id] == 1:
+            first_failure.set()
+            raise PublicationStorageError("injected storage failure")
+        manifest = original_publish(destination_id, image, metadata, audience=audience)
+        if destination_id == "web-good":
+            good_committed.set()
+        return manifest
+
+    monkeypatch.setattr(store, "publish", controlled_publish)
+    backend = FilesystemPublicationDisplayBackend(store)
+    coordinator = DisplayPublicationCoordinator(
+        (configuration,),
+        lambda _configuration: backend,
+    )
+    identity = (4, 2)
+    prepared = _prepared_metadata()
+    submitted_image = Image.new("RGB", _WIDE.requested_output_size, (12, 34, 56))
+    expected_image_bytes = submitted_image.tobytes()
+    try:
+        coordinator.publish_with_metadata(identity, {_WIDE: submitted_image}, {_WIDE: prepared})
+
+        assert first_failure.wait(2)
+        assert good_committed.wait(2)
+        assert coordinator.desired_identity == identity
+        assert coordinator.acknowledgements == {"web-good": identity, "web-fail": None}
+
+        good = store.read_current("web-good")
+        assert good.metadata["publication_type"] == "scheduled"
+        assert good.metadata["destination_id"] == "web-good"
+        assert good.metadata["presentation"]["reveal_stage_index"] == 2
+        assert attempts == {"web-good": 1, "web-fail": 1}
+        with Image.open(BytesIO(good.image)) as published_image:
+            assert published_image.tobytes() == expected_image_bytes
+        with pytest.raises(PublicationStorageError):
+            store.read_current("web-fail")
+
+        assert coordinator.wait_for_publication(identity, timeout=5)
+        assert coordinator.acknowledgements == {"web-good": identity, "web-fail": identity}
+        assert attempts == {"web-good": 1, "web-fail": 2}
+        recovered = store.read_current("web-fail")
+        assert recovered.metadata["publication_type"] == "scheduled"
+        assert recovered.metadata["destination_id"] == "web-fail"
+        assert recovered.metadata["presentation"]["reveal_stage_index"] == 2
+        assert coordinator.desired_identity == identity
     finally:
         coordinator.close()
 

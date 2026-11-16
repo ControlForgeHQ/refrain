@@ -25,6 +25,7 @@ from ..geometry import ResolvedOutputSpecification
 from . import (
     DisplayBackend,
     DisplayBackendError,
+    DisplayBackendUpdateError,
     PublicationDisplayBackend,
     WithdrawableDisplayBackend,
     create_display_backend,
@@ -52,6 +53,7 @@ class _Presentation:
     identity: tuple[int, int]
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]
     metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None
+    transient: bool = False
     references: int = 1
 
 
@@ -170,6 +172,7 @@ class DisplayPublicationCoordinator:
             tuple[int, int],
             Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
         ] = {}
+        self._transient_presentations: set[tuple[int, int]] = set()
         expected_destinations = sum(len(configuration.outputs) for configuration in configurations)
         if len(self._states) != expected_destinations:
             raise ValueError("configured display destinations must have unique identifiers")
@@ -274,6 +277,8 @@ class DisplayPublicationCoordinator:
         """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
             metadata = self._publication_metadata.pop(identity, None)
+            transient = identity in self._transient_presentations
+            self._transient_presentations.discard(identity)
             if self._stopping or self._draining:
                 self._close_images(images)
                 raise RuntimeError("display publication coordinator is stopping")
@@ -292,7 +297,7 @@ class DisplayPublicationCoordinator:
                 self._close_images(images)
                 raise ValueError(f"publication is missing output variants for destinations: {missing}")
 
-            presentation = _Presentation(identity, images, metadata)
+            presentation = _Presentation(identity, images, metadata, transient)
             for state in self._states.values():
                 state.desired_identity = identity
                 if state.terminal or state.withdrawn:
@@ -304,6 +309,20 @@ class DisplayPublicationCoordinator:
                 state.retry_delay = 1.0
             self._release(presentation)
             self._condition.notify_all()
+
+    def publish_transient_presentation(
+        self,
+        identity: tuple[int, int],
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+    ) -> None:
+        """Publish a complete application-owned view through scheduled coordination."""
+        with self._condition:
+            self._transient_presentations.add(identity)
+        try:
+            self.publish(identity, images)
+        finally:
+            with self._condition:
+                self._transient_presentations.discard(identity)
 
     def publish_with_metadata(
         self,
@@ -1011,6 +1030,7 @@ class DisplayPublicationCoordinator:
                             ready.destination,
                             image,
                             prepared_metadata=prepared_metadata,
+                            transient=presentation.transient,
                         )
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
@@ -1115,10 +1135,14 @@ class DisplayPublicationCoordinator:
         transient: bool = False,
     ) -> None:
         if isinstance(backend, PublicationDisplayBackend):
-            if transient or prepared_metadata is None:
+            if transient:
                 backend.publish_transient(destination, image)
-            else:
-                backend.publish_scheduled(destination, image, prepared_metadata)
+                return
+            if prepared_metadata is None:
+                raise DisplayBackendUpdateError(
+                    f"scheduled publication for destination {destination.identifier!r} " "is missing prepared metadata"
+                )
+            backend.publish_scheduled(destination, image, prepared_metadata)
             return
         backend.publish(destination, image)
 

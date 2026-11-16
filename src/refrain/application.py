@@ -296,6 +296,18 @@ def _publish_scheduled(
         coordinator.publish(identity, images)
 
 
+def _publish_information_view(
+    coordinator: DisplayPublicationCoordinator,
+    images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+) -> None:
+    identity = _INFORMATION_VIEW_IDENTITY
+    publish_transient_presentation = getattr(coordinator, "publish_transient_presentation", None)
+    if callable(publish_transient_presentation):
+        publish_transient_presentation(identity, images)
+    else:
+        coordinator.publish(identity, images)
+
+
 def _destination_variant_images(
     configuration: ApplicationConfiguration,
     images: Mapping[ResolvedOutputSpecification, Image.Image],
@@ -520,8 +532,9 @@ def run_startup(
                     retry=False,
                     monotonic_clock=monotonic_clock,
                 )
-                coordinator.publish(
-                    _INFORMATION_VIEW_IDENTITY, _destination_variant_images(configuration, information_images)
+                _publish_information_view(
+                    coordinator,
+                    _destination_variant_images(configuration, information_images),
                 )
                 information_images_transferred = True
                 pending_information_images = None
@@ -826,8 +839,8 @@ def run_application(
                     if not information_view_done and not information_view_requested:
                         assert information_view_images is not None
                         with state_lock:
-                            coordinator.publish(
-                                _INFORMATION_VIEW_IDENTITY,
+                            _publish_information_view(
+                                coordinator,
                                 _destination_variant_images(configuration, information_view_images),
                             )
                         information_view_images = None
