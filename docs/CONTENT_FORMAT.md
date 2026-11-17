@@ -132,6 +132,16 @@ destinations:
   - id: "default"
     type: "image-server"
     audience: "private"
+  - id: epaper
+    type: waveshare-13in3-e
+    audience: private
+    overrides:
+      background: none
+      decoration: none
+      font: lora
+      text_color: black
+      decoration_color: black
+      qr: none
 
 image-server:
   host: "127.0.0.1"
@@ -281,14 +291,16 @@ destinations:
   - id: web-public
     type: publish
     audience: public
+    overrides:
+      background: none
 
   - id: web-private
     type: publish
     audience: private
     aspect_ratio: "16:10"
     resolution: [3840, 2400]
-    presentation:
-      background: "none"
+    overrides:
+      background: none
 
 image-server:
   host: "127.0.0.1"
@@ -307,45 +319,42 @@ The supported destination `type` values are `window`, `waveshare-13in3-e`, `imag
 
 Destination IDs must match `[A-Za-z0-9][A-Za-z0-9_-]*`, be no longer than 256 characters, and be globally unique across all types. IDs are used unchanged for runtime discovery, publication selection, and image-server resource paths. `all` is an ordinary valid ID; `@all` is reserved for publication selection. Invalid or duplicate IDs, invalid audiences, and capacity excesses are configuration errors. Backend capacities are checked before backend or service initialization.
 
-An optional destination-local `presentation` mapping overrides selected settings for scheduled image preparation:
+An optional destination-local `overrides` mapping restricts changes to the canonical presentation for scheduled image preparation:
 
 ```yaml
 destinations:
   - id: epaper
     type: waveshare-13in3-e
     audience: private
-    presentation:
-      background: "none"
-      text_color: "black"
-      decoration_color: "black"
-      qr:
-        enabled: false
-
-  - id: hallway
-    type: image-server
-    audience: public
-    aspect_ratio: "4:3"
-    resolution: [1600, 1200]
-    presentation:
-      background: "none"
+    overrides:
+      background: none
+      decoration: none
+      font: lora
+      text_color: black
+      decoration_color: black
+      qr: none
 ```
 
 | Field | Type | Meaning |
 |---|---|---|
-| `presentation.background` | Background identifier or named-pool reference | Overrides background selection. `"none"` intentionally suppresses background artwork. |
-| `presentation.decoration` | Decoration identifier or named-pool reference | Overrides decoration selection. `"none"` intentionally suppresses decoration artwork. |
-| `presentation.font` | Font-bundle identifier or named-pool reference | Overrides font-bundle selection. |
-| `presentation.text_color` | Palette identifier, pool reference, or nonempty sequence of either | Overrides literary text-color selection. |
-| `presentation.decoration_color` | Palette identifier, pool reference, or nonempty sequence of either | Overrides decoration tint-color selection. |
-| `presentation.qr.enabled` | YAML boolean | Overrides the global QR generation policy. |
+| `overrides.background` | String | Exactly `none`; suppresses the canonical background. |
+| `overrides.decoration` | String | Exactly `none`; suppresses the canonical decoration. |
+| `overrides.font` | Font-bundle identifier | Selects one explicit, registered font bundle. |
+| `overrides.text_color` | Palette identifier | Selects one explicit identifier in the effective palette. |
+| `overrides.decoration_color` | Palette identifier | Selects one explicit identifier in the effective palette. |
+| `overrides.qr` | String | Exactly `none`; suppresses the QR code for this destination. |
 
-These fields use the same resource registries, named pools, and strict value types as the corresponding existing presentation preferences. Resource and palette identifiers are resolved during preparation; unavailable preferences follow existing fallback and diagnostic rules. `"none"` is a deliberate no-artwork selection, not an unavailable resource. For colors, an override has precedence over content-entry, background, decoration, and global preferences. For resources, it has precedence over ordinary content-entry and decoration preferences. An unavailable destination resource preference falls through the ordinary selection hierarchy. A selected decoration's `qr_ready: false` restriction and QR geometry viability remain effective even when QR is requested.
+`overrides` is an optional mapping at the destination level; when present it must be a mapping. Its only supported keys are the six shown above. `background` and `decoration` are suppression-only: they do not accept alternative resource identifiers, pool references, or lists. `font` accepts one explicit registered font-bundle identifier, not a pool or fallback list. Each color accepts one explicit available palette identifier, not a pool, list, or RGB value. `qr` accepts only `none`; it is not a boolean or nested mapping. Values are case-sensitive strings. Unknown keys, wrong YAML types, unknown font or palette identifiers, and every unsupported value are configuration errors; they must not be silently ignored or resolved through fallback. This strict override validation takes precedence over the general warning behavior for other unknown application-configuration fields.
 
-Omitting `presentation`, or omitting any individual field, preserves the existing behavior for that destination and field. Unsupported fields are diagnosed as unrecognized and ignored; they do not add rendering controls. These overrides apply only to scheduled preparation, not to finished transient images delivered to a destination. All destination types, including `publish`, support the presentation override contract.
+Destination overrides are applied after Refrain resolves and persists the destination-independent canonical presentation. An explicit font or color replaces only that canonical value for the destination; the font's role-specific faces continue to use the established face-preference and regular-face fallback rules. Overrides never trigger independent artistic selection, and destination backends do not apply them to completed output images.
 
-Each destination resolves an output specification consisting of a declared presentation aspect ratio and requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain prepares one complete set of reveal-stage images for each unique output specification required by configured destinations. Destinations with identical specifications may share prepared variants; destinations with different specifications receive their matching variants.
+Omitting `overrides`, or any individual property, retains that property's canonical value. `background: none` suppresses only the canonical background and does not change geometry. `decoration: none` suppresses all canonical decoration artwork and uses the global `presentation.insets`, `text.min_font_size`, and `text.max_font_size` values for that destination, including their documented defaults (`384/384/324/324` insets and font bounds `56/200`); decoration-specific geometry constraints do not carry over. The effective values remain subject to the existing geometry, font-bound, scaling, and validation rules. `decoration_color` has no rendering effect when no decoration layer is present.
 
-When destination presentation overrides differ, prepared collections are shared only when both the output specification and effective presentation requirements match. Destinations with equivalent requirements may share presentation-wide artistic choices even when their IDs differ. Different output specifications in one compatible preparation group receive independent raster-dependent variants.
+`qr: none` suppresses QR rendering only for that destination. It does not change the canonical QR policy or QR rendering for other destinations. Without this override, the canonical QR policy, selected decoration's `qr_ready` restriction, and existing placement and output-geometry viability rules apply. Do not introduce alternate QR payloads or destination-specific QR settings.
+
+Overrides apply only to scheduled image preparation, not to finished transient images delivered to a destination. All destination types, including `publish`, support the same restricted override contract.
+
+Each destination resolves an output specification consisting of a declared presentation aspect ratio and requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain resolves one canonical presentation for the committed daily selection, then prepares one complete set of reveal-stage images for each unique combination of output specification and effective destination overrides. Destinations with identical specifications and effective requirements may share prepared variants; destinations with different requirements receive separate variants. Destination IDs do not affect artistic selection or cache grouping.
 
 The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` and `publish` destinations default to `16:10 @ 3840 × 2400`. Each accepts `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. A `publish` destination still requires an explicit ID, type, and audience. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
 
@@ -355,7 +364,7 @@ The default loopback address prevents connections from other network devices. Bi
 
 Each image-server destination is exposed at `/display/<id>/current`. The service retains the latest complete PNG representation and entity tag for each destination in memory; no separate persistent image store is used.
 
-Unsupported configuration fields are reported as unrecognized fields. The retired `display` configuration is not part of the supported schema.
+Unsupported configuration fields are reported as unrecognized fields, except unsupported destination `overrides` keys or values, which are configuration errors as specified above. The retired `display` configuration is not part of the supported schema.
 
 ### Scheduling settings
 
@@ -919,7 +928,7 @@ Each effective member has equal selection probability. A configured override of 
 
 ### Background and decoration resolution
 
-For each selected quotation, Refrain resolves the decoration before resolving the font and background.
+For each committed daily selection, Refrain resolves the canonical decoration before resolving the canonical font and background. These destination-independent selections are resolved once and persisted with the selection; configured destination overrides are applied afterward and cannot trigger new canonical selection.
 
 An available explicit content-entry decoration takes precedence over the default decoration pool. The value `"none"` suppresses decoration selection.
 
@@ -977,9 +986,9 @@ An absent decoration preference does not prevent explicit content-entry resource
 
 The selected decoration's complete inset override applies when present; otherwise the global insets apply.
 
-Content-level fields in this document express presentation preferences. The selected entry's preferences needed to interpret or present the committed quotation are captured in its daily selection record; regeneration does not reread the original content entry, and later edits do not change those captured preferences. Their resolved resources, colors, output geometry, effective insets, QR availability, ordered layers, and transformations are derived during image preparation and are not committed as resolved rendering decisions.
+Content-level fields in this document express presentation preferences. The selected entry's preferences needed to interpret or present the committed quotation are captured in its daily selection record; regeneration does not reread the original content entry, and later edits do not change those captured preferences. The canonical resources, colors, presentation style, font bundle and faces, and QR policy resolved from those preferences are persisted with that record. Destination overrides and output geometry, effective insets, QR availability, ordered layers, and transformations are resolved for preparation and are not part of the canonical selection.
 
-All variants generated together use consistent presentation-wide choices from the captured preferences, current configuration, and available assets. Raster-dependent geometry, wrapping, fitted font pixel sizes, QR viability and module size, and conditional QR/no-QR decoration layers may differ by output specification. A valid cached image set is reused even when those inputs change. If a new set must be generated, the captured preferences are resolved against current inputs and the resulting visual choices may differ.
+All variants generated together use the same persisted canonical choices and each destination's effective overrides. Raster-dependent geometry, wrapping, fitted font pixel sizes, QR viability and module size, and conditional QR/no-QR decoration layers may differ by output specification. A valid cached image set is reused even when configuration or assets change. If a new set must be generated, reuse the canonical selections rather than resolving the captured preferences or pools again; current output specifications and asset availability may affect preparation results but do not change canonical choices.
 
 The presentation-level QR policy defaults to enabled. Effective QR availability is resolved for each output specification using that policy, the selected decoration's `qr_ready` value, valid in-bounds design-space placement, and sufficient presentation-canvas pixels for at least one pixel per QR module. Resolve this complete decision before selecting conditional decoration layers. QR rasterization and composition occur later on the presentation canvas after literary rendering; layer `condition` values select artwork but do not enable or disable QR generation.
 
@@ -1564,7 +1573,7 @@ An entry cannot override the quotation reveal time in Version 0.1.
 
 The effective reveal schedule is resolved when preparing the daily selection record.
 
-The selected quotation, its captured content-level presentation preferences, and its resolved reveal schedule do not change if the original entry or global configuration later changes. Regeneration does not reread the original entry. If regeneration is necessary, captured preferences are resolved against current application configuration and available assets, so the resulting image set may reflect those current inputs.
+The selected quotation, its captured content-level presentation preferences, canonical presentation, and resolved reveal schedule do not change if the original entry or global configuration later changes. Regeneration does not reread the original entry or reselect canonical resources from changed pools. If regeneration is necessary, the persisted canonical selections are prepared using current output specifications and available assets; the rendered result may reflect those inputs without changing canonical identity.
 
 ### Override validation
 

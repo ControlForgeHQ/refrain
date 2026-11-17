@@ -2,11 +2,13 @@
 
 This specification defines the single JSON metadata schema used by prepared
 scheduled images and completed publications. Both use schema version `1`.
-Preparation and publication differ only in which publication-envelope fields
-have been populated and whether a transient publication has scheduled payload.
-Destination audience is policy external to this schema. The field `audience`
-is prohibited at every level, including the top-level document and embedded
-content entry.
+Scheduled reconstruction data records the destination-independent canonical
+presentation separately from the effective presentation used to prepare a
+destination's image. Preparation and publication differ in which
+publication-envelope fields have been populated and whether a transient
+publication has scheduled payload. Destination audience is policy external to
+this schema. The field `audience` is prohibited at every level, including the
+top-level document and embedded content entry.
 Runtime ownership belongs in [Architecture](ARCHITECTURE.md); serialization,
 validation, and testing requirements belong in [Engineering](ENGINEERING.md).
 
@@ -65,25 +67,85 @@ quotation's display-day start time. The stage flags describe what the image
 actually shows. The committed quotation identity and revision remain unchanged
 across publication events and reveal stages.
 
-## Scheduled reconstruction
+## Canonical and prepared destination presentation
 
 For a scheduled document, `reconstruction` contains exactly:
 
 | Field | Type | Required value |
 |---|---|---|
 | `content_entry` | Mapping | Valid single-quotation entry in the [content-entry format](CONTENT_FORMAT.md#content-entries) |
+| `canonical_presentation` | Mapping | Resolved destination-independent artistic presentation |
+| `effective_presentation` | Mapping | Actual effective presentation used to prepare this destination's output |
+
+`canonical_presentation` contains exactly:
+
+| Field | Type | Required value |
+|---|---|---|
 | `presentation_style` | String | `"centered"` or `"left-aligned"`; matches the generated entry |
-| `background` | String | Actual stable background identifier or `"none"` |
-| `decoration` | String | Actual stable decoration identifier or `"none"` |
+| `background` | String | Resolved stable background identifier or `"none"` |
+| `decoration` | String | Resolved stable decoration identifier or `"none"` |
 | `fonts` | Mapping | `bundle` identifier and `faces` mapping |
 | `colors` | Mapping | `text` palette identifier and `decoration` palette identifier or null |
-| `qr` | Mapping | Boolean `enabled` and `available` values |
-| `font_size_range` | Mapping | Positive integer `minimum` and `maximum`, with minimum not above maximum |
-| `insets` | Mapping | Nonnegative integer `left`, `right`, `top`, and `bottom` |
+| `qr` | Mapping | Exactly `enabled`, the canonical literary QR policy as a Boolean |
+
+`effective_presentation` contains the same artistic-choice fields plus the
+following output-preparation fields. Its values describe the resolved result
+after applying the destination's supported overrides, not the override
+requests:
+
+- `presentation_style`, `background`, `decoration`, `fonts`, and `colors`
+  record the actual effective choices. Suppressed background or decoration is
+  recorded as `"none"`.
+- `qr` contains exactly Boolean `enabled` and `available` fields. `enabled`
+  records whether QR policy permits rendering after destination suppression;
+  `available` records whether a QR was actually included after decoration
+  restrictions, placement validation, and output-geometry checks.
+- `font_size_range` and `insets` record the actual effective geometry values
+  used for this output in design-canvas units. When decoration is suppressed,
+  they record the global insets and minimum/maximum font sizes, not the
+  suppressed decoration's constraints.
+
+The effective mapping contains exactly `presentation_style`, `background`,
+`decoration`, `fonts`, `colors`, `qr`, `font_size_range`, and `insets`.
+
+`font_size_range` contains exactly:
+
+| Field | Type | Required value |
+|---|---|---|
+| `minimum` | Integer | Positive design-canvas pixel size |
+| `maximum` | Integer | Positive design-canvas pixel size, not less than `minimum` |
+
+`insets` contains exactly:
+
+| Field | Type | Required value |
+|---|---|---|
+| `left` | Integer | Nonnegative design-canvas pixels |
+| `right` | Integer | Nonnegative design-canvas pixels |
+| `top` | Integer | Nonnegative design-canvas pixels |
+| `bottom` | Integer | Nonnegative design-canvas pixels |
+
+Booleans are not integers for these fields. These are the effective
+design-canvas configuration values, not mapped presentation-canvas rectangles,
+fitted raster font sizes, or text positions. The output specification remains
+the requested raster identity.
 
 `fonts.faces` contains exactly the `quotation`, `source`, and `attribution`
 roles, each mapped to the actual resolved face identifier. `colors` contains
-palette identifiers, not resolved RGB values.
+palette identifiers, not resolved RGB values. Stable identifiers and resolved
+values are recorded rather than raw override requests, pools, fallback lists,
+asset bytes, absolute resource paths, or raw RGB values.
+
+The prepared document's `output_specification` and `effective_presentation`
+identify the prepared rendering requirements. `destination_id` remains null
+until publication finalization so compatible destinations can share prepared
+images and metadata. Completed metadata records the actual destination ID in
+the publication envelope. Do not infer the effective presentation from
+finished pixels or re-resolve it while finalizing metadata.
+
+The canonical presentation is persisted with the committed daily selection,
+independently of destination-specific prepared images. All destinations derive
+their effective presentation from that same canonical record. `canonical_presentation`
+must therefore remain unchanged when destination overrides differ.
 
 `content_entry` contains exactly one quotation: the complete committed
 quotation text, available source and attribution, presentation style, effective
@@ -96,8 +158,10 @@ self-contained and does not depend on the original content library.
 
 Resolved resource and palette identifiers are stable names; do not serialize
 asset bytes, absolute resource paths, raw RGB values, font files, executable
-payloads, output-specific geometry, crop coordinates, rendered text positions,
-or other transient raster-layout calculations. Reconstruction input is not a
+payloads, output-specific raster geometry, crop coordinates, rendered text
+positions, or other transient raster-layout calculations. The required
+effective design-canvas insets and font-size bounds above are configuration
+values, not output-specific raster geometry. Reconstruction input is not a
 serialized rendering plan.
 
 ## Actions and destination audience
@@ -144,8 +208,8 @@ the normal envelope and output specification, plus exactly:
 ```
 
 Transient metadata has no committed selection identity, display date, reveal
-stage, literary content, reconstruction data, resolved artistic-resource
-choices, or actions. Finalizing a transient does not inspect scheduled
+stage, literary content, canonical or effective presentation data, resolved
+artistic-resource choices, or actions. Finalizing a transient does not inspect scheduled
 preparation or current selection state. Information-view classification does
 not alter its existing scheduling, coordinator priority, duration, or
 acknowledgement behavior.
@@ -178,10 +242,12 @@ Viewer validation is context-independent and does not require the audience.
 No Python-specific persistence format or runtime/content-library dependency is
 used.
 
-Schema version `1` is shared by preparation and completed publication; there
-is no second completed-publication schema. A future incompatible format change
-requires an explicitly versioned schema rather than silently changing the
-meaning of existing fields.
+Schema version `1` is shared by preparation and completed publication. This
+version-1 contract directly distinguishes canonical and effective
+presentations; there is no second completed-publication schema, compatibility
+translation, legacy alias, migration mechanism, or prerelease version bump. A
+future incompatible format change requires an explicitly versioned schema
+rather than silently changing the meaning of existing fields.
 
 This metadata contract does not define the filesystem manifest. Its independent
 field names and validation rules are specified in

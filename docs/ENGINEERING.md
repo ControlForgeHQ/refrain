@@ -412,6 +412,11 @@ Apply only defaults established by the public configuration specification. Do no
 
 Unknown application-configuration fields and invalid optional values must be reported and handled according to the configuration contract without unnecessarily preventing operation.
 
+Destination `overrides` follow the stricter public contract in
+`docs/CONTENT_FORMAT.md`: reject unsupported keys, types, and values rather than
+handling them as ordinary ignored unknown fields or falling back to resource
+pools.
+
 When optional values are omitted, informational default notices should be consolidated where practical rather than generating excessive startup output.
 
 Discover bundled and user-owned assets when loading effective configuration, using package-resource APIs for bundled resources and category directories relative to the effective configuration for user assets. Do not monitor, modify, or generate files in user asset directories. Safely validate each manifest and resource independently; confine manifest references to their package and do not follow symlinks during discovery.
@@ -432,7 +437,14 @@ Do not treat missing or inaccessible sources, unsuccessful discovery, or an empt
 
 Preserve the selected content's presentation preferences in the daily selection record when needed to interpret or present the quotation. Those captured preferences are authoritative for the committed selection: do not reread the original content entry after commitment, and do not let later edits to it change the captured values.
 
-The semantic committed selection and its captured preferences do not change when source content or configuration files are edited. If a valid prepared cache cannot be reused, resolve the captured preferences against current application configuration and available assets during regeneration. Derived visual resources and rendering decisions are not frozen at commitment, so regenerated appearance may differ.
+The semantic committed selection, captured preferences, and persisted
+canonical presentation do not change when source content or configuration
+files are edited. If a valid prepared cache cannot be reused, reuse the
+canonical selections and apply current destination overrides, output
+specifications, and available assets during regeneration. Do not resolve the
+captured preferences or pools again for a committed selection. Derived
+destination geometry and rendering results are not frozen at commitment, so
+regenerated appearance may differ without changing canonical identity.
 
 Do not rewrite user-authored configuration or content files as part of validation.
 
@@ -490,15 +502,24 @@ A failure before publication leaves the previous operational state authoritative
 
 Do not require a global-history append to succeed before recognizing a committed selection.
 
+Resolve the canonical presentation only after the quotation selection is
+committed so visual-resource failure cannot prevent or repeat quotation
+selection. Attach the resolved canonical selections to that selection with the
+same complete-state atomic replacement mechanism. Publish them before
+preparing destination variants; a failed attachment leaves them unresolved,
+while a successful attachment is reused unchanged after restart. Attaching
+them does not advance the selection revision or alter repetition history or
+reveal progress.
+
 ### Recovery and prerelease state
 
 Persistent operational state must be validated when loaded. Incomplete, invalid, or integrity-check-failing state must not be silently accepted. An interrupted state publication must not produce a partially committed selection or inconsistent repetition history. A failure after selection commitment must preserve the committed quotation. Global-history failures must not prevent operational recovery, and global history must not be used to reconstruct repetition state or determine the next revision.
 
 Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. The snapshot's `actions` field is optional when reading this same version-1 schema so valid pre-action snapshots recover with an empty action sequence; newly written snapshots include the field. If present, persisted actions must be validated strictly, and invalid action data must follow ordinary persistent-state recovery errors rather than content-loader warning-and-drop behavior. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location, without silently replacing selected content or modifying the file. For the platform-standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a state path configured outside that standard location, it must identify the path and direct the operator to stop Refrain, back up the file, and manually quarantine or remove only that file; `--reset` does not manage custom paths.
 
-The current state need only preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, the complete ordered action sequence, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Preserve each action's type, declared audiences, and payload without consumer-specific interpretation. Do not persist derived rendering geometry, selected fonts or face identifiers, resolved colors, selected image resources, tinting decisions, QR placement, or layer transformation plans solely to reproduce pixels.
+The current state must preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, the complete ordered action sequence, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Once resolved, it must also preserve the canonical presentation's stable selections: presentation style, selected background and decoration identifiers or suppression, selected font bundle and role-specific face identifiers, resolved palette identifiers, and canonical QR policy. Attach and persist these canonical selections once for the committed daily selection, independently of destination-specific prepared artifacts. Preserve each action's type, declared audiences, and payload without consumer-specific interpretation. Do not persist destination override requests, destination-specific effective geometry, QR placement or module size, output dimensions, or layer transformation plans solely to reproduce pixels. Canonical presentation persistence must not change the committed quotation, selection revision, repetition history, or reveal progression.
 
-Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries. Valid current-format state must remain recoverable across restarts.
+Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries. Verify canonical selections are attached atomically, survive restart, and are reused unchanged across destinations and override changes. A failure before canonical attachment may retry canonical resolution; a successful attachment must never be independently reselected. Valid current-format state must remain recoverable across restarts.
 
 Global selection history is not included in the operational-state document. The configured state-file path must be absolute. A missing state file represents an uninitialized installation.
 
@@ -649,41 +670,46 @@ Do not accumulate unlimited obsolete prepared images during ordinary operation.
 
 #### Complete-set cache
 
-The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision, effective presentation requirements/compatible preparation groups, output specifications, and ordered reveal stages. Cache the resolved preparation metadata alongside its exact image collection using the existing versioned publication-metadata schema. Do not define a separate prepared-presentation descriptor, rendering snapshot type, or intermediate translation schema. The schema fields and preparation-stage validation contract are defined in [Publication Metadata](PUBLICATION_METADATA.md). Persist stage metadata and image integrity associations in the same complete-set transaction. The preparation metadata records the committed quotation and applicable semantic information plus the actual resolved artistic choices that produced the images, including resolved resource and palette identifiers, font bundle and role-specific faces, and effective QR behavior. Publication-event fields that do not yet exist remain explicitly nullable as that schema specifies; do not invent publication IDs or timestamps. Every required stage for every output specification and preparation group must be present with valid associated metadata. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate image/metadata association, collection completeness, and integrity, detecting missing, damaged, truncated, mismatched, or inconsistent files.
+The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision and persisted canonical presentation, effective presentation requirements/compatible preparation groups, output specifications, and ordered reveal stages. Cache the resolved preparation metadata alongside its exact image collection using the existing versioned publication-metadata schema. Do not define a separate prepared-presentation descriptor, rendering snapshot type, or intermediate translation schema. The schema fields and preparation-stage validation contract are defined in [Publication Metadata](PUBLICATION_METADATA.md). Persist stage metadata and image integrity associations in the same complete-set transaction. The preparation metadata records both the canonical presentation and the actual effective destination presentation used to produce the images, including resolved resource and palette identifiers, font bundle and role-specific faces, effective QR inclusion or suppression, and effective insets and font-size bounds. Publication-event fields that do not yet exist remain explicitly nullable as that schema specifies; do not invent publication IDs or timestamps. Every required stage for every output specification and preparation group must be present with valid associated metadata. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate image/metadata association, collection completeness, and integrity, detecting missing, damaged, truncated, mismatched, or inconsistent files.
 
 Reuse a complete compatible cached collection and its original resolved choices after restart. Do not repeat random resource selection or infer choices from finished pixels to reconstruct metadata for existing images. Missing, damaged, inconsistent, or incompatible metadata makes a reconstruction-capable collection unusable; regenerate the compatible images and metadata together from the committed selection, without changing its identity, history, or reveal progression. The metadata remains disposable derived presentation data.
 
 Associate variants with effective presentation requirements as well as output
-specification and selection revision. Destinations with different effective
-overrides must not reuse one another's cached images, even when their output
-specifications match. Keep matching requirements in a coherent preparation
-group so that random presentation-wide choices are resolved once and remain
-shared across that group's output specifications. This distinguishes required
-override inputs without requiring a fingerprint of every resolved rendering
-decision or every installed asset.
+specification, selection revision, and the persisted canonical presentation.
+Destinations with different effective overrides must not reuse one another's
+cached images, even when their output specifications match. Keep matching
+requirements in a coherent preparation group so that the canonical artistic
+selections remain shared across that group's output specifications. A change
+to destination overrides changes effective requirements and cannot change or
+reselect the canonical presentation. This distinguishes required override
+inputs without requiring a fingerprint of every resolved rendering decision
+or every installed asset.
 
 In the current Version 0.1 model, reuse a complete valid set during ordinary
 operation without checking whether configuration, fonts, palette, or image
 assets have changed. If the set is absent, incomplete, damaged, or otherwise
-unusable, resolve current configuration and resources and prepare the complete
-required variant collection together. Publish the replacement safely only
-after the complete new collection is ready. A replacement may look different
-from the prior set.
+unusable, use the persisted canonical selections with current destination
+overrides, output specifications, and available resources to prepare the
+complete required variant collection together. Resolve canonical selections
+only if they were not yet durably attached to the committed selection.
+Publish the replacement safely only after the complete new collection is
+ready. A replacement may look different from the prior set.
 
 Changes to effective destination overrides change the required variant
 identity, so an image prepared for different requirements must not be treated
 as a cache hit. Changes to installed assets or rendering behavior alone do not
 promise archival reproduction; only missing or invalid required artifacts
 trigger regeneration. Regenerate a missing or invalid compatible collection's
-images and metadata together, without changing committed selection or reveal
+images and metadata together from the persisted canonical presentation,
+without changing committed selection, canonical selections, or reveal
 progression. Preserve and reuse other valid preparation groups when only one
 group is incompatible or incomplete.
 
 ### Prerelease implementation simplification
 
-Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes authoritative daily-selection fields for resolved artistic choices, artifact identities and fingerprints over visual decisions, cache invalidation when settings or assets change, regeneration rules that preserve old visual choices, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration.
+Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes artifact identities and fingerprints over every visual decision, cache invalidation when settings or assets change, regeneration rules that preserve old destination-specific pixels, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration. Do not remove the required canonical artistic selections from authoritative daily-selection state; persist only their stable identifiers and policy, not a destination-specific rendering plan or raster geometry.
 
-Retain the machinery needed to atomically commit selected content and scheduling state, protect repetition identity and monotonic reveal progress, associate complete image and publication-metadata collections with the right selection, preparation group, output specifications, and stages, detect damaged cache data, safely replace a complete set, reuse it during ordinary operation, and regenerate compatible images and metadata together after cache failure. Resolved artistic choices belong in the required derived preparation metadata, not authoritative daily-selection state. Do not introduce a separate rendering snapshot or metadata translation layer.
+Retain the machinery needed to atomically commit selected content and scheduling state, attach canonical artistic selections once without changing selection identity, protect repetition identity and monotonic reveal progress, associate complete image and publication-metadata collections with the right canonical selection, effective preparation group, output specifications, and stages, detect damaged cache data, safely replace a complete set, reuse it during ordinary operation, and regenerate compatible images and metadata together after cache failure. Canonical artistic selections belong in authoritative daily-selection state; effective destination choices belong in derived preparation metadata. Do not introduce a separate rendering snapshot or metadata translation layer.
 
 #### Artifact publication and cleanup
 
@@ -852,7 +878,7 @@ Avoid unnecessary upscaling of source raster resources and unnecessary full-canv
 
 ### Shared presentation and viewer
 
-Runtime and `refrain-viewer` must call the same presentation-construction, preference-resolution, geometry, QR, and image-preparation operations. Keep precedence and fallback rules authoritative in shared presentation machinery; represent optional viewer choices with a typed override model and apply them there, not in a second viewer-side resolver. Viewer font-size bounds must use the shared configured-bound resolution, design-to-presentation scaling, and fitting path. Normal runtime preparation supplies no viewer overrides.
+Runtime and `refrain-viewer` must call the same presentation-construction, preference-resolution, geometry, QR, and image-preparation operations. Keep precedence and fallback rules authoritative in shared presentation machinery; represent optional viewer choices with a typed override model and apply them there, not in a second viewer-side resolver. Runtime preparation resolves and persists the canonical presentation once, then applies each destination's restricted configuration overrides in shared preparation before rendering. Viewer overrides remain a separate local interface. Viewer font-size bounds must use the shared configured-bound resolution, design-to-presentation scaling, and fitting path. Normal runtime preparation supplies no viewer overrides.
 
 For local inspection and export, the viewer selects a validated content entry and one 1-based quotation directly, without eligibility, priority, repetition, scheduling, or selection commitment. Its built-in `@preview` fixture belongs only to the viewer. It resolves one viewer-owned output specification, uses the same design/presentation/output pipeline, and writes or displays the final output image without using configured display backends. In push mode, it instead renders against runtime-discovered destination specifications and may produce multiple unique output variants.
 
@@ -872,15 +898,15 @@ Validation must establish that each registered file exists, is readable, and can
 
 Validate the syntax of content-entry face preferences during content-library loading. Report a valid but unavailable winning face when the selected bundle and preferences are resolved for a complete image preparation.
 
-Use a controlled random source for deterministic testing of automatic font selection.
+Use a controlled random source for deterministic testing of canonical automatic font selection.
 
-Select one font bundle during image preparation using content-entry, decoration, and default-pool precedence. Resolve each preference only when reached; try distinct candidates from a pool in random order without replacement, exhausting that level before proceeding. Never merge candidates across levels. Then resolve each literary role within the selected bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit preference applies and that pool is empty, preparation fails with an actionable diagnostic. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
+Select one canonical font bundle using content-entry, decoration, and default-pool precedence, and persist the resolved bundle and faces with the canonical presentation. Resolve each preference only when reached; try distinct candidates from a pool in random order without replacement, exhausting that level before proceeding. Never merge candidates across levels. Then resolve each literary role within the selected bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit content-entry or decoration preference applies and that pool is empty, canonical resolution fails with an actionable diagnostic. A destination `overrides.font` replaces the canonical bundle with exactly one validated registered identifier; it must not use a pool, fallback list, or random selection. Resolve role faces for that effective bundle using the existing face-preference rules. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
 
-Do not store resolved font choices, font bytes, filesystem paths, or content digests in authoritative daily-selection state. Preserve the resolved bundle and face identifiers in the associated derived preparation metadata using the publication metadata schema. Resolve current preferences once per complete preparation and use those faces consistently for all generated stages; finalization must reuse these captured identifiers.
+Do not store font bytes, filesystem paths, or content digests in authoritative daily-selection state. Persist the canonical resolved bundle and face identifiers as stable selections; record both canonical and effective resolved identifiers in the associated preparation metadata using the publication metadata schema. Reuse the persisted canonical choices across restarts and destinations. Finalization must reuse the prepared metadata's captured effective identifiers.
 
 Do not independently select fonts for individual reveal stages.
 
-Reuse a valid complete prepared-image set without resolving fonts, even when a selected face or font file has changed or become unavailable. If regeneration is needed, resolve current explicit preferences and the effective default pool deterministically; do not use a separate emergency bundled-font pool. Report an actionable preparation error if the selected font or required regular face cannot be loaded.
+Reuse a valid complete prepared-image set without resolving fonts, even when a selected face or font file has changed or become unavailable. If regeneration is needed, reuse the persisted canonical font and face selections; apply any explicit destination font override without consulting the canonical selection pools again. Do not use a separate emergency bundled-font pool. Report an actionable preparation error if the selected effective font or required regular face cannot be loaded.
 
 Font errors during regeneration must not change the committed quotation, content identity, reveal schedule, or reveal progression.
 
@@ -898,7 +924,7 @@ Use a controlled random source for testing equal-probability selection among dis
 
 Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base on the design canvas, preserving RGBA transparency. Scale the completed graphical composition to the presentation canvas as specified in `docs/ARCHITECTURE.md`, then reuse preparation-wide results for every stage where appropriate. Use an appropriate high-quality Pillow resampling filter when dimensions differ, retain deterministic geometry, and close decoded resources promptly.
 
-Daily-image preparation accepts the selected content, effective reveal stages, and current resource registries. It resolves a background from current preferences or pool configuration for the whole generated set. A supplied empty registry represents unavailable resources and applies the paper-white fallback policy.
+Canonical resolution selects a background from the captured content preferences or effective pool once and persists its stable identifier. Daily-image preparation reuses that canonical choice for all destinations and applies only configured destination suppression; a supplied empty registry represents unavailable resources and applies the documented paper-white fallback without reselecting a different canonical background.
 
 Treat a standalone PNG background as one centered-cover image. For packaged backgrounds, apply each layer's declared transformation; `method` is optional and its category-specific default is `cover`. Support `contain`, `cover`, `nine-slice`, and `anchor` as defined in [Content Format](CONTENT_FORMAT.md#discovered-backgrounds). Do not require centered cover for a packaged layer that declares another valid method.
 
@@ -908,7 +934,7 @@ When preparation cannot resolve or decode an optional background, report a warni
 
 Decoration identifiers, the initial ordered-layer manifest schema, and preference metadata are defined in [Decoration registry](CONTENT_FORMAT.md#decoration-registry). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
 
-Resolve presentation-wide choices such as decoration, font, background, palette, and layer preferences consistently for a complete preparation, while resolving output-specification-dependent insets, transforms, and raster results for each specification as defined in `docs/ARCHITECTURE.md`. Decoration-layer `method` is optional and defaults to `contain`; support the manifest methods and parameters in [Content Format](CONTENT_FORMAT.md#decoration-manifests), including constrained anchor alignment. Resolve effective QR availability separately for each output specification before selecting its conditional decoration layers. Keep selection outside rendering; compose each resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
+Resolve canonical presentation-wide choices such as decoration, font, background, palette, and layer preferences once and persist them before destination preparation. Apply restricted destination overrides to derive and validate an effective presentation before rendering; resolve output-specification-dependent insets, transforms, and raster results for each specification as defined in `docs/ARCHITECTURE.md`. When decoration is suppressed, use global presentation insets and font-size bounds rather than its geometry. Decoration-layer `method` is optional and defaults to `contain`; support the manifest methods and parameters in [Content Format](CONTENT_FORMAT.md#decoration-manifests), including constrained anchor alignment. Resolve effective QR availability separately for each output specification before selecting its conditional decoration layers. Keep selection outside rendering; compose each resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
 
 Test `contain`, centered `cover`, nine-slice, and anchor methods directly on the design canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd dimensions, clipping/alignment, and matching-size sources that need no transform. Test nine-slice source boundaries, 1:1 preservation of configured source-pixel thicknesses on the design canvas, edge `stretch` and centered `crop`, center stretching, and exact shared boundaries. For example, a 1920 × 1200 source with 20-pixel slices on a 3840 × 2400 design canvas must retain 20-pixel edge/corner thicknesses. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
 
@@ -918,7 +944,7 @@ Image preparation accepts the effective decoration registry independently of the
 
 ### QR composition
 
-Follow the two-phase QR dependency in `docs/ARCHITECTURE.md`: resolve design-space placement, map the allocation to presentation-canvas pixels, and evaluate effective availability before choosing `always`, `qr`, or `no-qr` decoration layers. Availability includes presentation-level policy, selected-decoration `qr_ready`, valid in-bounds placement, and at least one presentation pixel per QR module. Rasterization and composition happen later on the presentation canvas, after literary rendering. Do not decide availability from policy and `qr_ready` alone or make a second decision in the decoration renderer.
+Follow the two-phase QR dependency in `docs/ARCHITECTURE.md`: resolve design-space placement, map the allocation to presentation-canvas pixels, and evaluate effective availability before choosing `always`, `qr`, or `no-qr` decoration layers. Availability includes the canonical presentation-level policy unless the destination's `qr: none` override suppresses it, selected-decoration `qr_ready`, valid in-bounds placement, and at least one presentation pixel per QR module. QR suppression is destination-local and must not mutate canonical policy or affect other destinations. Rasterization and composition happen later on the presentation canvas, after literary rendering. Do not decide availability from policy and `qr_ready` alone or make a second decision in the decoration renderer.
 
 Test default and all directional placements, per-axis defaults, single-axis centering, conflicts, malformed values (including booleans), design-canvas bounds failures, edge-rounding and odd centering cases, and the supported canvases. Verify effective availability under each policy/readiness/placement/raster-viability condition before conditional-layer selection, then verify QR rasterization and composition on the presentation canvas after literary rendering. Cover exact Version 0.1 encoding, a complete four-module quiet zone, opaque black-and-white pixels, and consistent placement across reveal stages. Test intentional policy and `qr_ready` suppression without warnings, invalid-placement and insufficient-raster-size suppression with warnings, and preservation of the selected decoration and literary preparation. Do not perform automatic collision avoidance or alter literary insets or artwork to reserve QR space. The information view remains independent of literary QR behavior.
 
@@ -984,7 +1010,7 @@ If the complete composition cannot fit within the supported presentation region,
 
 ### Preparation and validation
 
-For each required output specification, prepare its complete set of reveal-stage images from the durable daily selection and current presentation inputs. Use that specification's complete fully revealed literary composition to determine geometry for every stage in its set; do not require different specifications to share raster geometry.
+For each required output specification, prepare its complete set of reveal-stage images from the durable daily selection and persisted canonical presentation, applying current destination overrides and output requirements. Use that specification's complete fully revealed literary composition to determine geometry for every stage in its set; do not require different specifications to share raster geometry.
 
 Resolve the complete composition layout once per output specification and reuse it for every required cumulative visibility stage of that specification.
 
@@ -1062,12 +1088,17 @@ The initial implementation needs one application-owned information-view layout. 
 
 Use the shared versioned schema and exact field contract in
 [Publication Metadata](PUBLICATION_METADATA.md) for both prepared and
-completed documents. Keep finalization, validation, parsing, and serialization
-hardware-independent and based on small JSON-compatible values. Use the
-standard-library JSON module; serialize deterministically as UTF-8 JSON, reject
-duplicate object keys and nonstandard numeric values, and validate both
-preparation and completed stages. Do not use pickle, executable payloads, raw
-resource paths, resource bytes, RGB values, or raster-layout calculations.
+completed documents. Scheduled reconstruction metadata must preserve the
+canonical presentation separately from the effective destination presentation.
+The canonical stable selections come from authoritative operational state;
+effective metadata records the actual resolved choices, QR inclusion or
+suppression, and geometry used to prepare the destination image. Keep
+finalization, validation, parsing, and serialization hardware-independent and
+based on small JSON-compatible values. Use the standard-library JSON module;
+serialize deterministically as UTF-8 JSON, reject duplicate object keys and
+nonstandard numeric values, and validate both preparation and completed
+stages. Do not use pickle, executable payloads, raw resource paths, resource
+bytes, RGB values, or raster-layout calculations.
 
 The application-level finalizer must receive the publication-event identity
 and timestamp, destination identity, actual output specification, and the
@@ -1080,19 +1111,22 @@ that public output contains no private-only actions in any nested content.
 Transient documents must contain no scheduled association, reconstruction
 data, or actions.
 
-Automated tests must cover schema-stage validation, Unicode JSON round trips,
-timezone-aware publication timestamps, exact destination/output association,
-public/private filtering and privacy leakage, order and duplicate preservation,
-transient metadata, and shared-preparation immutability. These operations must
-run without a resident process, display hardware, network service, systemd, or
-publication directory. Filesystem publication, manifest handling, and viewer
-reconstruction are separate capabilities; viewer reconstruction consumes this
-schema through the shared renderer, and the filesystem writer validates this
-completed metadata against its independent manifest contract. The resident
-`publish` backend supplies the image and exact compatible preparation metadata
-to the finalizer and writer; hardware-independent end-to-end coverage verifies
-manifest integrity, audience isolation, transient behavior, and viewer
-reconstruction independently of the content library.
+Automated tests must cover schema-stage validation, canonical/effective
+metadata separation and immutability, effective-value representation for every
+override including decoration-suppression geometry and QR suppression,
+Unicode JSON round trips, timezone-aware publication timestamps, exact
+destination/output association, public/private filtering and privacy leakage,
+order and duplicate preservation, transient metadata, and shared-preparation
+immutability. These operations must run without a resident process, display
+hardware, network service, systemd, or publication directory. Filesystem
+publication, manifest handling, and viewer reconstruction are separate
+capabilities; viewer reconstruction consumes this schema through the shared
+renderer, and the filesystem writer validates this completed metadata against
+its independent manifest contract. The resident `publish` backend supplies
+the image and exact compatible preparation metadata to the finalizer and
+writer; hardware-independent end-to-end coverage verifies manifest integrity,
+audience isolation, transient behavior, and viewer reconstruction independently
+of the content library.
 
 ### Viewer publication reconstruction
 
@@ -1648,7 +1682,7 @@ serialization must require an audience and reject actions not visible to it.
 Test that prepared metadata cannot be serialized or consumed as a completed
 publication and that blank publication IDs are rejected consistently.
 
-Test destination visual post-processing independently of backend construction. Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output. Verify the Waveshare publication path quantizes exactly once, passes palette indices unchanged through driver rotation and 4-bit packing, and leaves the original RGB image unchanged. Verify the conversion can be imported and exercised without GPIO/SPI dependencies and that the driver and viewer use the same conversion. These tests establish software behavior only, not physical panel validation.
+Test destination override validation and resolution, including unsupported properties and types, suppression-only resources, explicit single-font and single-color identifiers, rejection of pools and fallback lists, and `qr: none` rather than a boolean. Verify that overrides are applied before rendering, do not mutate canonical state, and do not trigger reselection for another destination or after restart. Cover decoration suppression restoring global insets and font bounds, background suppression retaining decoration geometry, effective-value validation, and prepared metadata describing actual effective values rather than only override requests. Test destination visual post-processing independently of backend construction. Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output. Verify the Waveshare publication path quantizes exactly once, passes palette indices unchanged through driver rotation and 4-bit packing, and leaves the original RGB image unchanged. Verify the conversion can be imported and exercised without GPIO/SPI dependencies and that the driver and viewer use the same conversion. These tests establish software behavior only, not physical panel validation.
 
 Include an aspect-mismatched output specification with declared aspect 4:3 and requested resolution 1600 × 1190. Assert that the design canvas is 3200 × 2400 and background/decorative composition occurs there; literary geometry and font fitting, QR viability and rasterization, and diagnostic overlays resolve on the 1596 × 1197 presentation canvas; and only the completed image is resized to the 1600 × 1190 output image. This case must not be replaced by tests where presentation-canvas and output-image dimensions happen to match. Also exercise exact-aspect supported configurations. Verify deterministic half-up rounding and rejection of degenerate geometry.
 
