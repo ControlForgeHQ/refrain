@@ -158,6 +158,8 @@ The installed distribution supplies `config.default.yaml` as an editable startin
 
 Identifiers and enumerated values are case-sensitive. Missing, null, empty, non-string, or unsupported audiences are errors. Invalid or duplicate destination IDs and capacity excesses are errors. `all` is an ordinary valid ID; `@all` is reserved for CLI publication selection and does not satisfy the ID syntax.
 
+For `publish` destinations, IDs must additionally avoid Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, and `LPT1`–`LPT9`), regardless of case. IDs of different `publish` destinations must also be unique under case-insensitive comparison, ensuring their publication directories remain distinct on case-insensitive filesystems.
+
 | Destination type | Maximum configured destinations | Default aspect ratio | Default resolution | Explicit geometry |
 |---|---:|---|---|---|
 | `window` | 1 | `16:9` | `[1920, 1080]` | Supply both fields or neither. |
