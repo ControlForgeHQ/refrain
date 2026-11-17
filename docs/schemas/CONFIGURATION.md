@@ -1,12 +1,6 @@
 # Application Configuration
 
-This document defines Refrain's Version 0.1 application-configuration YAML interface: field names, types, required values, defaults, supported values, and validation constraints.
-
-Configuration selects destinations, storage locations, scheduling times, presentation defaults, and resources. It does not contain content entries, asset manifests, publication metadata, or publication manifests.
-
-[Architecture](../ARCHITECTURE.md) owns runtime behavior, selection and pool-expansion algorithms, precedence, scheduling, rendering, persistence, recovery, and backend lifecycles. [Engineering](../ENGINEERING.md) owns implementation and test requirements. [CLI](../CLI.md) owns configuration-file selection and command syntax.
-
-During the schema split, [Content and Configuration Format](CONTENT_FORMAT.md) remains available for content-entry and asset-package definitions. Separate `CONTENT.md` and `ASSETS.md` documents are planned; publication metadata and manifests will eventually be consolidated into `PUBLICATION.md`. Until then, see [Publication Metadata](PUBLICATION_METADATA.md) and [Publication Manifest](PUBLICATION_MANIFEST.md).
+This document specifies Refrain's application-configuration YAML format, including destinations, storage, scheduling, presentation settings, resource selection, and validation requirements.
 
 ## YAML document
 

@@ -1,12 +1,6 @@
 # Content Entries
 
-This document defines Refrain's Version 0.1 content-entry YAML interface: field names, types, required values, defaults, supported values, and validation constraints.
-
-Each content file contains exactly one entry. An entry contains one or more quotations and the metadata, actions, eligibility, priority, and presentation preferences shared by all of them. A quotation requiring different treatment belongs in a separate entry.
-
-[Application Configuration](CONFIGURATION.md) owns application-wide settings, palettes, and named-pool declarations. [Architecture](../ARCHITECTURE.md) owns runtime interpretation, preference resolution, selection, scheduling, commitment, rendering, and recovery. [Engineering](../ENGINEERING.md) owns implementation and testing requirements. [CLI](../CLI.md) owns command syntax and viewer overrides.
-
-Asset packages and manifests remain in [Content and Configuration Format](CONTENT_FORMAT.md#font-registry) pending a separate `ASSETS.md`. Publication formats remain in [Publication Metadata](PUBLICATION_METADATA.md) and [Publication Manifest](PUBLICATION_MANIFEST.md) pending consolidation into `PUBLICATION.md`. Those planned documents are not prerequisites for using this schema.
+This document specifies the YAML format for Refrain content entries, including quotations, metadata, actions, presentation preferences, eligibility rules, reveal overrides, and validation requirements.
 
 ## YAML document
 
@@ -83,14 +77,14 @@ Use short, descriptive, stable identifiers, such as `"amazing-grace"`. File name
 
 Quotation strings retain parsed Unicode content, punctuation, and intended line breaks. There is no project-defined maximum quotation count or arbitrary quotation-length limit. A valid quotation may still fail presentation validation or image preparation if it cannot fit the supported layout. Quotation identity and repetition tracking are defined by [Architecture](../ARCHITECTURE.md#quotation-identity), separately from displayed text.
 
-`source` identifies where a quotation originates. `attribution` identifies the person, group, or other entity to which it is attributed. Both are optional; each must be a nonempty string when supplied. They are not restricted to song titles or artists:
+`source` identifies where a quotation originates. `attribution` identifies the person, group, or other entity to which it is attributed. Both are optional; each must be a nonblank string when supplied, containing at least one non-whitespace character. Leading and trailing whitespace in otherwise valid metadata is preserved without trimming or normalization. They are not restricted to song titles or artists:
 
 ```yaml
 source: "A Book Title"
 attribution: "An Author"
 ```
 
-Omitted metadata has no visible field to reveal. A null or empty string does not express absence; omit the field instead.
+Omitted metadata has no visible field to reveal. A null, empty, or whitespace-only string does not express absence; omit the field instead.
 
 ## Actions
 
@@ -160,7 +154,7 @@ A syntactically valid but unavailable font, background, or decoration preference
 
 ### Font
 
-`font` accepts one nonempty string: a font-bundle identifier or a font-pool reference.
+`font` accepts one nonblank string matching the shared resource-identifier or font-pool-reference syntax: a font-bundle identifier or a font-pool reference.
 
 ```yaml
 font: "lora"
@@ -172,7 +166,7 @@ Alternatively:
 font: "@literary"
 ```
 
-A registered font need not belong to the default pool to be preferred explicitly. There is no list form, direct font-file path interface, or `none` suppression value. An empty string, null, or non-string value is invalid.
+A registered font need not belong to the default pool to be preferred explicitly. There is no list form or direct font-file path interface. The reserved value `none` is not a font preference and invalidates the entry. Empty, whitespace-only, malformed, null, and non-string values are also invalid. A syntactically valid but unavailable font identifier does not invalidate the entry; normal resource fallback applies.
 
 The documented resolution order is the entry preference, selected decoration preference, then automatic selection from the effective default font pool. A usable explicit entry or decoration preference does not require a usable default pool. Availability checks, warnings, font loading, and fallback are owned by [Architecture](../ARCHITECTURE.md#font-selection).
 
@@ -251,7 +245,7 @@ Alternatively:
 text_color: ["black", "@neutral"]
 ```
 
-Direct RGB values and RGB component lists are unsupported. Palette availability is evaluated during preparation. Unknown, malformed, or unavailable preference members are diagnosed and excluded; a preference with no usable members falls through without invalidating the entry. Duplicate identifiers do not add weight.
+A declaration must be a string or a nonempty sequence. An invalid outer structure, including null, an empty sequence, a mapping, or another unsupported type, invalidates the entry. Within a structurally valid sequence, invalid member types, malformed identifiers, direct RGB literals, and unavailable identifiers are diagnosed and excluded individually without invalidating the entry. Valid members remain usable. If no usable members remain, the preference falls through to the next level. Duplicate identifiers do not add weight. Palette availability is evaluated during preparation.
 
 The documented fallback order is entry, selected background, selected decoration, effective global text-color pool, then built-in `black`. Candidates from different levels are not combined. Runtime selection is owned by [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection).
 
@@ -263,7 +257,7 @@ The documented fallback order is entry, selected background, selected decoration
 decoration_color: ["black", "@muted"]
 ```
 
-It uses the shared palette but an independent pool namespace. Direct RGB values and RGB component lists are unsupported. Invalid or unavailable members do not invalidate the entry; they are diagnosed and excluded. Duplicate identifiers do not add weight.
+It uses the shared palette but an independent pool namespace. The same structural and member-level validation rules as `text_color` apply: an invalid outer structure invalidates the entry, while invalid or unavailable individual candidates are diagnosed and excluded without invalidating the entry. A preference with no usable candidates falls through. Duplicate identifiers do not add weight.
 
 The documented fallback order is entry, selected background, selected decoration, effective global decoration-color pool, then built-in `black`, without combining levels. This preference affects only effectively tintable selected decoration layers; it never recolors the background. No decoration color is resolved when no layer is effectively tintable. Runtime tinting and selection belong to [Architecture](../ARCHITECTURE.md#decoration-tinting).
 
@@ -472,7 +466,9 @@ A partial library is usable when discovery and loading complete and at least one
 
 Diagnostics identify the affected file and field or entry, where applicable, and explain whether an item was rejected, excluded, or ignored. Warnings must be actionable and must not repeatedly flood ordinary logs.
 
-For content diagnostics, `INFO` denotes application of a documented default because an optional value was omitted. `WARNING` identifies a recoverable problem or rejected item when usable content remains available. `ERROR` identifies an unsatisfied required library condition. Logging, notice consolidation, and process-output requirements belong to [Engineering](../ENGINEERING.md#logging-and-diagnostics). Application-configuration diagnostic behavior is defined separately in [Application Configuration](CONFIGURATION.md#validation-and-compatibility).
+Omitted optional content-entry fields use their documented defaults or absence semantics silently. No informational diagnostic is required or emitted solely because an optional field was omitted.
+
+For content diagnostics, `INFO` denotes useful operational information that does not indicate a configuration or content problem. `WARNING` identifies a recoverable problem or rejected item when usable content remains available. `ERROR` identifies an unsatisfied required library condition. Logging and process-output requirements belong to [Engineering](../ENGINEERING.md#logging-and-diagnostics). Application-configuration diagnostic behavior is defined in [Application Configuration](CONFIGURATION.md#validation-and-compatibility).
 
 Repetition-history cleanup, the effect of rejected entries on repetition identity, successful-selection commitment, and independence of an already committed selection belong to [Architecture](../ARCHITECTURE.md#selection-pools-and-repetition). A library-level failure must not be treated as an intentionally empty library for cleanup.
 
