@@ -14,7 +14,7 @@ refrain [--config PATH]
 
 With no mode option, `refrain` starts the normal resident runtime. `--config PATH` selects the application configuration; when omitted, the standard Refrain configuration path is used. The selected configuration file must exist. Normal startup does not substitute the packaged default configuration, initialize installation directories, or copy sample content.
 
-The resident owns its configured backends and display resources. A second normal or demo invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). Numeric exit codes and a complete list of accepted normal-mode options are not specified here.
+The resident owns its configured backends and display resources. A second normal or demo invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). `--config` is the only normal-mode option apart from `-h`/`--help`, which displays command help and exits. Orderly shutdown returns exit status `0`; reported startup or runtime errors return `1`. Invalid arguments or conflicting modes return `2`.
 
 ### Accelerated demo
 
@@ -22,9 +22,9 @@ The resident owns its configured backends and display resources. A second normal
 refrain [--config PATH] --demo SECONDS
 ```
 
-`--config PATH` selects the application configuration for the demo, or the standard configuration is used when omitted. `SECONDS` requests the minimum monotonic viewing interval for each reveal stage. Demo is a standalone backend-owning mode, but it uses fresh temporary session storage rather than configured or standard production persistence. It uses one eligibility display date for the session, suppresses the startup information view, and continues stage progression when destinations are unavailable, subject to preparation succeeding. The resident ownership rule prevents concurrent normal or demo runtimes.
+`--config PATH` selects the application configuration for the demo, or the standard configuration is used when omitted. `SECONDS` must be a positive finite number of seconds, including fractional values such as `0.125`; zero, negative values, NaN, infinity, and nonnumeric values are rejected. It requests the minimum monotonic viewing interval for each reveal stage. Demo is a standalone backend-owning mode, but it uses fresh temporary session storage rather than configured or standard production persistence. It uses one eligibility display date for the session, suppresses the startup information view, and continues stage progression when destinations are unavailable, subject to preparation succeeding. The resident ownership rule prevents concurrent normal or demo runtimes.
 
-See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progression and [Engineering](ENGINEERING.md#demo-session-ownership-and-timing) for lifecycle and validation requirements. The public contract does not establish the numeric grammar or bounds for `SECONDS` or demo exit codes; do not infer them from implementation details.
+See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progression and [Engineering](ENGINEERING.md#demo-session-ownership-and-timing) for lifecycle and validation requirements. Demo continues until shutdown. Orderly shutdown returns `0`; reported startup or runtime errors return `1`, and invalid arguments return `2`.
 
 ### Initialize
 
@@ -34,7 +34,7 @@ refrain --initialize
 
 Initialization is noninteractive and repeatable. It creates or reuses the standard per-user installation, including the standard publication root without replacing existing contents, and does not start the resident runtime. It operates on standard installation paths; runtime storage settings do not redirect it. A conflicting resident owner prevents the operation and produces an actionable diagnostic. Successful initialization leaves existing user configuration and content intact according to the [installation contract](ARCHITECTURE.md#application-paths-and-initialization); failures report the affected operation and path.
 
-The public contract does not establish whether `--config PATH` is accepted alongside `--initialize`; the selected configuration does not redirect the standard installation targets. Initialization's success exit code and exact diagnostic wording are not specified here.
+`--config PATH` cannot be combined with `--initialize`. Successful initialization returns `0`; a reported initialization failure returns `1`, and invalid arguments return `2`.
 
 ### Reset
 
@@ -42,9 +42,9 @@ The public contract does not establish whether `--config PATH` is accepted along
 refrain --reset
 ```
 
-Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. It requires the exact confirmation described by [Engineering](ENGINEERING.md#installation-approach); there is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset preserves publication storage and does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Architecture](ARCHITECTURE.md#application-paths-and-initialization).
+Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. Both input and output must be interactive terminals, and the confirmation must be exactly `RESET` (case-sensitive, without extra spaces). There is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset preserves publication storage and does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Architecture](ARCHITECTURE.md#application-paths-and-initialization).
 
-The public contract does not establish whether `--config PATH` is accepted alongside `--reset`; configuration selection does not redirect the standard deletion targets. Exact prompt text, exit codes, and diagnostic wording are not specified here.
+`--config PATH` cannot be combined with `--reset`. Successful reset returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`.
 
 ### Purge
 
@@ -52,9 +52,9 @@ The public contract does not establish whether `--config PATH` is accepted along
 refrain --purge
 ```
 
-Purge is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. It requires the exact confirmation described by [Engineering](ENGINEERING.md#installation-approach); there is no noninteractive bypass. Cancellation leaves the installation unchanged. Purge includes the standard user assets and publication root but does not follow configured custom paths. Stop any independent consumer that may read publication data before purging it.
+Purge is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. Both input and output must be interactive terminals, and the confirmation must be exactly `PURGE REFRAIN` (case-sensitive, with one space between the words and no extra spaces). There is no noninteractive bypass. Cancellation leaves the installation unchanged. Purge includes the standard user assets and publication root but does not follow configured custom paths. Stop any independent consumer that may read publication data before purging it.
 
-The public contract does not establish whether `--config PATH` is accepted alongside `--purge`; configuration selection does not redirect the standard deletion targets. Exact prompt text, exit codes, and diagnostic wording are not specified here. See [Architecture](ARCHITECTURE.md#application-paths-and-initialization) and [Engineering](ENGINEERING.md#filesystem-locations) for deletion scope and safety.
+`--config PATH` cannot be combined with `--purge`. Successful purge returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`. See [Architecture](ARCHITECTURE.md#application-paths-and-initialization) and [Engineering](ENGINEERING.md#filesystem-locations) for deletion scope and safety.
 
 ## Resident runtime control
 
@@ -66,7 +66,7 @@ Refresh republishes the runtime's current scheduled presentation and does not re
 
 Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all participating destinations completes or fails. Exit status zero means every included destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
 
-Refresh is a standalone control-client mode and uses the already-running resident's configuration and destinations; it does not select or start a runtime configuration. The public contract does not establish whether `--config PATH` is accepted alongside `--refresh`.
+Refresh is a standalone control-client mode and uses the already-running resident's configuration and destinations; it does not select or start a runtime configuration. `--config PATH` cannot be combined with `--refresh`. Refresh failures return `1`; invalid arguments or conflicting modes return `2`. An unconfirmed outcome means publication may have occurred; do not retry automatically.
 
 ## Presentation viewer
 
@@ -105,7 +105,7 @@ With `--image`, presentation-generation controls (`--config`, `--entry`, font an
 --config PATH
 ```
 
-`--config` selects the application configuration used by the viewer for content, assets, preferences, and presentation rendering. When omitted, the viewer uses the standard Refrain configuration. In push mode, it continues to control these viewer-owned rendering inputs; it never determines or overrides the resident runtime's configured destination topology or output specifications.
+`--config` selects the application configuration used by the viewer for content, assets, preferences, and presentation rendering. When omitted, the viewer uses the standard Refrain configuration. The selected configuration file must exist and pass validation. Finished-image input and destination discovery do not load it. In push mode, it continues to control these viewer-owned rendering inputs; it never determines or overrides the resident runtime's configured destination topology or output specifications.
 
 ### Destination discovery
 
@@ -152,7 +152,7 @@ The following options explicitly override a presentation choice:
 | `--max-font-size PIXELS` | Positive integer design-canvas pixels; upper bound for quotation fitting. |
 | `--debug-layout` | Enable presentation layout diagnostics. |
 
-`--qr` and `--no-qr` are mutually exclusive. When both font-size bounds are supplied, the minimum may not exceed the maximum.
+`--qr` and `--no-qr` are mutually exclusive. Each supplied font-size bound replaces only that bound; the other remains inherited from configuration, or from publication metadata during reconstruction. The effective minimum may not exceed the effective maximum, even when only one bound is supplied.
 
 An explicit viewer override is strict. A `@POOL` override selects one candidate from that category's expanded pool; if the pool has no selectable candidates, viewer preparation fails with an actionable diagnostic rather than silently falling back. If an explicitly requested registered resource, face, color, style, or other value cannot be used, viewer preparation likewise fails instead of consulting a lower-precedence preference or default pool. Properties not explicitly overridden continue to use normal Refrain preference resolution and pool selection. `none` explicitly suppresses only the background or decoration, as shown above.
 
@@ -182,8 +182,8 @@ refrain-viewer --publication publication.json \
 The viewer requires a valid completed publication document and accepts only
 `publication_type: scheduled`. It rejects preparation-stage, incomplete,
 malformed, unsupported-version, transient, or structurally invalid metadata.
-The shared publication metadata schema and validator define the document
-contract; the viewer does not finalize or repair metadata.
+The [publication metadata schema](schemas/PUBLICATION_METADATA.md) defines the
+document contract; the viewer does not finalize or repair metadata.
 
 The committed quotation, source, attribution, presentation style, and resolved
 resource identifiers in the document supply the rendering input. The original
@@ -236,7 +236,7 @@ refrain-viewer --render-as waveshare-13in3-e --output panel-preview.png
 refrain-viewer --render-as portrait --window
 ```
 
-This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `image-server` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. The Waveshare PNG retains the resolved palette indices; the viewer creates an RGB copy only for local-window display. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected.
+This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `image-server` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. The Waveshare PNG retains the resolved palette indices; the viewer creates an RGB copy only for local-window display. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected. Visual post-processing currently supports only `window`, `image-server`, and `waveshare-13in3-e`; a configured `publish` destination is rejected by `--render-as`.
 
 `--output` writes the PNG without opening a window unless `--window` is also supplied. Without `--output`, the normal default behavior opens the simple local viewer window.
 
@@ -260,4 +260,4 @@ Push requires a running normal Refrain instance. An unknown or no-longer-configu
 
 `--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, `--render-as`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
 
-Preparation progress may be reported while images are rendered. After runtime admission, the viewer reports that publication has begun before waiting on potentially slow backend work. It remains attached for the terminal result. Exit status zero means every selected destination succeeded. Busy, rejected, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero.
+Preparation progress may be reported while images are rendered. After runtime admission, the viewer reports that publication has begun before waiting on potentially slow backend work. It remains attached for the terminal result. Exit status zero means every selected destination succeeded. Busy, rejected, failed, unavailable-runtime, and unconfirmed outcomes return `1`; invalid arguments or conflicting modes return `2`. An unconfirmed outcome means publication may have occurred; do not retry automatically.
