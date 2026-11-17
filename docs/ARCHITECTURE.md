@@ -124,6 +124,10 @@ The runtime should avoid unnecessary memory use and background processing. Quali
 
 **Daily Selection Record:** A persistent copy of the selected quotation and the content properties needed to interpret it, independent of the original content entry. Rendering resources and settings are resolved during image preparation.
 
+**Canonical Presentation:** The destination-independent artistic presentation resolved once for a committed daily selection, including its selected visual resources, font, colors, and QR policy.
+
+**Effective Presentation:** The canonical presentation after applying one destination's supported overrides and resolving any resulting geometry defaults.
+
 **Selection Commitment:** The successful durable recording of a daily selection, updated repetition history, selection revision, reveal progress, and scheduling context as one consistent authoritative state.
 
 **Reveal Stage:** A cumulative set of content fields eligible for presentation at a particular point in the configured reveal schedule.
@@ -660,6 +664,7 @@ Refrain maintains sufficient durable operational state to preserve:
 - the selected content identity, optional source and attribution, and content properties needed to interpret or present the quotation;
 - the selected entry's complete ordered action sequence;
 - the effective reveal schedule and scheduling context needed to resume it;
+- the resolved canonical presentation for the committed daily selection, once it has been resolved;
 - active repetition history;
 - the highest reveal stage reached for the current selection;
 
@@ -671,21 +676,21 @@ After commitment, the active selection must not require access to the original Y
 
 ### Daily selection record
 
-The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library. It also captures the selected entry's complete ordered action sequence as opaque semantic data.
+The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library. It also captures the selected entry's complete ordered action sequence as opaque semantic data and, once resolved, the canonical presentation.
 
-It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, any selected content preferences needed to interpret or present the quotation, and the entry's immutable ordered actions. These captured values remain authoritative for this selection; later edits to the source entry do not replace them, and recovery never rereads that entry to obtain them. The record does not contain other quotations from the entry.
+It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, any selected content preferences needed to interpret or present the quotation, the entry's immutable ordered actions, and the canonical presentation's resolved stable selections. These captured values remain authoritative for this selection; later edits to the source entry do not replace them, and recovery never rereads that entry to obtain them. The record does not contain other quotations from the entry.
 
-The record is not a serialized rendering plan. Actions are not rendering inputs. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, selected fonts or faces, resolved colors, selected background or decoration resources, tintability decisions, resolved QR policy or placement, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. The captured content-level preferences are resolved against current application configuration and available assets when images are prepared.
+The record is not a serialized rendering plan. Actions are not rendering inputs. Persist the canonical stable selections, not destination-specific overrides or raster-dependent results. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, QR placement or module size, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Resolve and durably record the canonical presentation once for the selection before preparing destination variants. If that resolution or its persistence is interrupted, recovery may complete it; once recorded, it must not be independently reselected for a destination or after restart.
 
 Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location; it must not silently replace the selected content or modify the state file. For a platform-standard state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state path outside the standard location, identify that path and direct the operator to stop Refrain and manually back up and remove or quarantine only that file; `--reset` does not manage custom paths.
 
 Selection commitment does not depend on resolving visual resources.
 
-Content-level presentation preferences remain part of the selected record when needed to preserve the selected entry's intended behavior. They are preferences for future preparation, not resolved rendering decisions.
+Content-level presentation preferences remain part of the selected record when needed to preserve the selected entry's intended behavior. They are inputs to canonical resolution; the resolved canonical selections are persisted separately from destination-specific prepared artifacts.
 
-The daily selection record is immutable after commitment except for monotonic reveal progress and the scheduling context required by the display-day model.
+The daily selection record is immutable after commitment except for monotonic reveal progress, scheduling context required by the display-day model, and the one-time attachment of its canonical presentation.
 
-Prepared images are disposable derived artifacts. Regeneration preserves the selected content and reveal progression but may reflect current configuration, assets, fonts, colors, layout, and QR policy.
+Prepared images are disposable derived artifacts. Regeneration preserves the selected content, canonical presentation, and reveal progression. Destination-specific effective presentations may reflect configured overrides; raster-dependent geometry is resolved for each output specification.
 
 ### Global history
 
@@ -762,27 +767,27 @@ The exact storage formats, rotation mechanics, and persistence operations belong
 
 ### Prepared images
 
-After selection commitment, Refrain resolves current presentation configuration, available resources, and each destination's effective presentation requirements. It groups destinations with compatible requirements independently of their destination IDs and generates every required reveal-stage image for each output specification in each group.
+After selection commitment, Refrain resolves the canonical presentation once from the captured content preferences, current presentation configuration, and available resources, then persists it independently of destination-specific prepared artifacts. For each destination it derives an effective presentation from that canonical value and the destination's restricted `overrides`, resolves any required geometry defaults, validates the result, and only then renders. Overrides do not mutate the canonical presentation or cause artistic reselection. Refrain groups destinations with compatible effective requirements independently of their destination IDs and generates every required reveal-stage image for each output specification in each group.
 
-Within a preparation group, presentation-wide choices are resolved consistently across all required output specifications; raster-dependent layout and rendering results are resolved independently for each variant. Destination overrides take precedence over ordinary content-entry, decoration, and global preferences for the corresponding fields. Omitted fields retain the existing resolution and fallback rules. An explicit `"none"` background or decoration suppresses artwork selection. QR enablement does not override decoration restrictions or output geometry viability.
+Canonical choices are shared by every destination. Destination overrides are applied after canonical resolution and support only background or decoration suppression, one explicit font, one explicit text color, one explicit decoration color, or QR suppression. Omitted properties retain their canonical values, except that suppressing decoration uses the global default insets and font-size bounds. Background suppression does not reset geometry. Within a preparation group, presentation-wide effective choices remain consistent across its output specifications; raster-dependent layout and rendering results are resolved independently for each variant. QR suppression does not change the canonical QR policy or the availability of QR on other destinations.
 
 For each output specification, the prepared images form an ordered reveal-stage set. Images within that set have the same expected output dimensions and compatible image mode; different output specifications may have different dimensions and raster-dependent results.
 
-Prepared images are persisted on disk and associated with the committed selection revision, compatible preparation group/effective presentation requirements, output specifications, ordered reveal stages, and their resolved publication-schema metadata. Destination identity alone does not partition a group; incompatible requirements cannot share a cached image even when output specifications match.
+Prepared images are persisted on disk and associated with the committed selection revision and canonical presentation, compatible effective-presentation requirements, output specifications, ordered reveal stages, and their resolved publication-schema metadata. Destination identity alone does not partition a group; incompatible requirements cannot share a cached image even when output specifications match.
 
-The existing versioned publication-metadata schema belongs to the exact prepared collection and compatible preparation group; it is not a separate prepared-presentation descriptor, rendering snapshot, or authoritative selection state. It records actual resolved resource and palette identifiers, font bundle and role-specific faces, effective QR behavior, and other artistic choices used by the images, including applicable destination overrides and fallbacks. Publication-event fields that do not yet exist during preparation remain unassigned or explicitly nullable as that schema specifies; do not invent publication IDs or timestamps.
+The existing versioned publication-metadata schema belongs to the exact prepared collection and compatible preparation group; it is not a separate prepared-presentation descriptor or rendering snapshot. It records the canonical presentation independently of each prepared destination presentation, whose values describe the effective result actually used for the images rather than only the override requests. Prepared destination metadata records actual resolved resource and palette identifiers, font bundle and role-specific faces, QR inclusion or suppression, effective insets and font-size bounds, and the output specification. Publication-event fields that do not yet exist during preparation remain unassigned or explicitly nullable as that schema specifies; do not invent publication IDs or timestamps.
 
 They are derived artifacts, not independently authoritative application state.
 
 Prepared images must remain associated with the committed selection revision and expected reveal-stage sequence.
 
-Complete compatible collections are reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate them. A change to effective destination overrides changes that destination's requirements and prevents reuse of an incompatible collection, while compatible groups remain reusable. This does not make the cache archival: changes to available resources or rendering behavior may change the result when required images are missing or otherwise unusable.
+Complete compatible collections are reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate them. A change to effective destination overrides changes that destination's requirements and prevents reuse of an incompatible collection, while compatible groups remain reusable. The canonical selection is recovered unchanged and is not reselected when an override changes. This does not make the cache archival: changes to available resources or rendering behavior may change the result when required images are missing or otherwise unusable.
 
-If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation.
+If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection and its persisted canonical presentation, using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation without changing the canonical selections.
 
 All output variants within one compatible preparation group use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior. Within one output specification, its complete literary composition determines stable geometry for every reveal stage; this does not require different specifications to share geometry.
 
-When output or effective presentation requirements change, any missing compatible variants are prepared from the existing committed selection without changing the quotation or reveal progress. Variants within one preparation group share preparation-wide choices. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward. Finished transient images already prepared for a destination bypass destination presentation overrides.
+When output or effective presentation requirements change, any missing compatible variants are prepared from the existing committed selection and canonical presentation without changing the quotation, canonical selections, or reveal progress. Variants within one preparation group share preparation-wide choices. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward. Finished transient images already prepared for a destination bypass destination presentation overrides.
 
 The runtime must not require all prepared images to remain decoded in memory.
 
@@ -799,6 +804,8 @@ Missing or invalid original content does not prevent recovery when the committed
 If selection commitment was interrupted, Refrain must recover the last valid operational state and repeat selection when necessary.
 
 If rendering or image persistence was interrupted after commitment, Refrain regenerates the complete stage set using current configuration and available resources. Existing fallback and diagnostic policies apply to unavailable or invalid resources.
+
+If canonical presentation resolution was interrupted before its selections were durably recorded, recovery may complete that resolution once for the committed daily selection. Once persisted, those canonical selections are authoritative across restarts and destination preparation; an override change does not cause them to be selected again.
 
 If current operational state is incompatible, unavailable, or invalid, report an actionable diagnostic identifying the effective state-file location. For a platform-standard state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured path outside the standard location, direct the operator to stop Refrain and manually back up and remove or quarantine only that file; do not suggest `--reset` for a custom path. Do not modify the state or silently substitute another quotation. Valid current-format state remains recoverable.
 
@@ -949,7 +956,7 @@ A subsequent successful update may skip intermediate stages and present the late
 
 Daily-image preparation accepts a committed daily selection record and an explicit sequence of cumulative reveal stages.
 
-Preparation resolves the selected content and current presentation settings, generates the view-specific background, and uses the shared renderer to produce complete images without accessing physical display hardware.
+Preparation resolves or recovers the canonical presentation, derives and validates each destination's effective presentation before rendering, generates the view-specific background, and uses the shared renderer to produce complete images without accessing physical display hardware.
 
 Neither preparation nor the renderer selects content, modifies selection history, or determines application lifecycle policy.
 
@@ -992,7 +999,7 @@ For example, a declared 16:9 aspect and requested 1920 × 1080 resolution use a 
 
 Literary insets are design-canvas measurements, each measured inward from the corresponding design-canvas edge for the selected aspect ratio. Resolve the literary rectangle in design-canvas coordinates, then map its edges to the presentation canvas using deterministic nearest-integer, half-up rounding. Do not derive literary geometry from aspect-mismatched output-image dimensions.
 
-Global layout insets provide the defaults. A selected decoration may replace them with a complete inset set for the current preparation. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve and scale the rectangle for the presentation canvas, then keep it unchanged across that output specification's reveal stages. Configured minimum and maximum literary font sizes are also design-canvas measurements; scale the effective bounds to presentation-canvas pixels with deterministic nearest-integer, half-up rounding before fitting and rendering. Quotation fitting and wrapping operate only in presentation-canvas coordinates. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
+Global layout insets and global minimum and maximum literary font sizes provide the defaults. A selected decoration may replace the insets and font-size bounds with its complete constraints. When a destination suppresses the canonical decoration, resolve both insets and font-size bounds from the global defaults; do not retain decoration-specific geometry. Background suppression alone does not reset geometry. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve and scale the effective rectangle for the presentation canvas, then keep it unchanged across that output specification's reveal stages. Scale the effective font-size bounds to presentation-canvas pixels with deterministic nearest-integer, half-up rounding before fitting and rendering. Quotation fitting and wrapping operate only in presentation-canvas coordinates. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
 
 Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
 
@@ -1443,7 +1450,7 @@ Closing the desktop window through the window manager intentionally withdraws it
 
 The backend reports initialization, presentation, and cleanup failures through common display-backend errors. It reports an unavailable graphical environment with guidance to install Tk support and use a graphical session.
 
-Destination visual post-processing occurs only after the complete requested output image has been rendered. The hardware-independent post-processing contract returns destination-final visual pixels without modifying the caller's image; `window` and `image-server` use identity processing. The viewer and configured backend publication paths use this same contract. It does not initialize or require a display backend.
+Destination presentation overrides are resolved before rendering and never implemented by post-processing a completed output image. The hardware-independent post-processing contract is limited to backend-specific output conversion, returns destination-final pixels without modifying the caller's image, and does not alter artistic presentation choices; `window` and `image-server` use identity processing. The viewer and configured backend publication paths use this same contract. It does not initialize or require a display backend.
 
 The Waveshare backend owns model-specific hardware operations, including:
 
@@ -1466,7 +1473,7 @@ A completed destination publication operation indicates that the backend accepte
 
 Failures and uncertain hardware outcomes must remain distinguishable where the underlying implementation permits.
 
-Display backends must not perform quotation selection, reveal scheduling, image preparation, or persistent-state updates.
+Display backends must not perform quotation selection, reveal scheduling, image preparation, artistic overrides, or persistent-state updates. Destination overrides are applied to the canonical presentation before rendering; backends deliver the resulting complete output image and may perform only their explicitly documented hardware-format or orientation conversion.
 
 Backend implementations are built-in application components. Version 0.1 does not define a general display plugin system.
 
