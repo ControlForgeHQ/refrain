@@ -1,15 +1,7 @@
 # GitHub Copilot Instructions
 
-Refrain maintains its repository-wide contributor instructions in the root `AGENTS.md` file.
+Before beginning any work, read `AGENTS.md` in full and follow its instructions.
 
-Before making substantive changes:
+`AGENTS.md` establishes the mandatory repository-wide restrictions and directs contributors to the authoritative development workflow.
 
-1. Read and follow `AGENTS.md`.
-2. Consult the authoritative project documentation it references.
-3. Follow the assigned GitHub issue or explicit user request.
-
-Do not treat these Copilot-specific instructions as a separate source of architectural, engineering, or product requirements.
-
-If instructions conflict or required documentation is unavailable, explain the problem rather than making unsupported assumptions.
-
-For issue-driven AI implementation and pull-request revisions, follow `docs/AI_WORKFLOW.md`.
+Do not treat this file as an independent source of project requirements or permissions.
