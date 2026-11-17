@@ -479,7 +479,7 @@ Configuration is accepted as an effective configuration of valid supplied values
 
 | Condition | Result |
 |---|---|
-| Optional value omitted with a documented default | Use that default; informational notice, which may be consolidated. |
+| Optional value omitted with a documented default | Use that default silently. |
 | Optional value explicitly invalid with a documented default | Warn and use that default, subject to field-specific constraints. |
 | Optional value invalid without a documented default | Warn and ignore it, subject to field-specific constraints. |
 | Unknown field | Warn and ignore, except strict destination `overrides`. |
@@ -493,7 +493,7 @@ A problem is fatal when a required effective value for the operation cannot be e
 
 Diagnostics identify the configuration file and affected field and explain whether a value was ignored, excluded, or replaced by a documented default. Severity is:
 
-- `INFO`: A documented default was applied for an omitted optional value.
+- `INFO`: Useful operational information that does not indicate a configuration problem.
 - `WARNING`: A recoverable problem remains compatible with usable effective configuration.
 - `ERROR`: A required effective condition cannot be satisfied.
 
