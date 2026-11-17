@@ -6,8 +6,6 @@ It is authoritative for engineering principles, coding standards, dependency man
 
 Runtime architecture and behavioral contracts belong in `docs/ARCHITECTURE.md`.
 
-Product direction and release sequencing belong in `docs/ROADMAP.md`.
-
 The content-format specification owns the public YAML configuration and content contracts.
 
 ## Engineering principles
@@ -133,12 +131,6 @@ Routine development work must not trigger updates to the root README. It is chan
 
 Technical information belongs in its authoritative project document. Implementation details and validation outcomes belong in the relevant issues and pull requests.
 
-### docs/ROADMAP.md
-
-The roadmap owns release goals, planned capabilities, sequencing, and future product scope.
-
-It must not prescribe implementation details.
-
 ### docs/ARCHITECTURE.md
 
 The architecture owns runtime responsibilities, behavior, lifecycle, state semantics, scheduling rules, and architectural invariants.
@@ -179,7 +171,7 @@ and validation requirements.
 
 `AGENTS.md` routes automated contributors to the authoritative documentation and defines agent-specific guardrails.
 
-It must not duplicate architecture, engineering standards, or roadmap requirements.
+It must not duplicate architecture or engineering standards.
 
 ### Issues and pull requests
 
@@ -340,7 +332,7 @@ Dependencies must be justified by required functionality.
 
 Prefer maintained libraries with clear licensing and support for the target Python and Linux environments.
 
-Do not introduce dependencies for deferred roadmap features.
+Do not introduce dependencies for deferred future features.
 
 Development and testing dependencies must be distinguishable from production runtime dependencies.
 
@@ -1920,7 +1912,7 @@ AI implementation agents are contributors, not architectural authorities.
 
 Agents must read `AGENTS.md` and the relevant authoritative project documents.
 
-An agent must not silently change architecture, expand scope, or implement later roadmap items.
+An agent must not silently change architecture, expand scope, or implement future items.
 
 When an issue cannot be completed correctly within the documented architecture, the agent must report the conflict rather than redesigning the project independently.
 

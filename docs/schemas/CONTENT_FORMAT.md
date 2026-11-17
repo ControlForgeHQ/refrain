@@ -8,8 +8,6 @@ Runtime behavior and selection policy belong in `docs/ARCHITECTURE.md`.
 
 Engineering practices, YAML parser selection, storage implementation, and testing requirements belong in `docs/ENGINEERING.md`.
 
-Feature scope and release sequencing belong in `docs/ROADMAP.md`.
-
 
 ## Format principles
 
@@ -1849,4 +1847,4 @@ The initial formats do not define:
 - independent presentation layouts for individual display backends;
 - interactive content editing.
 
-These capabilities may be evaluated for later releases according to the roadmap.
+These capabilities may be evaluated for later releases.

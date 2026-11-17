@@ -16,7 +16,6 @@ The application is functional, but its presentation system, configuration, deplo
 
 Development progress, planned features, and outstanding work are tracked through the repository's [Issues](https://github.com/ControlForgeHQ/refrain/issues) and [Pull Requests](https://github.com/ControlForgeHQ/refrain/pulls).
 
-For intended features and release milestones, see the [Roadmap](docs/ROADMAP.md).
 
 More information will follow as Refrain approaches its first release.
 

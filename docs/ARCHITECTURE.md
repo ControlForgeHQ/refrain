@@ -8,8 +8,6 @@ Refrain is intended primarily for personal and household use while remaining con
 
 This document defines the system architecture, component responsibilities, runtime behavior, persistent state, scheduling semantics, display behavior, and architectural boundaries.
 
-Product scope and release sequencing belong in `docs/ROADMAP.md`.
-
 Engineering standards, dependency selection, testing requirements, and implementation practices belong in `docs/ENGINEERING.md`.
 
 The detailed YAML content schema and its validation rules belong in the content-format specification.
