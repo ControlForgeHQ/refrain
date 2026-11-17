@@ -281,8 +281,6 @@ destinations:
   - id: web-public
     type: publish
     audience: public
-    aspect_ratio: "16:10"
-    resolution: [3840, 2400]
 
   - id: web-private
     type: publish
@@ -349,7 +347,7 @@ Each destination resolves an output specification consisting of a declared prese
 
 When destination presentation overrides differ, prepared collections are shared only when both the output specification and effective presentation requirements match. Destinations with equivalent requirements may share presentation-wide artistic choices even when their IDs differ. Different output specifications in one compatible preparation group receive independent raster-dependent variants.
 
-The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` destination defaults to `16:10 @ 3840 × 2400`. Both accept `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. A `publish` destination requires both fields explicitly. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
+The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` and `publish` destinations default to `16:10 @ 3840 × 2400`. Each accepts `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. A `publish` destination still requires an explicit ID, type, and audience. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
 
 The optional top-level `image-server` mapping controls the shared read-only HTTP listener. Its presence enables the service; an empty mapping, `{}`, and a bare `image-server:` key are equivalent. `host` defaults to `"127.0.0.1"` and `port` to `8080`; the port must be an integer from 1 through 65535. When this mapping is absent, image-server destinations remain configured and accept in-memory publications, but external HTTP delivery is unavailable. Listener failure does not invalidate accepted image representations. One service is shared by all image-server destinations.
 

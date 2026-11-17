@@ -1617,7 +1617,7 @@ provides reusable storage, manifest validation, and maintenance behavior;
 Stage 3B registers the backend and integrates publication with the resident's
 existing destination coordinator and runtime-control path.
 
-Each `publish` destination has its own validated ID, explicitly declared output
+Each `publish` destination has its own validated ID, resolved output
 specification, publication audience, presentation overrides, and directory. It publishes the
 destination-specific presentation prepared by Refrain. Scheduled preparation
 groups destinations only when their effective presentation requirements match;

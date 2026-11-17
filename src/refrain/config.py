@@ -904,9 +904,6 @@ def _parse_destinations(
                     default_size=default_size,
                 )
             elif backend_type == "publish":
-                for required_field in ("aspect_ratio", "resolution"):
-                    if required_field not in value:
-                        report(f"{field}.{required_field}", "is required for publish destinations", logging.ERROR)
                 specification = _resolve_output_specification(
                     value,
                     field,
