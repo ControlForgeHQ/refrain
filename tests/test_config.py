@@ -107,6 +107,123 @@ def test_bundled_background_registry_and_plain_default(tmp_path: Path, caplog) -
         config.backgrounds["other"] = next(iter(config.backgrounds.values()))
 
 
+def test_publish_destinations_share_backend_and_use_explicit_geometry(tmp_path: Path) -> None:
+    data = configuration_data(
+        destinations=[
+            {
+                "id": "web-public",
+                "type": "publish",
+                "audience": "public",
+                "aspect_ratio": "16:10",
+                "resolution": [320, 200],
+            },
+            {
+                "id": "web-private",
+                "type": "publish",
+                "audience": "private",
+                "aspect_ratio": "16:10",
+                "resolution": [320, 200],
+            },
+            {
+                "id": "web-custom",
+                "type": "publish",
+                "audience": "private",
+                "aspect_ratio": "16:9",
+                "resolution": [320, 180],
+                "presentation": {"background": "none"},
+            },
+        ]
+    )
+
+    configuration = load_application_config(write_config(tmp_path / "config.yaml", data))
+
+    assert len(configuration.display_backends) == 1
+    backend = configuration.display_backends[0]
+    assert backend.type == "publish"
+    assert [destination.identifier for destination in backend.outputs] == [
+        "web-public",
+        "web-private",
+        "web-custom",
+    ]
+    assert [destination.output_specification for destination in backend.outputs] == [
+        ResolvedOutputSpecification("16:10", (320, 200)),
+        ResolvedOutputSpecification("16:10", (320, 200)),
+        ResolvedOutputSpecification("16:9", (320, 180)),
+    ]
+    assert backend.outputs[0].prepared_image_key == backend.outputs[1].prepared_image_key
+    assert backend.outputs[1].prepared_image_key != backend.outputs[2].prepared_image_key
+
+
+def test_publish_destination_defaults_geometry_when_pair_is_omitted(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(destinations=[{"id": "web-public", "type": "publish", "audience": "public"}]),
+    )
+
+    configuration = load_application_config(config_path)
+    destination = configuration.display_backends[0].outputs[0]
+
+    assert destination.output_specification.aspect_ratio == "16:10"
+    assert destination.output_specification.requested_output_size == (3840, 2400)
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        {"id": "web", "type": "publish", "audience": "public", "resolution": [320, 200]},
+        {"id": "web", "type": "publish", "audience": "public", "aspect_ratio": "16:10"},
+    ],
+)
+def test_publish_destination_rejects_incomplete_geometry_pair(tmp_path: Path, destination: dict[str, object]) -> None:
+    config_path = write_config(tmp_path / "config.yaml", configuration_data(destinations=[destination]))
+    assert "destinations[0]" in diagnostic_fields(config_path)
+
+
+def test_publish_destination_directory_ids_are_case_insensitively_unique(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(
+            destinations=[
+                {
+                    "id": "web-public",
+                    "type": "publish",
+                    "audience": "public",
+                    "aspect_ratio": "16:10",
+                    "resolution": [320, 200],
+                },
+                {
+                    "id": "WEB-PUBLIC",
+                    "type": "publish",
+                    "audience": "private",
+                    "aspect_ratio": "16:10",
+                    "resolution": [320, 200],
+                },
+            ]
+        ),
+    )
+    assert "destinations[1].id" in diagnostic_fields(config_path)
+
+
+@pytest.mark.parametrize("identifier", ["CON", "com1", "Lpt9"])
+def test_publish_destination_rejects_windows_reserved_directory_ids(tmp_path: Path, identifier: str) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(
+            destinations=[
+                {
+                    "id": identifier,
+                    "type": "publish",
+                    "audience": "public",
+                    "aspect_ratio": "16:10",
+                    "resolution": [320, 200],
+                }
+            ]
+        ),
+    )
+
+    assert "destinations[0].id" in diagnostic_fields(config_path)
+
+
 def test_builtin_palette_custom_colors_and_black_text_default(tmp_path: Path) -> None:
     data = configuration_data()
     data["palette"] = {"red": "#C82F32", "burnt-orange": "#C65A20"}

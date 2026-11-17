@@ -278,12 +278,24 @@ destinations:
     aspect_ratio: "4:3"
     resolution: [1600, 1200]
 
+  - id: web-public
+    type: publish
+    audience: public
+
+  - id: web-private
+    type: publish
+    audience: private
+    aspect_ratio: "16:10"
+    resolution: [3840, 2400]
+    presentation:
+      background: "none"
+
 image-server:
   host: "127.0.0.1"
   port: 8080
 ```
 
-The currently supported Version 0.1 destination `type` values are `window`, `waveshare-13in3-e`, and `image-server`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` supports multiple destinations through one optional HTTP service. Filesystem `publish` destination configuration and presentation overrides are not yet supported; the independent filesystem writer and `storage.publish` root do not register or activate a destination backend. See the [planned backend architecture](ARCHITECTURE.md#filesystem-publication-target-backend-integration-planned).
+The supported destination `type` values are `window`, `waveshare-13in3-e`, `image-server`, and `publish`. Each destination is independently addressable, but destinations of one type share that backend's lifecycle and any backend-owned infrastructure. `window` and `waveshare-13in3-e` support at most one configured destination each; `image-server` and `publish` support multiple destinations through one backend instance. The filesystem `publish` backend writes each destination to its own directory below the effective `storage.publish` root; it does not accept destination-local filesystem paths. See [filesystem publication architecture](ARCHITECTURE.md#filesystem-publication-target-backend-integration-implemented).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -329,13 +341,13 @@ destinations:
 
 These fields use the same resource registries, named pools, and strict value types as the corresponding existing presentation preferences. Resource and palette identifiers are resolved during preparation; unavailable preferences follow existing fallback and diagnostic rules. `"none"` is a deliberate no-artwork selection, not an unavailable resource. For colors, an override has precedence over content-entry, background, decoration, and global preferences. For resources, it has precedence over ordinary content-entry and decoration preferences. An unavailable destination resource preference falls through the ordinary selection hierarchy. A selected decoration's `qr_ready: false` restriction and QR geometry viability remain effective even when QR is requested.
 
-Omitting `presentation`, or omitting any individual field, preserves the existing behavior for that destination and field. Unsupported fields are diagnosed as unrecognized and ignored; they do not add rendering controls. These overrides apply only to scheduled preparation, not to finished transient images delivered to a destination. Destination overrides are supported for the three current destination types; the planned filesystem `publish` destination is not implemented.
+Omitting `presentation`, or omitting any individual field, preserves the existing behavior for that destination and field. Unsupported fields are diagnosed as unrecognized and ignored; they do not add rendering controls. These overrides apply only to scheduled preparation, not to finished transient images delivered to a destination. All destination types, including `publish`, support the presentation override contract.
 
 Each destination resolves an output specification consisting of a declared presentation aspect ratio and requested output resolution. The requested resolution never determines or implies the aspect ratio. Refrain prepares one complete set of reveal-stage images for each unique output specification required by configured destinations. Destinations with identical specifications may share prepared variants; destinations with different specifications receive their matching variants.
 
 When destination presentation overrides differ, prepared collections are shared only when both the output specification and effective presentation requirements match. Destinations with equivalent requirements may share presentation-wide artistic choices even when their IDs differ. Different output specifications in one compatible preparation group receive independent raster-dependent variants.
 
-The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` destination defaults to `16:10 @ 3840 × 2400`. Both accept `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
+The `window` destination defaults to `16:9 @ 1920 × 1080`. The `image-server` and `publish` destinations default to `16:10 @ 3840 × 2400`. Each accepts `aspect_ratio` and `resolution` as a pair: omit both to use defaults or supply both; supplying only one is a configuration error. A `publish` destination still requires an explicit ID, type, and audience. The `waveshare-13in3-e` destination has the fixed `4:3 @ 1600 × 1200` specification and rejects both geometry fields.
 
 The optional top-level `image-server` mapping controls the shared read-only HTTP listener. Its presence enables the service; an empty mapping, `{}`, and a bare `image-server:` key are equivalent. `host` defaults to `"127.0.0.1"` and `port` to `8080`; the port must be an integer from 1 through 65535. When this mapping is absent, image-server destinations remain configured and accept in-memory publications, but external HTTP delivery is unavailable. Listener failure does not invalidate accepted image representations. One service is shared by all image-server destinations.
 
@@ -1090,7 +1102,7 @@ Individual quotations do not have independent overrides or actions. An entry's a
 
 ### Actions
 
-Actions are optional, ordered, opaque declarations owned by a content entry. Refrain validates and preserves their generic envelope but does not recognize action types, interpret payloads, execute actions, or publish them. Future consumers decide what an action means and whether they support it.
+Actions are optional, ordered, opaque declarations owned by a content entry. Refrain validates and preserves their generic envelope but does not recognize action types, interpret payloads, or execute actions. Scheduled filesystem publications include only actions eligible for the destination's explicitly configured audience; other destinations and publication modes do not execute actions.
 
 ```yaml
 actions:
@@ -1121,7 +1133,7 @@ Actions retain declaration order, and duplicate types or identical actions are p
 
 A malformed action—including a non-mapping member, missing or invalid required field, duplicate or unsupported visibility, non-string payload, unsupported envelope field, or oversized payload—is discarded with a warning. A malformed top-level `actions` value is warned about and treated as an empty sequence. These recoverable action errors do not invalidate the content entry or its quotations; validation continues with other actions. Invalid YAML syntax and malformed required entry fields retain their ordinary file or entry rejection behavior.
 
-Actions are captured with the selected quotation in the committed daily selection and persist independently of later edits to the source file. Existing valid version-1 snapshots without an `actions` field recover with an empty sequence. The current resident display flow does not classify destinations, filter actions, or publish metadata, and does not execute actions. The shared Stage 2A metadata finalizer applies the destination-audience filtering contract defined in [Architecture](ARCHITECTURE.md#destination-specific-metadata-and-audiences); it does not alter content loading or execute actions.
+Actions are captured with the selected quotation in the committed daily selection and persist independently of later edits to the source file. Existing valid version-1 snapshots without an `actions` field recover with an empty sequence. The resident supplies the configured audience to the shared Stage 2A metadata finalizer, which applies the destination-audience filtering contract defined in [Architecture](ARCHITECTURE.md#destination-specific-metadata-and-audiences); it does not alter content loading or execute actions.
 
 ### Text-color preference
 

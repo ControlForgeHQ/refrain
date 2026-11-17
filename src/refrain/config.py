@@ -41,9 +41,17 @@ _TOP_LEVEL_FIELDS = {
     "backgrounds",
     "decorations",
 }
-_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server"}
+_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server", "publish"}
 _MAX_DESTINATION_IDENTIFIER_LENGTH = 256
 _DESTINATION_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_WINDOWS_RESERVED_DESTINATION_IDS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 _HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
@@ -810,6 +818,7 @@ def _parse_destinations(
     destination_groups: dict[str, list[DisplayOutputConfiguration]] = {}
     destination_counts: dict[str, int] = {}
     seen_destination_ids: set[str] = set()
+    seen_publish_directory_ids: set[str] = set()
     if not isinstance(configured_destinations, list) or not configured_destinations:
         report("destinations", "is required and must be a nonempty sequence of destination mappings", logging.ERROR)
     else:
@@ -851,10 +860,28 @@ def _parse_destinations(
             if not isinstance(backend_type, str) or backend_type not in _DISPLAY_BACKENDS:
                 report(
                     f"{field}.type",
-                    "must be one of the supported backends: 'window', 'waveshare-13in3-e', 'image-server'",
+                    "must be one of the supported backends: "
+                    "'window', 'waveshare-13in3-e', 'image-server', 'publish'",
                     logging.ERROR,
                 )
                 continue
+            if backend_type == "publish":
+                if identifier.upper() in _WINDOWS_RESERVED_DESTINATION_IDS:
+                    report(
+                        f"{field}.id",
+                        "must not be a Windows-reserved device name",
+                        logging.ERROR,
+                    )
+                    continue
+                directory_identifier = identifier.casefold()
+                if directory_identifier in seen_publish_directory_ids:
+                    report(
+                        f"{field}.id",
+                        f"conflicts with a case-insensitive publish destination directory named {identifier!r}",
+                        logging.ERROR,
+                    )
+                    continue
+                seen_publish_directory_ids.add(directory_identifier)
             destination_counts[backend_type] = destination_counts.get(backend_type, 0) + 1
             capacity = DESTINATION_CAPACITIES[backend_type]
             if capacity is not None and destination_counts[backend_type] > capacity:
@@ -875,6 +902,14 @@ def _parse_destinations(
                     report,
                     default_aspect=default_aspect,
                     default_size=default_size,
+                )
+            elif backend_type == "publish":
+                specification = _resolve_output_specification(
+                    value,
+                    field,
+                    report,
+                    default_aspect="16:10",
+                    default_size=(3840, 2400),
                 )
             else:
                 for forbidden_field in ("aspect_ratio", "resolution"):

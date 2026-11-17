@@ -15,7 +15,7 @@ from typing import Iterable, Mapping
 
 from PIL import Image
 
-from .config import ApplicationConfiguration
+from .config import _WINDOWS_RESERVED_DESTINATION_IDS, ApplicationConfiguration
 from .paths import ApplicationPaths, resolve_application_paths, resolve_publication_root
 from .publication_metadata import (
     parse_publication_metadata,
@@ -36,14 +36,6 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,255}\Z")
 _PUBLICATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,239}\Z")
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _TEMPORARY = re.compile(r"\.refrain-[0-9a-f]{32}\.manifest\.tmp\Z")
-_WINDOWS_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
-}
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_METADATA_BYTES = 16 * 1024 * 1024
 
@@ -54,7 +46,9 @@ def _generated_publication_name(name: str) -> bool:
 
 
 def _valid_destination_identifier(value: str) -> bool:
-    return bool(_IDENTIFIER.fullmatch(value)) and not (os.name == "nt" and value.upper() in _WINDOWS_RESERVED_NAMES)
+    return bool(_IDENTIFIER.fullmatch(value)) and not (
+        os.name == "nt" and value.upper() in _WINDOWS_RESERVED_DESTINATION_IDS
+    )
 
 
 class PublicationStorageError(Exception):
@@ -104,7 +98,7 @@ def _validate_manifest(value: object) -> PublicationManifest:
     if (
         not isinstance(publication_id, str)
         or not _PUBLICATION_ID.fullmatch(publication_id)
-        or publication_id.upper() in _WINDOWS_RESERVED_NAMES
+        or publication_id.upper() in _WINDOWS_RESERVED_DESTINATION_IDS
     ):
         raise PublicationStorageError("manifest publication_id must be a valid identifier of at most 240 characters")
     if value["image_filename"] != f"{publication_id}.png":
@@ -662,7 +656,7 @@ class PublicationStore:
         if (
             not isinstance(publication_id, str)
             or not _PUBLICATION_ID.fullmatch(publication_id)
-            or publication_id.upper() in _WINDOWS_RESERVED_NAMES
+            or publication_id.upper() in _WINDOWS_RESERVED_DESTINATION_IDS
         ):
             raise PublicationStorageError(
                 "publication_id must be a valid filename identifier of at most 240 characters"
