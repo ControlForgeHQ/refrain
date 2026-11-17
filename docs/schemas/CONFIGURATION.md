@@ -305,7 +305,7 @@ scheduling:
     attribution: "23:00"
 ```
 
-These section fragments do not describe an overnight reveal schedule. Revealing at `"01:00"` after a `"20:00"` day start is unsupported in Version 0.1.
+Reveal times must be on the same local calendar date as the configured day start and must not precede it.
 
 Per-entry reveal declarations belong to the content-entry schema. Display-date calculation, cumulative stages, commitment, clock changes, and missed events belong to [Architecture](../ARCHITECTURE.md#progressive-reveal).
 
@@ -361,7 +361,7 @@ This is a startup-presentation setting, not an external request interface or an 
 
 This setting controls literary presentations and does not affect the standalone information view. A selected decoration may suppress QR through its asset-side `qr_ready` field; a destination may suppress it using `overrides.qr: "none"`.
 
-Version 0.1 has no configurable QR payload, placement, or size in application configuration, and no content-entry QR setting. The fixed payload, output-dependent availability, conditional artwork, placement, and raster rules belong to [Architecture](../ARCHITECTURE.md#qr-generation-and-conditional-artwork); decoration positioning fields belong to the asset schema.
+The QR payload, placement, and size are not configurable through application configuration or content entries. QR generation, output-dependent availability, conditional artwork, placement, and raster rules are defined in [Architecture](../ARCHITECTURE.md#qr-generation-and-conditional-artwork). Decoration positioning fields are defined in the asset schema.
 
 ## Palette
 
@@ -390,7 +390,7 @@ Configuration selects registered resources by stable identifier. It does not reg
 
 Bundled resources come from package resources. User fonts, backgrounds, and decorations are discovered recursively under `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` beside the selected configuration file. An alternate configuration file supplies its own containing directory as the assets root; neither the working directory nor the standard configuration directory supplies additional user assets in that case. `storage.content` is independent of this assets root.
 
-Manifest formats, file requirements, package confinement, registration validity, and collision constraints remain in the [legacy asset sections](CONTENT_FORMAT.md#font-registry) pending `ASSETS.md`. Discovered valid resources are available by identifier even when absent from a default pool. Discovery alone does not add them to a configured pool.
+Resource discovery, registration, and validation use the asset formats and requirements defined in the asset schema. Discovered valid resources are available by identifier even when absent from a default pool. Discovery alone does not add them to a configured pool.
 
 ### Pool declarations
 
@@ -494,7 +494,3 @@ Diagnostics identify the configuration file and affected field and explain wheth
 - `ERROR`: A required effective condition cannot be satisfied.
 
 Log transport, repetition control, and process-output requirements belong to Engineering. Validation must not overwrite the configuration file or mutate authoritative operational state on a failed load.
-
-This is the public Version 0.1 configuration interface. New fields and changed meanings require deliberate documentation; unknown YAML metadata is not an extension mechanism or executable instruction.
-
-The retired top-level `display` configuration, configured timezone, arbitrary resource-path registrations, weights or resource repetition histories, configurable QR payloads, arbitrary presentation templates, scripts, and general-purpose theme expressions are not supported configuration fields.

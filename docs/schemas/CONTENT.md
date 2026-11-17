@@ -12,7 +12,7 @@ This document specifies the YAML format for Refrain content entries, including q
 - Quote values resembling dates, times, numbers, or booleans when a string is required. Unquoted scalar strings are accepted when the parser produces the intended string value.
 - Boolean values do not satisfy integer fields. A supplied null is invalid unless a field's recovery rule expressly handles it.
 
-Multiple entries in a sequence, wrapper mappings containing entries, multiple YAML documents, and per-quotation mappings are not Version 0.1 entry formats.
+Each file must contain exactly one entry mapping. Multiple entries, wrapper mappings, multiple YAML documents, and per-quotation mappings are invalid.
 
 ### Quotation strings
 
@@ -472,9 +472,8 @@ For content diagnostics, `INFO` denotes useful operational information that does
 
 Repetition-history cleanup, the effect of rejected entries on repetition identity, successful-selection commitment, and independence of an already committed selection belong to [Architecture](../ARCHITECTURE.md#selection-pools-and-repetition). A library-level failure must not be treated as an intentionally empty library for cleanup.
 
-## Compatibility and limits
+## Interface constraints
 
-This is a Version 0.1 public interface. New fields and changed meanings require deliberate documentation and review. Unknown entry fields are not an extension mechanism. Future editors must produce this format.
+Unknown entry fields are invalid. Content entries do not support per-quotation metadata or presentation preferences, arbitrary eligibility expressions, content-level presentation geometry, or executable instructions.
 
-Version 0.1 does not define per-quotation metadata or preferences, arbitrary eligibility expressions, weekday or holiday calculations, complex recurrences, content-level insets or font-size bounds, content-level QR controls, arbitrary executable metadata, or renderer commands. Opaque actions remain declarations for consumers, not instructions executed by Refrain.
-
+Opaque actions are declarations for external consumers; Refrain does not execute them.
