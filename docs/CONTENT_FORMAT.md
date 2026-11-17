@@ -132,6 +132,16 @@ destinations:
   - id: "default"
     type: "image-server"
     audience: "private"
+  - id: epaper
+    type: waveshare-13in3-e
+    audience: private
+    overrides:
+      background: none
+      decoration: none
+      font: lora
+      text_color: black
+      decoration_color: black
+      qr: none
 
 image-server:
   host: "127.0.0.1"
@@ -354,7 +364,7 @@ The default loopback address prevents connections from other network devices. Bi
 
 Each image-server destination is exposed at `/display/<id>/current`. The service retains the latest complete PNG representation and entity tag for each destination in memory; no separate persistent image store is used.
 
-Unsupported configuration fields are reported as unrecognized fields. The retired `display` configuration is not part of the supported schema.
+Unsupported configuration fields are reported as unrecognized fields, except unsupported destination `overrides` keys or values, which are configuration errors as specified above. The retired `display` configuration is not part of the supported schema.
 
 ### Scheduling settings
 
@@ -918,7 +928,7 @@ Each effective member has equal selection probability. A configured override of 
 
 ### Background and decoration resolution
 
-For each selected quotation, Refrain resolves the decoration before resolving the font and background.
+For each committed daily selection, Refrain resolves the canonical decoration before resolving the canonical font and background. These destination-independent selections are resolved once and persisted with the selection; configured destination overrides are applied afterward and cannot trigger new canonical selection.
 
 An available explicit content-entry decoration takes precedence over the default decoration pool. The value `"none"` suppresses decoration selection.
 
@@ -976,9 +986,9 @@ An absent decoration preference does not prevent explicit content-entry resource
 
 The selected decoration's complete inset override applies when present; otherwise the global insets apply.
 
-Content-level fields in this document express presentation preferences. The selected entry's preferences needed to interpret or present the committed quotation are captured in its daily selection record; regeneration does not reread the original content entry, and later edits do not change those captured preferences. Their resolved resources, colors, output geometry, effective insets, QR availability, ordered layers, and transformations are derived during image preparation and are not committed as resolved rendering decisions.
+Content-level fields in this document express presentation preferences. The selected entry's preferences needed to interpret or present the committed quotation are captured in its daily selection record; regeneration does not reread the original content entry, and later edits do not change those captured preferences. The canonical resources, colors, presentation style, font bundle and faces, and QR policy resolved from those preferences are persisted with that record. Destination overrides and output geometry, effective insets, QR availability, ordered layers, and transformations are resolved for preparation and are not part of the canonical selection.
 
-All variants generated together use consistent presentation-wide choices from the captured preferences, current configuration, and available assets. Raster-dependent geometry, wrapping, fitted font pixel sizes, QR viability and module size, and conditional QR/no-QR decoration layers may differ by output specification. A valid cached image set is reused even when those inputs change. If a new set must be generated, the captured preferences are resolved against current inputs and the resulting visual choices may differ.
+All variants generated together use the same persisted canonical choices and each destination's effective overrides. Raster-dependent geometry, wrapping, fitted font pixel sizes, QR viability and module size, and conditional QR/no-QR decoration layers may differ by output specification. A valid cached image set is reused even when configuration or assets change. If a new set must be generated, reuse the canonical selections rather than resolving the captured preferences or pools again; current output specifications and asset availability may affect preparation results but do not change canonical choices.
 
 The presentation-level QR policy defaults to enabled. Effective QR availability is resolved for each output specification using that policy, the selected decoration's `qr_ready` value, valid in-bounds design-space placement, and sufficient presentation-canvas pixels for at least one pixel per QR module. Resolve this complete decision before selecting conditional decoration layers. QR rasterization and composition occur later on the presentation canvas after literary rendering; layer `condition` values select artwork but do not enable or disable QR generation.
 
@@ -1563,7 +1573,7 @@ An entry cannot override the quotation reveal time in Version 0.1.
 
 The effective reveal schedule is resolved when preparing the daily selection record.
 
-The selected quotation, its captured content-level presentation preferences, and its resolved reveal schedule do not change if the original entry or global configuration later changes. Regeneration does not reread the original entry. If regeneration is necessary, captured preferences are resolved against current application configuration and available assets, so the resulting image set may reflect those current inputs.
+The selected quotation, its captured content-level presentation preferences, canonical presentation, and resolved reveal schedule do not change if the original entry or global configuration later changes. Regeneration does not reread the original entry or reselect canonical resources from changed pools. If regeneration is necessary, the persisted canonical selections are prepared using current output specifications and available assets; the rendered result may reflect those inputs without changing canonical identity.
 
 ### Override validation
 
