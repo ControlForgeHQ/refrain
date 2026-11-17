@@ -1781,9 +1781,7 @@ Record validation limitations honestly.
 
 ### Installation approach
 
-For the supported artifact-based Linux installation, systemd operations, and manual
-validation procedure, see [LINUX_SERVICE.md](LINUX_SERVICE.md). Hardware setup
-and permissions are specified in the packaged Waveshare backend guide.
+For supported Linux deployments, use an unprivileged application identity and systemd supervision. Hardware setup and permissions are specified in the packaged Waveshare backend guide.
 
 The installed package includes a complete default configuration and sample content library as package resources. Explicit initialization copies these resources to standard per-user locations, but ordinary startup never performs installation or repairs missing user configuration.
 
@@ -1804,6 +1802,10 @@ Reset removes only the standard state file, active and rotated global-history fi
 Use systemd for unattended deployment on Raspberry Pi OS.
 
 The service should start automatically when enabled and recover from unexpected application termination according to a bounded restart policy.
+
+Service startup must not depend on network availability. A network-dependent destination must not prevent locally attached displays from operating.
+
+Configure the host timezone and provide reliable clock synchronization appropriate to the deployment. The supplied systemd unit does not guarantee that clock synchronization has completed before Refrain starts. Systems without a reliable real-time clock may initially select content using an incorrect date; operators requiring a trustworthy initial selection must arrange for clock readiness before service startup.
 
 Avoid duplicating systemd supervision in application code.
 
