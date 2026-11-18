@@ -10,7 +10,7 @@ Use ordinary mappings, sequences, strings, integers, and booleans. Mapping keys 
 
 All three manifests require `format: 1`, where `1` is an integer, and a valid `id`. Booleans do not satisfy integer fields. Explicit null is invalid unless a field's recovery rule handles it.
 
-Unknown manifest and layer fields produce warnings and are ignored unless a stricter rule is stated below. They do not define extensions or drawing instructions.
+Unknown manifest and layer fields produce warnings and are ignored unless a stricter rule is stated below. Nested `anchor` and `slices` parameter mappings are strict: unknown fields invalidate the containing resource. Unknown fields do not define extensions or drawing instructions.
 
 ## Resource identifiers and discovery
 
@@ -36,7 +36,11 @@ Every successfully registered asset is available by identifier independently of 
 
 Custom assets cannot shadow bundled identifiers. A readable bundled manifest with a syntactically valid identifier claims that identifier even if another manifest field or referenced resource makes the asset unusable. A bundled standalone background similarly claims its valid filename-stem identifier. An identifier is not reserved once no bundled resource claims it.
 
-All custom resources sharing an identifier in one category are excluded. Diagnostics list their locations deterministically; filesystem enumeration order must not select a custom winner. Unrelated resources remain usable.
+Bundled resources sharing an identifier within the same category are conflicting distribution data. All conflicting bundled resources are excluded, with deterministic diagnostics identifying their locations. Discovery order must not select a winner. Their claimed identifier remains unavailable to custom resources.
+
+Custom resources are individually validated before custom identifier collisions are evaluated. Invalid custom resources do not claim identifiers or participate in collision detection. When two or more otherwise valid custom resources share an identifier within the same category, all conflicting custom resources are excluded. Diagnostics identify their locations deterministically; filesystem enumeration order must not select a winner.
+
+Identifiers are independent between resource categories. An identifier used by a font bundle may also be used by a background or decoration.
 
 ### Resource paths
 
@@ -59,7 +63,11 @@ Each bundle contains a `font.yaml` manifest and its referenced font files.
 
 Face identifiers use the shared identifier syntax. A bundle must contain a usable face named `regular`. Files need not all belong to one typographic family. Font files must be readable and loadable by the Pillow renderer.
 
-An invalid face name or structurally invalid required manifest data excludes the bundle. A missing, invalid, or unusable `regular` face excludes it. An unusable optional face is diagnosed and excluded individually, leaving an otherwise usable bundle available. Every referenced face must obey the package path-confinement rules.
+An invalid face name or structurally invalid required manifest data excludes the bundle. A missing, invalid, unreadable, unsafe, or otherwise unusable `regular` face excludes the bundle.
+
+An invalid optional face is diagnosed and excluded individually, leaving an otherwise usable bundle available. This includes missing or unreadable files, unsupported font data, invalid paths, and paths that violate package confinement. Unsafe paths must never be followed outside the package.
+
+Every referenced face must obey the package path-confinement rules. Optional-face recovery does not permit references outside the package or relax validation of the required `regular` face.
 
 Bundled font directories retain their applicable license and copyright files. Redistribution requirements are described in [Engineering](../ENGINEERING.md#font-loading-and-resolution).
 
@@ -162,7 +170,11 @@ Insets are measured inward from the selected aspect-specific design canvas, inde
 | `16:9` | 3840 × 2160 |
 | `16:10` | 3840 × 2400 |
 
-Opposing insets must leave positive width and height: `left + right < canvas width` and `top + bottom < canvas height`. Missing edges, negative values, booleans, fractional values, strings, and null are invalid. Invalid inset metadata excludes the decoration.
+Opposing insets must leave positive width and height for every aspect ratio used by the configured destinations: `left + right < canvas width` and `top + bottom < canvas height`.
+
+Validation uses the design canvases corresponding to configured destination aspects, not every aspect ratio Refrain supports. A decoration whose insets are incompatible with any configured destination aspect is excluded from the usable resource registry with an actionable warning. Adding or changing destinations requires validating decorations against the resulting configured aspect set.
+
+Missing edges, negative values, booleans, fractional values, strings, and null are invalid. Invalid inset metadata excludes the decoration without affecting unrelated valid resources.
 
 The literary rectangle contains the complete quotation and any source and attribution, including fields awaiting reveal. Insets do not reserve QR space or detect artwork overlap. Authors must check the resulting composition. Geometry resolution, scaling, and stable fitting follow [Architecture](../ARCHITECTURE.md#literary-presentation-geometry).
 
@@ -267,7 +279,9 @@ Both anchor axes must be supplied, even if one is geometrically redundant for th
 | `horizontal` | `stretch` or `crop` | No | `stretch`. |
 | `vertical` | `stretch` or `crop` | No | `stretch`. |
 
-Booleans, fractional values, negative measurements, and non-integer values are invalid. The left and right distances must sum to no more than the source width; top and bottom must sum to no more than its height. Source regions required by the destination must contain usable artwork.
+The `slices` mapping accepts only the six fields listed above. Unknown fields invalidate the containing resource rather than being ignored. Booleans, fractional values, negative measurements, and non-integer values are invalid.
+
+The left and right distances must sum to no more than the source width; top and bottom must sum to no more than its height. Source regions required by the destination must contain usable artwork.
 
 The four distances partition the actual source into nine regions and also specify preserved edge thicknesses on the design canvas, numerically 1:1. Do not first scale the source or its slice boundaries through the reference envelope.
 
@@ -289,7 +303,15 @@ Conditions preserve the relative order of remaining layers. They neither enable 
 
 Malformed YAML, unsupported `format`, invalid identifiers, structurally invalid required data, invalid layer definitions or parameter combinations, invalid images, and invalid decoration insets exclude the affected resource without invalidating unrelated resources. Invalid optional font faces follow the font-specific recovery rule above.
 
-Discovery validates image metadata and integrity; successful registration does not guarantee that decoding or every canvas-dependent transformation will succeed later. Invalid nine-slice source boundaries exclude the resource. Destination-dependent transformation failures are handled during preparation according to [Architecture](../ARCHITECTURE.md#background-and-decoration-recovery).
+Discovery validates image metadata and integrity; successful registration does not guarantee that decoding or every canvas-dependent transformation will succeed later. Invalid nine-slice source boundaries exclude the resource. Canvas-dependent transformation failures are detected during preparation.
+
+If any eligible layer of a packaged background fails during preparation, the complete background composition is discarded and paper-white is used.
+
+If any eligible layer of a decoration fails during ordinary preparation, the entire decoration composition is discarded. The output uses the normal no-decoration fallback, including global presentation insets. Successfully prepared layers from the failed decoration must not be retained. Strict viewer requests report the failure rather than silently applying this fallback.
+
+Both recovery paths emit actionable diagnostics. They preserve the committed quotation, canonical presentation identity, and reveal progression. Prepared-output metadata records the actual effective presentation rather than an incomplete or failed composition.
+
+Detailed recovery and persistence requirements are defined in [Architecture](../ARCHITECTURE.md#background-and-decoration-recovery).
 
 Recoverable optional metadata uses only its stated fallback: ignored preferences, ignored malformed face-preference mappings, default `true` for malformed tintability/readiness, and QR suppression for invalid placement. Invalid optional metadata must not silently gain invented values.
 
