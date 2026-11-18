@@ -23,7 +23,7 @@ One dataset has progressively populated sections. The validation stage determine
 
 `schema_version` is the integer `1` in every form. A present section is complete for its form; a partial `presentation` or `publication` object is invalid. No root stage discriminator is defined. Checkpoints are not completed publications.
 
-A completed scheduled document has `publication.publication_type: "scheduled"`; a completed transient document has `publication.publication_type: "transient"`. A transient document contains no literary content, presentation choices, or actions, including null or empty placeholders for those sections.
+A completed scheduled document has `publication.type: "scheduled"`; a completed transient document has `publication.type: "transient"`. A transient document contains no literary content, presentation choices, or actions, including null or empty placeholders for those sections.
 
 ## Content
 
@@ -66,7 +66,7 @@ Completed scheduled validation with a supplied audience rejects every action tha
 
 | Field | Type | Constraint |
 |---|---|---|
-| `presentation_style` | String | `"centered"` or `"left-aligned"`. |
+| `style` | String | `"centered"` or `"left-aligned"`. |
 | `background` | String | Resolved stable background identifier or `"none"`. |
 | `decoration` | String | Resolved stable decoration identifier or `"none"`. |
 | `fonts` | Object | Exactly `bundle` and `faces`, as below. |
@@ -91,13 +91,13 @@ Font-size bounds and insets are effective configuration values in design-canvas 
 
 | Field | Type | Constraint |
 |---|---|---|
-| `publication_id` | String | Nonblank publication-event identifier. Filesystem datasets additionally satisfy the manifest identity constraints below. |
-| `publication_type` | String | `"scheduled"` or `"transient"`. |
-| `published_at` | String | Valid UTC RFC-3339 timestamp ending in `Z`. |
+| `id` | String | Nonblank publication-event identifier. Filesystem datasets additionally satisfy the manifest identity constraints below. |
+| `type` | String | `"scheduled"` or `"transient"`. |
+| `timestamp` | String | Valid UTC RFC-3339 timestamp ending in `Z`. |
 | `destination_id` | String | Configured destination identifier matching `[A-Za-z0-9][A-Za-z0-9_-]*`, at most 256 characters. |
 | `output_specification` | Object | Exactly `aspect_ratio` and `requested_output_size`, as below. |
 
-`publication_id` identifies one publication event, independently of selection revision and visibility. `published_at` denotes the event timestamp, not the logical display date. Naive timestamps and local-time strings without an offset are invalid; the JSON value is UTC with `Z`.
+`id` identifies one publication event, independently of selection revision and visibility. `timestamp` denotes the event timestamp, not the logical display date. Naive timestamps and local-time strings without an offset are invalid; the JSON value is UTC with `Z`.
 
 `output_specification.aspect_ratio` is one of `"4:3"`, `"5:3"`, `"16:9"`, or `"16:10"`. `requested_output_size` is an array of exactly two positive integers, width then height, identifying the actual requested image size. Aspect and requested size are independent declared output values; the size need not have the declared aspect's mathematical ratio. This object contains no calculated layout dimensions.
 
@@ -118,9 +118,9 @@ Each destination directory has one stable `manifest.json`. It contains exactly:
 | Field | Type | Constraint |
 |---|---|---|
 | `schema_version` | Integer | Exactly `1`. |
-| `publication_id` | String | Publication-event identifier satisfying the filename constraints below. |
-| `image_filename` | String | Exactly `<publication_id>.png`. |
-| `metadata_filename` | String | Exactly `<publication_id>.json`. |
+| `id` | String | Publication-event identifier satisfying the filename constraints below. |
+| `image_filename` | String | Exactly `<id>.png`. |
+| `metadata_filename` | String | Exactly `<id>.json`. |
 | `image_sha256` | String | Lowercase 64-character hexadecimal SHA-256 digest of the image file bytes. |
 | `metadata_sha256` | String | Lowercase 64-character hexadecimal SHA-256 digest of the metadata file bytes. |
 
@@ -128,7 +128,7 @@ The manifest contains no destination audience, reconstruction fields, history in
 
 ### Identity and filenames
 
-For filesystem publication, `publication_id` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,239}` and must not be a Windows-reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, or `LPT1` through `LPT9`, without regard to case. This 240-character maximum applies to the filesystem dataset identity; metadata's standalone publication-ID requirement is a nonblank string.
+For filesystem publication, `id` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,239}` and must not be a Windows-reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, or `LPT1` through `LPT9`, without regard to case. This 240-character maximum applies to the filesystem dataset identity; metadata's standalone publication-ID requirement is a nonblank string.
 
 Both referenced filenames are relative single-component names in the same destination directory, derived exactly from that identity. Arbitrary paths, separators, dots in the ID, traversal components, drive-qualified paths, and absolute paths are invalid. The stable manifest filename is always `manifest.json`.
 
@@ -138,7 +138,7 @@ The destination directory is a direct child of the effective `storage.publish` r
 
 A valid filesystem dataset contains the manifest, both referenced regular files in its destination directory without filesystem redirection, and completed metadata. Both stored file hashes must match the manifest's SHA-256 values.
 
-The completed metadata's `publication.publication_id` equals the manifest's `publication_id`; `publication.destination_id` equals the owning directory's destination ID. The image is a complete single-frame PNG with dimensions equal to `publication.output_specification.requested_output_size`. Scheduled and transient completed documents are both valid dataset metadata; checkpoints are not.
+The completed metadata's `publication.id` equals the manifest's `id`; `publication.destination_id` equals the owning directory's destination ID. The image is a complete single-frame PNG with dimensions equal to `publication.output_specification.requested_output_size`. Scheduled and transient completed documents are both valid dataset metadata; checkpoints are not.
 
 Digests describe exact file bytes, including JSON whitespace and PNG encoding. Equivalent parsed JSON does not imply equal hashes. Filesystem behavior is defined in [Architecture](../ARCHITECTURE.md#dataset-publication-and-recovery) and [Engineering](../ENGINEERING.md#filesystem-publication-storage).
 
@@ -232,7 +232,7 @@ The same content has a complete presentation section. Publication is absent.
     ]
   },
   "presentation": {
-    "presentation_style": "centered",
+    "style": "centered",
     "background": "paper",
     "decoration": "none",
     "fonts": {
@@ -300,7 +300,7 @@ This public destination record has source visibility enabled and includes only t
     ]
   },
   "presentation": {
-    "presentation_style": "centered",
+    "style": "centered",
     "background": "paper",
     "decoration": "none",
     "fonts": {
@@ -331,9 +331,9 @@ This public destination record has source visibility enabled and includes only t
     }
   },
   "publication": {
-    "publication_id": "publication-example",
-    "publication_type": "scheduled",
-    "published_at": "2026-11-18T17:00:00Z",
+    "id": "publication-example",
+    "type": "scheduled",
+    "timestamp": "2026-11-18T17:00:00Z",
     "destination_id": "web-public",
     "output_specification": {
       "aspect_ratio": "16:10",
@@ -352,9 +352,9 @@ This public destination record has source visibility enabled and includes only t
 {
   "schema_version": 1,
   "publication": {
-    "publication_id": "transient-example",
-    "publication_type": "transient",
-    "published_at": "2026-11-18T17:01:00Z",
+    "id": "transient-example",
+    "type": "transient",
+    "timestamp": "2026-11-18T17:01:00Z",
     "destination_id": "web-public",
     "output_specification": {
       "aspect_ratio": "16:10",
@@ -375,10 +375,11 @@ This manifest describes the supplied complete transient example dataset. Its has
 ```json
 {
   "schema_version": 1,
-  "publication_id": "transient-example",
+  "id": "transient-example",
   "image_filename": "transient-example.png",
   "metadata_filename": "transient-example.json",
   "image_sha256": "9d8e0815185722c4cf8d7fa49fcf7fd71207f427aef740e589ae8b033a60511a",
-  "metadata_sha256": "0e46986ff4c1c3da30af0de732943005211a92361fc465f7e063ef4e649db1b1"
+  "metadata_sha256": "6c44b32455de4c38f6c4762015cdbb467b3fc3d27db43fe97195431b668ff17a"
 }
 ```
+
