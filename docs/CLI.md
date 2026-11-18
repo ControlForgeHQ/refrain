@@ -1,6 +1,6 @@
 # Command-line usage
 
-This document is the authoritative public reference for command syntax, argument behavior, mode conflicts, results, and user-facing command diagnostics. Runtime behavior behind these commands is defined in [the architecture](ARCHITECTURE.md); implementation and testing guidance is in [Engineering](ENGINEERING.md).
+This document is the authoritative public reference for command syntax, argument behavior, mode conflicts, results, and user-facing command diagnostics.
 
 ## Primary `refrain` application
 
@@ -24,7 +24,7 @@ refrain [--config PATH] --demo SECONDS
 
 `--config PATH` selects the application configuration for the demo, or the standard configuration is used when omitted. `SECONDS` must be a positive finite number of seconds, including fractional values such as `0.125`; zero, negative values, NaN, infinity, and nonnumeric values are rejected. It requests the minimum monotonic viewing interval for each reveal stage. Demo is a standalone backend-owning mode, but it uses fresh temporary session storage rather than configured or standard production persistence. It uses one eligibility display date for the session, suppresses the startup information view, and continues stage progression when destinations are unavailable, subject to preparation succeeding. The resident ownership rule prevents concurrent normal or demo runtimes.
 
-See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progression and [Engineering](ENGINEERING.md#demo-session-ownership-and-timing) for lifecycle and validation requirements. Demo continues until shutdown. Orderly shutdown returns `0`; reported startup or runtime errors return `1`, and invalid arguments return `2`.
+See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progression. Demo continues until shutdown. Orderly shutdown returns `0`; reported startup or runtime errors return `1`, and invalid arguments return `2`.
 
 ### Initialize
 
@@ -54,7 +54,7 @@ refrain --purge
 
 Purge is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. Both input and output must be interactive terminals, and the confirmation must be exactly `PURGE REFRAIN` (case-sensitive, with one space between the words and no extra spaces). There is no noninteractive bypass. Cancellation leaves the installation unchanged. Purge includes the standard user assets and publication root but does not follow configured custom paths. Stop any independent consumer that may read publication data before purging it.
 
-`--config PATH` cannot be combined with `--purge`. Successful purge returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`. See [Architecture](ARCHITECTURE.md#application-paths-and-initialization) and [Engineering](ENGINEERING.md#filesystem-locations) for deletion scope and safety.
+`--config PATH` cannot be combined with `--purge`. Successful purge returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`. See [Architecture](ARCHITECTURE.md#application-paths-and-initialization) for deletion scope and safety.
 
 ## Resident runtime control
 
@@ -180,9 +180,9 @@ refrain-viewer --publication publication.json \
 ```
 
 The viewer requires a valid completed publication document and accepts only
-`publication_type: scheduled`. It rejects preparation-stage, incomplete,
+`publication.type: "scheduled"`. It rejects preparation-stage, incomplete,
 malformed, unsupported-version, transient, or structurally invalid metadata.
-The [publication metadata schema](schemas/PUBLICATION_METADATA.md) defines the
+The [publication metadata schema](schemas/PUBLICATION.md#metadata-document-shapes) defines the
 document contract; the viewer does not finalize or repair metadata.
 
 The committed quotation, source, attribution, presentation style, and resolved
