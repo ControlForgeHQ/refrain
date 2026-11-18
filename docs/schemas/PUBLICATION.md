@@ -140,7 +140,7 @@ A valid filesystem dataset contains the manifest, both referenced regular files 
 
 The completed metadata's `publication.id` equals the manifest's `id`; `publication.destination_id` equals the owning directory's destination ID. The image is a complete single-frame PNG with dimensions equal to `publication.output_specification.requested_output_size`. Scheduled and transient completed documents are both valid dataset metadata; checkpoints are not.
 
-Digests describe exact file bytes, including JSON whitespace and PNG encoding. Equivalent parsed JSON does not imply equal hashes. Filesystem behavior is defined in [Architecture](../ARCHITECTURE.md#dataset-publication-and-recovery) and [Engineering](../ENGINEERING.md#filesystem-publication-storage).
+Digests describe exact file bytes, including JSON whitespace and PNG encoding. Equivalent parsed JSON does not imply equal hashes. Filesystem behavior is defined in [Architecture](../ARCHITECTURE.md#dataset-publication-and-recovery).
 
 ## Complete examples
 
@@ -382,4 +382,5 @@ This manifest describes the supplied complete transient example dataset. Its has
   "metadata_sha256": "6c44b32455de4c38f6c4762015cdbb467b3fc3d27db43fe97195431b668ff17a"
 }
 ```
+
 

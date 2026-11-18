@@ -168,7 +168,7 @@ font: "@literary"
 
 A registered font need not belong to the default pool to be preferred explicitly. There is no list form or direct font-file path interface. The reserved value `none` is not a font preference and invalidates the entry. Empty, whitespace-only, malformed, null, and non-string values are also invalid. A syntactically valid but unavailable font identifier does not invalidate the entry; normal resource fallback applies.
 
-The documented resolution order is the entry preference, selected decoration preference, then automatic selection from the effective default font pool. A usable explicit entry or decoration preference does not require a usable default pool. Availability checks, warnings, font loading, and fallback are owned by [Architecture](../ARCHITECTURE.md#font-selection).
+The documented resolution order is the entry preference, selected decoration preference, then automatic selection from the effective default font pool. A usable explicit entry or decoration preference does not require a usable default pool.
 
 ### Font faces
 
@@ -183,7 +183,7 @@ font_faces:
 
 Each value must be a nonempty, case-sensitive ASCII face identifier using the shared identifier syntax. Unknown roles, non-mapping values, explicit nulls, empty strings, and invalid identifiers reject the entry without rejecting unrelated entries.
 
-A syntactically valid face need not exist in every bundle. This mapping does not select a bundle and has no catch-all role or per-quotation form. The first defined role preference wins in the order entry, decoration, bundle manifest, global `fonts.faces`, then implicit `regular`. An explicit `regular` overrides lower preferences. If the winning face is unavailable, that bundle's `regular` face is used with a warning; lower-level face preferences are not consulted. Runtime face resolution is owned by [Architecture](../ARCHITECTURE.md#font-selection).
+A syntactically valid face need not exist in every bundle. This mapping does not select a bundle and has no catch-all role or per-quotation form. The first defined role preference wins in the order entry, decoration, bundle manifest, global `fonts.faces`, then implicit `regular`. An explicit `regular` overrides lower preferences. If the winning face is unavailable, that bundle's `regular` face is used with a warning; lower-level face preferences are not consulted.
 
 ### Background
 
@@ -247,7 +247,7 @@ text_color: ["black", "@neutral"]
 
 A declaration must be a string or a nonempty sequence. An invalid outer structure, including null, an empty sequence, a mapping, or another unsupported type, invalidates the entry. Within a structurally valid sequence, invalid member types, malformed identifiers, direct RGB literals, and unavailable identifiers are diagnosed and excluded individually without invalidating the entry. Valid members remain usable. If no usable members remain, the preference falls through to the next level. Duplicate identifiers do not add weight. Palette availability is evaluated during preparation.
 
-The documented fallback order is entry, selected background, selected decoration, effective global text-color pool, then built-in `black`. Candidates from different levels are not combined. Runtime selection is owned by [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection).
+The documented fallback order is entry, selected background, selected decoration, effective global text-color pool, then built-in `black`. Candidates from different levels are not combined.
 
 ### Decoration color
 
@@ -259,7 +259,7 @@ decoration_color: ["black", "@muted"]
 
 It uses the shared palette but an independent pool namespace. The same structural and member-level validation rules as `text_color` apply: an invalid outer structure invalidates the entry, while invalid or unavailable individual candidates are diagnosed and excluded without invalidating the entry. A preference with no usable candidates falls through. Duplicate identifiers do not add weight.
 
-The documented fallback order is entry, selected background, selected decoration, effective global decoration-color pool, then built-in `black`, without combining levels. This preference affects only effectively tintable selected decoration layers; it never recolors the background. No decoration color is resolved when no layer is effectively tintable. Runtime tinting and selection belong to [Architecture](../ARCHITECTURE.md#decoration-tinting).
+The documented fallback order is entry, selected background, selected decoration, effective global decoration-color pool, then built-in `black`, without combining levels. This preference affects only effectively tintable selected decoration layers; it never recolors the background. No decoration color is resolved when no layer is effectively tintable.
 
 ### Presentation style
 
@@ -468,7 +468,7 @@ Diagnostics identify the affected file and field or entry, where applicable, and
 
 Omitted optional content-entry fields use their documented defaults or absence semantics silently. No informational diagnostic is required or emitted solely because an optional field was omitted.
 
-For content diagnostics, `INFO` denotes useful operational information that does not indicate a configuration or content problem. `WARNING` identifies a recoverable problem or rejected item when usable content remains available. `ERROR` identifies an unsatisfied required library condition. Logging and process-output requirements belong to [Engineering](../ENGINEERING.md#logging-and-diagnostics). Application-configuration diagnostic behavior is defined in [Application Configuration](CONFIGURATION.md#validation-and-compatibility).
+For content diagnostics, `INFO` denotes useful operational information that does not indicate a configuration or content problem. `WARNING` identifies a recoverable problem or rejected item when usable content remains available. `ERROR` identifies an unsatisfied required library condition. Application-configuration diagnostic behavior is defined in [Application Configuration](CONFIGURATION.md#validation-and-compatibility).
 
 Repetition-history cleanup, the effect of rejected entries on repetition identity, successful-selection commitment, and independence of an already committed selection belong to [Architecture](../ARCHITECTURE.md#selection-pools-and-repetition). A library-level failure must not be treated as an intentionally empty library for cleanup.
 
@@ -477,3 +477,4 @@ Repetition-history cleanup, the effect of rejected entries on repetition identit
 Unknown entry fields are invalid. Content entries do not support per-quotation metadata or presentation preferences, arbitrary eligibility expressions, content-level presentation geometry, or executable instructions.
 
 Opaque actions are declarations for external consumers; Refrain does not execute them.
+

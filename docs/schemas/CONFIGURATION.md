@@ -192,7 +192,7 @@ fonts:
 
 Do not combine either configurable geometry form with a Waveshare destination. Its valid declaration is shown without geometry fields in the complete example.
 
-A `publish` destination has no destination-local filesystem path. Its directory is a direct child of the effective `storage.publish` root, named from its destination ID. Publication file structures belong to [Publication Manifest](PUBLICATION_MANIFEST.md).
+A `publish` destination has no destination-local filesystem path. Its directory is a direct child of the effective `storage.publish` root, named from its destination ID. Publication file structures belong to [Publication manifest](PUBLICATION.md#manifest-fields).
 
 ### Destination overrides
 
@@ -273,7 +273,7 @@ The standard storage-directory defaults are:
 
 On Linux, an unset, empty, or nonabsolute `XDG_STATE_HOME` uses `~/.local/state`; the corresponding `XDG_CACHE_HOME` fallback is `~/.cache`. These environment variables are host path inputs, not YAML fields.
 
-Platform path resolution and storage lifecycles belong to [Architecture](../ARCHITECTURE.md#application-paths-and-initialization) and [Engineering](../ENGINEERING.md#file-paths).
+Platform path resolution and storage lifecycles belong to [Architecture](../ARCHITECTURE.md#application-paths-and-initialization).
 
 A supplied `storage` value must be a mapping. An invalid `storage.content` value produces a warning and uses its default. Invalid explicitly supplied `state`, `artifacts`, or `publish` values are errors; they do not fall back to platform paths. Unknown storage fields are warned about and ignored.
 
@@ -315,7 +315,7 @@ scheduling:
 
 Reveal times must be on the same local calendar date as the configured day start and must not precede it.
 
-Per-entry reveal declarations belong to the content-entry schema. Display-date calculation, cumulative stages, commitment, clock changes, and missed events belong to [Architecture](../ARCHITECTURE.md#progressive-reveal).
+Per-entry reveal declarations are defined in [Content Entries](CONTENT.md#per-entry-reveal-overrides). Display-date calculation, cumulative stages, commitment, clock changes, and missed events belong to [Architecture](../ARCHITECTURE.md#progressive-reveal).
 
 ## Presentation defaults
 
@@ -347,7 +347,7 @@ Insets are measured inward from the aspect-specific design canvas, not the reque
 
 For the active design canvas, `left + right` must be less than its width and `top + bottom` less than its height. The resulting literary rectangle must have positive width and height.
 
-A selected decoration's complete `presentation_insets` replaces the global mapping; otherwise the global mapping applies. Asset-side declarations belong to the asset schema. Content entries cannot directly specify insets. Scaling, rounding, composition, and fitting requirements belong to [Architecture](../ARCHITECTURE.md#literary-presentation-geometry).
+A selected decoration's complete `presentation_insets` replaces the global mapping; otherwise the global mapping applies. Asset-side declarations are defined in [Assets](ASSETS.md#presentation-insets). Content entries cannot directly specify insets. Scaling, rounding, composition, and fitting requirements belong to [Architecture](../ARCHITECTURE.md#literary-presentation-geometry).
 
 ### Information view
 
@@ -369,7 +369,7 @@ This is a startup-presentation setting, not an external request interface or an 
 
 This setting controls literary presentations and does not affect the standalone information view. A selected decoration may suppress QR through its asset-side `qr_ready` field; a destination may suppress it using `overrides.qr: "none"`.
 
-The QR payload, placement, and size are not configurable through application configuration or content entries. QR generation, output-dependent availability, conditional artwork, placement, and raster rules are defined in [Architecture](../ARCHITECTURE.md#qr-generation-and-conditional-artwork). Decoration positioning fields are defined in the asset schema.
+The QR payload, placement, and size are not configurable through application configuration or content entries. QR generation, output-dependent availability, conditional artwork, placement, and raster rules are defined in [Architecture](../ARCHITECTURE.md#qr-generation-and-conditional-artwork). Decoration positioning fields are defined in [Assets](ASSETS.md#qr-readiness-and-positioning).
 
 ## Palette
 
@@ -398,7 +398,7 @@ Configuration selects registered resources by stable identifier. It does not reg
 
 Bundled resources come from package resources. User fonts, backgrounds, and decorations are discovered recursively under `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` beside the selected configuration file. An alternate configuration file supplies its own containing directory as the assets root; neither the working directory nor the standard configuration directory supplies additional user assets in that case. `storage.content` is independent of this assets root.
 
-Resource discovery, registration, and validation use the asset formats and requirements defined in the asset schema. Discovered valid resources are available by identifier even when absent from a default pool. Discovery alone does not add them to a configured pool.
+Resource discovery, registration, and validation use the formats and requirements defined in [Assets](ASSETS.md#resource-identifiers-and-discovery). Discovered valid resources are available by identifier even when absent from a default pool. Discovery alone does not add them to a configured pool.
 
 ### Pool declarations
 
@@ -438,15 +438,13 @@ The `@` reference syntax applies only in supported resource-selection positions.
 
 ### Pool validity and effective membership
 
-Invalid pool names or malformed definitions are diagnosed without discarding unrelated valid definitions. Malformed or unknown references and invalid or unavailable identifiers warn and contribute no candidates. Duplicate resolved identifiers contribute one candidate, retaining the first occurrence. Duplicate font and color identifiers are diagnosed. Cyclic pool references are permitted; their expansion is specified in Architecture.
+Invalid pool names or malformed definitions are diagnosed without discarding unrelated valid definitions. Malformed or unknown references and invalid or unavailable identifiers warn and contribute no candidates. Duplicate resolved identifiers contribute one candidate, retaining the first occurrence. Duplicate font and color identifiers are diagnosed. Cyclic pool references are permitted; their expansion is specified in [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection).
 
 Each named pool retains its actual expanded membership, including an empty `default`. Runtime fallbacks do not insert `none` or `black` into an empty named pool. An explicit reference to that pool remains empty; it does not acquire an implicit `builtin` pool.
 
 A missing or malformed required `fonts.pools.default`, including an explicitly empty sequence, is an error. Invalid or unavailable font members are excluded with warnings. A nonempty font declaration whose usable expansion is empty does not by itself prohibit operation with an otherwise usable explicit content or decoration font preference. Preparation requiring automatic font selection needs at least one usable default candidate; there is no unrelated bundled-font fallback.
 
 Missing background or decoration defaults use `["none"]`. Missing color defaults use `["black"]`. Invalid optional default declarations warn; unusable members are excluded. Automatic background, decoration, and color fallbacks are defined in [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection), separately from named-pool membership.
-
-Expansion order, recursion handling, equal-probability selection, resource precedence, face fallback, and strict viewer requests are owned by Architecture and [CLI](../CLI.md#presentation-overrides).
 
 ### Global font faces
 
@@ -475,7 +473,7 @@ The optional `text` mapping accepts `min_font_size`, `max_font_size`, and `color
 
 Bounds default independently when omitted. Explicit invalid bounds, including booleans, strings, floating-point values, nonpositive values, or an inverted effective range, are errors.
 
-These are automatic primary-quotation sizing limits, not a fixed size and not automatic source or attribution limits. Their units are design-canvas pixels, not requested output-image pixels. Scaling and fitting belong to Architecture. Content entries cannot directly set these bounds.
+These are automatic primary-quotation sizing limits, not a fixed size and not automatic source or attribution limits. Their units are design-canvas pixels, not requested output-image pixels. Content entries cannot directly set these bounds.
 
 ## Validation and compatibility
 
@@ -501,4 +499,5 @@ Diagnostics identify the configuration file and affected field and explain wheth
 - `WARNING`: A recoverable problem remains compatible with usable effective configuration.
 - `ERROR`: A required effective condition cannot be satisfied.
 
-Log transport, repetition control, and process-output requirements belong to Engineering. Validation must not overwrite the configuration file or mutate authoritative operational state on a failed load.
+Validation must not overwrite the configuration file or mutate authoritative operational state on a failed load.
+

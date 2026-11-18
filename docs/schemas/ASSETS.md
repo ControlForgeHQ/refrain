@@ -198,7 +198,7 @@ Decoration-wide and per-layer `tintable` values must be YAML booleans. Both defa
 
 Effective layer tintability is `decoration.tintable AND layer.tintable`. Tinting uses one selected decoration color for effectively tintable layers, replacing RGB while preserving source alpha. Set `tintable: false` on the decoration or individual layer when authored RGB must survive. Opaque grayscale differences do not survive RGB replacement.
 
-There is no per-layer palette choice or separate tint-activation field. `text_color` affects literary text, not artwork. Neither color preference recolors background artwork. Runtime color selection is specified in [Architecture](../ARCHITECTURE.md#decoration-tinting).
+There is no per-layer palette choice or separate tint-activation field. `text_color` affects literary text, not artwork. Neither color preference recolors background artwork.
 
 ### QR readiness and positioning
 
@@ -233,7 +233,7 @@ Both packaged backgrounds and decorations use nonempty, ordered layer sequences.
 | `condition` | `always`, `qr`, or `no-qr` | Decoration only; optional | `always`. |
 | `tintable` | Boolean | Decoration only; optional | `true`. |
 
-Values are case-sensitive. Layers composite in declaration order. All decoration artwork is behind literary text and QR; no foreground phase or arbitrary z-index is defined. [Architecture](../ARCHITECTURE.md#raster-composition-pipeline) specifies composition order and rendering.
+Values are case-sensitive. Layers composite in declaration order. All decoration artwork is behind literary text and QR; no foreground phase or arbitrary z-index is defined.
 
 Full-canvas artwork should use the 3840 × 2400 reference-quality authoring size. Smaller PNGs are accepted but may lose sharpness when enlarged. Source dimensions do not establish an alternate reference coordinate system.
 
@@ -311,11 +311,9 @@ If any eligible layer of a decoration fails during ordinary preparation, the ent
 
 Both recovery paths emit actionable diagnostics. They preserve the committed quotation, canonical presentation identity, and reveal progression. Prepared-output metadata records the actual effective presentation rather than an incomplete or failed composition.
 
-Detailed recovery and persistence requirements are defined in [Architecture](../ARCHITECTURE.md#background-and-decoration-recovery).
-
 Recoverable optional metadata uses only its stated fallback: ignored preferences, ignored malformed face-preference mappings, default `true` for malformed tintability/readiness, and QR suppression for invalid placement. Invalid optional metadata must not silently gain invented values.
 
-Warnings must identify the affected file/resource and field where applicable and explain exclusion, ignoring, or fallback. Logging and resource-validation testing requirements are specified in [Engineering](../ENGINEERING.md#resource-validation).
+Warnings must identify the affected file/resource and field where applicable and explain exclusion, ignoring, or fallback.
 
 Resource-selection fallback, regular-face fallback, paper-white or omitted-artwork recovery, complete-image cache reuse, and canonical-selection stability follow [Architecture](../ARCHITECTURE.md#presentation-and-rendering). Registration does not require membership in a default pool. Empty pool membership is not repaired by adding fallback identifiers; pool validity is specified in [Application Configuration](CONFIGURATION.md#pool-validity-and-effective-membership). Strict viewer override behavior is specified in [CLI](../CLI.md#presentation-overrides).
 
@@ -450,4 +448,5 @@ layers:
       horizontal: crop
       vertical: crop
 ```
+
 
