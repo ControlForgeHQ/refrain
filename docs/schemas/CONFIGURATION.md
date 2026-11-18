@@ -72,8 +72,7 @@ image-server:
 
 storage:
   content: "content"
-  state: "state/current.json"
-  history: "state/global-history.jsonl"
+  state: "state"
   artifacts: "cache/artifacts"
   publish: "publication"
 
@@ -246,28 +245,37 @@ The optional `storage` mapping contains only the following nonempty path strings
 | Field | Default when omitted |
 |---|---|
 | `content` | `content/` beside the selected configuration file. |
-| `state` | Platform-standard operational-state file. |
-| `history` | Platform-standard global-history file. |
+| `state` | Platform-standard state directory. |
 | `artifacts` | Platform-standard prepared-artifact directory. |
 | `publish` | Platform-standard publication root. |
 
+`storage.state` identifies a directory containing Refrain's persistent state files, each with a fixed filename:
+
+| Filename | Purpose |
+|---|---|
+| `state.json` | Authoritative operational state. |
+| `global-history.jsonl` | Chronological global selection history. |
+| `publication.json` | Current publication checkpoint. |
+
+Global history is not independently configurable. Its existing recording, rotation, and retention semantics are unchanged.
+
 Absolute paths are used as specified. Relative paths are resolved from the directory containing the selected configuration file, not from the current working directory.
 
-Each omitted operational path retains its independent platform-standard default. Selecting a different configuration file or setting one storage path does not relocate the others. Only omitted `storage.content` follows the selected configuration file.
+Each omitted storage path retains its independent platform-standard default. Selecting a different configuration file or setting one storage path does not relocate the others. Only omitted `storage.content` follows the selected configuration file.
 
-The standard operational defaults are:
+The standard storage-directory defaults are:
 
-| Platform | `state` | `history` | `artifacts` | `publish` |
-|---|---|---|---|---|
-| Linux | `$XDG_STATE_HOME/refrain/state.json` | `$XDG_STATE_HOME/refrain/global-history.jsonl` | `$XDG_CACHE_HOME/refrain/artifacts` | `$XDG_STATE_HOME/refrain/publish` |
-| Windows | `%LOCALAPPDATA%\Refrain\State\state.json` | `%LOCALAPPDATA%\Refrain\State\global-history.jsonl` | `%LOCALAPPDATA%\Refrain\Cache\artifacts` | `%LOCALAPPDATA%\Refrain\Publish` |
-| macOS | `~/Library/Application Support/Refrain/State/state.json` | `~/Library/Application Support/Refrain/State/global-history.jsonl` | `~/Library/Caches/Refrain/artifacts` | `~/Library/Application Support/Refrain/Publish` |
+| Platform | `state` | `artifacts` | `publish` |
+|---|---|---|---|
+| Linux | `$XDG_STATE_HOME/refrain` | `$XDG_CACHE_HOME/refrain/artifacts` | `$XDG_STATE_HOME/refrain/publish` |
+| Windows | `%LOCALAPPDATA%\Refrain\State` | `%LOCALAPPDATA%\Refrain\Cache\artifacts` | `%LOCALAPPDATA%\Refrain\Publish` |
+| macOS | `~/Library/Application Support/Refrain/State` | `~/Library/Caches/Refrain/artifacts` | `~/Library/Application Support/Refrain/Publish` |
 
 On Linux, an unset, empty, or nonabsolute `XDG_STATE_HOME` uses `~/.local/state`; the corresponding `XDG_CACHE_HOME` fallback is `~/.cache`. These environment variables are host path inputs, not YAML fields.
 
 Platform path resolution and storage lifecycles belong to [Architecture](../ARCHITECTURE.md#application-paths-and-initialization) and [Engineering](../ENGINEERING.md#file-paths).
 
-A supplied `storage` value must be a mapping. An invalid `storage.content` value produces a warning and uses its default. Invalid explicitly supplied `state`, `history`, `artifacts`, or `publish` values are errors; they do not fall back to platform paths. Unknown storage fields are warned about and ignored.
+A supplied `storage` value must be a mapping. An invalid `storage.content` value produces a warning and uses its default. Invalid explicitly supplied `state`, `artifacts`, or `publish` values are errors; they do not fall back to platform paths. Unknown storage fields are warned about and ignored.
 
 ## Scheduling
 
