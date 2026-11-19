@@ -28,11 +28,12 @@ Implementation prompts should direct agents to these sources rather than duplica
 
 ## Documentation ownership and changes
 
-Read every Markdown document under `docs/specifications/` in full before beginning implementation, revision, or review work, regardless of the assigned scope. Read other documentation relevant to the assigned task.
+Read every Markdown document under `docs/specifications/` and `docs/DEVELOPMENT_STANDARDS.md` in full before beginning implementation, revision, or review work, regardless of the assigned scope. Read other documentation relevant to the assigned task.
 
 The authoritative documentation has distinct responsibilities:
 
 - `docs/specifications/` defines Refrain's required system behavior, component responsibilities, state ownership, architectural invariants, implementation constraints, and testing requirements.
+- `docs/DEVELOPMENT_STANDARDS.md` defines universal coding, dependency, linting, testing, logging, and validation standards.
 - `docs/CLI.md` defines the public command-line interface, including commands, arguments, accepted values, results, and diagnostics.
 - `docs/schemas/` contains the authoritative definitions of Refrain's data formats, including configuration, content, resources, publication, and persistent state where applicable.
 
@@ -50,9 +51,13 @@ If implementation reveals that protected documentation is incorrect, incomplete,
 
 Every pull request must identify changes to public interfaces and their associated documentation. Explicitly describe changes to field names, accepted values, defaults, validation rules, command syntax, and externally observable results. Changes to CLI and schema documentation require specific maintainer review.
 
+When a change affects documentation, check related documents for stale or contradictory statements and update the authoritative owning document when that update is authorized. If its editing restrictions prevent the update, report the discrepancy and recommend the correction in accordance with `AGENTS.md`; do not modify the protected document.
+
+A normal change should require edits to as few authoritative documents as practical, while still updating every document required by the approved change.
+
 ## Pull-request requirements
 
-Create a draft pull request for the assigned GitHub issue. Keep the implementation within the approved scope and use the existing pull request for subsequent revisions.
+Create a draft pull request for the assigned GitHub issue. Keep the implementation within the approved scope and use the existing pull request for subsequent revisions. A pull request should ordinarily address one independently reviewable concern.
 
 When the pull request is intended to complete the assigned issue, include an explicit closing reference in its description:
 
@@ -62,9 +67,10 @@ Closes #<issue>
 
 The pull-request description must identify:
 
-- the assigned issue and the implementation completed;
+- the assigned issue, why the change was needed, and the implementation completed;
 - significant implementation decisions or assumptions;
-- tests and validation performed, including any limitations;
+- tests and validation performed, including limitations and validation that could not be performed;
+- known implementation limitations;
 - changes to public interfaces and their associated documentation;
 - documentation discrepancies requiring maintainer attention.
 
@@ -89,7 +95,7 @@ Preserve the original pull-request description and chronological review discussi
 
 ## Validation
 
-Follow the testing and validation requirements in `docs/specifications/` and the assigned issue.
+Follow the testing and validation requirements in `docs/specifications/`, `docs/DEVELOPMENT_STANDARDS.md`, and the assigned issue.
 
 Run applicable automated tests in the implementation environment and report their results, including any tests that could not be performed.
 
@@ -109,3 +115,4 @@ Report failed, pending, cancelled, unavailable, or unperformed checks and tests 
 Do not claim physical hardware validation unless testing was actually performed on the relevant hardware. Identify hardware-dependent behavior that remains unverified.
 
 Summarize validation performed and outstanding limitations in the pull-request description. Report additional validation results when responding to review feedback.
+
