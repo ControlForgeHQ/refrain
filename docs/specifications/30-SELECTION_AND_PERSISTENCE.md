@@ -2,44 +2,40 @@
 
 ## Authoritative and derived state
 
-Authoritative operational state owns:
+Refrain maintains three distinct persistent records within the effective `storage.state` directory, as defined by [Storage](../schemas/CONFIGURATION.md#storage).
 
-- the current committed selection and its monotonically increasing revision;
+Authoritative operational state (`state.json`) owns:
+
+- the current committed daily selection and its monotonically increasing revision;
+- the immutable selected literary content, captured content preferences, and ordered action declarations;
+- the effective reveal schedule and scheduling context required for recovery;
 - active repetition history;
-- the immutable daily selection record;
-- monotonic reveal progress;
-- scheduling context needed for recovery.
+- the highest reveal stage reached for the committed selection.
 
-Global history owns chronological historical selection records but does not determine operational behavior.
+Operational state is authoritative for selection identity, scheduling, repetition history, and reveal progression. It must not depend on global history, publication checkpoints, or prepared images to establish the current selection or its revision.
 
-Prepared images are disposable cache entries derived from the current daily selection, its reveal stages, the required output specifications and compatible preparation groups, and the configuration and resources available when the variants were prepared.
+The publication checkpoint (`publication.json`) is a single evolving record associated with the current committed selection revision. It has two successive complete forms, defined by [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes):
 
-The appropriate reveal stage is initially determined by the committed schedule and current time.
+- A content checkpoint containing the committed literary content, effective reveal schedule, current visibility, and complete ordered action declarations.
+- A content-and-presentation checkpoint additionally containing the resolved destination-independent artistic choices.
 
-Within a committed selection, reveal progress must not move backward.
+The completed presentation checkpoint is the sole durable authority for those resolved artistic choices. They must not be duplicated in operational state. A valid checkpoint associated with the current selection preserves those choices across restarts, changes to resource pools or configuration, and preparation for different destinations.
 
-The currently required stage is therefore the later of:
+Operational state remains authoritative when the publication checkpoint is missing, invalid, or associated with another selection. Checkpoint loss must not invalidate or replace the committed quotation, change repetition history or selection revision, or regress reveal progress. Lost artistic choices may be resolved again with an actionable warning.
 
-- the stage required by the current time;
-- the highest stage already reached for the committed selection.
+The checkpoint's reveal visibility must reflect committed operational reveal progress. Reveal advancement is committed to operational state before checkpoint visibility is updated. Recovery must reconcile stale checkpoint visibility from operational state without discarding otherwise valid resolved artistic choices.
 
-Reveal progression must survive application restarts while the committed selection's display date matches the current logical display date.
+Destination-specific preparation derives effective presentation values from the shared checkpoint and applicable destination overrides and output requirements. Destination processing uses independent copies and must not modify the shared checkpoint. Completed publication metadata records the visibility and effective presentation applicable to its publication event.
 
-Prepared images are reused without checking for configuration or asset changes. If a set is unusable, regenerate it completely from current inputs; exact visual reproduction is not a requirement.
+Global history (`global-history.jsonl`) records committed selection events chronologically on a best-effort basis. It is not authoritative for operational behavior, and its completeness or availability must not affect selection recovery or revision assignment.
+
+Prepared images are disposable cache entries derived from the committed selection, its reveal stages, output specifications, and compatible effective presentation requirements. Complete valid cached images remain reusable without reevaluating configuration or asset changes. Unusable sets are regenerated from the committed selection, available persisted artistic choices, and current applicable preparation inputs. Pixel-identical regeneration is not required.
+
+Within a committed selection, the currently required reveal stage is the later of the stage required by the committed schedule and current time, or the highest stage already reached. Reveal progression must not move backward and must survive restarts while the committed selection's display date matches the current logical display date.
 
 The future calendar archive is a separate historical presentation resource and is not authoritative for the active display.
 
-Use ordinary local filesystem storage for Refrain's initial persistent data.
-
-A database service is not required.
-
-The storage representation should remain simple, inspectable, and suitable for recovery after unexpected termination.
-
-Authoritative operational state, global selection history, and prepared images have separate storage responsibilities.
-
-Operational state must not depend on reading global-history records or prepared-image files to determine the current selection revision.
-
-The architectural commitment and recovery requirements determine the storage design.
+Persistent storage uses ordinary local filesystem facilities. Its representation must remain simple, inspectable, and recoverable after unexpected termination. No database service is required.
 
 ## Eligibility and specificity
 
@@ -236,285 +232,233 @@ For each new daily selection:
 15. Atomically commit the daily selection record, updated repetition history, next selection revision, initial reveal progression, and required scheduling context as authoritative operational state.
 16. Record the committed selection in global history on a best-effort basis.
 
-Selection is not complete until operational-state commitment succeeds.
+Selection is not complete until operational-state commitment succeeds. Subsequent publication checkpoint writes and destination preparation follow [Selection commitment](#selection-commitment) and do not constitute additional selection events.
 
 An unavailable or empty effective content library cannot produce a new selection and must not trigger repetition-history cleanup.
 
-A failed or interrupted operational-state commitment permits the selection procedure to run again.
+A failed operational-state commitment leaves the proposed selection incomplete. When the outcome of a commitment is uncertain, recover authoritative operational state before attempting another commitment. An already committed selection event must not be committed again.
 
 The next selection revision is derived from authoritative operational state, never from global-history contents.
 
-Visual resources and rendering decisions are resolved during preparation, not selection commitment.
+Destination-independent artistic choices are resolved after selection commitment and before destination-specific preparation, not during quotation selection.
 
 Selection policy must not depend on file enumeration order or incidental filesystem behavior.
 
 ## Selection commitment
 
-Selection identifies the individual quotation to be displayed during the next presentation interval.
+A new daily selection becomes authoritative only after its complete daily selection record, updated repetition history, next selection revision, initial reveal progress, and required scheduling context have been durably committed as one consistent operational-state revision in `state.json`.
 
-The selected quotation inherits the eligibility, priority, reveal configuration, presentation metadata, and declared actions of its containing content entry.
+Selection commitment does not require visual-resource resolution, image preparation, destination publication, or global-history recording.
 
-A new daily selection becomes authoritative only after its complete daily selection record, updated repetition history, next selection revision, initial reveal progress, and required scheduling context have been durably committed consistently as one operational-state revision with one logical commit point.
+After successful operational-state commitment, Refrain persists the publication checkpoint in the following order:
 
-An interrupted or unsuccessful operational-state commitment leaves the proposed selection incomplete.
+1. Construct the content checkpoint from the committed operational selection, including the selected literary content, effective reveal schedule, current reveal visibility, and complete ordered action declarations. Atomically write this checkpoint to `publication.json`.
+2. Resolve destination-independent artistic choices using the committed selection's captured presentation preferences and applicable configuration and resources. Atomically replace `publication.json` with the complete content-and-presentation checkpoint.
+3. Begin destination-specific preparation using independent copies of the completed checkpoint.
 
-Once commitment succeeds, the selection remains authoritative independently of subsequent image preparation, display updates, or global-history recording.
+Each checkpoint must conform to its corresponding complete form in [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes). Both checkpoint forms are associated with the committed selection revision. A checkpoint belonging to another selection must not influence the current committed selection.
 
-Each committed selection is eligible for recording in global history. Global-history recording is best-effort and does not participate in the authoritative operational-state transaction.
+The content and presentation checkpoints are successive states of one file, not separate persistent records. Resolved artistic choices must not be attached to operational state. Checkpoint writes must not increment the selection revision, modify repetition history, replace committed literary content, or reset reveal progress.
 
-After operational-state commitment, failure to prepare images, update the display, or append global history must not invalidate the committed selection, cause reselection, or commit the same selection event again.
+Operational-state commitment precedes every checkpoint write for a new selection. No cross-file atomic transaction is required. A failed or interrupted checkpoint write does not invalidate the committed selection or authorize reselection. Recovery resumes checkpoint construction or presentation resolution as required by the last valid state and checkpoint.
 
-Selection commitment establishes a new authoritative operational-state revision containing:
+An interrupted operational-state commitment must recover to either the preceding valid selection or the newly committed selection. A failure before successful commitment leaves the proposed selection incomplete. Once commitment succeeds, subsequent checkpoint, preparation, display, or history failures must not invalidate that selection or cause the same selection event to be committed again.
 
-- the complete daily selection record;
-- the updated repetition history;
-- the identity and scheduling context of the committed selection;
-- initial reveal progression.
+Global-history recording is best-effort and independent of operational-state and publication-checkpoint persistence. Its failure must not prevent checkpoint completion or ordinary presentation.
 
-These values form one consistent operational-state update.
-
-An interrupted operational-state update must recover to either the preceding valid selection or the newly committed selection.
-
-Global-history recording follows successful selection commitment but is not part of the authoritative operational-state transaction.
-
-The persistence mechanism must provide reasonable protection against incomplete writes and interrupted replacement.
-
-The exact storage formats, rotation mechanics, and persistence operations are documented under [Selection revisions and atomic writes](#selection-revisions-and-atomic-writes) and [Global history and retention](#global-history-and-retention).
-
-Global-history recording is independent of that commit and must not be included in its transaction.
-
-Construct a complete next operational state and publish it using atomic filesystem replacement.
-
-Temporary and final state files must reside on a filesystem supporting the required replacement semantics.
-
-Flush file contents before replacement and synchronize relevant directory metadata where supported.
-
-A failure before publication leaves the previous operational state authoritative. A failure after publication may require reloading state to establish whether the new selection was committed.
-
-Do not require a global-history append to succeed before recognizing a committed selection.
-
-Resolve the canonical presentation only after the quotation selection is committed so visual-resource failure cannot prevent or repeat quotation selection. Attach the resolved canonical selections to that selection with the same complete-state atomic replacement mechanism. Publish them before preparing destination variants; a failed attachment leaves them unresolved, while a successful attachment is reused unchanged after restart. Attaching them does not advance the selection revision or alter repetition history or reveal progress.
+Atomic replacement mechanics, revision checks, ambiguous write outcomes, and checkpoint recovery are specified under [Selection revisions and atomic writes](#selection-revisions-and-atomic-writes) and [Recovery and state compatibility](#recovery-and-state-compatibility).
 
 ## Committed selection snapshot
 
-Refrain maintains sufficient durable operational state to preserve:
+The committed daily selection record preserves:
 
-- the current committed daily selection and its monotonically increasing revision;
-- the display date associated with that selection;
-- the selected quotation's original text;
-- the selected content identity, optional source and attribution, and content properties needed to interpret or present the quotation;
-- the selected entry's complete ordered action sequence;
-- the effective reveal schedule and scheduling context needed to resume it;
-- the resolved canonical presentation for the committed daily selection, once it has been resolved;
-- active repetition history;
-- the highest reveal stage reached for the current selection;
+- the selected entry identity and normalized quotation identity;
+- the selected quotation's complete original text;
+- optional source and attribution;
+- the associated logical display date;
+- the effective reveal schedule;
+- the selected entry's content properties and presentation preferences required to interpret or present the quotation;
+- the selected entry's complete ordered action declarations.
 
-Refrain separately maintains a chronological global history of selection events.
+The record contains only the selected quotation, not other quotations from its containing entry. Actions are preserved as opaque semantic declarations, including their type, declared audiences, and payload. They are not rendering inputs.
 
-Operational state is authoritative for selection, scheduling, reveal progression, and recovery. Global history is historical information and is not required for normal operation.
+Operational state additionally preserves the selection revision, active repetition history, highest reached reveal stage, and scheduling context required for recovery.
 
-The daily selection record contains a complete copy of the selected quotation and the semantic content properties needed to apply its reveal behavior without consulting the original content library. It also captures the selected entry's complete ordered action sequence as opaque semantic data and, once resolved, the canonical presentation.
+Selection commitment captures the selected content and its effective schedule independently of visual-resource resolution. Once committed, the selected content, identities, preferences, actions, and effective reveal schedule remain unchanged for that selection. Subsequent edits, removal, or invalidation of the original content entry must not alter the committed record or prevent its recovery.
 
-It includes the selected entry identity and quotation identity, the selected quotation's original text, optional source and attribution, effective reveal schedule, display date, any selected content preferences needed to interpret or present the quotation, the entry's immutable ordered actions, and the canonical presentation's resolved stable selections. These captured values remain authoritative for this selection; later edits to the source entry do not replace them, and recovery never rereads that entry to obtain them. The record does not contain other quotations from the entry.
+The committed record retains the authored presentation preferences needed to resolve artistic choices if the publication checkpoint is lost. Resolved artistic choices belong exclusively to the content-and-presentation checkpoint in `publication.json`, not to operational state. They are resolved after selection commitment and must not change the committed literary content, selection revision, repetition history, scheduling context, or reveal progress.
 
-The record is not a serialized rendering plan. Actions are not rendering inputs. Persist the canonical stable selections, not destination-specific overrides or raster-dependent results. Do not store output dimensions, design-canvas geometry, resolved literary rectangles, QR placement or module size, layer transformation geometry, or other derived rendering values solely to reproduce previously generated pixels. Resolve and durably record the canonical presentation once for the selection before preparing destination variants. If that resolution or its persistence is interrupted, recovery may complete it; once recorded, it must not be independently reselected for a destination or after restart.
+Neither operational state nor the shared publication checkpoint stores destination-specific overrides, completed publication events, or raster-dependent rendering plans. Output dimensions, presentation-canvas geometry, fitted literary rectangles, QR placement and module sizes, layer transformations, and other raster-dependent results are derived during destination preparation.
 
-Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, rendering branches, or tests for earlier internal schemas. A numeric discriminator is not required unless technically necessary; if retained, its current prerelease value is `1`. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location; it must not silently replace the selected content or modify the state file. For a platform-standard state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state path outside the standard location, identify that path and direct the operator to stop Refrain and manually back up and remove or quarantine only that file; `--reset` does not manage custom paths.
+Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, normalization paths, rendering branches, or tests for earlier internal schemas. A numeric schema discriminator is unnecessary unless required by the implementation; if retained, its sole current prerelease value is `1`.
 
-Selection commitment does not depend on resolving visual resources.
-
-Content-level presentation preferences remain part of the selected record when needed to preserve the selected entry's intended behavior. They are inputs to canonical resolution; the resolved canonical selections are persisted separately from destination-specific prepared artifacts.
-
-The daily selection record is immutable after commitment except for monotonic reveal progress, scheduling context required by the display-day model, and the one-time attachment of its canonical presentation.
-
-Prepared images are disposable derived artifacts. Regeneration preserves the selected content, canonical presentation, and reveal progression. Destination-specific effective presentations may reflect configured overrides; raster-dependent geometry is resolved for each output specification.
-
-The daily selection record contains the selected entry identity, normalized quotation identity, original quotation text, optional source and attribution, effective reveal schedule, display date, any selected content-level properties or preferences needed to interpret or present the quotation, and—once resolved—the canonical presentation's stable artistic selections. These captured preferences and canonical selections are authoritative for the committed selection; preparation and recovery do not reread the source entry. Selection revision, repetition history, highest reveal stage, and scheduling context are held in authoritative operational state.
-
-The record does not contain a destination-specific rendering plan. Persist canonical font bundle and role-face identifiers, palette identifiers, background and decoration selections or suppression, presentation style, and QR policy. Do not persist destination overrides, output dimensions, design-canvas and presentation-canvas sizes, effective inset rectangle or font bounds, palette RGB values, tinting decisions, QR placement or module size, layer transformations, or other destination- and raster-dependent parameters solely for pixel-identical recovery.
-
-The selected quotation and captured content-level preferences remain available even when the source YAML entry is edited or unavailable. Editing that entry does not change the committed selection. If regeneration is needed, reuse the persisted canonical selections and apply current destination overrides and output specifications; do not make new canonical selections. Current assets or rendering behavior may affect usable output without altering the selected quotation, captured preferences, canonical presentation, or effective reveal schedule.
-
-Preparation errors are reported without changing the committed selection, repetition history, or reveal progress.
-
-A committed daily selection preserves the selected content, captured content-level preferences, effective reveal schedule, and once-resolved canonical presentation independently of subsequent content-library or configuration changes.
-
-Preserve the selected content's presentation preferences in the daily selection record when needed to interpret or present the quotation. Those captured preferences are authoritative for the committed selection: do not reread the original content entry after commitment, and do not let later edits to it change the captured values.
-
-The semantic committed selection, captured preferences, and persisted canonical presentation do not change when source content or configuration files are edited. If a valid prepared cache cannot be reused, reuse the canonical selections and apply current destination overrides, output specifications, and available assets during regeneration. Do not resolve the captured preferences or pools again for a committed selection. Derived destination geometry and rendering results are not frozen at commitment, so regenerated appearance may differ without changing canonical identity.
+For compatibility within the current version-1 operational-state schema, an absent `actions` field in an existing committed snapshot represents an empty action sequence. Newly committed snapshots must include `actions`. Present action declarations must be validated strictly; invalid persisted actions are operational-state errors and must not be silently repaired or discarded.
 
 ## Selection revisions and atomic writes
 
-Selection revisions increase monotonically. Derive each new selection revision from the preceding authoritative operational-state revision, never from the number or contents of global-history records.
+Selection revisions increase monotonically. Derive each new revision from authoritative operational state, never from global history or publication checkpoints. The initial selection uses revision 1; each subsequent new selection uses `current_revision + 1`. Display dates may repeat or move backward after clock adjustments and are not revision keys.
 
-An interrupted operational-state commitment must not leave a partially committed selection or inconsistent repetition history. Do not treat a partially written or invalid daily selection record as a completed selection.
+Each `SelectionProposal` carries the base state revision supplied to `select_quotation`. The caller obtains that revision and repetition history from the same recovered operational state.
 
-Each `SelectionProposal` carries the base state revision supplied to `select_quotation`.
+A selection commitment is accepted only when its base revision matches the current operational revision, except for an exact idempotent retry of an already committed selection event.
 
-The caller obtains the base revision and repetition history from the same recovered operational state.
+An idempotent retry must match the committed selection revision, display date, complete immutable daily selection record, and resulting repetition history. Equality includes the selected occurrence's captured semantic properties and actions, not merely its normalized quotation identity. Subsequent reveal progression, scheduling updates permitted after commitment, and publication checkpoint contents do not participate in this comparison. An idempotent retry does not rewrite operational state or change the committed selection.
 
-A successful new selection uses `current_revision + 1`. The initial selection uses revision 1.
+The store assumes one writer at a time. Revision checks reject stale proposals and reveal-progress updates but do not provide cross-process compare-and-swap semantics. Callers must serialize writes sharing the same effective state directory. Resident process exclusivity is defined under [runtime ownership](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#resident-ownership-and-authenticated-control). No general transaction framework or additional state-store locking mechanism is required.
 
-Display dates may repeat or move backward after clock adjustments and are not revision keys.
+Operational-state updates and publication-checkpoint updates use independent atomic file replacements. For each update:
 
-Commit accepts a proposal only when its base revision matches the current operational revision, except for an exact idempotent retry of an already published selection.
+1. Construct and validate the complete replacement document.
+2. Write it to a unique temporary file in the target file's directory.
+3. Flush and synchronize the temporary file's contents.
+4. Atomically replace the target using `os.replace`.
+5. Synchronize applicable parent-directory metadata on POSIX where supported.
 
-An idempotent retry preserves any subsequent reveal progression and does not commit another selection.
+Temporary and final files must reside on the same filesystem. Temporary files are not recovery candidates. An interruption before replacement leaves the preceding complete document authoritative; an interruption after replacement requires examination of the current document to establish the committed outcome.
 
-The store assumes one writer at a time. Revision checks reject stale proposals and reveal-progress updates but are not a cross-process compare-and-swap. Callers must serialize concurrent writes sharing the same state path.
+The standard-library implementation does not synchronize directory metadata on Windows, so directory-entry durability after sudden power loss is weaker there. If directory synchronization fails after replacement, report that replacement occurred and reload the authoritative document before deciding whether a retry is appropriate. Do not classify an uncertain post-replacement outcome as an unsuccessful pre-replacement write.
 
-No general state-store locking or transaction framework is required; resident process exclusivity is specified separately under [runtime ownership](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#resident-ownership-and-authenticated-control).
+Each new selection is committed to `state.json` before either publication checkpoint is written. The content-only and content-and-presentation checkpoints are successive independent replacements of `publication.json`. Before accepting a checkpoint for the current selection, validate its schema form, selection revision, display date, and captured literary content against authoritative operational state. The checkpoint must not establish or replace a committed selection.
 
-Selection commitment and reveal advancement use the same complete-state publication mechanism.
+`PersistentStateStore.advance_reveal_progress(expected_revision, stage)` requires the current committed selection revision and a nonnegative integer stage ordinal within the committed selection's valid reveal-stage sequence. Boolean values and stage ordinals beyond the final stage are invalid. Validate the requested stage before writing either persistent document.
 
-Write a unique temporary file in the state file's directory, flush and synchronize its contents, then publish it with `os.replace`.
+Missing operational state, stale revisions, and invalid stage values must be rejected without modifying persistent state. An invalid reveal-stage value must produce an actionable warning and suspend further reveal progression for the affected selection until the condition is corrected; unrelated application functionality must remain available.
 
-On POSIX, synchronize applicable parent-directory metadata after replacement.
+A successful reveal advancement atomically replaces `state.json`, changing only `highest_reveal_stage`. The committed selection record, selection revision, and repetition history remain unchanged. Requests for the current or an earlier stage do not advance progress or rewrite operational state.
 
-Temporary files are not recovery candidates.
+After a successful reveal advancement, synchronize `publication.json` visibility with the committed operational reveal stage. Preserve any valid resolved presentation choices and all other checkpoint content. If synchronization fails or is interrupted, operational reveal progress remains authoritative; recovery must reconcile the checkpoint without regressing the committed stage.
 
-The temporary and final files share a filesystem, and replacement is the single operational-state publication point.
+Checkpoint writes and reveal advancement must not create new selection events or global-history records. No cross-file transaction is required.
 
-The standard-library implementation does not synchronize directory metadata on Windows, so directory-entry durability across sudden power loss is weaker there.
+Automated tests must cover:
 
-If directory synchronization fails after replacement, the operation reports that publication occurred. Callers must reload authoritative state before deciding whether to retry.
-
-The selection-state commit initializes reveal progress for a new selection independently of its predecessor.
-
-`PersistentStateStore.advance_reveal_progress(expected_revision, stage)` requires the current committed revision and accepts nonnegative integer stage ordinals.
-
-Missing state and stale revisions raise a state-commit error without publishing a change.
-
-Reveal advancement replaces only `highest_reveal_stage`. It preserves the selected content record, repetition history, and selection revision.
-
-Requests for the current or an earlier stage do not advance progress or rewrite the state document.
-
-Publication failures retain the existing reporting distinction between failure before replacement and failure after publication.
-
-Automated testing should cover:
-
-- atomic selection commitment;
-
-Test persistence failure at meaningful boundaries, including failures before and after commitment.
-
-Verify that incomplete data cannot be mistaken for successfully committed state.
-
-Where practical, test recovery using a newly initialized application instance rather than only inspecting the state of the instance that performed the write.
+- revision assignment, stale-proposal rejection, and exact idempotent selection retries;
+- atomic operational-state and checkpoint replacement, including interruptions before and after replacement;
+- recovery of ambiguous write outcomes using newly initialized application instances;
+- rejection of partial, invalid, or incorrectly associated checkpoints;
+- valid, repeated, stale, and out-of-range reveal-stage updates;
+- state-first reveal progression and recovery of stale checkpoint visibility without loss of valid artistic choices;
+- preservation of committed selection and repetition history across checkpoint failures.
 
 ## Recovery and state compatibility
 
-After commitment, the active selection must not require access to the original YAML entry. The content library does not override a valid committed daily selection record. Removing, renaming, modifying, or invalidating the original entry leaves that selection unchanged and does not prevent recovery when the committed record is valid.
+On startup, Refrain must recover and validate authoritative operational state before examining the publication checkpoint or prepared images.
 
-On startup, Refrain first attempts to recover the committed operational selection.
+A missing `state.json` represents an uninitialized installation. An incomplete, incompatible, corrupt, or integrity-check-failing operational-state document must not be accepted, modified, or silently replaced with another selection. The publication checkpoint, global history, and prepared images must not be used to reconstruct authoritative operational state.
 
-If selection commitment was interrupted, Refrain must recover the last valid operational state and repeat selection when necessary.
+An interrupted operational-state commitment must recover to the last valid committed state. If the proposed selection was not committed, normal selection may proceed when required. If commitment succeeded, recovery must retain that selection without repeating its commitment, altering repetition history, or creating another selection event.
 
-If rendering or image persistence was interrupted after commitment, Refrain regenerates the complete stage set from the persisted canonical presentation using current destination overrides, output specifications, and available resources. Existing fallback and diagnostic policies apply to unavailable or invalid resources without reselecting canonical resources.
+A valid committed daily selection remains authoritative independently of the original content library. Removing, renaming, modifying, or invalidating the original YAML entry must not change the selected quotation, captured preferences, actions, or effective reveal schedule.
 
-If canonical presentation resolution was interrupted before its selections were durably recorded, recovery may complete that resolution once for the committed daily selection. Once persisted, those canonical selections are authoritative across restarts and destination preparation; an override change does not cause them to be selected again.
+After recovering valid operational state, Refrain must validate the publication checkpoint against the current committed selection. Validation includes the permitted checkpoint form, selection revision, display date, and consistency of captured literary content, effective reveal schedule, and actions. Checkpoint structure and field constraints are defined by [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes).
 
-If current operational state is incompatible, unavailable, or invalid, report an actionable diagnostic identifying the effective state-file location. For a platform-standard state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured path outside the standard location, direct the operator to stop Refrain and manually back up and remove or quarantine only that file; do not suggest `--reset` for a custom path. Do not modify the state or silently substitute another quotation. Valid current-format state remains recoverable.
+Recovery follows these rules:
 
-Missing, damaged, or inaccessible global history must not prevent operational recovery.
+- **Valid content-and-presentation checkpoint:** Reuse its resolved artistic choices without reselection. Changes to current configuration, resource pools, or destination overrides do not invalidate those choices.
+- **Valid content-only checkpoint:** Resume destination-independent artistic resolution from the committed content and captured preferences, then atomically persist the completed presentation checkpoint before destination preparation.
+- **Missing, corrupt, stale, or otherwise unusable checkpoint:** Reconstruct the content checkpoint from authoritative operational state and persist it. Resolve destination-independent artistic choices again and persist the completed presentation checkpoint. When previously resolved artistic choices cannot be recovered, emit an actionable warning that the new choices may differ from the original presentation.
+- **Checkpoint visibility inconsistent with operational reveal progress:** Reconcile `content.reveal_stage` from authoritative operational state. Preserve otherwise valid checkpoint content and resolved artistic choices. Do not reduce committed reveal progress or retrospectively alter completed publication metadata.
 
-The existing physical e-paper image should be preserved when recovery cannot safely complete.
+A checkpoint associated with another selection revision must never override the current committed selection. An invalid checkpoint must not be treated as a valid source of artistic choices or partially repaired by accepting unvalidated presentation data.
 
-Persistent operational state must be validated when loaded. Incomplete, invalid, or integrity-check-failing state must not be silently accepted. An interrupted state publication must not produce a partially committed selection or inconsistent repetition history. A failure after selection commitment must preserve the committed quotation. Global-history failures must not prevent operational recovery, and global history must not be used to reconstruct repetition state or determine the next revision.
+Recovery must preserve the committed selection revision, repetition history, selected literary content, effective reveal schedule, and highest committed reveal stage. Reconstructing or completing publication checkpoints must not modify those authoritative values.
 
-Only the current prerelease operational-state schema is supported. Do not add schema migrations, legacy readers, normalization paths, rendering branches, or tests for earlier internal state formats. A numeric discriminator is unnecessary unless required by the implementation; if one is retained, the sole current prerelease value is `1`. The snapshot's `actions` field is optional when reading this same version-1 schema so valid pre-action snapshots recover with an empty action sequence; newly written snapshots include the field. If present, persisted actions must be validated strictly, and invalid action data must follow ordinary persistent-state recovery errors rather than content-loader warning-and-drop behavior. Incompatible or invalid state must produce an actionable diagnostic reflecting the effective state-file location, without silently replacing selected content or modifying the file. For the platform-standard per-user state path, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a state path configured outside that standard location, it must identify the path and direct the operator to stop Refrain, back up the file, and manually quarantine or remove only that file; `--reset` does not manage custom paths.
+Checkpoint recovery uses the same state-first ordering and atomic replacement requirements as ordinary processing. Destination-specific preparation must not proceed from newly resolved artistic choices until the completed checkpoint has been durably persisted. A checkpoint persistence failure leaves operational state authoritative and must be reported without triggering literary reselection.
 
-The current state must preserve the selected entry and quotation identities, original quotation text, optional source and attribution, content properties needed to interpret or present the selected quotation, the complete ordered action sequence, effective reveal schedule, display-day and scheduling context, selection revision, repetition history, and highest reached reveal stage. Once resolved, it must also preserve the canonical presentation's stable selections: presentation style, selected background and decoration identifiers or suppression, selected font bundle and role-specific face identifiers, resolved palette identifiers, and canonical QR policy. Attach and persist these canonical selections once for the committed daily selection, independently of destination-specific prepared artifacts. Preserve each action's type, declared audiences, and payload without consumer-specific interpretation. Do not persist destination override requests, destination-specific effective geometry, QR placement or module size, output dimensions, or layer transformation plans solely to reproduce pixels. Canonical presentation persistence must not change the committed quotation, selection revision, repetition history, or reveal progression.
+Prepared-image recovery uses the valid completed presentation checkpoint and current applicable destination overrides, output specifications, configuration, and available resources. Missing, damaged, incompatible, or incomplete prepared-image sets are regenerated as complete compatible sets. Healthy compatible cached sets remain reusable. Existing resource fallback and diagnostic policies apply without changing the checkpoint's persisted artistic choices.
 
-Recovery behavior must be covered by automated tests using controlled failures at meaningful publication boundaries. Verify canonical selections are attached atomically, survive restart, and are reused unchanged across destinations and override changes. A failure before canonical attachment may retry canonical resolution; a successful attachment must never be independently reselected. Valid current-format state must remain recoverable across restarts.
+If operational state is invalid or incompatible, report an actionable diagnostic identifying the effective `state.json` path. For a platform-standard state directory, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state directory outside the standard location, direct the operator to stop Refrain and manually back up and quarantine or remove only the affected `state.json` file. Standard-path reset does not manage custom state directories.
 
-Global selection history is not included in the operational-state document. The configured state-file path must be absolute. A missing state file represents an uninitialized installation.
+Missing, damaged, or inaccessible global history must not prevent operational recovery. Global history must not determine selection revisions, repetition eligibility, or reveal progress.
 
-Automated testing should cover:
+When recovery cannot safely complete, preserve the existing physical e-paper image rather than replacing it with an unverified presentation.
 
-- recovery of valid current-format daily selections independently of current content-library availability;
-- clear rejection of incompatible current state without modifying the state file; diagnostics for platform-standard paths may direct the operator to stop Refrain and run `refrain --reset`, while diagnostics for configured paths outside the standard location identify that path and require manual backup and quarantine/removal of only that file;
-- current selection-record round trips containing selected content, effective schedule, day context, ordered actions, and required repetition/reveal state, without derived rendering decisions; recovery of valid version-1 snapshots with no actions field and rejection of invalid persisted action data;
-- recovery of the selected quotation and monotonic reveal progress after image preparation or cache failure;
-- no legacy development-schema readers, migrations, normalization, or historical-format recovery tests beyond the explicitly supported missing-actions field in version 1;
-- recovery from interrupted writes;
-- current daily-selection recovery;
+Operational-state compatibility is limited to the current prerelease schema and the explicit version-1 missing-actions exception defined under [Committed selection snapshot](#committed-selection-snapshot). Do not introduce migrations or readers for earlier internal schemas.
+
+Automated tests must cover:
+
+- recovery of a valid committed selection independently of the original content library;
+- interrupted operational-state commits and ambiguous replacement outcomes;
+- recovery from valid content-only and complete presentation checkpoints;
+- preservation of resolved artistic choices across restart, resource-pool changes, and destination override changes;
+- recovery from missing, corrupt, stale, and mismatched checkpoints without literary reselection or reveal regression;
+- actionable warnings and artistic re-resolution when the completed presentation checkpoint is lost;
+- checkpoint visibility reconciliation without loss of valid artistic choices;
+- failure to persist a recovered checkpoint;
+- prepared-image loss, corruption, and regeneration using compatible persisted presentation choices;
+- rejection of invalid operational state without modifying it, including correct standard and custom path diagnostics;
+- current-schema state round trips, missing-actions compatibility, and rejection of invalid persisted actions;
+- recovery using newly initialized application instances after controlled interruptions at meaningful persistence boundaries.
 
 ## Global history and retention
 
-Global history is a separate chronological record of committed quotation-selection events, independent of authoritative operational state.
+Global history is a best-effort chronological record of committed quotation-selection events, independent of authoritative operational state and the publication checkpoint.
 
-Each record identifies the selection revision and logical display date and preserves:
+The active history file is `global-history.jsonl`, located directly within the effective `storage.state` directory. Rotated history segments use the same directory.
 
-- the selected quotation text;
-- its normalized repetition identity;
-- the time at which the selection was made.
-
-Global history records selection events rather than unique display dates. Multiple selections associated with the same logical display date remain distinct records, including selections resulting from clock adjustments.
-
-Global history is independent of the containing entry's identifier, source, attribution, priority, and eligibility rules for repetition purposes.
-
-Global history is append-only during normal recording. Recorded events are not modified or removed when repetition pools are exhausted.
-
-Global history has bounded retention. Its rotation mechanism and fixed retention limits are documented under [Global history and retention](#global-history-and-retention). Discarding older records does not affect operational state or future selection revisions.
-
-Global-history recording is best-effort. Report a recording failure without invalidating the committed selection, preventing image preparation, or stopping ordinary presentation.
-
-An interruption may result in a missing or incomplete historical record. Global-history completeness is not a prerequisite for application recovery.
-
-Do not read global history to determine current selection state, quotation eligibility, repetition eligibility, scheduling, or the next selection revision.
-
-Use append-only UTF-8 JSON Lines (JSONL), containing one complete JSON object per recorded selection event.
-
-Each record includes:
+Each committed selection event is eligible for one history record containing:
 
 - the committed selection revision;
 - the logical display date;
 - the UTC timestamp of the selection event;
-- the selected quotation's original text;
+- the selected quotation's complete original text;
 - its normalized repetition identity;
-- any non-rendering selection metadata required by the history contract.
+- any additional non-rendering selection metadata required by the history contract.
 
-Records must not contain embedded font files or rendered images.
+Global history records selection events rather than unique display dates. Multiple committed selections for the same logical display date remain distinct events, including selections following clock adjustments.
 
-Use compact JSON serialization, with each record terminated by a newline.
+Records use compact UTF-8 JSON Lines (JSONL), with one complete JSON object per line terminated by a newline. Records must not contain embedded font files or rendered images.
 
-Global-history recording occurs only for committed selection events, not reveal updates or display refreshes.
+Append history only after successful operational-state selection commitment. Reveal advancement, checkpoint updates, display refreshes, and transient publications must not create history records.
 
-Global-history retention is bounded and does not have operator-configurable limits in Version 0.1. Use size-based rotation with the following fixed limits:
+Recording is best-effort. Failure to open, append, flush, repair, rotate, or retain history must produce a diagnostic without invalidating a committed selection, preventing preparation, or stopping ordinary presentation.
 
-The maximum segment size is 1 MiB (1,048,576 bytes).
+Global history is not an authority for current selection identity, repetition eligibility, scheduling, reveal progression, or selection revision assignment. History records are not modified or removed when repetition pools reset. Missing or damaged history must not prevent operational recovery.
 
-The total retention allowance is 20 MiB, represented by one active segment and up to 19 rotated segments.
+### Rotation and retention
 
-The active segment contains the newest records. Rotated segments retain older records in chronological order, with the oldest retained segment removed when necessary to maintain the fixed retention allowance.
+History retention uses fixed size-based rotation without operator-configurable limits in the current prerelease:
 
-Rotation occurs between complete records, never within a JSONL record.
+- Maximum segment size: 1 MiB (1,048,576 bytes).
+- Maximum retained storage: 20 MiB, consisting of one active segment and up to 19 rotated segments.
 
-Before appending a record that would exceed the 1 MiB active-segment limit, rotate the active segment.
+The active segment contains the newest records. Rotated segments retain older records in chronological order. Remove the oldest retained segments as necessary to maintain the retention allowance.
 
-A single record exceeding the segment limit cannot be recorded and must produce a diagnostic without affecting the committed selection.
+Rotation occurs only between complete records. Before appending a record that would exceed the active segment limit, rotate the active segment.
 
-Rotation must not modify authoritative operational state or reset selection revisions.
+A single record exceeding the segment limit must not be recorded and must produce a diagnostic without affecting operational state.
 
-Global-history recording is best-effort.
+Rotation and retention must not modify authoritative operational state, publication checkpoints, prepared images, or future calendar presentation archives.
 
-Failure to open, append, flush, rotate, or retain a history segment must produce a diagnostic but must not invalidate a committed selection or prevent ordinary display operation.
+### Interrupted append recovery
 
-An interrupted append may leave an incomplete trailing record. History-reading tools must distinguish such records from complete valid events without affecting application recovery.
+Before appending or rotating an existing active history file, inspect its trailing JSONL record.
 
-The history format does not promise transactional consistency with operational state.
+If an interrupted append left an incomplete trailing record, truncate only the incomplete tail to the last complete record boundary and emit a warning. Preserve all preceding complete records.
 
-A missing historical record after an interruption is acceptable.
+A complete valid JSON record lacking its terminating newline must be preserved; restore the record delimiter before appending another event.
 
-Normal operation should avoid recording the same committed selection repeatedly during ordinary retries or restarts, but no cross-file exactly-once transaction is required.
+Do not interpret an incomplete trailing record as a committed history event. Do not silently discard complete records or attempt to reconstruct missing history from operational state.
 
-Global-history storage assumes one writer at a time. Concurrent writers sharing the same history directory require external coordination.
+Tail recovery applies to the active history segment. It does not authorize rewriting arbitrary invalid records or repairing historical rotated segments.
 
-History rotation and retention apply only to global-history files. They do not delete the current prepared images or any future calendar presentation archive.
+### Consistency and concurrency
 
-Automated testing should cover:
+Global-history persistence does not participate in the atomic operational-state or publication-checkpoint transactions. An interrupted write may leave a committed selection without a corresponding history record.
 
-- global and repetition-history behavior;
+Ordinary retries and restarts should avoid recording the same committed selection event repeatedly, but cross-file exactly-once recording is not required.
+
+History storage assumes one writer at a time. Concurrent writers sharing the same state directory require external coordination.
+
+Automated tests must cover:
+
+- chronological recording of committed selection events, including repeated logical display dates;
+- absence of history writes for reveal advancement, checkpoint updates, refreshes, and transient publications;
+- size-based rotation, retention limits, and oversized records;
+- recovery of incomplete active-file tails before append and rotation;
+- preservation of complete records, including valid records missing a final newline;
+- history write, repair, and rotation failures without affecting operational state or ordinary presentation;
+- absence of transactional dependencies between global history and authoritative operational state.
 
 ## Calendar archive boundaries
 
