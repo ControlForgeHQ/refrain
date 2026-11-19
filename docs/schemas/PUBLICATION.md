@@ -71,7 +71,7 @@ Completed scheduled validation with a supplied audience rejects every action tha
 | `decoration` | String | Resolved stable decoration identifier or `"none"`. |
 | `fonts` | Object | Exactly `bundle` and `faces`, as below. |
 | `colors` | Object | Exactly `text` and `decoration`, as below. |
-| `qr` | Object | Exactly Boolean `enabled` and `available`. |
+| `qr` | Object | Content-and-presentation checkpoints contain exactly Boolean `enabled`. Completed scheduled publications contain exactly Boolean `enabled` and `available`. |
 | `font_size_range` | Object | Exactly positive integer `minimum` and `maximum`; `maximum >= minimum`. |
 | `insets` | Object | Exactly nonnegative integer `left`, `right`, `top`, `bottom`. |
 
@@ -81,7 +81,7 @@ Resource, bundle, face, and palette identifiers are case-sensitive ASCII strings
 
 `colors.text` is a resolved palette identifier. `colors.decoration` is a resolved palette identifier or null; null denotes absence of a resolved tint color.
 
-`qr.enabled` records whether QR policy permits rendering after destination suppression. `qr.available` records whether a QR was actually included after decoration restrictions, placement validation, and output-geometry checks. These fields contain no QR payload, URL, content rule, placement, or module-size data.
+In a content-and-presentation checkpoint, `qr.enabled` records the canonical QR policy before destination suppression. `qr.available` must be omitted because output-dependent availability has not been resolved. In a completed scheduled publication, `qr.enabled` records the effective policy after destination suppression, and `qr.available` records whether a QR was actually included after decoration restrictions, placement validation, and output-geometry checks. Both fields are required in completed scheduled publication metadata. Neither field contains a QR payload, URL, content rule, placement, or module-size data.
 
 Font-size bounds and insets are effective configuration values in design-canvas pixels. They are not fitted raster font sizes, mapped rectangles, rendered positions, crop coordinates, or other raster-layout calculations. The presentation records one set of resolved choices; no canonical/effective duplicate objects exist.
 
