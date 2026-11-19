@@ -2,71 +2,441 @@
 
 ## Shared construction and state isolation
 
-Runtime and `refrain-viewer` must use the same presentation-construction, preference-resolution, fallback, geometry, QR-viability, image-composition, preparation, and rendering operations. Keep precedence and fallback rules in that shared machinery; do not implement a separate viewer-side resolver. Represent viewer choices with typed explicit overrides, applied there as the highest-precedence layer only for the corresponding properties. Unspecified properties retain normal Refrain precedence and pool selection.
+`refrain-viewer` provides one-shot literary presentation inspection, image export, completed-publication reconstruction, finished-image inspection, destination discovery, and transient publication through the resident runtime.
 
-Normal runtime preparation resolves and persists the canonical presentation once, then applies each destination's restricted configuration overrides in shared preparation before rendering. It supplies no viewer overrides or diagnostic overlays. The viewer's `--debug-layout` option uses the shared presentation diagnostics. Optional viewer quotation font-size bounds are design-canvas measurements resolved with configuration values and scaled to the presentation canvas through the shared configured-bound resolution and fitting path. An alternate `--config` selects the normal configuration layer; it does not elevate that layer above entry or decoration preferences.
+Runtime and viewer presentation generation must use the same content interpretation, artistic preference resolution, fallback, output geometry, QR viability, graphical composition, literary fitting, and rendering operations. Do not implement independent viewer-side selection or rendering rules.
 
-For local inspection and export, the viewer selects a validated content entry and one 1-based quotation directly, without eligibility, priority, repetition, scheduling, or selection commitment. Its built-in `@preview` fixture belongs only to the viewer. It resolves one viewer-owned output specification, uses the same design/presentation/output pipeline, and writes or displays the final output image without using configured display backends. In push mode, it instead renders against runtime-discovered destination specifications and may produce multiple unique output variants.
+Viewer-owned presentation choices are typed explicit overrides. Each supplied override has highest precedence for its corresponding property only. Unspecified properties retain normal preference-resolution behavior.
 
-Verify `refrain-viewer --debug-layout` uses the shared presentation diagnostics without enabling overlays in normal runtime or demo preparation.
+Viewer preparation resolves artistic choices transiently. It does not commit a daily selection or persist a publication checkpoint.
+
+Normal runtime preparation instead recovers or persists the committed selection's destination-independent presentation checkpoint before applying destination overrides. The viewer must not mutate that checkpoint.
+
+An alternate `--config` selects the viewer's normal configuration layer. It does not elevate that configuration above content-entry or decoration preferences.
+
+For local presentation inspection and export, the viewer selects one content entry and quotation directly without eligibility, priority, repetition-history, or daily-selection commitment.
+
+The built-in `@preview` pseudo-entry is viewer-owned fixture content, not part of the effective content library.
+
+The viewer does not read or modify operational state, global history, publication checkpoints, prepared-image caches, or other resident persistence locations. This restriction includes custom and configuration-relative storage locations.
+
+Viewer presentation generation may read the selected configuration, content library, and rendering assets. Finished-image input and destination discovery do not require them.
+
+The viewer never constructs, initializes, closes, or directly accesses a configured display backend in any mode.
+
+Its local window is viewer-owned, display-only UI. It may fit a private image copy to the desktop without modifying the complete rendered or supplied output image.
+
+Transient publication is submitted through the authenticated local resident runtime-control interface. The running normal Refrain process owns backend access and publication.
+
+The viewer must not acquire resident ownership, establish a competing runtime, or modify normal scheduling, repetition history, committed literary content, reveal progression, prepared-image artifacts, or publication checkpoints.
 
 ## Inspection, export and output selection
 
-The installed `refrain-viewer` command owns one-shot presentation inspection and image export. It loads the selected application configuration and content/assets, explicitly selects one entry and one 1-based quotation number, constructs presentation data through the same shared operation as the runtime, and uses the authoritative preparation and rendering pipeline. It does not schedule, select, commit, persist, or reveal progressively.
+The installed `refrain-viewer` command owns one-shot presentation inspection and image export.
 
-Viewer-owned transient publication accepts either a fully rendered Refrain presentation or an explicitly supplied finished PNG. Finished-image pixels are authoritative and already downstream of the presentation pipeline: do not pass them through presentation construction, preparation, rendering, or output-geometry transformation. Direct finished-image inspection and publication do not load application configuration, content, assets, or persistence.
+The default invocation selects `@preview:2`, the medium built-in preview quotation, and displays its fully revealed presentation in a simple local window.
 
-Refrain-presentation viewer execution loads no operational state, global history, or prepared artifacts, including configuration-relative or custom storage locations. Its only filesystem output in inspection/export modes is an explicitly requested PNG. The viewer never constructs, initializes, or directly accesses configured backend instances in any mode; push asks the resident runtime to publish completed images. The viewer window is display-only, viewer-owned UI. It may scale only a private desktop copy to fit and must not mutate the rendered output image.
+The `@preview` fixture provides short, medium, and long quotations with source and attribution. Explicit `--entry @preview` selects quotation 1. Without `--entry`, quotation 2 is selected.
 
-The built-in `@preview` pseudo-entry is viewer-owned fixture content, not part of the content library. It supplies short, medium, and long quotations with source and attribution metadata; the default invocation selects `@preview:2`. A normal entry selector ignores eligibility, priority, and repetition history, and does not change ordinary content-entry identifier syntax.
+A normal entry selector uses an entry identifier and optional 1-based quotation number. If omitted, the number defaults to 1.
 
-For local Refrain-presentation inspection and export, the viewer creates one viewer-selected output specification independently of configured display-backend specifications. Its default is 16:10 at the full design-canvas dimensions. `--render-as DESTINATION_ID` instead resolves the identifier in the viewer's effective configuration and uses that destination's output specification. Both follow the established design-canvas → presentation-canvas → requested-output pipeline; `--render-as` then applies the shared destination visual post-processing to the complete output image. `--output` writes the final output PNG. The optional simple viewer window displays that same output and may scale only a private desktop copy to fit; it is not a configured display backend. In push mode, output specifications come exclusively from the selected runtime destinations, and the viewer may render one variant for each unique specification. A finished PNG may instead serve every selected specification only when its dimensions exactly match each requested output size; differing declared presentation aspects do not require distinct finished pixels when requested dimensions match.
+Invalid entry identifiers, malformed selectors, and zero, negative, or out-of-range quotation numbers are errors.
 
-Push may use either `refrain-viewer [presentation overrides...] --push TARGET` or `refrain-viewer --image PATH --push TARGET`, where `TARGET` is `@all` or one configured destination ID discovered from the running normal runtime. The literal ID `all` selects only that destination. The viewer treats identifiers as opaque and uses runtime discovery for destination topology and output geometry. Public command syntax and mode conflicts are specified in the [CLI reference](../CLI.md#presentation-viewer). The runtime owns destination geometry; the viewer owns the selected content and presentation choices, overrides, and complete output pixels.
+Explicit viewer selection ignores normal eligibility, priority, repetition history, and daily scheduling. It must not create synthetic operational selection records.
 
-Push requires a running normal Refrain instance. The viewer discovers selected destination specifications without reserving them, then either renders each unique specification using coherent presentation-wide choices or submits the supplied finished pixels unchanged after exact-size validation for every selected destination. It does not contain backend-specific routing or geometry logic. The runtime validates the current destinations, specifications, and exact image dimensions before publication. A changed or unavailable destination is rejected rather than adapted.
+### Local output specification
 
-Push is synchronous: the viewer identifies the selected destination set and reports visible progress before waiting for potentially slow publication. It remains attached until publication to every selected destination has completed or failed, and returns success only if every selected destination succeeds. A busy request is rejected in full without queuing or partial publication.
+Local presentation inspection and export use one viewer-owned output specification, independently of configured backend output specifications.
 
-Test default and explicit `@preview` selection, exact normal-entry selection, omitted and explicit 1-based quotation numbers, malformed/zero/negative/out-of-range selectors, and independence from eligibility, priority, and repetition. Verify that runtime and viewer use the shared preparation/resolution machinery, normal preference precedence remains unchanged, and each explicit override takes precedence only for its property. Cover strict rejection of unavailable requested resources, ordinary pool resolution for unspecified properties, and QR placement/readiness constraints when QR is forced on.
+The default aspect ratio is `16:10`, with requested dimensions equal to that aspect's full design canvas.
 
-Cover each aspect's full design-canvas default, exact and mismatched requested resolutions, the one-output-specification design/presentation/output pipeline for local inspection/export, final-image PNG export, and the default-window, PNG-only, window-only, and combined destinations. Mock the local window where necessary and verify desktop fitting does not mutate the output image. For local inspection/export, use sentinel persistence locations and backend factories to verify the viewer never accesses configured backends or runtime persistence. For push, verify it never constructs, initializes, or directly accesses configured backends, but does exercise the resident runtime-control publication path using discovered output specifications. Verify that a destination reported as not supporting transient publication is rejected before rendering, both when selected directly and when included by `--push @all`. Verify that a literal destination ID `all` is routed as a named destination and never treated as the all-participating selector. Do not treat mocked window behavior as graphical-session validation.
+Explicit `--aspect` and `--resolution` values select the viewer's output specification. They use the normal design-canvas, presentation-canvas, and output-image pipeline in [Image spaces and raster geometry](50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry).
 
-Cover identity behavior for `window` and `image-server`, deterministic Waveshare palette/dither sentinels, preservation of the caller's image, configured destination lookup and geometry through `refrain-viewer --render-as`, CLI mode conflicts, and post-processed PNG/window output.
+A viewer output must have positive integer dimensions with width at most 3840 pixels and height at most 2400 pixels.
+
+Width and height are validated independently. Portrait and square outputs are supported. The requested output dimensions do not need to mathematically match the declared aspect ratio.
+
+Validate the actual requested output specification before allocating an image. Do not reject a viewer request merely because an unused supported aspect would make a decoration's insets or transformation invalid.
+
+Viewer preparation validates the selected aspect and all resources actually needed for its composition.
+
+`--render-as DESTINATION_ID` resolves the named destination from the viewer's effective configuration and uses its declared aspect ratio and requested resolution.
+
+It also applies the destination's defined hardware-independent visual conversion to the completed output image.
+
+`--render-as` is local inspection or export. It does not publish to that destination or require a running resident.
+
+Destination identifiers are resolved exactly; do not infer backend types or output specifications from identifier spelling.
+
+Use the shared destination visual-conversion implementation, including identity conversion for destinations that require no special pixel processing and the shared Waveshare conversion for its fixed panel format.
+
+A configured `publish` destination uses identity visual conversion; it does not require a filesystem publication operation merely to inspect its rendered pixels.
+
+The `--render-as` option selects destination geometry and visual conversion. It does not silently turn viewer inspection into a configured destination publication or grant access to resident backend instances.
+
+`--output PATH` writes the complete final PNG. It does not open a viewer window unless `--window` is also requested.
+
+Without `--output`, ordinary local inspection opens the viewer window by default.
+
+The viewer window may resize only a separate display copy. It must preserve the original rendered output and must not change exported pixels.
+
+For Waveshare visual conversion, export the palette-indexed PNG produced by the shared converter. Create a private RGB copy only when needed for local-window display.
+
+The `--debug-layout` option uses shared presentation diagnostics. Diagnostic overlays are applied on the presentation canvas before any final whole-image resize.
+
+Viewer diagnostics must not enable overlays in normal runtime presentation or alter persisted presentation state.
+
+### Explicit reveal-stage inspection
+
+`--reveal-stage N` selects a zero-based cumulative reveal stage for local one-shot rendering of an explicitly selected quotation.
+
+The option requires explicit `--entry` selection, including an explicitly selected `@preview` quotation. It does not replace normal selection, scheduling, or reveal progression.
+
+When omitted, local viewer rendering presents every available literary field fully revealed.
+
+Resolve the requested stage using the shared canonical cumulative reveal-stage sequence. The first stage has index 0. Fields sharing the same resolved reveal instant appear in one stage; absent optional fields create no stages.
+
+A stage index must be an integer within the resolved sequence. Negative values, booleans, malformed values, and indexes beyond the final stage are invalid.
+
+The requested stage controls only the visibility of fields in the one locally rendered image. Its layout must use the complete literary composition, preserving final field positions and concealment behavior.
+
+Do not persist viewer reveal-stage selection, commit operational reveal progression, modify publication checkpoint visibility, create selection history, or publish intermediate stages automatically.
+
+`--reveal-stage` is permitted with local presentation inspection, `--output`, and `--render-as`.
+
+It is not a resident scheduling mode and cannot be combined with `--publication`, `--image`, `--push`, or standalone destination discovery.
+
+### Finished-image input
+
+`--image PATH` accepts an already completed, single-frame, 8-bit RGB PNG for local inspection or transient publication.
+
+The supplied image is authoritative finished pixels, downstream of all Refrain presentation construction.
+
+Do not apply literary preparation, resource selection, presentation overrides, graphical composition, QR generation, layout calculation, resizing, cropping, padding, color-mode conversion, or destination artistic overrides to it.
+
+Finished-image input does not load application configuration, content, rendering assets, operational state, or prepared artifacts.
+
+Validate the PNG signature, structure, format, mode, dimensions, and image integrity before use.
+
+Its dimensions must satisfy the finished-image limits: width 1–3840 and height 1–2400 pixels.
+
+Inspect encoded metadata and dimensions before full decoding where possible. Reject unsafe or oversized images without unbounded memory allocation or decompression.
+
+The local viewer may create a private resized copy solely for desktop display. The supplied image and its original pixels remain unchanged.
+
+A finished PNG may be transiently published to multiple selected destinations only when its exact dimensions match every destination's requested output dimensions.
+
+Different declared presentation aspects do not require different finished pixels when their requested dimensions are identical.
+
+Do not infer a declared presentation aspect from an externally supplied PNG.
+
+`--image` cannot be combined with presentation-generation controls, local output geometry, `--render-as`, `--output`, `--publication`, or standalone destination discovery.
+
+Local `--window` inspection is allowed, but `--window` cannot be combined with transient `--push`.
+
+### Resource and state isolation
+
+Local Refrain-presentation generation uses the selected configuration, its valid content and asset registries, and the shared rendering pipeline.
+
+Explicit viewer requests remain strict. An unavailable explicitly selected resource or empty explicitly selected pool must fail rather than silently fall through to another preference level.
+
+Unspecified choices follow the ordinary preference precedence and applicable recovery behavior.
+
+Do not use production persistence paths as temporary viewer storage. Temporary viewer rendering data must be independently owned and cleaned up without changing runtime state or artifacts.
+
+Tests must cover:
+
+- default and explicit `@preview` behavior;
+- exact entry and 1-based quotation selection;
+- malformed, missing, and out-of-range selectors;
+- independence from eligibility, priority, and repetition history;
+- explicit zero-based `--reveal-stage` selection, cumulative visibility, simultaneous reveals, and invalid indexes;
+- fully revealed default behavior and unchanged field geometry across reveal stages;
+- local output defaults, all supported aspects, portrait and square outputs, and mismatched requested resolutions;
+- maximum output dimensions and preallocation rejection;
+- `--render-as` configured destination lookup, exact geometry, and visual conversion;
+- local PNG export, default window behavior, and private desktop fitting;
+- `--debug-layout` without mutation of output or persistent runtime state;
+- finished RGB PNG validation, safe decoding, and unchanged source pixels;
+- strict explicit overrides and ordinary precedence for unspecified values;
+- absence of backend construction, resident ownership, operational-state access, and persistence changes.
 
 ## Strict overrides and local display conversion
 
-Explicit viewer overrides remain strict: an empty or unavailable referenced pool is an error rather than a fallback.
+Explicit viewer presentation overrides are strict and apply only to their corresponding artistic or fitting property.
 
-For Waveshare output, the palette-indexed raster is also the viewer's PNG output; make only a private RGB copy when local display needs it.
+A directly selected identifier must be valid and usable. An explicit pool reference must contain at least one selectable candidate. Invalid, empty, or unavailable explicit requests produce actionable errors rather than silently selecting a lower-priority resource.
+
+Explicit quotation, source, and attribution face overrides must resolve to usable faces in the selected effective font bundle.
+
+An explicit `--font` override may select a registered font bundle or supported named font pool. This viewer behavior is distinct from the restricted single-identifier `destinations[].overrides.font` configuration contract.
+
+Explicit background and decoration `"none"` values suppress those resources.
+
+`--qr` and `--no-qr` control the viewer's literary QR policy. They do not override mandatory resource-readiness, placement-validity, or raster-viability conditions.
+
+The viewer must calculate effective QR availability using the same output-specific pipeline as ordinary preparation, including reevaluation after a failed decoration is discarded.
+
+Supported minimum and maximum quotation font-size overrides are design-canvas measurements. Each supplied bound overrides only that bound. The resulting effective minimum must not exceed the maximum.
+
+Global quotation font-size bounds remain in effect when decoration is suppressed. Do not infer decoration-specific font-size bounds from artwork or asset metadata.
+
+Viewer presentation overrides are processed by the shared preparation machinery and must not be implemented through post-processing of completed pixels.
+
+Destination visual conversion is a separate operation performed after the complete presentation image has been rendered.
+
+The viewer and runtime must use the same deterministic Waveshare RGB-to-seven-index conversion, including the active palette's duplicate black index and the same selected dithering behavior.
+
+Quantize the image exactly once. Do not perform a second palette conversion in the viewer, backend, or vendor driver.
+
+The converter must not mutate the caller-owned RGB image or require vendor driver, GPIO, or SPI dependencies merely to inspect or export a converted preview.
+
+Hardware-independent tests must compare viewer and backend conversion output using deterministic image sentinels.
+
+Viewer-exported processed previews should be compared with representative physical panel output during separate hardware validation. Monitor colorimetry does not establish physical e-paper pigment correctness.
 
 ## Publication reconstruction
 
-`refrain-viewer --publication PATH` accepts a complete publication metadata document directly, for example:
+`refrain-viewer --publication PATH` reconstructs a presentation from an existing completed scheduled-publication metadata document.
 
-```bash
-refrain-viewer --publication publication.json \
-  --aspect 16:9 --resolution 3840 2160 --no-qr --output custom.png
-```
+Accept only the completed scheduled form defined by [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes), with `publication.type: "scheduled"`.
 
-Parse and validate `refrain-viewer --publication` input with the shared completed-stage publication metadata API. Accept only complete scheduled-publication metadata; reject prepared metadata, null or incomplete publication-envelope fields, transient publications, malformed or unsupported-version documents. A non-null publication ID alone does not establish completion. Never finalize preparation metadata in the viewer. Bound publication metadata input to 16 MiB and turn malformed or deeply nested JSON into an actionable CLI error.
+Reject content-only checkpoints, content-and-presentation checkpoints, transient publications, incomplete or malformed documents, unsupported schema versions, unexpected fields, and structurally invalid metadata.
 
-Use the embedded single-quotation content entry and captured effective destination presentation as the rendering baseline. Keep the canonical presentation as separate provenance; do not substitute it for the prepared destination values. Pass published choices through the existing shared preparation machinery and apply typed explicit viewer overrides only to their corresponding values. Otherwise do not rerun content-entry, decoration, or global resource selection. Resolve resource identifiers and font faces only through validated installed configuration registries and the palette; preserve explicit published values and fail on missing or unusable requirements rather than selecting substitutes or falling back to preference pools. Treat embedded content and identifiers as structured rendering inputs, never arbitrary paths, executable instructions, or action payloads.
+The presence of a publication identifier alone does not prove that the document is a completed scheduled publication.
 
-Render all literary fields fully revealed by default. The shared reconstruction path uses the requested output geometry and renders fully revealed. Recalculate text layout, wrapping, QR viability, and raster geometry through the shared preparation pipeline for each requested output specification. Published insets and font-size bounds remain in design-canvas units unless a supported font-size override is supplied. The source publication's QR availability and output specification do not restrict a new output. Close generated images and decoded resources according to the existing image-ownership rules.
+Use the shared metadata parser and validator. The maximum input file size is 16 MiB.
 
-Reconstruction does not load the original content library, access resident runtime or operational state, history, or the prepared-image cache, initialize a backend, or acquire the resident ownership lock. `--config` supplies rendering resources only. Do not infer an audience or original destination; never interpret or execute actions.
+Reject malformed, oversized, or excessively nested JSON with actionable CLI errors. Do not attempt to repair or finalize metadata received for reconstruction.
 
-Hardware-independent `--publication` tests must construct valid completed scheduled documents using the actual shared preparation, finalization, and serialization APIs: capture metadata from deterministic image preparation, finalize it with a synthetic publication event, destination, audience, and actual output specification, then serialize with the required audience. Use mutated documents only for negative tests; do not hand-author a valid completed schema or introduce a test-only publication backend.
+The document's `content` section supplies the complete quotation, optional source and attribution, and associated visibility and scheduling metadata.
 
-Cover strict shared-schema validation of completed, preparation-stage, transient, incomplete, malformed, unsupported, and unexpected-field inputs; transient rejection; reconstruction from committed metadata independently of the content library and runtime state; resolved-choice, resource and font-face preservation; strict missing-resource failures; explicit override precedence; fully revealed rendering; requested geometry, export and window behavior; QR re-evaluation; and absence of content-library, resident-state, cache, backend, and action access. Verify `--publication` conflicts with `--entry`, `--image`, `--push`, `--render-as`, and `--list-destinations`.
+The document's single `presentation` section supplies the resolved effective artistic choices used by the published destination.
 
-End-to-end resident publication tests must additionally verify the current manifest and hashes, destination-specific audiences and reveal stages, reconstruction without the content library, and rendering at both the original and a different supported geometry.
+The completed `publication` section supplies the publication event and original output specification, but does not constrain the viewer to that original geometry.
+
+Do not require or reconstruct an embedded content entry, authored preference pools, or simultaneous canonical and effective presentation objects.
+
+Use the published resolved choices directly as the rendering baseline.
+
+Do not rerun content-entry, decoration, or global artistic resource selection for choices already recorded in the publication.
+
+Load required resources only through the validated installed registries and effective palette selected by `--config` or its normal default.
+
+Treat identifiers as resource references, never as arbitrary filesystem paths or executable instructions.
+
+If a required published resource, font bundle, font face, or palette identifier is unavailable or unusable, reconstruction fails with an actionable error. Do not substitute unrelated resources, rerandomize choices, or silently fall back to preference pools.
+
+Explicit viewer overrides remain available and replace only their corresponding published choices.
+
+Unspecified properties retain the published values.
+
+The viewer does not infer the original destination's audience or apply its destination configuration. Actions are validated as metadata but are never interpreted, executed, or used to select rendering behavior.
+
+The original publication's `content.reveal_stage` records visibility at its publication event. By default, reconstruction renders all available literary fields fully revealed; it does not replay the original reveal sequence or modify that recorded event.
+
+The published QR policy is the baseline for reconstruction. Reevaluate effective QR availability for the newly requested geometry and selected decoration.
+
+The original `presentation.qr.available` flag describes the source publication and does not constrain QR viability for a new output specification.
+
+Resolve layout, wrapping, font fitting, graphical transformations, QR placement, and raster-dependent geometry using the shared presentation pipeline.
+
+Published insets and quotation font-size bounds remain design-canvas measurements unless explicitly overridden by supported viewer controls.
+
+`--publication` may be combined with supported local aspect, resolution, output, window, debug, and artistic override controls.
+
+It cannot be combined with `--entry`, `--reveal-stage`, `--image`, `--push`, `--render-as`, or standalone destination discovery.
+
+Reconstruction must obey the same finished-image dimension limits and source-image decoding safeguards as ordinary viewer preparation.
+
+It does not load the original content library or access resident runtime, operational state, repetition or global history, publication checkpoints, or prepared-image caches.
+
+It does not initialize backends or acquire resident ownership.
+
+Close decoded resources and generated images using the shared image-ownership rules.
+
+### Reconstruction validation
+
+Hardware-independent reconstruction tests must use valid completed scheduled metadata produced through the actual shared preparation, publication-finalization, and serialization APIs.
+
+Construct a valid published example by preparing a deterministic presentation, applying a synthetic destination and audience, finalizing a real publication event, and serializing its completed metadata.
+
+Do not hand-author a separate supposedly valid publication schema solely for tests, or create a test-only publication backend.
+
+Use mutations of valid produced documents for negative tests.
+
+Tests must cover:
+
+- accepted completed scheduled publications;
+- rejected checkpoint, transient, incomplete, malformed, and unsupported-version documents;
+- strict schema validation and bounded JSON input;
+- reconstruction independently of the original content library and runtime state;
+- preservation of published literary content and effective artistic choices;
+- strict unavailable-resource, font, and face failures;
+- explicit viewer override precedence;
+- fully revealed default presentation;
+- changed output geometry and output-size limits;
+- QR viability reevaluation;
+- local PNG export and window display;
+- rejection of incompatible CLI modes;
+- absence of action execution, audience inference, backend access, and persistent-state mutation.
+
+Filesystem publication integration tests must also verify reconstruction from a genuinely published, integrity-validated dataset, using its current manifest and completed scheduled metadata.
 
 ## Resident push workflow
 
-An external preview contains complete output images rendered by the submitting viewer. The viewer remains authoritative for its pixels, using its own selected configuration, content, assets, and presentation overrides. The runtime does not reconstruct the preview from content or semantic presentation parameters. A viewer first discovers destination output specifications, renders one complete image variant for each unique specification, then submits those images and the specifications against which they were rendered. Presentation-wide choices remain coherent across variants generated together. Variants for identical specifications may share one image and transfer.
+The viewer submits transient complete-image publication requests through the already-running normal Refrain process.
 
-Hardware-independent tests using fake backends and controlled synchronization cover:
+It does not access resident backends, construct backend-specific transport operations, or modify the normal desired scheduled presentation.
 
-- generic viewer routing without backend-type conditionals.
+The resident runtime is authoritative for configured destination identifiers, participation, withdrawal, transient-publication capability, declared output aspects, and requested resolutions.
+
+The viewer discovers the required destination specifications before rendering or submitting an image.
+
+A destination identifier is an opaque routing value. Do not infer backend type, hardware, transport, capabilities, or geometry from its spelling.
+
+`--push TARGET` accepts one exact configured destination identifier or the reserved selector `@all`.
+
+The bare identifier `all` is an ordinary destination ID and selects only that destination.
+
+`@all` selects every configured destination still participating in publication. It skips intentionally withdrawn destinations but does not silently exclude failed, unavailable, or transient-unsupported destinations.
+
+An explicitly named withdrawn destination is rejected.
+
+A request selecting no participating destinations must fail with an actionable no-target result rather than reporting success.
+
+### Discovery and preflight
+
+Destination discovery does not reserve destinations or guarantee that they remain unchanged before publication.
+
+Before rendering, validate the discovered destination set and all properties that can be checked locally:
+
+- the requested destination exists;
+- each selected destination is participating and not intentionally withdrawn;
+- every selected destination supports transient publication;
+- the number of selected destinations and required image variants is within the transport limits;
+- all requested output dimensions are valid and within the finished-image limits;
+- required variants can be generated without unsupported or oversized output requirements;
+- the selected mode can provide an exact-size image to every target.
+
+A directly selected destination lacking transient capability is rejected before rendering.
+
+If `@all` includes any participating destination lacking transient capability, reject the entire request before rendering. Do not silently omit it.
+
+For finished-image input, reject the complete request if the supplied PNG dimensions differ from any selected destination's requested dimensions.
+
+For Refrain-presentation push, group destinations by their discovered output specifications and render one complete variant for each unique required specification.
+
+Use coherent viewer-owned artistic choices across variants generated together. Output-dependent QR availability, layout, and geometry are resolved separately for each specification.
+
+Variants with identical output specifications may share one rendered image and transfer.
+
+The runtime revalidates the complete destination set, current specifications, capabilities, required variants, and admission conditions before backend publication.
+
+A destination removed or reconfigured after discovery must cause rejection rather than automatic adaptation or substitution.
+
+### Transport limits and admission
+
+Transient requests must obey the established runtime-control limits:
+
+- at most 64 selected destinations;
+- at most 64 complete single-frame RGB PNG variants;
+- at most 3840 pixels in width and 2400 pixels in height for each image;
+- at most 9,216,000 decoded pixels per image;
+- at most 32 MiB encoded for each image;
+- at most 192 MiB total encoded image data per request.
+
+Check image dimensions and encoded sizes before expensive decoding or transfer where possible.
+
+Apply safe bounded validation to externally supplied PNGs and generated transfer variants.
+
+Do not decode and retain every transferred image simultaneously. Runtime staging and sequential validation belong to [Transient transfer and staging](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-transfer-and-staging).
+
+Obtain the runtime's metadata preflight response before transferring image payloads. A rejected request must not race image transfer or backend publication.
+
+Transient publication is opportunistic, not queued. Admission is atomic across the complete selected destination set.
+
+If any destination or shared backend instance cannot safely accept the request immediately, reject the entire request as busy without starting publication to any selected destination.
+
+The admitted destination membership is fixed for that operation. Do not add or remove targets silently after admission.
+
+Ordinary scheduled publication has priority until transient admission succeeds.
+
+After admission, the resident owns the complete operation, including every destination outcome. Client disconnection must not cancel, preempt, or roll back admitted publication.
+
+A newer required scheduled presentation may follow an admitted transient operation on the same backend instance, but must not overlap, interrupt, or replace it.
+
+Transient push does not change scheduled publication identity or acknowledgement. Routine scheduler reevaluation of an unchanged scheduled identity must not automatically overwrite the preview.
+
+An explicit `refrain --refresh` requests the runtime's currently required scheduled presentation. Refresh admission and stale-identity checks belong to [Transient admission and refresh](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-admission-and-refresh), not the viewer's rendering path.
+
+### Publication results
+
+Push is synchronous from the command user's perspective.
+
+Report useful preparation and preflight diagnostics before transfer. Once publication is admitted, report its accepted publication phase before waiting for potentially slow backend operations.
+
+A complete success result requires successful publication by every admitted destination.
+
+One destination's success does not establish success for another, even if their images or backend instance are shared.
+
+A failure at one destination must be reported without incorrectly marking successful independent destinations as failed.
+
+When any selected destination fails, the overall request is unsuccessful, but already completed publication at other destinations is not rolled back.
+
+Distinguish:
+
+- no configured or participating targets;
+- unknown or intentionally withdrawn targets;
+- unsupported transient-publication capability;
+- invalid or mismatched geometry;
+- exceeded transport or image limits;
+- busy admission;
+- failed publication at one or more destinations;
+- unavailable resident runtime;
+- unconfirmed outcome after loss of a terminal response.
+
+A rejection before admission means no requested backend publication began.
+
+A lost terminal acknowledgement after admission is not proof of success or failure. Report the outcome as unconfirmed and do not automatically replay the request.
+
+Publication across destinations is not transactional and cannot be rolled back.
+
+A transient push does not modify committed literary content, operational selection revision, repetition history, global history, reveal progression, current publication checkpoint, scheduled prepared-image cache, or scheduled publication acknowledgement.
+
+Completed transient publication metadata uses the transient form defined by [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes), containing only `schema_version` and the completed `publication` section.
+
+It contains no synthetic literary content, resolved presentation section, or action declarations.
+
+Finished transient pixels bypass scheduled destination presentation overrides and ordinary literary preparation.
+
+### Resident push validation
+
+Hardware-independent tests using controlled runtime discovery, fake backends, and deterministic synchronization must cover:
+
+- generic destination routing without backend-type conditionals;
+- exact destination IDs, including literal `all` versus reserved `@all`;
+- direct destination selection, withdrawn targets, and no-target results;
+- `@all` inclusion of unavailable and failed participating destinations;
+- rejection of unsupported transient destinations before rendering;
+- preflight image counts, dimensions, encoded sizes, and transport limits;
+- exact-size finished-image validation for every destination;
+- multiple declared aspects with identical requested dimensions;
+- coherent viewer presentation choices across multiple output specifications;
+- changed or removed destinations after discovery;
+- metadata preflight rejection before payload transfer;
+- bounded sequential PNG validation and temporary staging;
+- atomic busy rejection without partial admission;
+- fixed membership after successful admission;
+- independent publications on different backend instances;
+- serialization of destinations sharing one backend instance;
+- admitted transient work completing before newer scheduled work on the same instance;
+- loss of client connection before and after admission;
+- unconfirmed outcomes when terminal acknowledgement is lost;
+- truthful per-destination success and failure reporting;
+- absence of automatic replay or rollback;
+- no changes to authoritative state, publication checkpoints, scheduled cache, or scheduled acknowledgement;
+- completed transient metadata containing no literary or presentation sections;
+- correct resource lifetime and shutdown handling.
+
+Physical Waveshare validation must separately confirm that a viewer preview is published through the existing resident backend, cannot overlap another physical refresh, remains displayed after push completion, and can be replaced by `refrain --refresh` without restarting Refrain.
