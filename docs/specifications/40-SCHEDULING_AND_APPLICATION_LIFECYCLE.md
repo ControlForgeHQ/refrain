@@ -24,36 +24,36 @@ The local calendar date associated with a new selection determines its special-d
 
 A committed daily selection remains authoritative while its display date matches the current logical display date.
 
-Whenever the current logical display date differs from the committed selection's display date, Refrain establishes a new selection for the current logical date. This rule applies during continuous operation, after restart, and after either forward or backward clock adjustments. It does not depend on observing a particular boundary crossing.
+Whenever the current logical display date differs from the committed selection's display date, Refrain establishes a new selection for the current logical date when eligible content is available. This rule applies during continuous operation, after restart, and after either forward or backward clock adjustments. It does not depend on observing a particular boundary crossing.
 
 Repeated scheduling evaluations for the same committed logical date must not generate duplicate selections. Display failures, content-library changes, and missed reveal events do not independently trigger reselection.
 
-When the logical date is unchanged, the existing selection remains authoritative and its reveal progression never moves backward. A transition to another logical date establishes a new selection and reveal progression, even if a quotation was previously selected for that date.
+When the logical date is unchanged, the existing selection remains authoritative and its reveal progression never moves backward. A transition to another logical date requires evaluation of a new selection, even if a quotation was previously selected for that date.
 
 The current logical display date is calculated from resolved day-start boundaries as defined under Logical-date evaluation. When the clock advances within that logical date, Refrain advances to the reveal stage appropriate to the new time.
 
-When the logical display date differs from the committed selection's date, Refrain selects a quotation for the current logical date, including after a forward jump across one or more day-start boundaries.
+When the logical display date differs from the committed selection's date, Refrain selects a quotation for the current logical date when eligible content is available, including after a forward jump across one or more day-start boundaries.
 
 Skipped display dates do not require retrospective selection or presentation.
 
-For example, if the clock advances from October 17 to November 28, Refrain selects content for November 28 and presents the appropriate reveal stage.
+For example, if the clock advances from October 17 to November 28, Refrain evaluates a new selection for November 28 and presents the appropriate reveal stage when selection succeeds.
 
 Moving the clock backward does not reverse reveal progression while the logical display date remains unchanged.
 
-If the backward adjustment changes the logical display date, Refrain establishes a new selection for that date.
+If the backward adjustment changes the logical display date, Refrain evaluates a new selection for that date.
 
 With `day_start: "06:00"`:
 
-- Monday 07:00 to Monday 03:00 changes the logical date from Monday to Sunday and establishes a new selection.
+- Monday 07:00 to Monday 03:00 changes the logical date from Monday to Sunday and requires a new selection evaluation.
 - Monday 15:00 to Monday 10:00 keeps the same logical date and selection; reveal progress is retained.
 - Monday 23:00 to Tuesday 02:00 keeps the same logical date and selection.
-- Tuesday 02:00 to Tuesday 07:00 changes the logical date from Monday to Tuesday and establishes a new selection.
+- Tuesday 02:00 to Tuesday 07:00 changes the logical date from Monday to Tuesday and requires a new selection evaluation.
 
-Moving to another logical date does not reverse or remove prior selection or history records. The new selection has its own reveal progression.
+Moving to another logical date does not reverse or remove prior selection or history records. A successfully committed new selection has its own reveal progression.
 
 The logical display date is the local calendar date associated with the most recent resolved day-start boundary not later than the current instant.
 
-Resolve the configured day-start for the current host-local calendar date using the Local time rules: an ambiguous wall time uses its first occurrence, and a nonexistent wall time uses the first valid local instant after the gap. Compare the current instant with that resolved boundary using timezone-aware instant ordering. At or after the boundary, the logical display date is the boundary's local calendar date; otherwise, it belongs to the preceding resolved display-day boundary. Do not determine whether the boundary has passed using only a local wall-clock-value comparison.
+Resolve the configured day-start for the current host-local calendar date using the local-time rules: an ambiguous wall time uses its first occurrence, and a nonexistent wall time uses the first valid local instant after the gap. Compare the current instant with that resolved boundary using timezone-aware instant ordering. At or after the boundary, the logical display date is the boundary's local calendar date; otherwise, it belongs to the preceding resolved display-day boundary. Do not determine whether the boundary has passed using only a local wall-clock-value comparison.
 
 On ordinary dates, this remains equivalent to the intuitive rule: before `day_start`, use the preceding local calendar date; at or after `day_start`, use the current local calendar date.
 
@@ -61,13 +61,13 @@ For example, with `day_start: "06:00"`, Monday 05:00 has logical display date Su
 
 During a fall-back transition with `day_start: "01:30"` inside the repeated interval, the first occurrence of 01:30 is authoritative. Both the interval after that occurrence and before the fold, and the second occurrence of 01:15, belong to the new logical display date: the resolved boundary has already passed in absolute time. The repeated hour must not temporarily regress the logical date or create extra selections or history records. During a spring-forward gap containing the configured day-start, the preceding logical date remains active until the first valid local instant after the gap.
 
-On startup and during ordinary scheduling, compare this date with the committed selection's display date. A mismatch requires one new selection for the current logical date; skipped dates do not require retrospective selections. The committed date and day-start context are sufficient for this comparison. Do not require a boundary-observation event, retain an outdated selection because a boundary was not observed, or persist or infer clock-observation history.
+On startup and during ordinary scheduling, compare this date with the committed selection's display date. A mismatch requires evaluation of a new selection for the current logical date; skipped dates do not require retrospective selections. The committed date and day-start context are sufficient for this comparison. Do not require a boundary-observation event, retain an outdated selection because a boundary was not observed, or persist or infer clock-observation history.
 
 On startup, Refrain recovers the committed selection and its highest previously reached reveal stage.
 
 The active stage must be at least the previously reached stage.
 
-A restart retains the committed selection and reveal progression when its display date matches the current logical display date. If the date differs, startup establishes a new selection for the current logical date with its own reveal progression.
+A restart retains the committed selection and reveal progression when its display date matches the current logical display date. If the date differs, startup evaluates a new selection for the current logical date.
 
 Backward clock adjustments must not cause previously revealed fields to become hidden.
 
@@ -77,15 +77,11 @@ When a new daily selection is committed, reveal progress begins according to tha
 
 Clock adjustments that establish a new display day follow the rules defined in the display-day model.
 
-A restart retains the committed selection and reveal progression only while the current logical display date matches the committed date.
-
-The active selection remains authoritative while the current logical display date matches its committed date; a mismatch requires a new selection regardless of clock direction or restart.
-
 Use operating-system local civil time for display-day and reveal calculations. Resolve future wall-time deadlines with operating-system local-time rules; a timezone-aware value returned by `datetime.now().astimezone()` may contain only the current offset and is not sufficient to resolve future dates.
 
 Keep local wall-time conversion isolated so tests can inject deterministic local-time rules without changing the process timezone.
 
-Resolve day-start boundaries through the same isolated local-time conversion rules used for scheduled deadlines. Follow Architecture's Logical-date evaluation: compare the current instant with the resolved day-start boundary for the current local calendar date; at or after it, use the boundary's local calendar date, otherwise use the preceding resolved display-day boundary's date. Compare timezone-aware instants in absolute-time order (for example, after conversion to UTC), preserving the distinction between occurrences in a fold. Do not implement this as a bare local `time` comparison when the date can contain an ambiguous or nonexistent boundary.
+Resolve day-start boundaries through the same isolated local-time conversion rules used for scheduled deadlines. Compare the current instant with the resolved day-start boundary for the current local calendar date; at or after it, use the boundary's local calendar date, otherwise use the preceding resolved display-day boundary's date. Compare timezone-aware instants in absolute-time order (for example, after conversion to UTC), preserving the distinction between occurrences in a fold. Do not implement this as a bare local `time` comparison when the date can contain an ambiguous or nonexistent boundary.
 
 Do not use fixed-duration sleeps as a substitute for correct calendar-boundary calculations.
 
@@ -95,13 +91,13 @@ The scheduler should ordinarily wait until the next meaningful event rather than
 
 Implement the documented forward- and backward-clock behavior without allowing previous reveal stages to become hidden.
 
-If a clock change alters the logical display date, establish one selection for the current logical date regardless of adjustment direction. If the date is unchanged, retain the selection and its monotonic reveal progression. Tests must cover these cases without requiring the host operating-system clock to be modified.
+If a clock change alters the logical display date, evaluate a new selection for the current logical date regardless of adjustment direction. If the date is unchanged, retain the selection and its monotonic reveal progression. Tests must cover these cases without requiring the host operating-system clock to be modified.
 
 Separate the current time source from scheduling policy sufficiently to permit controlled test inputs.
 
 Use monotonic elapsed time for retry intervals and other durations that should not be affected by wall-clock adjustments.
 
-Persist the display date and day-start context required by [logical-date model](#civil-time-and-logical-date-evaluation). On startup, compare the current logical display date with the committed date: retain the selection when they match and establish one selection for the current logical date when they differ.
+Persist the display date and day-start context required by the logical-date model. On startup, compare the current logical display date with the committed date: retain the selection when they match and evaluate a new selection for the current logical date when they differ.
 
 Test logical-date comparison across restarts, missed day starts, backward and forward clock adjustments, and large forward jumps. Repeated evaluations for the same committed logical date must not duplicate a selection. Do not add or infer clock-observation history.
 
@@ -114,7 +110,8 @@ Require deterministic hardware-independent tests with explicit current instants 
 - a spring-forward transition with day start inside the nonexistent interval, retaining the preceding logical date before the first valid instant after the gap and using the new logical date at and after that instant;
 - non-hour offset folds and gaps where supported by the injected local-time rules;
 - startup, restart, and fresh evaluation within those transition intervals without prior boundary observations;
-- repeated evaluation and restart with a committed selection for the evaluated logical date, producing only one selection and no duplicate history records while retaining monotonic reveal progression.
+- repeated evaluation and restart with a committed selection for the evaluated logical date, producing only one selection and no duplicate history records while retaining monotonic reveal progression;
+- reveal-stage coalescing when distinct local wall times resolve to the same instant during daylight-saving gaps, including cumulative visibility, stage-zero coalescing, and absence of duplicate stages.
 
 Automated testing should cover:
 
@@ -142,11 +139,9 @@ A global reveal schedule defines the default timing for supported semantic field
 
 Individual content entries may override that schedule.
 
-The effective schedule is resolved before the daily selection record is committed.
+The effective schedule is resolved and validated before the daily selection record is committed. Every supplied entry reveal override must be validated against the configured day start and inherited schedule before the entry can participate in selection, including overrides for absent source or attribution fields. Invalid effective schedules exclude the affected entry without invalidating unrelated eligible content.
 
 Subsequent changes to global configuration or the original entry do not alter the committed schedule.
-
-Reveal schedules must be validated to prevent impossible or contradictory behavior.
 
 Reveal timing is evaluated relative to the logical display day associated with the selection.
 
@@ -154,7 +149,13 @@ If the current time requires a later reveal stage, advance directly to it; a for
 
 Reveal progression never moves backward within a committed selection.
 
-Within one logical display date, reveal progression is monotonic. A new selection for another logical display date begins its own reveal progression.
+Within one logical display date, reveal progression is monotonic. A new committed selection begins its own reveal progression.
+
+Operational state owns the highest reached reveal stage. Successful advancement must be committed to `state.json` before updating the shared publication checkpoint's reveal visibility. A failed checkpoint update does not reverse the committed progression. Recovery reconciles visibility from operational state without discarding otherwise valid resolved presentation choices.
+
+An invalid persisted or requested reveal stage must not be accepted as valid progression. Reject invalid stage values before persistent writes. Report the condition with an actionable warning and suspend further progression for the affected selection until corrected, while leaving unrelated application functionality available.
+
+Stage persistence and checkpoint synchronization follow [Selection revisions and atomic writes](30-SELECTION_AND_PERSISTENCE.md#selection-revisions-and-atomic-writes).
 
 ## Scheduling interfaces and waits
 
@@ -164,15 +165,19 @@ The public interface is `refrain.evaluate_scheduling(current_time, configuration
 
 The evaluator calculates the current logical display date from resolved host-local day-start boundary instants as defined under Logical-date evaluation, using `scheduling.day_start`. With a committed selection, a different logical date requires a new selection for that date; the same date retains the selection and advances reveal progress monotonically. Repeated evaluation for one committed logical date does not request another selection. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
 
-`refrain.resolve_reveal_stages(selection)` returns the canonical ordered `CompositionVisibility` sequence for a committed daily selection. The coordinator uses this same sequence for image preparation and cache validation; scheduling evaluation derives its required stage index from that sequence. Simultaneous reveal times share a stage, fields scheduled at the quotation time appear in stage zero, and source and attribution may reveal in either order. The final stage includes every available optional field.
+`refrain.resolve_reveal_stages(selection)` returns the canonical ordered `CompositionVisibility` sequence for a committed daily selection. Resolve each present field's scheduled local time to an absolute instant using the established civil-time rules before grouping reveal stages. Fields whose resolved instants are identical share one stage, even when their configured wall times differ. Each stage reveals every field scheduled for its instant and retains all fields revealed by preceding stages. The quotation and any fields resolving to its initial instant appear in stage zero. Missing optional fields do not create stages. Source and attribution may reveal in either order. The final stage includes every available optional field.
+
+The coordinator uses this same cumulative sequence for image preparation and cache validation. Scheduling evaluation derives its required stage index from the sequence. Stage ordering and equality are determined by resolved instants, not by comparing local `HH:MM` values alone.
 
 The required scheduling contract does not include `DisplayDayBoundary`, `DisplayDayBoundaryObserver`, and the `observed_boundary` argument to `evaluate_scheduling()`. Do not introduce a boundary-history subsystem in their place.
 
 `refrain.next_scheduling_deadline(current_time, configuration, state)` returns the current time immediately when initial selection or a logical-date mismatch requires a selection; otherwise, it returns the next applicable committed reveal time or configured day-start time. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; waiting does not select content, mutate persistent state, prepare images, or operate a display.
 
-The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage. A persisted stage beyond the sequence's final index is invalid and evaluation raises `SchedulingEvaluationError`.
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage.
 
-When a reveal advancement is required, the coordinator publishes the corresponding prepared variant to each destination. Scheduling evaluation does not determine whether an image was successfully presented.
+A persisted stage beyond the sequence's final index is invalid, and evaluation raises `SchedulingEvaluationError`. The application coordinator must report the failure and suspend reveal progression for the affected selection without treating the invalid value as a valid stage, terminating unrelated destination operations, or replacing committed literary content.
+
+When a reveal advancement is required, the coordinator commits operational progression and synchronizes checkpoint visibility independently of backend acknowledgement. It then requests the corresponding prepared variant from each participating destination. Scheduling evaluation does not determine whether an image was successfully presented.
 
 A failed display update does not invalidate the committed selection or its prepared images.
 
@@ -180,32 +185,34 @@ A subsequent successful update may skip intermediate stages and present the late
 
 ## Scheduling and delivery boundaries
 
-The display scheduler determines which reveal stage should currently be presented. Each destination receives the prepared output image matching its output specification.
+The display scheduler determines which reveal stage should currently be presented. Each destination receives the prepared output image matching its output specification and effective presentation requirements.
 
-Normal scheduled reveals do not invoke the renderer or consult the content library.
+Normal scheduled reveals select prepared images rather than invoking the renderer or consulting the content library. Image regeneration when required is a separate preparation responsibility.
 
 The display backend owns physical display communication and recovery.
 
-The committed daily selection remains authoritative when prepared images need to be recovered.
+The committed daily selection remains authoritative when prepared images need to be recovered. The matching complete publication checkpoint supplies persisted destination-independent artistic choices, subject to the approved checkpoint-loss recovery rules.
 
 Time and configuration are inputs to the relevant responsibilities. Neither is an independent source of quotation-selection policy.
+
+Publication admission, destination acknowledgement, per-instance serialization, coalescing, retries, and backend failure isolation are defined under [Scheduled delivery and acknowledgement](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#scheduled-delivery-and-acknowledgement).
 
 ## Startup and daily transitions
 
 Normal startup performs the following logical operations:
 
 1. Load application configuration, accepting documented defaults and recoverable configuration problems while reporting diagnostics.
-2. Recover persistent operational state, if available.
+2. Recover and validate persistent operational state, if available.
 3. Evaluate whether an existing committed selection remains active under the display-day transition rules.
-4. Load and validate content sources when a new selection is required, constructing an effective library from accepted entries.
-5. Perform and commit a new selection when required and when a usable effective content library is available.
-6. Verify that all required reveal-stage images are available and valid for the committed selection.
-7. Reuse a complete prepared-image cache or regenerate the complete stage set from the current daily selection, configuration, and available resources.
+4. When a new selection is required, complete content discovery and validation, constructing an effective library from accepted entries.
+5. Commit a new selection when eligible content is available. When the effective library is usable but contains no quotation eligible for the current logical date, use the no-eligible-content fallback defined below without creating a selection.
+6. For a committed selection, recover or construct its content and presentation checkpoints under the established state-first persistence and recovery requirements.
+7. Verify that all required reveal-stage images are available and valid. Reuse compatible complete image sets or regenerate them from the committed selection, completed checkpoint, current applicable configuration, and available resources. Prepare the no-eligible-content fallback independently when applicable.
 8. Initialize configured display backends independently.
 9. If automatic information-view presentation is enabled, prepare and request publication of the information view.
-10. Observe the configured information-view duration and transition to daily presentation when it expires, or proceed directly when automatic presentation is disabled or cannot be completed.
-11. Determine the currently required daily reveal stage, respecting previously reached progression and the current logical display date.
-12. Independently attempt publication of the corresponding prepared image to every participating destination.
+10. Observe the bounded information-view startup behavior and transition to daily presentation when its interval expires, or proceed directly when automatic presentation is disabled or cannot be completed.
+11. Determine the currently required daily reveal stage, respecting committed reveal progression and the current logical display date, or select the fully revealed fallback presentation when applicable.
+12. Independently request publication of the corresponding prepared image to every participating destination.
 13. Continue operating until shutdown.
 
 The application may prepare or recover the committed daily presentation before or during information-view publication. Information-view presentation does not defer required selection commitment or alter authoritative reveal progression.
@@ -222,83 +229,109 @@ A valid committed selection does not require its original content entry or a cur
 
 If no committed selection exists and a usable effective content library cannot be constructed, startup cannot establish a daily presentation and must report an actionable error.
 
-If a new selection is required during continuous operation but the content library is unavailable or unusable, Refrain must not clear repetition history, commit an empty selection, or replace the previously committed presentation.
+If a new selection is required during continuous operation but content directories are missing or inaccessible, source enumeration is incomplete, or the effective content library contains no valid quotations, Refrain must not clear repetition history, commit an empty selection, or replace previously committed operational state. It must preserve existing prepared images where practical and report the failure.
 
-The application must preserve existing committed state and prepared images where practical.
+### No-eligible-content fallback
 
-Failure to initialize an individual display backend must not prevent other configured destinations from becoming operational.
+When content discovery completes successfully and produces a usable effective library containing valid quotations but none eligible for the current logical display date, Refrain must present a fallback instead of treating the library as unavailable.
 
-The implementation may organize these operations differently provided their externally observable behavior is preserved.
+The fallback uses the exact curated quotation supplied by the application for the information view, attributed to `Forge, Refrain Development Team`. Render it using the normal literary presentation facilities with all available literary fields fully revealed. It is not the branded information view and does not use its runtime-information layout.
+
+The fallback is not a committed daily selection. It must not create a synthetic content entry or selection revision, modify authoritative operational state or repetition history, append global history, or advance reveal progress.
+
+A previously committed selection for another logical date remains unchanged in persistent state. Presenting the fallback must not misrepresent that earlier selection as belonging to the current display date.
+
+Do not repeatedly attempt a new selection for the same logical date during ordinary operation after determining that the healthy effective library has no eligible quotation. Evaluate content eligibility again for the next logical display date.
+
+The fallback does not apply to missing or inaccessible content sources, incomplete discovery or enumeration, or an effective library containing no valid quotations. These conditions retain the established unavailable-library error and preservation behavior.
+
+### Display-day transition
 
 At a recognized display-day transition, the application:
 
 1. Determines the new display date.
-2. Constructs a nonempty effective content library from successfully examined sources and accepted entries.
-3. Removes obsolete repetition identities based on the effective library.
-4. Performs eligibility, repetition, priority, and random quotation selection.
-5. Creates the daily selection record.
-6. Atomically commits the selection record, updated repetition history, next selection revision, initial reveal progress, and required scheduling context.
+2. Completes content discovery and validation, constructing an effective content library from accepted entries.
+3. If no quotation is eligible in an otherwise usable effective library, prepares the no-eligible-content fallback without changing committed operational state.
+4. Otherwise, removes obsolete repetition identities based on the effective library and performs eligibility, repetition, priority, and random quotation selection.
+5. Creates and atomically commits the daily selection record, updated repetition history, next selection revision, initial reveal progress, and required scheduling context.
+6. Persists the content-only publication checkpoint, then resolves and persists the complete content-and-presentation checkpoint before destination-specific preparation.
 7. Records the committed selection in global history on a best-effort basis.
-8. Generates and persists every required reveal-stage image.
+8. Generates or reuses all required compatible reveal-stage images.
 9. Determines the stage appropriate to the current time.
-10. Independently requests presentation of the corresponding prepared image through each configured backend.
+10. Independently requests presentation of the corresponding image through each participating backend.
 
-A missing, inaccessible, or empty effective content library prevents a new selection without modifying committed operational state.
+Steps concerning selection commitment, checkpoints, and global history do not apply to the no-eligible-content fallback.
 
-The selection is complete at operational-state commitment, independently of whether global-history recording, image preparation, or display communication subsequently succeeds.
+An unavailable or empty effective content library prevents a new selection without modifying committed operational state. A healthy library with no eligible quotation follows the fallback behavior instead.
+
+Selection is complete at operational-state commitment, independently of whether checkpoint persistence, global-history recording, image preparation, or display communication subsequently succeeds.
 
 A failure after commitment must not trigger reselection.
 
-Presentation completion is tracked independently for each backend and does not change the committed selection.
+Presentation completion is tracked independently for each destination and does not change the committed selection.
+
+Failure to initialize an individual display backend must not prevent other configured destinations from becoming operational. Failures affecting one destination on a shared backend instance must not be reported as successful for other destinations or silently treated as failures of unrelated backend instances.
+
+The implementation may organize these operations differently provided their externally observable behavior and required persistence ordering are preserved.
+
+Automated tests must cover:
+
+- unavailable sources, incomplete discovery, and libraries with no valid quotations;
+- healthy effective libraries with no eligible quotation, including the exact information-view quotation, required attribution, full reveal, and normal literary rendering;
+- no synthetic selection, repetition-history mutation, publication checkpoint update, or global-history event for the fallback;
+- preservation of an existing committed selection for another display date during fallback presentation;
+- retry of ordinary eligibility at the next logical display date;
+- successful selection with individual invalid files or entries excluded;
+- state-first checkpoint construction and recovery during startup and display-day transitions;
+- independently failed and healthy destinations during startup and ordinary publication.
 
 ## Startup information-view timing
 
-The information view is independent of the committed daily selection. Preparing or displaying it must not create a new selection, modify selection histories, or advance reveal progress.
+The information view is independent of the committed daily selection. Preparing or displaying it must not create a new selection, modify selection histories or publication checkpoints, or advance reveal progress.
 
 Automatic presentation occurs once on each application start, subject to the configured duration. It does not repeat at ordinary display-day boundaries.
 
 The automatic duration defaults to 60 seconds. A duration of zero disables automatic presentation without disabling the information-view capability.
 
-The configured duration is measured using elapsed monotonic time beginning when the first backend successfully publishes the information view.
+The configured duration is measured using elapsed monotonic time beginning when the first backend successfully acknowledges publication of the information view.
 
 Publication to other backends remains independent. A slow or unavailable backend must not delay the transition to daily presentation for other destinations.
 
-If no backend successfully publishes the information view within a bounded initial attempt period, the application proceeds toward normal daily presentation rather than waiting indefinitely.
+The initial opportunity to obtain a successful information-view acknowledgement must be bounded. If no backend succeeds within that period, Refrain must stop waiting for the information-view interval and proceed toward normal daily presentation.
 
-When the duration expires, Refrain determines the currently required daily presentation using the normal scheduling and recovery rules. It does not replay reveal stages that are no longer required.
+When the configured information-view interval expires, or the bounded initial attempt period ends without success, pending information-view jobs that have not started backend publication must expire rather than delaying the currently required scheduled presentation.
+
+An information-view publication already active on a backend instance must be allowed to complete safely. The next required scheduled presentation for that instance follows the active operation without overlapping it. Other backend instances proceed independently.
+
+When the information-view interval expires, Refrain determines the currently required daily presentation using the normal scheduling and recovery rules. It does not replay reveal stages that are no longer required.
 
 An information-view preparation or publication failure must not invalidate the committed selection or prevent ordinary daily presentation when a functional display destination remains available.
 
 The information view may be requested independently of automatic startup behavior, but it is not one of the defined runtime-control operations.
 
-Use the existing display publication coordinator to distribute the prepared information-view image to configured backends.
+Use the existing display publication coordinator to distribute prepared information-view images to configured backends. Do not create a separate backend-publication mechanism or reset display backends merely to transition between information and daily views.
 
 The startup information-view interval is transient application state. It does not require durable storage or modification of the committed daily selection.
 
-Use a monotonic clock for the configured display duration. Begin timing when the first backend successfully acknowledges publication of the information view.
-
-Bound the initial attempt to obtain a successful information-view publication so recoverable backend failures cannot postpone daily presentation indefinitely.
-
 Do not require successful publication by every backend before the information-view interval begins or ends.
 
-When the interval ends, reevaluate the normal scheduling requirements and request the currently appropriate prepared daily image. Preserve the scheduled-presentation acknowledgement independently; information-view publication must not replace or invalidate it. Preserve independent backend execution, pending-update coalescing, and safe handling of active hardware transfers.
-
-Do not reset or reconstruct display backends merely to transition between the information and daily views.
+Preserve scheduled-presentation acknowledgement independently; information-view publication must not replace or invalidate it. Preserve per-instance serialization, independent backend execution, pending scheduled-update coalescing, and safe handling of active hardware transfers.
 
 Information-view preparation failures must be reported without preventing ordinary daily presentation when that remains possible.
 
 Include hardware-independent automated tests covering:
 
-Include hardware-independent automated tests covering:
-
 - default, disabled, and explicitly configured information-view durations;
 - invalid duration values and documented fallback behavior;
-- preservation of committed selection, repetition history, and reveal progression;
+- preservation of committed selection, repetition history, checkpoint data, and reveal progression;
 - preservation of normal scheduled-publication acknowledgement when an information view is published;
-- publication to multiple independent backends;
-- timer start after the first successful publication;
+- publication to multiple independent backends and destinations sharing a backend instance;
+- timer start after the first successful publication acknowledgement;
 - wall-clock adjustments during the information-view interval;
 - bounded initial publication attempts when no backend succeeds;
+- expiration of pending information-view jobs that have not started;
+- completion of an active information-view update before the next scheduled update on the same backend instance;
+- independent progress by other backend instances during slow information-view publication;
 - transition to the latest required daily presentation after missed reveal events;
 - failure isolation and shutdown during information-view presentation.
 
@@ -308,72 +341,85 @@ After successful preparation, the application waits for the next meaningful sche
 
 Scheduled reveal updates select an existing prepared image.
 
-Normal operation must not require repeated content-library access or repeated rendering.
+Normal operation must not require repeated content-library access or repeated rendering while the committed selection and its compatible prepared images remain usable.
 
 Clock adjustments are evaluated according to the display-day and reveal-progression rules.
 
 The application must not rely on busy waiting to determine ordinary reveal times.
 
-## Accelerated demo sessions
-
-The optional `--demo SECONDS` operating mode repeatedly selects quotations and presents each canonical reveal stage at an accelerated interval. It bypasses normal time-of-day scheduling without manufacturing clock transitions. The automatic startup information view is suppressed.
-
-The session determines its eligibility display date once from host-local time and the configured day start. Every subsequent selection uses that same date and the normal selection and resource-resolution procedure, including session repetition history. A date does not limit the number of selection revisions in this mode.
-
-Demo progression belongs to the application controller, not the scheduler, renderer, or display backends. Each daily selection is committed before its complete required output-variant set is prepared or reused from cache. `resolve_reveal_stages()` supplies the same cumulative sequence used in normal operation, preserving simultaneous reveals and absent fields.
-
-The initial stage is requested as soon as it is ready. Each valid prepared stage may progress even when no destination accepts its image. Its requested minimum monotonic viewing interval begins at the first successful backend acknowledgement, or at the publication attempt when none is available. Publication failure alone does not complete a stage or advance the demo; the controller's interval governs progression. Expiration completes the stage even when destinations are unavailable, failed, or withdrawn. After the final stage's interval, the controller may commit another selection. Preparation or image-loading failure leaves the stage pending and does not authorize progression or reselection. Publication remains owned by the existing coordinator, with independent backend workers, coalescing, and backend-owned refresh constraints; not every destination must acknowledge each stage.
-
-Operational state, prepared artifacts, and global history are isolated in fresh temporary session storage using their existing formats. Configured and platform-standard production persistence locations are never used or modified in demo mode. The committed quotation, captured content preferences, canonical presentation, and reveal progression remain authoritative within the session. A complete valid prepared set remains stable while reused; after cache loss or invalidation, preparation reuses the canonical selections and resolves only effective destination overrides and output-dependent values from current configuration and available resources. The session continues selection and reveal progression when destinations are unavailable, failed, or withdrawn. Shutdown releases session resources; demo sessions are neither retained nor resumed.
-
-Lifecycle, retry, timing, and testing implementation guidance is collected under [Accelerated demo sessions](#accelerated-demo-sessions).
-
-`run_demo()` owns accelerated progression separately from normal scheduling. Load configuration first, then create standard-library temporary session storage for the existing operational-state store, prepared-image artifact store, and global-history store. Storage settings may be parsed as part of configuration but must not be used as demo persistence targets; do not inspect or open production persistence locations. Determine the initial display date through the OS-local/day-start calculation once; do not reevaluate wall time to drive demo stages.
-
-Reuse the application selection, resource resolution, daily-selection commitment, reveal-progress persistence, image-cache recovery, and history-recording operations. Keep a pending selection proposal across commit retries, including uncertain publication followed by a failed reload, so an already published selection cannot be replaced inadvertently. Recover preparation or image-loading failures from the durable daily selection without skipping the requested stage. Best-effort history recording retains its ordinary semantics.
-
-Use `resolve_reveal_stages()` for canonical progression. Publish prepared images with revision/stage identities through `DisplayPublicationCoordinator`. Wait interruptibly for any successful acknowledgement. Measure the viewing interval from `first_successful_publication_time()` when an acknowledgement exists; if no destination accepts the image, start the interval at its publication attempt. A valid prepared stage completes when this interval expires even if destinations are unavailable, failed, or withdrawn; publication failure alone neither completes nor advances a stage. After the final stage's interval, the controller may commit another selection. Preparation or image-loading failure leaves the stage pending and must not authorize progression or reselection. Use the same monotonic clock supplied to the coordinator. Initialization, preparation, publication failures, and wall-clock adjustments do not themselves alter committed selection or reveal state. Recheck elapsed time after interrupted or early waits; bound individual duration waits to avoid platform timeout overflow for large finite CLI intervals.
-
-Use the normal independent backend retries and increasing application retry delays from 1 to at most 60 seconds. Do not reset backends between stages or require all destinations to succeed. Continue progression and retry waits while destinations are unavailable, failed, or withdrawn; only shutdown ends the session for those conditions.
-
-Stop new work on Ctrl+C or SIGTERM. Close the publication coordinator before removing temporary storage, preserving its bounded worker shutdown and image-reference ownership. Attempt session cleanup even after fatal application errors; report cleanup failures without concealing the primary error or touching production files. Each invocation starts fresh and has no resumable session state. Suppress the startup information view in demo mode.
-
-Cover CLI validation and normal-mode requirements, canonical progression, fixed eligibility dates, repeated revisions and pool exhaustion, stable resource identifiers, isolation from production files, fresh sessions, cleanup, interrupted waits, and preparation/publication/storage recovery with deterministic hardware-independent tests. Use injectable clocks, controlled waits, and fake backends instead of real-time sleeps. Include independent healthy/slow or unavailable destinations and all-backend loss; retain ordinary scheduler, startup, persistence, and recovery regression coverage. These tests do not establish physical e-paper behavior.
+Normal operation does not include accelerated resident selection or a `refrain --demo` lifecycle. Explicit local quotation inspection and one-shot reveal-stage rendering belong to `refrain-viewer` and are defined by the [public CLI](../CLI.md).
 
 ## Lifecycle recovery
 
 Recovery is performed according to the stage at which an interruption occurred.
 
-An interruption before selection commitment permits selection to be repeated.
+An interruption before successful operational-state selection commitment permits normal selection to be repeated when required.
 
-An interruption after commitment preserves the committed selection.
+An interruption after commitment preserves the committed selection, its revision, repetition history, effective reveal schedule, and highest reached reveal stage.
 
-Missing or incomplete prepared variants are regenerated as complete stage sets from the durable daily selection and its persisted canonical presentation, applying current destination overrides and output requirements without canonical reselection or reveal regression.
+On startup, recover and validate operational state before publication checkpoints or prepared images. The publication checkpoint must match the current committed selection and satisfy its required schema form.
 
-Recoverable destination and backend-service failures use bounded retries without delaying other destinations. Exhausted retries wait for a subsequent publication opportunity, and destination unavailability does not terminate the resident runtime.
+A valid content-only checkpoint permits completion of destination-independent artistic resolution. A valid complete presentation checkpoint preserves its resolved artistic choices across restart and destination preparation, regardless of subsequent changes to resource pools or configuration.
 
-After restart, each available backend is supplied with its currently required prepared variant without relying on persisted backend-specific presentation progress.
+A missing, damaged, invalid, or stale publication checkpoint must be reconstructed from authoritative operational state. When the sole durable record of resolved artistic choices has been lost, resolve those choices again and emit an actionable warning that the resulting appearance may differ. Recovery must not reselect literary content, increment the revision, change repetition history, or reduce reveal progress.
 
-Recovery must not introduce additional history entries or silently substitute content.
+If checkpoint visibility is behind committed operational reveal progression, synchronize visibility from operational state while preserving otherwise valid artistic choices.
 
-Display backend failures must remain isolated from other destinations and must not invalidate content selection or persistent history.
+Checkpoint construction and recovery must follow the state-first persistence requirements defined in [Selection and Persistence](30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility).
+
+Missing or incomplete prepared variants are regenerated as complete compatible stage sets from the committed selection, valid completed presentation checkpoint, current applicable destination overrides, output requirements, and available resources. A compatible healthy cache remains reusable without checking for configuration or asset changes.
+
+Regeneration must not independently reselect persisted artistic choices while their authoritative checkpoint remains valid. When checkpoint loss required new artistic resolution, previously prepared artifacts must not be reused solely because their selection revision and output dimensions match; preparation compatibility must reflect the resolved presentation requirements.
+
+Recoverable destination and backend-service failures use bounded retries without delaying other backend instances. Exhausted retries wait for a subsequent publication opportunity, and destination unavailability does not terminate the resident runtime.
+
+After restart, each available participating destination is supplied with its currently required prepared variant without relying on persisted destination-specific presentation acknowledgements.
+
+Recovery must not introduce additional history entries or silently substitute literary content.
+
+Display backend failures must remain isolated from other destinations and must not invalidate content selection or persistent history. A shared backend-instance failure must affect only the destinations actually dependent on that instance.
 
 Rendering failures must not cause reselection after a daily selection has been committed.
 
 Content-library changes or validation failures must not modify an already committed daily selection.
 
-An unrecoverable configuration or state error must be reported clearly rather than disguised as normal operation.
+An unrecoverable configuration or operational-state error must be reported clearly rather than disguised as normal operation.
+
+An existing physical e-paper image must be preserved when recovery cannot safely complete.
+
+Automated tests must cover recovery across selection commitment, both publication checkpoint boundaries, reveal advancement, checkpoint visibility synchronization, cache regeneration, backend failures, and application restart. Tests must distinguish loss of an artistic checkpoint from loss of a prepared-image cache and verify preservation of valid authoritative state.
 
 ## Shutdown coordination
 
-Normal shutdown must stop new presentation requests and safely release resources owned by every configured display backend.
+Normal shutdown must stop admission of new presentation requests, stop recoverable retries, and safely release resources owned by every configured backend instance.
+
+Use one 60-second foreground shutdown deadline for the complete coordination and worker-drain operation, not an independent 60-second allowance for each backend, destination, or worker.
+
+Admitted one-shot publication operations remain owned by the resident during shutdown. Allow them to reach terminal outcomes within the remaining shutdown deadline while preventing new admission. Unstarted or unadmitted requests must not indefinitely delay backend cleanup.
+
+When the foreground deadline expires, report outstanding per-destination publication outcomes as unconfirmed rather than successful or definitively failed. A timeout does not prove that the corresponding backend publication did not occur.
 
 Backend shutdown must account for active publication operations without permitting unsafe overlapping hardware access.
 
-Shutdown waits for active synchronous publications only for a bounded period. It must not interrupt a backend operation or invoke that backend's cleanup concurrently with an active publication. If a publication remains blocked at the deadline, its worker retains the active image and attempts cleanup if the operation later returns; process termination may ultimately end a still-blocked worker.
+Do not interrupt a backend operation or invoke that backend's cleanup concurrently with an active publication on the same instance. This applies when one backend instance serves multiple named destinations.
 
-Failure to close one backend must not prevent cleanup attempts for other backends.
+If a synchronous publication remains blocked at the deadline, its worker retains the active image and backend resources until the operation returns or the process exits. The worker must attempt safe deferred cleanup if the operation later returns. Do not free resources still owned by an active operation.
+
+Failure to close one backend instance must not prevent cleanup attempts for other independent backend instances.
+
+Retain exclusive resident ownership while backend workers or deferred cleanup still require protected resources. Release ownership only after safe cleanup completes or allow the operating system to release it on process exit. Do not expose the installation as available to another resident while protected backend operations remain active.
 
 Shutdown must not intentionally erase retained e-paper images.
 
-Committed selection state, including the canonical presentation, remains available for subsequent startup recovery. Prepared images are a disposable cache that may be rebuilt from that canonical presentation.
+Committed operational state and the valid publication checkpoint remain available for subsequent startup recovery. Prepared images are disposable cache entries that may be regenerated using the established recovery rules.
+
+Automated tests must cover:
+
+- the single 60-second foreground deadline across multiple backend workers;
+- safe completion or deferred cleanup of blocked active publications without concurrent backend access;
+- unconfirmed per-destination outcomes when the deadline expires;
+- admitted one-shot work continuing independently of disconnected clients;
+- independent cleanup of healthy backend instances when another instance remains blocked;
+- retention of active image and backend resources until safe release;
+- exclusive ownership throughout outstanding protected operations;
+- preservation of committed state, publication checkpoints, and retained e-paper imagery during shutdown.
