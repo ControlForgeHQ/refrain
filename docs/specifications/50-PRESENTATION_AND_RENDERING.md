@@ -2,176 +2,204 @@
 
 ## Preparation and renderer interfaces
 
-Daily-image preparation accepts a committed daily selection record and an explicit sequence of cumulative reveal stages.
+Daily-image preparation accepts a committed daily selection record, its validated publication checkpoint, and an explicit sequence of cumulative reveal stages.
 
-Preparation resolves or recovers the canonical presentation, derives and validates each destination's effective presentation before rendering, generates the view-specific background, and uses the shared renderer to produce complete images without accessing physical display hardware.
+Preparation resolves or recovers destination-independent artistic choices, applies destination overrides, derives effective presentation requirements, and generates complete images without accessing physical display hardware.
 
-Neither preparation nor the renderer selects content, modifies selection history, or determines application lifecycle policy.
+Neither preparation nor the renderer selects literary content, modifies selection or repetition history, advances reveal progress, or determines application lifecycle policy.
 
-Rendered output must be testable and inspectable without Raspberry Pi display hardware.
+The shared literary renderer owns typography, fitting, positioning, and drawing of quotations and optional source and attribution within the resolved literary rectangle. It does not read application configuration, resolve resource pools, access persistent selection state, or operate display backends.
 
-Daily-image preparation separates graphical composition from the shared literary renderer. The renderer owns the typography, fitting, positioning, and drawing of the quotation and its optional source and attribution within the resolved literary rectangle. It does not read application configuration, select content or fonts, access selection history, or determine application lifecycle policy.
+Graphical composition, literary rendering, QR composition, and destination visual conversion are separate responsibilities.
 
-Pillow is the preferred image-composition library.
+Use Pillow for image composition and rendering. Rendered output must be testable and inspectable without physical Raspberry Pi display hardware.
 
-The renderer produces standard images independently of physical display hardware.
-
-Display-specific conversion belongs at the boundary between prepared images and the hardware backend when necessary.
-
-Do not allow the renderer to depend directly on Waveshare-specific objects or APIs.
+Display-specific conversion is permitted only at the defined destination visual-conversion boundary. The literary renderer must not depend on Waveshare APIs, GPIO, SPI, or vendor driver objects.
 
 ## Canonical resolution and resource precedence
 
-An omitted resource configuration preserves the plain paper-white, undecorated presentation.
+For each committed daily selection, resolve destination-independent artistic choices from the captured content preferences, effective configuration, and available resources. Persist those choices in the complete content-and-presentation checkpoint in `publication.json` before destination-specific preparation.
 
-For each committed daily selection, resolve the canonical decoration, font, background, colors, presentation style, and QR policy from the selected content's captured preferences and current configuration, then persist those selections. Before rendering each destination, apply only its supported overrides and resolve its effective presentation and output-dependent layout.
+Operational state does not contain resolved artistic choices. The completed publication checkpoint is their sole durable authority, as specified in [Selection and Persistence](30-SELECTION_AND_PERSISTENCE.md#authoritative-and-derived-state).
 
-For each selected quotation, Refrain resolves the decoration first:
+A valid matching presentation checkpoint must be reused without reselecting artistic choices. Changes to resource pools, configuration, or destination overrides do not independently authorize canonical reselection. Recovery after checkpoint loss follows [Recovery and state compatibility](30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility).
 
-1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit decoration when available.
-2. An explicit decoration value of `"none"` suppresses decoration selection.
-3. Otherwise, select from the effective default decoration pool, using the automatic `"none"` fallback if that pool has no usable members. The fallback does not change the pool's membership.
+Resolve canonical decoration first:
 
-The selected decoration may provide preferred font and background values and a complete literary-inset override.
+1. Use the content entry's explicit decoration preference when valid and available, or select from its referenced pool.
+2. An explicit `"none"` suppresses decoration.
+3. Otherwise, select from the effective default decoration pool, using the automatic `"none"` fallback when no usable candidates remain.
 
-Exactly one font bundle is selected during image preparation using this precedence:
+The selected decoration may provide preferred font and background values, role-face preferences, color preferences, and complete literary-inset overrides.
 
-1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit font when usable.
-2. Otherwise, resolve and select one candidate from the selected decoration's preferred font pool when usable.
-3. Otherwise, select from the effective default font pool.
+Resolve the canonical font bundle using this precedence:
 
-Background selection follows this precedence:
+1. The content entry's font preference.
+2. The selected decoration's font preference.
+3. The effective default font pool.
+4. The unconditional bundled `source-sans-3/regular` recovery font when no other usable font can be resolved.
 
-1. If the content entry specifies a pool reference, select one candidate from that expanded pool. Use an available explicit background when available.
-2. An explicit background value of `"none"` suppresses all background selection, including a decoration's preferred background.
-3. Otherwise, resolve and select one candidate from the selected decoration's preferred background pool when specified and available.
-4. Otherwise, select from the effective default background pool, using the automatic `"none"` fallback if that pool has no usable members. The fallback does not change the pool's membership.
+Resolve one bundle, then resolve its quotation, source, and attribution faces independently according to [Font bundles, role faces and recovery](#font-bundles-role-faces-and-recovery).
 
-A decoration may explicitly prefer `"none"` as its background. This suppresses automatic background selection unless the content entry supplies its own background preference.
+Resolve canonical background using this precedence:
 
-Each preference pool is resolved at its existing precedence level and is never merged into another level.
+1. The content entry's background preference.
+2. The selected decoration's preferred background.
+3. The effective default background pool.
+4. The automatic `"none"` fallback.
 
-An empty explicit pool is unavailable and falls through to the next established preference.
+An explicit background `"none"` suppresses all lower-priority background selection. A decoration preference of `"none"` suppresses automatic background selection unless the content entry supplies a higher-priority preference.
 
-When a requested resource is unavailable, Refrain retains an otherwise valid content entry and proceeds to the next applicable preference, with an appropriate diagnostic.
+Each preference level is considered independently. Pool candidates are not merged across levels. An empty explicit pool falls through to the next applicable preference. Automatic fallback does not modify named pool membership.
 
-Only after decoration and background selection are known does preparation resolve text and decoration colors. Background preferences therefore cannot affect background selection and do not create a circular selection dependency.
+For a pool with multiple distinct usable candidates, select uniformly at random without replacement when testing candidates for usability. Repeated identifiers and nested references do not increase selection probability.
 
-Invalid decoration registrations must not make unrelated fonts, backgrounds, or decorations unavailable.
+Invalid or unavailable optional resource preferences must be diagnosed without invalidating otherwise valid selected literary content.
 
-Each effective background and decoration default pool has equal-probability selection among its distinct members. Neither pool has repetition history or weighting in Version 0.1.
+After decoration and background selection, resolve canonical text color using the first level with usable candidates:
 
-Canonical font, background, decoration, color, presentation-style, and QR-policy selections are resolved once from current configuration and available resources for the committed daily selection, then persisted with that selection. They do not form part of quotation identity or repetition history. Destination overrides and output-dependent layout, placement, and raster decisions remain derived: apply them to the persisted canonical presentation before rendering, and record the actual effective result with its prepared images. Finalization does not reselect or re-resolve either canonical or effective choices.
+1. Content entry `text_color`.
+2. Selected background `text_color`.
+3. Selected decoration `text_color`.
+4. Effective `text.colors.pools` default pool.
+5. Built-in `black`.
 
-After selecting the background, Refrain resolves one literary text color using the first level with usable candidates: the content entry's `text_color`, the selected background's `text_color`, the selected decoration's `text_color`, the effective `text.colors.pools` pool, then built-in `black`. Pool references expand in the text-color namespace. Invalid or unavailable identifiers are diagnosed and excluded at each level. Candidates are not combined across levels, and duplicate identifiers do not add selection weight.
+When the selected decoration contains at least one effectively tintable layer, resolve its canonical decoration color using:
 
-When decoration tinting is required, resolve one decoration color using the first level with usable candidates: the content entry's `decoration_color`, the selected background's `decoration_color`, the selected decoration's `decoration_color`, the effective `decorations.colors.pools` pool, then built-in `black`. Pool references expand in the independent decoration-color namespace. Do not resolve a decoration color when no selected decoration layer is effectively tintable. Background color preferences are presentation preferences only; they do not tint background artwork.
+1. Content entry `decoration_color`.
+2. Selected background `decoration_color`.
+3. Selected decoration `decoration_color`.
+4. Effective `decorations.colors.pools` default pool.
+5. Built-in `black`.
 
-The selected text and decoration colors are resolved for the complete preparation. Color selection is independent of quotation identity and repetition history.
+Text-color and decoration-color pools are independent namespaces. Do not merge their candidates.
 
-The registries, valid identifiers, image requirements, pool configuration, and content-entry overrides are specified in [asset schema](../schemas/ASSETS.md), [resource and pool configuration](../schemas/CONFIGURATION.md#resources-and-named-pools), and [content presentation preferences](../schemas/CONTENT.md#presentation-preferences).
+The canonical presentation also records the resolved presentation style, QR policy, and applicable design-space presentation configuration. Its fields follow the stage-appropriate [Publication schema](../schemas/PUBLICATION.md#presentation).
 
-Canonical presentation choices remain unchanged across destinations and restarts; output-specification-dependent geometry and rendering results are resolved independently for each compatible effective-presentation group.
+The shared presentation checkpoint records destination-independent resolved choices. Output-dependent QR availability is unresolved at this stage: record canonical `presentation.qr.enabled` but omit `presentation.qr.available` until destination preparation. Completed scheduled publication metadata records the actual effective values, including QR availability.
 
-Automated testing should cover:
+Do not persist destination-specific overrides, raster-layout calculations, output dimensions, fitted font pixel sizes, or rendered pixels in the shared publication checkpoint.
 
-- explicit background preferences, `"none"` suppression, and unavailable-preference fallback;
+Canonical resolution is performed once for the committed selection while the complete checkpoint remains valid. Destination processing must use independent copies of that checkpoint and must not mutate its persisted artistic choices.
+
+Resource registries, identifier validity, pool membership, and authored preferences are defined in [Assets](../schemas/ASSETS.md), [Application Configuration](../schemas/CONFIGURATION.md), and [Content Entries](../schemas/CONTENT.md).
+
+Tests must verify canonical resource precedence, deterministic randomized selection, empty-pool fallthrough, fallback behavior, persistence across restart, and preservation of valid artistic choices despite subsequent configuration and asset changes.
 
 ## Destination overrides
 
-Destinations may share a prepared output image only when both their output specifications and effective presentation requirements match; overrides are validated and applied before rendering, and backends own neither artistic overrides nor literary composition.
+Destinations derive their effective presentations from the persisted canonical presentation.
 
-Test destination override validation and resolution, including unsupported properties and types, suppression-only resources, explicit single-font and single-color identifiers, rejection of pools and fallback lists, and `qr: none` rather than a boolean.
+Apply only the six supported `destinations[].overrides` properties defined in [Application Configuration](../schemas/CONFIGURATION.md#destination-overrides):
 
-Verify that overrides are applied before rendering, do not mutate canonical state, and do not trigger reselection for another destination or after restart.
+- `background: "none"` suppresses the canonical background.
+- `decoration: "none"` suppresses the canonical decoration.
+- `font` selects exactly one registered font-bundle identifier.
+- `text_color` selects exactly one effective palette identifier.
+- `decoration_color` selects exactly one effective palette identifier.
+- `qr: "none"` suppresses literary QR.
 
-Cover decoration suppression restoring global insets and font bounds, background suppression retaining decoration geometry, effective-value validation, and prepared metadata describing actual effective values rather than only override requests.
+Omitted properties retain their canonical values, except for dependent effective requirements that must be recalculated after decoration suppression or resource recovery.
 
-Test destination visual post-processing independently of backend construction.
+Overrides do not accept pools, fallback lists, arbitrary resource alternatives, direct RGB values, booleans, nested QR mappings, or unsupported properties. Configuration validation is strict.
 
-These tests establish software behavior only, not physical panel validation.
+Destination font overrides replace the canonical bundle with the registered identifier supplied. They do not trigger random font selection or change the persisted canonical font. Resolve role faces for the effective bundle using the existing role-preference rules.
+
+Suppressing decoration restores global presentation insets. It does not change global quotation font-size bounds.
+
+Suppressing background does not reset literary geometry.
+
+Decoration-color overrides have no rendering effect when no effective decoration layer is tintable.
+
+Destination QR suppression changes only that destination's effective QR policy and availability. It must not modify canonical QR policy or affect another destination.
+
+For each destination, derive and validate the effective presentation before rendering. Record the actual effective values used, including resource fallbacks, suppression, resolved font and faces, colors, insets, font bounds, and QR availability, in its completed publication metadata.
+
+Do not serialize override requests as substitutes for resolved effective presentation values.
+
+Destinations may share prepared images only when their output specifications and effective presentation requirements are compatible. Different effective overrides, including QR suppression, must not incorrectly share pixels.
+
+Tests must cover every supported override, strict rejection of unsupported forms, canonical preservation, effective-value accuracy, decoration suppression, QR reevaluation, and compatible versus incompatible preparation groups.
 
 ## Font bundles, role faces and recovery
 
-A content entry may specify a preferred font, inherited by every quotation in that entry.
+A content entry may specify a preferred font bundle, inherited by every quotation in that entry. A decoration may specify a preferred font bundle. These preferences participate in canonical selection before destination overrides.
 
-A decoration may also specify a preferred font.
+Font selection has no repetition history. The same font may be selected for consecutive daily presentations.
 
-During image preparation, font selection follows this precedence:
+Resolve the canonical bundle according to [Canonical resolution and resource precedence](#canonical-resolution-and-resource-precedence).
 
-1. Resolve the destination's font preference when one is configured. For a pool reference, try its distinct expanded candidates in random order without replacement until one is usable; for a direct preference, try that font.
-2. Only if the destination preference has no usable font, resolve the content-entry font preference the same way.
-3. Only if those preferences have no usable font, resolve the selected decoration's preferred font pool the same way, or try its direct preference.
-4. Otherwise, select from the effective default font pool.
+For each preference level, try distinct expanded pool candidates in randomized order without replacement. Exhaust that level before proceeding to the next. Explicit registered identifiers are attempted directly.
 
-An unavailable bundle preference does not invalidate an otherwise valid content entry or decoration. Refrain reports an appropriate warning for each unavailable candidate and exhausts that preference level before proceeding to the next bundle-selection preference. Lower-priority preferences are not randomly selected before they are reached.
+A usable explicit content-entry or decoration preference does not require a nonempty default font pool.
 
-After selecting the bundle, Refrain independently resolves the `quotation`, `source`, and `attribution` faces within that bundle. For each role, the first defined preference wins in this order: content entry, selected decoration, selected bundle manifest, global `fonts.faces`, then implicit `regular`. An explicit `regular` is defined and overrides lower-priority values. If the winning face is unavailable or unusable, that role falls directly to the selected bundle's `regular` face with an actionable warning; lower-priority face preferences are not consulted. No role selects another bundle. Decoration face preferences apply to the selected bundle even when an entry overrides the decoration's bundle preference.
+An empty effective default font pool does not implicitly gain bundled resources, and `@builtin` remains opt-in for normal pool membership. The unconditional emergency font is a separate recovery guarantee, not a member inserted into any pool.
 
-Each distinct font in an expanded preference or effective default pool has equal selection probability when that preference is used. Repeated identifiers, nested references, and shared subpools do not add weight.
+After selecting a bundle, resolve `quotation`, `source`, and `attribution` faces independently.
 
-Automatic font selection requires at least one usable member in the effective default font pool. An empty pool is not an error when a usable explicit destination, content-entry, or decoration preference applies. If no usable explicit preference applies and the pool is empty, preparation fails with an actionable diagnostic. Refrain must not silently populate the pool with unrelated bundled fonts or use a separate emergency fallback pool; bundled membership is opt-in through `@builtin`.
+For each role, use the first defined preference in this order:
 
-Canonical font selection is performed once for each committed daily selection, not independently for destinations or variants. Fonts do not have repetition histories, and a font may be used on consecutive days.
+1. Content-entry `font_faces`.
+2. Selected decoration `font_faces`.
+3. Selected bundle manifest `font_faces`.
+4. Global `fonts.faces`.
+5. Implicit `regular`.
 
-Resolve the canonical decoration and font bundle, then resolve all role faces once and persist them with the daily selection. Destination font overrides may select one explicit bundle; preserve each effective font choice across that destination's output images and reveal stages. Do not select fonts independently for an output specification, destination without a font override, or stage.
+An explicit `regular` is a defined preference and overrides lower-priority values.
 
-Reuse a valid complete cached image set without resolving fonts. When regeneration is required, reuse the persisted canonical bundle and faces; apply a configured explicit destination font override where present and resolve its role faces using the precedence and failure behavior above. Do not reselect the canonical bundle from changed pools or resources. Font identifiers and face choices are persisted as canonical selections; font bytes, paths, and content digests are not.
+If the selected role face cannot be loaded, warn and use the same bundle's usable `regular` face. Do not consult lower-priority role preferences after a winning preference has been selected.
 
-If the selected effective font or a required face cannot be loaded during preparation, report an actionable preparation error. Font failure must not authorize reselection of the canonical font or literary content, or alter reveal progression.
+If the selected effective bundle or its required regular face is unusable during ordinary scheduled preparation, attempt recovery using usable bundles from the configured default font pool. If none is usable, use the unconditional packaged `source-sans-3/regular` font.
 
-An existing complete prepared image set is reused during ordinary operation even if font files or preferences subsequently change.
+A runtime font fallback must preserve the persisted canonical font identifier and face choices. Record the actual effective bundle and faces used for the prepared image and completed publication metadata.
 
-Font registration, default-pool validation, and configuration fallback rules are defined in [font bundles](../schemas/ASSETS.md#font-bundles), [pool validity and effective membership](../schemas/CONFIGURATION.md#pool-validity-and-effective-membership), and [configuration validation](../schemas/CONFIGURATION.md#validation-and-compatibility).
+Do not replace the canonical choice merely because the original resource has become unavailable.
 
-Use Pillow-compatible font files for text rendering.
+Fail ordinary font preparation only when no usable font remains after the established recovery sequence.
 
-Font identifiers, paths, and validation rules are defined in [font bundles](../schemas/ASSETS.md#font-bundles) and [resource paths](../schemas/ASSETS.md#resource-paths).
+The packaged `source-sans-3/regular` recovery resource must remain available independently of normal default-pool membership. Missing or unusable emergency font resources are packaging or installation failures and must produce actionable diagnostics.
 
-Font-selection and fallback behavior are collected under [Font bundles, role faces and recovery](#font-bundles-role-faces-and-recovery).
+An explicit viewer override or publication reconstruction request remains strict. It must fail when its required explicitly selected font or face cannot be resolved, rather than silently substituting an unrelated font.
 
-Use a controlled random source for deterministic testing of canonical automatic font selection.
+Destination font overrides are strict configuration syntax, but ordinary runtime resource failure after successful configuration acceptance follows the readability-first preparation recovery policy.
 
-Select one canonical font bundle using content-entry, decoration, and default-pool precedence, and persist the resolved bundle and faces with the canonical presentation. Resolve each preference only when reached; try distinct candidates from a pool in random order without replacement, exhausting that level before proceeding. Never merge candidates across levels. Then resolve each literary role within the selected bundle using entry, decoration, bundle, global, and implicit-regular preference precedence. A usable explicit content-entry or decoration font does not require a usable default pool. Automatic selection requires a nonempty effective pool; if no usable explicit content-entry or decoration preference applies and that pool is empty, canonical resolution fails with an actionable diagnostic. A destination `overrides.font` replaces the canonical bundle with exactly one validated registered identifier; it must not use a pool, fallback list, or random selection. Resolve role faces for that effective bundle using the existing face-preference rules. An unavailable winning face warns and resolves directly to the selected bundle's regular face; do not inspect lower-priority role preferences or select another bundle.
+Role-face resolution is limited to the quotation, source, and attribution within the selected effective bundle. Do not independently select unrelated bundles for individual roles.
 
-Do not store font bytes, filesystem paths, or content digests in authoritative daily-selection state. Persist the canonical resolved bundle and face identifiers as stable selections; record both canonical and effective resolved identifiers in the associated preparation metadata using the publication metadata schema. Reuse the persisted canonical choices across restarts and destinations. Finalization must reuse the prepared metadata's captured effective identifiers.
+Use Pillow-compatible `.ttf` and `.otf` font resources. File and identifier validation belong to [Font bundles](../schemas/ASSETS.md#font-bundles).
 
-Do not independently select fonts for individual reveal stages.
+Reuse complete compatible cached images without reloading fonts or checking whether font resources have changed.
 
-Reuse a valid complete prepared-image set without resolving fonts, even when a selected face or font file has changed or become unavailable. If regeneration is needed, reuse the persisted canonical font and face selections; apply any explicit destination font override without consulting the canonical selection pools again. Do not use a separate emergency bundled-font pool. Report an actionable preparation error if the selected effective font or required regular face cannot be loaded.
+When regeneration is required, use persisted canonical artistic choices and current applicable resources. Do not rerandomize canonical font selection unless the authoritative presentation checkpoint has been lost and is being reconstructed under the approved recovery policy.
 
-Font errors during regeneration must not change the committed quotation, content identity, reveal schedule, or reveal progression.
+Do not persist font bytes, filesystem paths, or content digests solely to reproduce pixels.
 
-Do not distribute third-party font files without verifying their licenses and redistribution terms.
+Do not download fonts during rendering. Verify licenses and redistribution terms for bundled resources.
 
-Do not add font downloading. Keep role-specific face resolution limited to quotation, source, and attribution within the single bundle selected for each preparation.
+Automated tests must cover:
 
-Test font configuration and selection behavior, including:
+- valid and invalid registered font bundles and faces;
+- unavailable explicit font preferences;
+- empty default pools without mutation of their membership;
+- usable content-entry and decoration preferences with empty default pools;
+- canonical preference precedence and deterministic randomized pool selection;
+- role-face precedence, explicit regular preferences, and fallback without lower-priority lookup;
+- distinct quotation, source, and attribution faces within one bundle;
+- destination single-font overrides and rejection of pool/list values;
+- unavailable selected bundles during ordinary preparation;
+- same-bundle regular recovery, default-pool recovery, and unconditional `source-sans-3/regular` recovery;
+- failure only when no usable font remains;
+- strict explicit viewer and publication reconstruction behavior;
+- preservation of canonical font identity after runtime fallback;
+- metadata recording the actual effective font and faces;
+- consistent font choices across reveal stages;
+- reuse of valid caches despite subsequent resource changes;
+- regeneration using persisted canonical selections without literary reselection.
 
-- valid registered fonts;
-- invalid or unreadable registered fonts;
-- empty default font pools;
-- default identifiers missing from the registry;
-- explicit content-entry font preferences;
-- a valid explicit content-entry or decoration preference with an empty effective default pool;
-- automatic-selection failure when the effective default pool is empty and no usable explicit preference applies;
-- application-level `fonts.faces` parsing and invalid-value handling, plus `font_faces` handling in content entries and resource manifests;
-- role-face precedence, explicit-regular overrides, unavailable winning-face fallback without lower-level preference lookup, and decoration preferences applied to an entry-selected bundle;
-- consistent face resolution across stages generated together and reuse of complete caches despite later typography configuration or asset changes;
-- unregistered content-entry fonts and their warnings;
-- randomized selection from the default pool;
-- absence of resolved font identifiers and face choices from operational state and global history;
-- image regeneration using current font preferences and available assets after cache invalidation;
-- preference fallback and diagnostics when a requested font is unavailable, without an emergency bundled-font pool;
-- consistent font use across every reveal stage prepared together;
-- reuse of valid prepared images independently of subsequent font-file changes;
-- actionable failure when no usable font resource can be resolved.
-
-Use deterministic random sources where required.
+Use deterministic random sources and controlled font-loading failures for recovery tests.
 
 ## Image spaces and raster geometry
 
-The literary presentation pipeline has exactly three primary image spaces: the design canvas, the presentation canvas, and the output image. They have distinct responsibilities and coordinate systems.
+The literary presentation pipeline has exactly three primary image spaces: the design canvas, the presentation canvas, and the output image.
 
 The fixed 3840 × 2400 reference envelope defines the maximum design area. The declared presentation aspect selects the corresponding centered design canvas by reducing only the dimension that exceeds the ratio:
 
@@ -182,23 +210,77 @@ The fixed 3840 × 2400 reference envelope defines the maximum design area. The d
 | 16:9 | 3840 × 2160 | 120 pixels from each vertical edge |
 | 16:10 | 3840 × 2400 | None |
 
-The design canvas is the high-resolution, aspect-specific graphical composition and authored-layout space. It is independent of requested output resolution. Its operations are creation of the paper-white base; background scaling, cropping, and composition; decoration-layer composition, `contain`, `cover`, `nine-slice`, and `anchor` transformations; decoration tinting; and resolution of configured presentation geometry expressed in design-canvas units. Configured measurements use design-canvas units unless a field explicitly describes source-asset pixels.
+The design canvas is the high-resolution, aspect-specific graphical composition and authored-layout space, independent of requested output resolution.
 
-Background and decoration layers use the same underlying image-transformation implementation. For `anchor`, the source is first uniformly scaled according to the selected design-canvas dimension, then aligned by its complete scaled rectangle to the declared canvas anchor, clipped at the design-canvas boundary, and alpha-composited. Scaling preserves aspect ratio and uses deterministic nearest-pixel rounding with half-pixel values rounded upward; clipping outside the canvas is normal composition, not a validation failure.
+Design-canvas operations include:
 
-Configured destinations resolve to output specifications, each comprising a declared presentation aspect ratio and requested output resolution. Backend-specific configuration and defaults determine these values; do not infer the declared ratio from requested dimensions. Prepared-image identity also distinguishes the destination's effective presentation requirements. The presentation-canvas dimensions are derived from the output specification and do not form part of artifact identity. When requested dimensions exactly match the declared ratio, the presentation canvas has those dimensions. Otherwise, it is the nearest positive integer-pixel resolution that exactly matches the declared ratio, using the existing deterministic nearest-raster and tie-breaking rules.
+- creating the paper-white base;
+- background composition;
+- decoration-layer composition;
+- `contain`, `cover`, `nine-slice`, and `anchor` transformations;
+- decoration tinting;
+- resolution of configured presentation measurements expressed in design-canvas units.
 
-For a mismatched request, reduce the declared ratio to integer dimensions `(rw, rh)`, then compute `k = max(1, round_half_up((rw × requested_width + rh × requested_height) / (rw² + rh²)))`. The presentation canvas is `(rw × k, rh × k)`. This projected scale and half-up tie break define the nearest exact-ratio raster deterministically.
+Configured presentation measurements use design-canvas units unless a field explicitly specifies source-image pixels.
 
-Scale the completed graphical composition from the design canvas as one image to the presentation canvas. Scale design-canvas presentation measurements into presentation-canvas coordinates using deterministic nearest-integer rounding, with exact half-pixel values rounded upward. Map rectangle edges independently; resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps. Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
+Background and decoration layers share one image-transformation implementation.
 
-When the requested resolution already matches the declared aspect, the presentation canvas is also the output image and no final resize is required. Otherwise, after all presentation-canvas composition is complete, resize that complete image once to the exact requested dimensions. This may intentionally distort the presentation. No layout, geometry resolution, text fitting or rendering, QR generation or composition, graphical composition, diagnostic annotation, or element-specific scaling or positioning occurs after this resize. Persist the resulting output image as the prepared PNG artifact and deliver it unchanged to the appropriate display backend, except for backend-owned hardware pixel-format or orientation conversion explicitly permitted by the backend contract.
+For `anchor`, uniformly scale the source according to its selected design-canvas dimension, align its complete scaled rectangle to the declared horizontal and vertical canvas anchors, clip outside the design canvas, and alpha-composite. Scaling preserves aspect ratio and uses deterministic nearest-pixel rounding, with half-pixel values rounded upward. Clipping outside the canvas is normal composition, not a validation failure.
 
-Any transient geometry retained for diagnostics, including literary bounds, is expressed in presentation-canvas coordinates and is not authoritative application state. It does not become output-image geometry merely because the resulting PNG is persisted. When enabled for an aspect-mismatched output, draw diagnostic overlays on the presentation canvas before applying the same final whole-image resize as the displayed content.
+Each configured destination resolves to an output specification containing its declared aspect ratio and requested resolution. Do not infer the declared ratio from requested dimensions.
 
-For example, a declared 16:9 aspect and requested 1920 × 1080 resolution use a 3840 × 2160 design canvas, a 1920 × 1080 presentation canvas, and a 1920 × 1080 output image, with no final resize. A declared 4:3 aspect and requested 1600 × 1190 resolution use a 3200 × 2400 design canvas and the nearest exact 4:3 presentation canvas, 1596 × 1197. Background and decoration composition occurs on the design canvas; the completed graphical composition is scaled to the presentation canvas, where literary, QR, and diagnostic composition occurs before one complete-image resize. The output image is 1600 × 1190. No element is laid out or rendered in 1600 × 1190 coordinates.
+Every finished rendering output must have integer dimensions satisfying:
 
-Prepare each literary reveal-stage image in this order:
+- width: 1–3840 pixels;
+- height: 1–2400 pixels.
+
+Width and height are validated independently. Portrait, square, and landscape outputs are valid. Requested dimensions need not match the declared aspect ratio mathematically.
+
+Apply these limits to scheduled preparation, viewer inspection and export, and other finished-image rendering or reconstruction operations. Preserve the Waveshare backend's separately fixed 1600 × 1200 requirement.
+
+Validate output dimensions and preflight required image allocations before allocating or decoding large raster buffers. Reject invalid or unsupported finished-image requirements without attempting unbounded allocation.
+
+The presentation-canvas dimensions are derived from the output specification. They do not independently identify prepared artifacts.
+
+When requested dimensions exactly match the declared aspect ratio, the presentation canvas has the requested dimensions.
+
+Otherwise, reduce the declared ratio to integer dimensions `(rw, rh)` and compute:
+
+`k = max(1, round_half_up((rw × requested_width + rh × requested_height) / (rw² + rh²)))`
+
+The presentation canvas is `(rw × k, rh × k)`.
+
+This projected scale and half-up tie break define the nearest exact-ratio raster deterministically.
+
+Scale the completed graphical composition from the design canvas to the presentation canvas as one image.
+
+Scale design-canvas presentation measurements to presentation-canvas coordinates using deterministic nearest-integer rounding, with half-pixel values rounded upward. Map rectangle edges independently; resolve shared boundaries once and assign any rounding remainder to an adjoining region to prevent gaps or overlaps.
+
+Reject non-finite, negative, out-of-bounds, or degenerate geometry before rendering.
+
+The presentation canvas owns:
+
+- literary-region geometry;
+- text measurement, fitting, and drawing;
+- QR rasterization and composition;
+- diagnostic overlays.
+
+If the requested resolution matches the declared aspect, the presentation canvas is also the output image, and no final resize is required.
+
+Otherwise, after all presentation-canvas composition is complete, resize that entire image once to the exact requested dimensions. This may intentionally distort the presentation.
+
+No layout, geometry calculation, text fitting, QR generation, graphical composition, diagnostic annotation, or individual-element scaling occurs after this resize.
+
+Persist the resulting complete output image as the prepared artifact.
+
+Transient diagnostic geometry, including literary bounds, remains expressed in presentation-canvas coordinates. When enabled, diagnostic overlays are rendered on the presentation canvas before any final whole-image resize.
+
+For example:
+
+- A 16:9 output requested at 1920 × 1080 uses a 3840 × 2160 design canvas and a 1920 × 1080 presentation canvas, with no final resize.
+- A 4:3 output requested at 1600 × 1190 uses a 3200 × 2400 design canvas and a 1596 × 1197 presentation canvas, followed by one whole-image resize to 1600 × 1190.
+
+The rendering order is:
 
 ```text
 source assets
@@ -225,265 +307,341 @@ OUTPUT IMAGE
     no further presentation operations
 ```
 
-For each output specification, resolve design-space QR placement, map its allocation to the presentation canvas, and determine effective QR availability before selecting conditional decoration layers. This decision accounts for the presentation-level QR policy, selected decoration's `qr_ready` value, valid in-bounds placement, and sufficient presentation-canvas pixels for a complete symbol with at least one pixel per module. Then compose the paper-white base, selected background layers, and conditionally active decoration layers on the design canvas, processing each resource's layers in manifest order. Scale the completed graphical composition to the presentation canvas and map presentation measurements there. Resolve literary geometry and font bounds, fit and render the literary fields, then rasterize and composite QR when effectively available; draw diagnostic/debug overlays on the presentation canvas. If requested dimensions differ, resize the completed presentation canvas once as a whole; otherwise use it unchanged as the output image. Persist complete output images for every required reveal stage and output specification, then publish each destination's matching image through the existing backend architecture.
+For each output specification, resolve QR design-space placement, map its allocation to the presentation canvas, and determine effective QR availability before selecting conditional decoration layers.
 
-Every decoration PNG is behind all literary text and QR output. This pipeline does not introduce foreground composition phases, arbitrary z-index values, or a general layer-ordering engine. Each output specification's geometry and graphical composition remain stable across its reveal stages. Other views, including the information view, retain their separate composition and QR behavior while observing the same output-specification model.
+Then compose the paper-white base, selected background layers, and eligible decoration layers on the design canvas in their established order.
 
-The declared aspect ratio is distinct from requested output resolution: it selects the design canvas and determines the exact-ratio presentation-canvas dimensions for each output specification.
+Scale the graphical composition to the presentation canvas, resolve literary geometry, fit and render the literary fields, composite QR when available, and draw diagnostic overlays.
 
-Graphical composition and configured presentation measurements move from the design canvas to the presentation canvas before all literary, QR, and diagnostic composition; only an optional final whole-image resize to the exact requested dimensions may follow.
+The output image is then either used unchanged or resized once as a whole.
 
-Use Pillow for raster composition and resampling. Follow the three image-space responsibilities and pipeline under [Image spaces and raster geometry](#image-spaces-and-raster-geometry); do not introduce a competing rendering sequence. Validate each resolved output specification and dimensions before allocating images. Keep the design canvas, presentation canvas, and requested output-image dimensions distinct. Resolve design-space geometry and scale it to presentation-canvas coordinates with the architecture's deterministic rounding rules. Render literary content, QR, and diagnostics on the presentation canvas; only the completed image may then be resized once as a whole to the requested output dimensions.
+Every decoration PNG remains behind literary text and QR output. Do not introduce arbitrary z-index values, foreground composition phases, or independent per-element output-space rendering.
 
-Nine-slice values are source-image pixel distances: partition the original source directly with those values and preserve the same numerical edge and corner thicknesses on the design canvas. Do not map source coordinates through the reference envelope. For example, a 1920 × 1200 source with `20 / 20 / 20 / 20` slices used on a 3840 × 2400 design canvas retains 20-pixel thicknesses, not 40-pixel thicknesses.
+Each output specification's geometry and graphical composition remain stable across its reveal stages.
 
-Avoid unnecessary upscaling of source raster resources and unnecessary full-canvas copies. Manage Pillow image and font resources explicitly, closing decoded or temporary images when their owners are finished with them. Diagnostic tools must follow their documented output-specification behavior and must not mutate committed presentation state or generated daily artifacts.
+Nine-slice values are source-image pixel distances. Partition the original source directly and preserve the same numerical edge and corner thicknesses on the design canvas. Do not scale slice coordinates through the reference envelope.
 
-Include an aspect-mismatched output specification with declared aspect 4:3 and requested resolution 1600 × 1190. Assert that the design canvas is 3200 × 2400 and background/decorative composition occurs there; literary geometry and font fitting, QR viability and rasterization, and diagnostic overlays resolve on the 1596 × 1197 presentation canvas; and only the completed image is resized to the 1600 × 1190 output image. This case must not be replaced by tests where presentation-canvas and output-image dimensions happen to match. Also exercise exact-aspect supported configurations. Verify deterministic half-up rounding and rejection of degenerate geometry.
+For example, 20-pixel slices in a 1920 × 1200 source retain 20-pixel thickness on a 3840 × 2400 design canvas, not 40 pixels.
 
-Verify that backgrounds and decorations are composed on the design canvas, that the completed graphical composition is scaled to the presentation canvas, and that literary text, QR, and diagnostics are composed there. Verify the optional final whole-image resize for both reduction and enlargement, and no resize when requested and presentation dimensions match. Do not require text or QR pixels to remain individually unchanged through that final resize.
+Use Pillow for raster composition and resampling. Manage decoded images and fonts explicitly, closing temporary resources when their owners are finished.
+
+Avoid unnecessary source-image upscaling and full-canvas copies without weakening rendering correctness or the specified coordinate transformations.
+
+Source background and decoration PNGs may exceed the dimensions of the finished output, but each source image is limited to 36,864,000 decoded pixels.
+
+Inspect source dimensions and enforce the decoded-pixel limit before full decoding or large allocation. Invalid, oversized, or unsafe resources must fail their affected resource or preparation group under the established recovery rules, without invalidating unrelated usable resources.
+
+Tests must distinguish the design canvas, presentation canvas, and output image. Include exact-aspect and mismatched-aspect outputs, portrait and square outputs, minimum and maximum dimensions, and rejection of oversized outputs before allocation.
+
+Specifically test 4:3 at requested 1600 × 1190, asserting design-canvas composition at 3200 × 2400, literary and QR composition at 1596 × 1197, and one final whole-image resize.
+
+Verify deterministic half-up rounding, shared boundaries, invalid geometry rejection, and absence of element-specific operations after the final resize.
 
 ## Literary composition and fitting
 
-Literary insets are design-canvas measurements, each measured inward from the corresponding design-canvas edge for the selected aspect ratio. Resolve the literary rectangle in design-canvas coordinates, then map its edges to the presentation canvas using deterministic nearest-integer, half-up rounding. Do not derive literary geometry from aspect-mismatched output-image dimensions.
+Literary insets are design-canvas measurements, each measured inward from its corresponding canvas edge for the selected aspect ratio.
 
-Global layout insets and global minimum and maximum literary font sizes provide the defaults. A selected decoration may replace the insets and font-size bounds with its complete constraints. When a destination suppresses the canonical decoration, resolve both insets and font-size bounds from the global defaults; do not retain decoration-specific geometry. Background suppression alone does not reset geometry. The resulting rectangle must have positive width and height and contain the complete literary composition. Resolve and scale the effective rectangle for the presentation canvas, then keep it unchanged across that output specification's reveal stages. Scale the effective font-size bounds to presentation-canvas pixels with deterministic nearest-integer, half-up rounding before fitting and rendering. Quotation fitting and wrapping operate only in presentation-canvas coordinates. This fitting guarantee does not protect text from independently composited artwork or QR output. The renderer follows valid configured geometry without guaranteeing an aesthetically successful composite. The default configuration and bundled artwork must be designed and validated to avoid undesirable overlap; custom configuration and decoration authors are responsible for an acceptable composition.
+Resolve the literary rectangle in design-canvas coordinates, then map its edges to the presentation canvas using deterministic nearest-integer, half-up rounding.
 
-Presentation insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations. Neither system determines or modifies the other.
+Do not derive literary geometry from aspect-mismatched output-image dimensions.
 
-The initial release provides one configurable presentation layout.
+Global presentation insets and global minimum and maximum quotation font sizes provide the applicable configuration defaults.
 
-Its intended appearance is that of a carefully typeset printed page rather than a conventional electronic interface.
+A selected decoration may replace the complete global inset mapping with its `presentation_insets`. Decoration manifests do not define quotation font-size bounds.
 
-The design prioritizes:
+Suppressing or discarding a decoration restores the global insets. Global quotation font-size bounds remain in effect.
 
-- readable typography;
-- generous whitespace;
-- restrained visual decoration;
-- a predominantly paper-white background;
-- dark text with optional color accents.
+Background suppression does not reset geometry.
 
-The effective literary rectangle derived from the four presentation insets contains the complete literary composition: the quotation and its optional source and attribution.
+Insets are independent of decoration slice coordinates, PNG dimensions, and artwork transformations.
 
-The shared quotation renderer determines the arrangement of all present fields within that region.
+The resulting literary rectangle must have positive width and height and contain the complete literary composition.
 
-The quotation remains visually dominant. Source and attribution use subordinate typography and are presented together as a compact byline beneath the quotation.
+The renderer fits and positions text in presentation-canvas coordinates using the effective rectangle and globally configured quotation font-size bounds scaled to that canvas.
 
-When both fields are present, the byline presents the attribution first, followed by the source:
+The fitting guarantee does not protect literary text from separately composited artwork or QR output. Refrain does not automatically detect or correct those overlaps.
+
+Bundled artwork and defaults must be designed and validated for acceptable composition. Custom decoration and configuration authors remain responsible for their visual results.
+
+The intended appearance is that of a carefully typeset printed page rather than a conventional electronic interface.
+
+The design prioritizes readable typography, generous whitespace, restrained decoration, a predominantly paper-white background, and dark text with optional color accents.
+
+The effective literary rectangle contains the complete quotation and optional source and attribution.
+
+The quotation remains visually dominant. Source and attribution use subordinate typography and form a compact byline beneath the quotation.
+
+When both fields are present, display attribution first, followed by source:
 
 `— Attribution, Source`
 
-The attribution uses a restrained, visually distinct text treatment. The source is preferably italicized where an appropriate resolved font variant is available.
+The attribution uses a restrained, visually distinct treatment. The source is preferably italicized when an appropriate resolved face is available.
 
-Version 0.1 does not require italic font support or automatic font substitution. The byline must remain legible and correctly arranged when only the regular resolved font is available.
+Italic font support or automatic font substitution is not required. The byline must remain legible with the regular resolved face.
 
-When only attribution is present, the byline uses the form `— Attribution`. When only source is present, it uses `— Source`. Absent fields do not introduce unnecessary separator punctuation.
+When only attribution is present, display `— Attribution`. When only source is present, display `— Source`.
 
-The complete byline is horizontally centered beneath the quotation for the `centered` presentation style and right-aligned within the presentation region for the `left-aligned` style.
+Absent fields do not introduce unnecessary separator punctuation.
 
-Unrevealed source and attribution fields remain visibly represented within the byline rather than leaving blank space or displaying literal placeholder characters.
+The byline is centered beneath the quotation for the `centered` style and right-aligned within the presentation region for the `left-aligned` style.
 
-Their representation must be sufficiently obscured that the original text is not legible, while preserving the visual footprint and placement of the eventual revealed content.
+Unrevealed source and attribution fields retain visibly obscured representations within their final positions, rather than blank space or literal placeholder characters.
 
-Suitable treatments include aggressive blurring or dense pixel-level distortion. The initial implementation should select a deterministic treatment appropriate to the target e-paper display rather than expose configurable concealment styles.
+Concealment must make the original text illegible while retaining the field's visual footprint and eventual placement.
 
-The byline retains its applicable leading dash and separator punctuation throughout progressive reveal.
+Suitable implementations include aggressive blurring or dense pixel-level distortion. Use one deterministic treatment appropriate to the target e-paper display rather than a configurable concealment system.
 
-Automatic fitting determines suitable text wrapping and font sizes within the supported bounds. All present fields must fit within the presentation region without overlapping, clipping, truncation, or omission.
+The applicable leading dash and separator punctuation remain visible throughout reveal progression.
 
-Presentation insets are design-canvas pixels, measured inward from each edge of the canvas for the declared aspect ratio. Resolve them on the design canvas, then map their edges to the presentation canvas using deterministic nearest-integer, half-up rounding.
+Automatic fitting determines text wrapping and font sizes within supported bounds. Every present field must fit within the literary region without overlapping, clipping, truncation, or omission.
 
-Fitting must preserve the quotation's intended text, including explicit line breaks and paragraph structure.
+Preserve intended quotation text, explicit line breaks, and paragraph structure.
 
-For quotations with explicit line breaks, fitting prioritizes the largest permitted font size that preserves authored lines without additional wrapping while fitting the complete composition. If authored lines cannot fit at the minimum permitted quotation font size, automatic word wrapping remains available. Quotations without explicit line breaks retain automatic wrapping and largest-fitting-font behavior.
+When explicit line breaks are present, prioritize the largest permitted font size that preserves authored lines without additional wrapping while fitting the complete composition.
 
-The renderer supports named presentation styles that determine how literary content is arranged within the presentation region.
+If those lines cannot fit at the minimum permitted size, automatic word wrapping remains available.
 
-Version 0.1 provides two built-in styles:
+Quotations without explicit line breaks use automatic wrapping and largest-fitting-font behavior.
 
-- `centered`: Each rendered quotation line is independently centered horizontally. The quotation block is vertically centered within its allocated space, with the byline centered beneath it.
-- `left-aligned`: Rendered quotation lines share a common left edge. The resulting text block remains horizontally centered according to its widest rendered line, rather than anchored to the region's left edge, with the quotation block vertically centered within its allocated space and the byline right-aligned.
+Version 0.1 provides two presentation styles:
 
-The selected presentation style is defined at the content-entry level and applies to every quotation in that entry. The default is `centered`.
+- `centered`: Each quotation line is independently centered horizontally. The quotation block is vertically centered in its allocated space, with the byline centered beneath it.
+- `left-aligned`: Quotation lines share a left edge. The resulting quotation block remains horizontally centered according to its widest line, rather than being anchored to the literary region's left edge. The block is vertically centered, and the byline is right-aligned.
 
-The rendering design must accommodate additional built-in presentation styles without changes to content-selection policy, persistence mechanisms, reveal scheduling, or physical display integration.
+The content entry selects the presentation style for all quotations it contains. The default is `centered`.
 
-Future styles may control line positioning, spacing, and the arrangement of source and attribution, provided they preserve required content, respect the presentation region, and maintain stable geometry across reveal stages.
+Additional built-in styles may be added without changing content-selection, persistence, scheduling, or physical display contracts. Do not introduce arbitrary layout scripting, externally supplied styles, a styling plugin interface, or a general-purpose layout framework without a demonstrated requirement.
 
-The initial release does not require additional styles, arbitrary layout scripting, externally supplied style implementations, or a general-purpose styling framework.
+Use Pillow font metrics and text-measurement facilities.
 
-Use the configurable output dimensions, design-canvas pixel presentation insets, and font-size bounds defined in [destination configuration](../schemas/CONFIGURATION.md#destinations), [literary insets](../schemas/CONFIGURATION.md#literary-insets), and [quotation font-size bounds](../schemas/CONFIGURATION.md#quotation-font-size-bounds).
+Measurement must account for actual glyph dimensions, line spacing, authored line breaks, paragraph spacing, source and attribution, role-specific face metrics, the complete effective literary rectangle, and the selected presentation style.
 
-Resolve configured geometry in design-canvas units and map it to the presentation canvas with deterministic rounding. Follow [Image spaces and raster geometry](#image-spaces-and-raster-geometry) for destination-specific output specifications and the optional final whole-image resize.
+Do not fit text using character counts or average character-width assumptions alone.
 
-The shared quotation renderer is responsible for arranging and drawing the quotation and its optional source and attribution within that region.
+The initial fitting mechanism should remain deterministic and straightforward rather than becoming a general-purpose text-layout engine.
 
-Layout calculation must account for all present fields before generating any reveal-stage image.
+Content that cannot fit at the minimum supported font size must produce a meaningful rendering error rather than silently clipping or omitting text.
 
-Use Pillow's font metrics and text-measurement facilities to determine suitable font sizes, line wrapping, and placement.
+Tests must cover short and long quotations, explicit lines and paragraphs, all optional metadata combinations, both styles, maximum-size fitting, reduced-size fitting, and unrenderable compositions.
 
-Text measurement must account for:
+Verify presentation-canvas bounds, byline punctuation, role-face metrics, and correct alignment. Exercise 1080p, 4K-class, portrait, square, mismatched-aspect, and fixed Waveshare outputs within the supported maximum finished dimensions.
 
-- actual glyph dimensions;
-- line spacing;
-- preserved line breaks;
-- paragraph spacing;
-- the complete effective literary rectangle;
-- space occupied by source and attribution;
-- the effective presentation style.
-
-Avoid assumptions based solely on character counts or average character widths.
-
-The fitting implementation must satisfy the presentation behavior described under [Literary composition and fitting](#literary-composition-and-fitting).
-
-Prefer a straightforward deterministic fitting procedure over a general-purpose text-layout framework.
-
-Do not hardcode the initial display resolution into unrelated content, selection, or scheduling logic.
-
-Validate each destination's supported aspect-ratio and resolution specification, including aspect-mismatched requests. Exercise 1080p and 4K presentation/output cases without treating hardware-independent results as physical display validation. Verify that preparation produces the Waveshare's fixed 4:3 @ 1600 × 1200 output and that the backend rejects any image with different dimensions rather than resizing, cropping, or padding it.
-
-Do not introduce a general-purpose layout framework or font-selection optimization engine without a demonstrated requirement.
-
-Use representative quotations of different lengths and combinations of optional metadata.
-
-Test automatic text fitting with:
-
-- short quotations;
-- long quotations requiring multiple wrapped lines;
-- explicit line breaks and paragraphs;
-- quotations that fit at the maximum permitted font size;
-- quotations requiring a smaller permitted font size;
-- quotations that cannot fit at the minimum permitted size.
-
-Verify that all rendered literary content stays within the effective rectangle mapped from design-canvas insets to the presentation canvas.
+Hardware-independent rendering tests do not establish physical display compatibility.
 
 ## Stable layout and progressive concealment
 
-The renderer resolves the complete literary composition using the quotation and every available source and attribution field, regardless of the current reveal stage. Each role uses its preparation's resolved face while the source and attribution remain components of the existing unified byline.
+Resolve the complete literary composition using the quotation and every present source and attribution field before generating reveal-stage images.
 
-The effective literary rectangle, resolved from the selected decoration's insets or global insets for the complete preparation, remains unchanged across every stage generated together.
+The resolved layout includes the typography, wrapping, positions, spacing, and visual footprints of all fields regardless of their current visibility.
 
-The resolved layout establishes the positions, role-specific typography, wrapping, and spacing of all present fields. Byline measurement and baseline placement account for each face's metrics, advances, and glyph bounds. The prefix and separator use the quotation face, with fixed positions determined from the complete composition.
+Use each role's resolved font face and metrics. Byline measurement and baseline placement must account for face-specific advances and glyph bounds.
 
-The byline is laid out using its complete final content, including both attribution and source when available, regardless of which fields are currently revealed.
+The leading dash and separators use the quotation face, with fixed positions derived from the complete composition.
 
-Its punctuation, alignment, and geometry are determined from the complete composition rather than recalculated for each reveal stage.
+The complete final byline determines the position and footprint of its individual fields, even when some are unrevealed.
 
-The complete byline determines the positions and visual footprints of its individual fields.
+An unrevealed field displays an obscured representation within its final position.
 
-An unrevealed field displays a visibly obscured representation within its allocated position. Concealment must prevent the original text from being legible while retaining an apparent visual presence comparable to the revealed field.
+Revealing a field replaces that representation with readable text without changing its position or the surrounding composition.
 
-Revealing a field replaces its obscured representation with readable text without changing the field's allocated position or the surrounding composition.
+Previously visible quotation text, byline fields, and punctuation must not move, resize, or reflow when another field becomes visible.
 
-The leading dash and applicable separator punctuation remain visible throughout the reveal sequence.
+Leading punctuation and applicable separators remain visible throughout progression.
 
-Previously visible quotation text, revealed byline fields, and punctuation must not move, resize, or reflow when another field is revealed.
+Absent fields require no reserved space, concealment, or separator punctuation.
 
-Absent optional fields do not require reserved space, concealment, or separator punctuation.
+The selected presentation style remains fixed for the committed selection.
 
-The selected presentation style remains fixed throughout the committed selection.
+All reveal stages for one output specification and compatible preparation group use identical literary geometry, typography, line wrapping, and field positions.
 
-Version 0.1 requires a deterministic visual concealment treatment suitable for the target e-paper display. The choice between techniques such as aggressive blurring and dense pixel distortion is an implementation decision informed by rendered-image inspection and hardware validation.
+Different output specifications may have different raster dimensions, fitted font pixel sizes, line wrapping, and mapped geometry.
 
-The treatment must not reveal readable text through insufficient distortion or introduce visual artifacts outside the field's allocated area.
+The concealment treatment must prevent readable text from appearing through insufficient distortion or produce artifacts outside a field's allocated area.
 
 Additional configurable concealment styles are not required.
 
-Each output specification's reveal stages use the same resolved composition layout.
+Presentation styles determine geometry. Image drawing consumes resolved layout geometry rather than independently interpreting style names.
 
-Content that cannot be rendered legibly within the supported literary rectangle must be handled explicitly rather than silently clipped, truncated, or omitted.
+Keep style-specific layout behavior isolated so additional built-in styles do not require changes to selection, persistence, scheduling, or display integration.
 
-For each output specification's preparation, resolve the complete literary composition once, including all present source and attribution fields, using the full composition that will be visible across the reveal sequence.
+If the complete composition cannot fit within its supported presentation region, report a meaningful error. Do not clip, truncate, overlap, or omit required text merely to produce an image.
 
-That specification's resulting layout must contain sufficient information to reproduce stable typography and field positions across every reveal stage. Different output specifications may have different raster dimensions, wrapping, fitted font pixel sizes, and mapped geometry.
-
-Presentation styles determine layout geometry. Image drawing uses the resolved geometry rather than independently interpreting style identifiers.
-
-Keep style-specific layout behavior isolated so additional built-in styles can be introduced without changing content-selection policy, persistence mechanisms, scheduling, or display integration.
-
-The initial implementation needs only the `centered` and `left-aligned` styles.
-
-A small internal dispatch mechanism for selecting built-in layout behavior is sufficient. Do not introduce a public styling plugin interface or generalized layout framework without a demonstrated requirement.
-
-All reveal stages within one output specification must use consistent layout geometry.
-
-Reserved space for future reveals must not cause previously visible content to move when additional information becomes visible.
-
-The renderer must not silently clip, truncate, overlap, or omit required text merely to produce an image.
-
-If the complete composition cannot fit within the supported presentation region, report a meaningful error.
-
-Verify that independently selected quotation, source, and attribution faces use their own metrics and remain consistent across all reveal stages. Include both presentation styles, optional-field combinations, mixed-face baselines and punctuation, fitting, clipping, and unchanged geometry during reveal.
+Tests must verify stable positions, role-specific face metrics, punctuation, concealment, and visibility across every reveal stage and both presentation styles.
 
 ## Graphical layers and transformations
 
-Packaged backgrounds contain an ordered, nonempty sequence of PNG layers. Layers are composited over the paper-white base in declaration order using normal alpha composition. A standalone PNG remains a single centered-cover background. Backgrounds and decorations use the same underlying layer transformation and alpha-composition machinery, so `contain`, `cover`, `nine-slice`, and constrained `anchor` alignment cannot diverge by resource type.
+All graphical composition occurs on the aspect-specific design canvas over a paper-white base.
 
-Packaged background layers support `contain`, `cover`, `nine-slice`, and `anchor`; `method` is optional and defaults to `cover`. They do not have decoration conditions, tintability, or other decoration metadata. A standalone PNG background is not a packaged layer and continues to use centered `cover`.
+Packaged backgrounds contain an ordered, nonempty sequence of PNG layers. Layers are composited in declaration order using normal alpha composition.
 
-A selected decoration may contain an ordered sequence of PNG layers. Each layer has a source image, an optional rendering method, optional parameters for that method, an optional QR-presence condition, and optional tintability metadata. The decoration-layer default remains `contain`. Layers are composed in manifest order on the design canvas. The shared methods are `contain`, which aspect-preservingly scales the image to fit that canvas; `cover`, which aspect-preservingly scales the source directly to cover that canvas and crops excess artwork symmetrically around its center; `nine-slice`, which adapts an image using four explicit source-image pixel distances; and `anchor`, which scales according to a declared axis and aligns to constrained horizontal and vertical canvas anchors. Cover does not first scale artwork to the reference envelope and has no positioning or alignment parameters; use `anchor` for its explicitly constrained alignment behavior. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers. Smaller custom PNGs may be enlarged by the selected method, but enlargement cannot restore image detail and may reduce visual sharpness.
+Standalone PNG backgrounds remain single centered-cover layers.
 
-The complete manifest fields, method parameters, and category-specific defaults are defined in [Decoration manifests](../schemas/ASSETS.md#decoration-manifests) and [Background assets](../schemas/ASSETS.md#background-assets).
+Packaged background layers support `contain`, `cover`, `nine-slice`, and `anchor`. Their omitted `method` defaults to `cover`.
 
-For `nine-slice`, the configured `left`, `right`, `top`, and `bottom` distances partition the source image directly into nine regions in its actual source-pixel coordinates. Reject non-integer, negative, overlapping, or out-of-bounds boundaries. Do not first scale the source into the reference envelope or scale its slice boundaries through that envelope. The configured distances are also the preserved edge thicknesses on the design canvas, numerically 1:1, regardless of the source image's overall dimensions.
+Background layers do not have decoration conditions, tintability, or other decoration-specific metadata.
 
-Preserve corner widths and heights and horizontal- and vertical-edge thicknesses on the design canvas. Adapt only edge lengths according to their configured `stretch` or `crop` behavior; stretch the center region in both dimensions. `stretch` scales an edge segment along its length to fit. `crop` retains the segment's scale, centers it, and crops equally from both ends; it never crops the complete source image. If the requested crop destination is longer than the available source edge segment, reject the transformation instead of stretching it or leaving a gap. Reject a design canvas smaller than the combined opposing preserved edge thicknesses. Edge tiling is not supported.
+Decorations contain an ordered sequence of PNG layers. Each layer has its source image, optional method, method-specific parameters, optional QR-presence condition, and optional tintability metadata.
 
-For example, applying 20-pixel slices to a 1920 × 1200 source on a 3840 × 2400 design canvas preserves four 20 × 20 corners. The top and bottom center regions are 3800 × 20, the left and right center regions are 20 × 2360, and the center is 3800 × 2360. The source center and edge pixels are transformed to fill their destination regions according to the existing stretch/crop policy. Preserve source alpha through scaling and alpha composition.
+The omitted decoration-layer `method` defaults to `contain`.
 
-Background identifiers, registration requirements, and default-pool validation are defined in [Background assets](../schemas/ASSETS.md#background-assets) and [resource pools](../schemas/CONFIGURATION.md#resources-and-named-pools). Selection precedence and recovery behavior are collected under [Canonical resolution and resource precedence](#canonical-resolution-and-resource-precedence) and [Graphical layers and transformations](#graphical-layers-and-transformations).
+Backgrounds and decorations must share the same transformation and alpha-composition implementation.
 
-Discover bundled and user backgrounds from their category directories, using `importlib.resources` for package-owned assets so installed-package operation does not depend on a source checkout. Preserve stable bundled identifiers. Validate images as readable, single-frame PNGs in RGB or RGBA mode, with positive dimensions, without requiring source dimensions to match the configured output. Apply the declared layer transformation on the design canvas and preserve transparency over the paper-white base.
+The supported transformation methods are:
 
-Use a controlled random source for testing equal-probability selection among distinct usable default-pool members. Resolve the background for a complete image-preparation operation, not during selection commitment or independently for reveal stages.
+- `contain`: Aspect-preservingly scale the source to fit within the design canvas.
+- `cover`: Aspect-preservingly scale the source directly to cover the canvas, cropping excess symmetrically around its center.
+- `nine-slice`: Partition and adapt an image using explicit source-pixel slice distances.
+- `anchor`: Scale according to the declared horizontal or vertical axis, or retain native size, then align to the specified constrained horizontal and vertical canvas anchors.
 
-Keep background composition outside the shared quotation renderer. Compose the resolved background over a paper-white base on the design canvas, preserving RGBA transparency. Scale the completed graphical composition to the presentation canvas as specified under [Image spaces and raster geometry](#image-spaces-and-raster-geometry), then reuse preparation-wide results for every stage where appropriate. Use an appropriate high-quality Pillow resampling filter when dimensions differ, retain deterministic geometry, and close decoded resources promptly.
+`cover` does not first scale to the reference envelope and has no arbitrary alignment parameters. Use `anchor` for its supported constrained positioning behavior.
 
-Canonical resolution selects a background from the captured content preferences or effective pool once and persists its stable identifier. Daily-image preparation reuses that canonical choice for all destinations and applies only configured destination suppression; a supplied empty registry represents unavailable resources and applies the documented paper-white fallback without reselecting a different canonical background.
+For `nine-slice`, the configured `left`, `right`, `top`, and `bottom` values partition the original source image into nine regions in source-pixel coordinates.
 
-Treat a standalone PNG background as one centered-cover image. For packaged backgrounds, apply each layer's declared transformation; `method` is optional and its category-specific default is `cover`. Support `contain`, `cover`, `nine-slice`, and `anchor` as defined in [Image layers](../schemas/ASSETS.md#image-layers). Do not require centered cover for a packaged layer that declares another valid method.
+Reject non-integer, negative, overlapping, or out-of-bounds boundaries.
 
-When preparation cannot resolve or decode an optional background, report a warning and continue with paper-white according to the established fallback policy. Do not change the committed quotation, captured preferences, selection identity, or reveal progression. Keep resource reads bounded and close decoded images when no longer needed.
+Do not first scale the source or its slice coordinates through the reference envelope.
 
-Decoration identifiers, the initial ordered-layer manifest schema, and preference metadata are defined in [Decoration manifests](../schemas/ASSETS.md#decoration-manifests). Discover bundled and user decorations through their package manifests and `importlib.resources` where appropriate. Validate every referenced image as a readable, single-frame RGB or RGBA PNG with positive dimensions; retain source alpha and do not alter source files.
+Preserve source edge and corner thicknesses numerically 1:1 on the design canvas.
 
-Resolve canonical presentation-wide choices such as decoration, font, background, palette, and layer preferences once and persist them before destination preparation. Apply restricted destination overrides to derive and validate an effective presentation before rendering; resolve output-specification-dependent insets, transforms, and raster results for each specification as defined under [Image spaces and raster geometry](#image-spaces-and-raster-geometry). When decoration is suppressed, use global presentation insets and font-size bounds rather than its geometry. Decoration-layer `method` is optional and defaults to `contain`; support the manifest methods and parameters in [Decoration manifests](../schemas/ASSETS.md#decoration-manifests), including constrained anchor alignment. Resolve effective QR availability separately for each output specification before selecting its conditional decoration layers. Keep selection outside rendering; compose each resulting graphical design on the design canvas before scaling it to the presentation canvas. Use deterministic scaling, rounding, and alpha composition. Do not infer presentation insets from slice values or image dimensions.
+Adapt horizontal and vertical edge lengths according to their configured `stretch` or `crop` behavior:
 
-Test `contain`, centered `cover`, nine-slice, and anchor methods directly on the design canvas, including reference-sized artwork, smaller and differently proportioned RGB/RGBA sources, alpha preservation, odd dimensions, clipping/alignment, and matching-size sources that need no transform. Test nine-slice source boundaries, 1:1 preservation of configured source-pixel thicknesses on the design canvas, edge `stretch` and centered `crop`, center stretching, and exact shared boundaries. For example, a 1920 × 1200 source with 20-pixel slices on a 3840 × 2400 design canvas must retain 20-pixel edge/corner thicknesses. Cover invalid boundaries, opposing corners that do not fit the destination, crop destinations longer than their source edge segments, and rounding cases that would otherwise introduce gaps or overlaps. Do not implement edge tiling.
+- `stretch` scales an edge segment along its length to fill the destination.
+- `crop` retains the edge segment's scale, centers it, and crops equal excess lengths from both ends.
 
-Decoration-wide and per-layer tintability both default to true; test the logical AND, including an untinted accent layer. When any layer is effectively tintable, select one color using the precedence in [Colors and tinting](#colors-and-tinting); a successful selection activates tinting. Preserve each layer's source alpha when applying that single preparation-wide decoration color. Artwork retaining authored RGB must explicitly be non-tintable. Reuse a complete valid set before resolving resources so later manifest or image changes do not invalidate it.
+A `crop` destination longer than its available source segment is invalid. Do not stretch or leave gaps as a fallback.
 
-Image preparation accepts the effective decoration registry independently of the background registry. Reuse a complete valid set before resolving image resources, so registry or file changes do not invalidate it.
+The center region stretches in both dimensions.
 
-Automated testing should cover:
+Reject design canvases too small for the combined preserved opposing edge thicknesses.
 
-- ordered background-layer composition, centered-cover standalone behavior, and shared `contain`, `cover`, `nine-slice`, and `anchor` transformations across background and decoration layers;
+Edge tiling is unsupported.
 
-Test ordered multi-layer decoration composition, all QR conditions, RGBA transparency, decoration-wide AND per-layer tintability, color-precedence selection and automatic tint activation, the untinted-accent case, consistent composition across reveal stages, and plain output for `"none"`. Verify diagnostics and established resource fallbacks, and that a valid cached set is reused without checking resource changes. Do not test or implement QR/text collision detection or automatic overlap correction.
+For example, 20-pixel slices on a 1920 × 1200 source applied to a 3840 × 2400 design canvas preserve four 20 × 20 corners, top and bottom edge destinations of 3800 × 20, left and right edge destinations of 20 × 2360, and a 3800 × 2360 center.
 
-Test background cover scaling and centered cropping and decoration `contain` scaling for portrait, landscape, matching, smaller, and larger source images, including alpha, odd dimensions, exact output size, and deterministic results. Test anchor scaling in both directions and at native size, aspect-ratio preservation, every horizontal and vertical alignment including center/center, clipping on each and multiple canvas edges, alpha composition, and shared geometry for backgrounds and decorations across 4:3, 5:3, 16:9, and 16:10 canvases. Test nine-slice corners, preservation of resolved corner dimensions across 4:3, 5:3, 16:9, and 16:10 canvases, edge stretching, centered edge cropping, center stretching, source-pixel bounds, destinations too small for preserved corners, crop destinations longer than available source segments, and deterministic rounding without gaps or overlaps.
+Preserve source alpha through scaling and composition.
+
+Source image dimensions need not match the design canvas or finished output. High-resolution artwork at 3840 × 2400 is preferred for full-canvas layers, but smaller sources may be enlarged at the cost of visual sharpness.
+
+Each source PNG must be a readable, single-frame RGB or RGBA image with positive dimensions and no more than 36,864,000 decoded pixels.
+
+Inspect dimensions and resource safety before full decoding. Do not permit oversized or malformed source images to trigger uncontrolled allocation.
+
+Resource registration validates intrinsic manifest and resource requirements. Preparation validates actual transformations and composition for the requested configured or viewer-selected aspect.
+
+Do not reject a resource solely because it would be unusable for an aspect ratio that is not configured or requested.
+
+Decoration authoring quality requirements for all established aspects are separate from runtime validity.
+
+For an ordinary scheduled presentation, a failure to prepare any eligible layer of the selected decoration invalidates the entire effective decoration composition.
+
+Discard all successfully prepared layers belonging to that failed decoration. Do not publish a partial decoration as though it were complete.
+
+Use the normal no-decoration fallback, including global presentation insets, without changing the global quotation font-size bounds.
+
+Recompute affected effective presentation requirements, including QR readiness and availability, after decoration fallback. Record the actual resulting effective presentation in completed metadata.
+
+Preserve the canonical decoration identifier in the shared publication checkpoint.
+
+Strict viewer or publication reconstruction requests must report unusable explicitly required resources instead of silently applying ordinary recovery.
+
+A failed selected background or background layer uses the paper-white fallback during ordinary preparation. The effective metadata must describe the background actually rendered.
+
+The underlying committed quotation, selection revision, repetition history, and reveal progress remain unchanged by resource failure.
+
+A valid complete prepared cache remains reusable without checking current assets or manifests.
+
+Decorations may contain conditional layers selected according to effective QR availability:
+
+- `always`: Always eligible.
+- `qr`: Eligible only when QR is available.
+- `no-qr`: Eligible only when QR is unavailable.
+
+These conditions do not change declaration order.
+
+Decoration-wide and per-layer tintability are both considered. A layer is effectively tintable only when both permit tinting.
+
+When tinting is active, apply the single resolved decoration color to each effectively tintable layer, replacing RGB while preserving alpha.
+
+Non-tintable layers retain their authored RGB values.
+
+Background artwork is not tinted by decoration-color preferences.
+
+Keep background composition and decoration composition outside the shared literary renderer. Scale the completed graphical composition to the presentation canvas as one image.
+
+The manifest schemas, field defaults, registration requirements, and shape constraints are owned by [Assets](../schemas/ASSETS.md). Do not duplicate their complete field definitions in the rendering implementation.
+
+Tests must cover:
+
+- ordered background and decoration composition;
+- standalone centered-cover backgrounds;
+- `contain`, `cover`, `nine-slice`, and `anchor` across background and decoration layers;
+- source images larger and smaller than the canvas, odd dimensions, transparency, and deterministic scaling;
+- source-pixel slice preservation, exact boundaries, edge stretching, centered edge cropping, and invalid crop destinations;
+- every anchor alignment, scaling axis, native-size placement, clipping, and aspect preservation;
+- supported configured and viewer-selected aspects without requiring unused-aspect runtime acceptance;
+- decoded source-image pixel limits and rejection before full decoding;
+- conditional QR/no-QR layers;
+- decoration-wide and per-layer tintability, including untinted accents;
+- all-or-nothing decoration fallback after any eligible layer fails;
+- global-inset restoration without changing font-size bounds;
+- recomputation of QR viability after decoration failure;
+- preservation of canonical choices and accurate effective metadata;
+- strict viewer and publication reconstruction errors;
+- cache reuse despite later asset changes.
+
+Do not implement automatic QR/text collision avoidance or alter literary insets to reserve QR space.
 
 ## Colors and tinting
 
-Decoration-wide and per-layer `tintable` values both default to `true`. A layer is effectively tintable only when `decoration.tintable AND layer.tintable` is true. If at least one layer is effectively tintable, select one decoration color for the complete preparation using the first level with usable candidates:
+Text and decoration colors are resolved as palette identifiers, not embedded RGB values.
 
-1. The content entry's `decoration_color`.
-2. The selected background's `decoration_color`.
-3. The selected decoration's `decoration_color`.
-4. The effective global `decorations.colors.pools` pool.
-5. The built-in `black` fallback.
+Resolve one literary text color using the precedence in [Canonical resolution and resource precedence](#canonical-resolution-and-resource-precedence).
 
-Select uniformly among distinct usable identifiers at the first applicable level; do not combine candidates from different levels. A successful color selection activates tinting; there is no separate activation state or configuration field. Apply the selected color to every effectively tintable layer, replacing RGB while preserving authored alpha, including antialiasing and transparency. When no layer is effectively tintable, do not resolve a decoration color. Artwork intended to retain authored RGB must set `tintable: false` at the decoration or layer level.
+The resulting text color applies consistently to quotation, source, attribution, and associated punctuation across all reveal stages in a preparation group.
 
-Automated testing should cover:
+If a selected text color becomes unusable during ordinary preparation, use the built-in `black` fallback for readability, with an actionable warning. Preserve the persisted canonical choice.
 
-- content, background, and decoration text-color and decoration-color preferences, exact precedence, unavailable members, and duplicate-free selection;
+Decoration-wide and per-layer `tintable` values default to `true`.
 
-Verify that literary text colors are consistent for the quotation, source, attribution, and punctuation across reveal stages generated together, and that the information view's typography is unchanged.
+A layer is effectively tintable only when both its decoration and the layer permit tinting.
+
+When at least one layer is effectively tintable, resolve one decoration color using:
+
+1. Content-entry `decoration_color`.
+2. Selected background `decoration_color`.
+3. Selected decoration `decoration_color`.
+4. Effective global `decorations.colors.pools` pool.
+5. Built-in `black`.
+
+Select uniformly among distinct usable identifiers at the first applicable preference level.
+
+A successful color selection activates tinting; there is no independent tint-activation configuration field.
+
+Apply the color to every effectively tintable layer, replacing RGB while preserving authored alpha, antialiasing, and transparency.
+
+Artwork intended to retain its original RGB must set `tintable: false` at the applicable level.
+
+When no layer is effectively tintable, do not resolve or apply a decoration tint.
+
+If decoration preparation fails and the decoration is discarded, effective decoration tinting is suppressed. Do not apply a decoration color to nonexistent artwork.
+
+Color fallback must not mutate the shared canonical presentation checkpoint. Completed publication metadata records the actual effective palette identifiers or the absence of an effective decoration color.
+
+Strict viewer and publication reconstruction remain subject to their explicit resource-validation requirements.
+
+Tests must verify color precedence, unavailable candidates, pool membership, duplicate-free selection, RGB replacement with alpha preservation, non-tintable layers, failed-decoration recovery, and effective metadata fidelity.
 
 ## QR placement and conditional artwork
 
-The presentation-level QR policy defaults to enabled and may be disabled. Resolve the QR allocation and placement in design-canvas coordinates, then map its four edges independently to presentation-canvas coordinates using deterministic nearest-integer, half-up rounding. This is a deliberate two-phase dependency:
+The presentation-level literary QR policy defaults to enabled and may be disabled. Destination `overrides.qr: "none"` suppresses QR for that destination.
+
+The shared presentation checkpoint persists canonical QR policy without computing output-dependent QR availability. Its `presentation.qr.enabled` records the canonical policy; `presentation.qr.available` remains omitted until destination-specific preparation.
+
+Completed scheduled publication metadata records both effective `qr.enabled` and actual `qr.available`, using the established field meanings.
+
+Resolve QR allocation and placement in design-canvas coordinates, then map the allocation's four edges independently to presentation-canvas coordinates using deterministic nearest-integer, half-up rounding.
+
+The two-phase dependency is:
 
 ```text
 resolve design-space placement
@@ -503,169 +661,322 @@ render literary content
 rasterize and composite QR
 ```
 
-Effective QR availability is resolved on the presentation canvas for each output specification before selecting conditional decoration artwork. It is true only when the policy is enabled, the selected decoration's `qr_ready` value (default `true`) permits it, placement metadata is valid and the complete allocation remains within the design canvas, and the mapped allocation is large enough for a complete symbol with at least one pixel per module. A valid `qr_ready: false` or disabled policy suppresses QR without a warning. Invalid placement metadata, conflicting anchors, an allocation outside the design canvas, or insufficient presentation-canvas pixels produce an actionable warning and suppress QR for that output specification without excluding the decoration, changing its other metadata, or failing literary preparation. Never fall back to a different position or clamp the allocation. A layer condition of `always` (the default), `qr`, or `no-qr` selects artwork for both states, available-only, or unavailable-only respectively. Conditions do not change layer order. This availability decision selects artwork but does not rasterize or composite QR pixels; that occurs later on the presentation canvas after literary rendering.
+Effective QR availability is resolved separately for every output specification before selecting conditional decoration artwork.
 
-For Version 0.1, an available literary QR code encodes `https://github.com/ControlForgeHQ/refrain`, independently of the selected quotation, entry, display date, or reveal stage. Resolve the destination separately from encoding, rasterization, and placement so a future companion experience can change destination resolution without redesigning those operations. Do not add a configurable destination or depend on the deferred companion experience.
+QR is available only when:
 
-Version 0.1 uses QR version 4, error-correction level M, UTF-8 byte encoding, and a complete four-module quiet zone. The 33 × 33 symbol and eight quiet-zone modules occupy a fixed application-level allocation of 246 × 246 design-canvas pixels. This allocation is independent of aspect ratio, output resolution, decoration, and literary insets; decorations cannot redefine its dimensions. A payload that does not fit the selected version and error-correction level produces an actionable preparation error.
+- the effective policy permits rendering;
+- the effective decoration's `qr_ready` value permits QR;
+- placement metadata is valid;
+- the complete allocation remains within the design canvas;
+- the mapped presentation-canvas allocation can contain the complete QR symbol with at least one pixel per module.
 
-Resolve QR payload independently from encoding, rasterization, and placement. A selected decoration may position the complete allocation with one horizontal method (`qr_from_left`, `qr_from_right`, or `qr_centered: horizontal`) and one vertical method (`qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical`). Directional offsets are nonnegative design-canvas pixels. When an axis has no method, its independent default is 20 pixels from the right or bottom edge. `qr_centered` is one scalar value and cannot center both axes. Positioning fields are mutually exclusive per axis; malformed or conflicting values suppress QR instead of selecting a precedence or silently using defaults. Centering and bounds validation use the design canvas for the variant's declared aspect.
+Disabled policy, destination suppression, or valid `qr_ready: false` suppress QR without warning.
 
-Use the mapped presentation-canvas allocation rectangle as authoritative, including any width or height difference caused by independent edge rounding. Choose the largest fitting module size for each output specification as `min(allocation_width, allocation_height) // 41`. If this is zero, warn and suppress QR for that output specification. Otherwise rasterize square integer-pixel modules and the complete quiet zone without antialiasing. Center the complete square footprint inside the allocation using half-up rounding when unused pixels are odd. Do not generate, position, resize, or rerasterize QR specifically for the output image; if a final resize is required, the complete QR is distorted only as part of the complete-image resize. Resolve the same placement and QR pixels across every reveal stage of one output specification.
+Invalid placement metadata, conflicting anchors, out-of-bounds allocation, or insufficient presentation-canvas pixels produce an actionable warning and suppress QR for that output specification.
 
-QR output is composited after literary text. The literary renderer must fit the complete literary composition within the configured literary rectangle, but this does not protect text from independently composited artwork or QR output. QR placement does not change literary insets, rearrange text, or reserve additional space. Refrain does not detect or correct QR/text overlap. A complete valid prepared-image cache remains reusable without reevaluating QR placement; regeneration uses the persisted canonical QR policy and current output geometry without changing committed selection state or reselecting canonical presentation. The information view remains outside literary QR behavior.
+Do not clamp allocation, infer an alternate position, or change the selected decoration solely because QR is unavailable.
 
-The same quotation renderer serves normal daily presentations, the information view, and potential future diagnostic views.
+If an unusable decoration is discarded during ordinary preparation, reevaluate QR availability using the resulting no-decoration effective presentation. This may change QR readiness or placement behavior. Do not preserve a QR decision computed from the failed decoration.
 
-The renderer does not require a content-library entry or committed daily selection record as its input. Callers supply the resolved content and presentation parameters appropriate to the view. It follows valid configured geometry and does not guarantee that independently composited graphical elements do not overlap.
+Conditional `always`, `qr`, and `no-qr` artwork is selected from the final effective QR availability state.
 
-The architecture does not require a general-purpose layout framework, externally supplied rendering components, a theme engine, or a plugin interface.
+For Version 0.1, an available literary QR code encodes:
 
-Follow the two-phase QR dependency under [QR placement and conditional artwork](#qr-placement-and-conditional-artwork): resolve design-space placement, map the allocation to presentation-canvas pixels, and evaluate effective availability before choosing `always`, `qr`, or `no-qr` decoration layers. Availability includes the canonical presentation-level policy unless the destination's `qr: none` override suppresses it, selected-decoration `qr_ready`, valid in-bounds placement, and at least one presentation pixel per QR module. QR suppression is destination-local and must not mutate canonical policy or affect other destinations. Rasterization and composition happen later on the presentation canvas, after literary rendering. Do not decide availability from policy and `qr_ready` alone or make a second decision in the decoration renderer.
+`https://github.com/ControlForgeHQ/refrain`
 
-Test default and all directional placements, per-axis defaults, single-axis centering, conflicts, malformed values (including booleans), design-canvas bounds failures, edge-rounding and odd centering cases, and the supported canvases. Verify effective availability under each policy/readiness/placement/raster-viability condition before conditional-layer selection, then verify QR rasterization and composition on the presentation canvas after literary rendering. Cover exact Version 0.1 encoding, a complete four-module quiet zone, opaque black-and-white pixels, and consistent placement across reveal stages. Test intentional policy and `qr_ready` suppression without warnings, invalid-placement and insufficient-raster-size suppression with warnings, and preservation of the selected decoration and literary preparation. Do not perform automatic collision avoidance or alter literary insets or artwork to reserve QR space. The information view remains independent of literary QR behavior.
+The payload is independent of the selected quotation, content entry, display date, and reveal stage.
+
+Do not add a configurable QR destination or depend on a deferred companion service.
+
+Version 0.1 uses:
+
+- QR version 4;
+- error-correction level M;
+- UTF-8 byte encoding;
+- a complete four-module quiet zone.
+
+The 33 × 33 symbol and eight total quiet-zone modules occupy a fixed 246 × 246 design-canvas pixel allocation.
+
+This allocation is independent of declared aspect, output resolution, decoration, and literary insets. Decorations cannot redefine its dimensions.
+
+A payload that does not fit the selected QR version and correction level produces an actionable preparation error.
+
+A decoration may position the allocation using one horizontal and one vertical method:
+
+- horizontal: `qr_from_left`, `qr_from_right`, or `qr_centered: horizontal`;
+- vertical: `qr_from_top`, `qr_from_bottom`, or `qr_centered: vertical`.
+
+Directional offsets are nonnegative design-canvas pixels.
+
+When an axis has no specified method, its default is 20 pixels inward from the right or bottom edge.
+
+`qr_centered` is one scalar value and cannot center both axes.
+
+Positioning fields are mutually exclusive per axis. Malformed or conflicting values suppress QR rather than establishing precedence or silently using defaults.
+
+Centering and bounds validation use the design canvas for the declared aspect.
+
+Use the mapped presentation-canvas allocation as authoritative, including differences caused by independent edge rounding.
+
+Choose the largest fitting QR module size as:
+
+`min(allocation_width, allocation_height) // 41`
+
+If the result is zero, warn and suppress QR.
+
+Otherwise rasterize integer-pixel square modules and the complete quiet zone without antialiasing.
+
+Center the complete QR footprint within its allocation using half-up rounding when unused pixels are odd.
+
+Do not generate, position, resize, or rerasterize QR specifically for the finished output image.
+
+If a final whole-image resize is required, the complete QR is resized and may be distorted only as part of that operation.
+
+Within one output specification, use identical QR placement and pixels across every reveal stage.
+
+Composite QR after literary text.
+
+QR placement does not alter literary insets, reserve additional text space, rearrange quotation layout, or introduce QR/text collision detection.
+
+A complete valid prepared-image cache remains reusable without reevaluating QR placement. Regeneration uses the persisted canonical QR policy and current output geometry without changing committed selection state.
+
+The information view remains independent of literary QR behavior.
+
+The shared quotation renderer must not depend on a content-library entry or committed selection record. Callers supply resolved content and presentation parameters appropriate to their view.
+
+Do not introduce a general-purpose theme engine, rendering plugin system, or externally supplied renderer framework.
+
+Tests must cover:
+
+- default and directional placement;
+- independently defaulted axes and single-axis centering;
+- conflicts, malformed values, and booleans;
+- allocation bounds on all supported design canvases;
+- edge rounding and odd centering;
+- exact QR version, correction level, encoding, and quiet zone;
+- insufficient presentation-canvas raster size;
+- policy and decoration-readiness suppression;
+- conditional decoration-layer selection before graphical composition;
+- QR rasterization after literary rendering;
+- destination-specific QR suppression without canonical mutation;
+- QR reevaluation after all-or-nothing decoration fallback;
+- stable QR results across reveal stages;
+- output-dependent availability in completed metadata;
+- absence of output-dependent `qr.available` from the shared checkpoint.
+
+Do not implement automatic collision avoidance, modify literary insets to accommodate QR, or introduce new QR configuration fields.
 
 ## Complete stage preparation
 
-Preparation resolves the unique output specifications required by configured destinations and generates a complete prepared output image for every required reveal stage and output specification.
+After successful selection commitment and persistence of the complete presentation checkpoint, prepare the reveal-stage images required by participating destinations.
 
-Destinations with identical output specifications share the same prepared output images. Prepared images are persisted independently of the content library.
+The caller supplies the committed selection, validated checkpoint, output specifications, effective presentation requirements, and cumulative reveal-stage sequence.
 
-Preparation does not modify the committed selection or its selection histories.
+Preparation does not determine reveal times or advance persistent reveal progress.
 
-After selection commitment, Refrain prepares all images required by the effective reveal schedule for every required output specification.
+Group destinations by compatible effective presentation requirements and output specifications, independently of their destination identifiers.
 
-Each image represents one cumulative reveal stage for one output specification.
+Destinations with identical output specifications and effective presentation requirements may share images. Destinations with incompatible requirements must not share pixels.
 
-All variants generated together use the same selected content and consistent presentation-wide choices. Raster-dependent layout and rendering results are resolved independently for each variant.
+For each unique compatible preparation group and output specification, generate a complete ordered reveal-stage set.
 
-Normal scheduled reveal progression selects existing prepared images. It does not invoke quotation fitting, text fitting, layout calculation, or image rendering.
+Each image represents one cumulative reveal stage and is independently displayable without requiring a previous image to have been presented.
 
-The renderer is not invoked separately for each reveal event during ordinary operation.
+Resolve the fully revealed literary composition once per output specification and reuse its geometry, typography, wrapping, spacing, and field positions for every stage in that set.
 
-If preparation fails, Refrain retains the committed selection and retries preparation without selecting different content.
+Only field visibility changes between stages within the same set.
 
-Presentation preparation resolves presentation-wide choices consistently and produces every image requested for the committed selection, each required output specification, and every reveal stage. The caller supplies the cumulative stage sequence; preparation does not calculate reveal times or determine the current stage.
+Different output specifications may have different presentation-canvas dimensions, fitted font sizes, wrapping, QR availability, and raster geometry.
 
-Each image represents a cumulative visibility stage for one output specification. The complete fully revealed literary composition determines that specification's stable geometry for every stage. Raster dimensions, wrapping, fitted font pixel sizes, and mapped geometry may differ across specifications.
+All stages generated together must use consistent preparation-wide artistic choices.
 
-Within one output specification, all stage images use identical layout geometry, typography, wrapping, and field positions. Only the visibility of fields changes. Across output specifications, selected presentation resources and other presentation-wide choices remain consistent, while presentation-canvas sizes, geometry, wrapping, fitted font pixel sizes, and QR results are resolved independently.
+Normal scheduled progression selects existing prepared images and does not rerender at every reveal event.
 
-The renderer does not independently recalculate the composition for each reveal stage.
+Missing intermediate reveal events need not be presented sequentially. The currently required later stage may be published directly.
 
-The same preparation facilities may produce a single fully visible image for views that do not require progressive reveals, including the information view.
+Preparation failures do not invalidate committed literary selection or authorize reselection.
 
-Every prepared image must be independently displayable without requiring a previous image to have been presented.
+A failure in one preparation group must not invalidate otherwise healthy independent groups.
 
-Prepared images are persisted as a disposable cache for reuse throughout the current display day and after application restarts.
+Persist every complete required stage set as disposable cache data using the independent atomic publication requirements under [Cache identity, publication and regeneration](#cache-identity-publication-and-regeneration).
 
-The preparation process must not expose incomplete images as a valid complete set. Cache metadata must associate complete variants with the current selection, output specifications, and expected stages, and detect incomplete or damaged files. Do not require a fingerprint of all rendering decisions.
+Do not expose incomplete stage sets as valid cached preparations.
 
-Every required reveal-stage image is generated for each unique combination of output specification and effective destination presentation requirements.
+The same rendering facilities must support single fully visible images for views without progressive reveals, including the information view and the no-eligible-content fallback.
 
-For each required output specification, prepare its complete set of reveal-stage images from the durable daily selection and persisted canonical presentation, applying current destination overrides and output requirements. Use that specification's complete fully revealed literary composition to determine geometry for every stage in its set; do not require different specifications to share raster geometry.
-
-Resolve the complete composition layout once per output specification and reuse it for every required cumulative visibility stage of that specification.
-
-Do not require intermediate stages to have been physically displayed before preparing or presenting a later stage.
-
-The same rendering facilities must support preparation of a single fully visible image for views that do not require progressive reveals.
-
-Test image dimensions, supported output formats, presentation styles, field visibility, layout stability, and significant fitting constraints without physical display hardware.
-
-Tests must verify that all present quotation, source, and attribution text remains within the configured presentation-canvas literary region without overlap or clipping.
-
-Automated testing should cover:
-
-- preparation and recovery of reveal-stage images;
+Tests must verify complete stage generation, stable layout, independent image usability, compatible group sharing, incompatible override separation, failure isolation, and recovery from missing stage images without literary reselection.
 
 ## Cache identity, publication and regeneration
 
-After selection commitment, Refrain resolves the canonical presentation once from the captured content preferences, current presentation configuration, and available resources, then persists it independently of destination-specific prepared artifacts. For each destination it derives an effective presentation from that canonical value and the destination's restricted overrides, resolves any required geometry defaults, validates the result, and only then renders. Overrides do not mutate the canonical presentation or cause artistic reselection. Refrain groups destinations with compatible effective requirements independently of their destination IDs and generates every required reveal-stage image for each output specification in each group.
+The prepared-image cache is derived output, not authoritative operational state or the authoritative publication checkpoint.
 
-Canonical choices are shared by every destination. Restricted destination overrides are applied after canonical resolution and change only the corresponding effective values; they cannot invoke artistic selection, affect another destination, or mutate the canonical presentation. Omitted properties retain their canonical values, except that suppressing decoration uses the global default insets and font-size bounds. Background suppression does not reset geometry. Within a preparation group, presentation-wide effective choices remain consistent across its output specifications; raster-dependent layout and rendering results are resolved independently for each variant. QR suppression does not change the canonical QR policy or the availability of QR on other destinations.
+A complete stage set is associated with:
 
-For each output specification, the prepared images form an ordered reveal-stage set. Images within that set have the same expected output dimensions and compatible image mode; different output specifications may have different dimensions and raster-dependent results.
+- the committed selection revision;
+- the applicable resolved presentation choices;
+- compatible effective destination preparation requirements;
+- the output specification;
+- the ordered reveal-stage sequence;
+- its complete images and integrity associations.
 
-Prepared images are persisted on disk and associated with the committed selection revision and canonical presentation, compatible effective-presentation requirements, output specifications, ordered reveal stages, and their resolved publication-schema metadata. Destination identity alone does not partition a group; incompatible requirements cannot share a cached image even when output specifications match.
+Destination identity alone does not partition a preparation group.
 
-The existing versioned publication-metadata schema belongs to the exact prepared collection and compatible preparation group; it is not a separate prepared-presentation descriptor or rendering snapshot. It records the canonical presentation independently of each prepared destination presentation, whose values describe the effective result actually used for the images rather than only the override requests. Prepared destination metadata records actual resolved resource and palette identifiers, font bundle and role-specific faces, QR inclusion or suppression, effective insets and font-size bounds, and the output specification. Publication-event fields that do not yet exist during preparation remain unassigned or explicitly nullable as that schema specifies; do not invent publication IDs or timestamps.
+Different effective presentation requirements must not share prepared images merely because their output dimensions match.
 
-They are derived artifacts, not independently authoritative application state.
+A changed QR override, decoration suppression, font override, color override, or other effective requirement changes compatibility when it affects rendered pixels.
 
-Prepared images must remain associated with the committed selection revision and expected reveal-stage sequence.
+Do not require a fingerprint of every asset, rendering decision, configuration field, or source file merely to permit cache reuse.
 
-Complete compatible collections are reused throughout ordinary operation and after application restart. Changes to configuration or assets do not by themselves invalidate or regenerate them. A change to effective destination overrides changes that destination's requirements and prevents reuse of an incompatible collection, while compatible groups remain reusable. The canonical selection is recovered unchanged and is not reselected when an override changes. This does not make the cache archival: changes to available resources or rendering behavior may change the result when required images are missing or otherwise unusable.
+Each output specification and compatible preparation group owns an independently committed complete reveal-stage set.
 
-If required variants are absent, damaged, incomplete, or unusable, prepare the complete stage sets needed for the current output specifications from the durable current selection and its persisted canonical presentation, using currently available configuration and assets, then safely publish complete usable artifacts. A changed output requirement may therefore add variants to an existing committed presentation without changing the canonical selections.
+A failure to prepare or persist one set must not invalidate or remove another healthy compatible set. Do not require a single global transaction spanning all destinations, output specifications, or preparation groups.
 
-All output variants within one compatible preparation group use one consistent set of presentation-wide choices, including selected font identity, background, decoration, and colors. Each variant independently resolves raster-dependent font pixel sizes, line wrapping, geometry, QR viability and module size, and conditional QR/no-QR decoration behavior. Within one output specification, its complete literary composition determines stable geometry for every reveal stage; this does not require different specifications to share geometry.
+For each stage set:
 
-When output or effective presentation requirements change, any missing compatible variants are prepared from the existing committed selection and canonical presentation without changing the quotation, canonical selections, or reveal progress. Variants within one preparation group share preparation-wide choices. Regeneration may change visual appearance but must not trigger selection, change repetition history, or move reveal progression backward. Finished transient images already prepared for a destination bypass destination presentation overrides.
+1. Generate every required reveal-stage image and its internal integrity associations.
+2. Write the complete proposed set in a unique temporary location.
+3. Flush and synchronize the files as supported.
+4. Publish the complete set atomically.
+5. Make it available for reuse only after the complete set is valid.
 
-The runtime must not require all prepared images to remain decoded in memory.
+An interruption must leave the preceding complete set or no usable set, never a partial collection accepted as complete.
 
-Preparation recovers the persisted canonical presentation, resolving and recording it once only if it was not yet attached to the committed selection. It applies destination overrides and current output specifications to prepare the complete required variant collection. Canonical resource choices remain unchanged across variants and restarts; output-specification-dependent geometry, QR availability, transformations, and other raster-dependent results are resolved separately for each specification. Unavailable or invalid resources follow the documented fallback and diagnostic policies without changing the committed quotation, canonical selections, or reveal progression.
+All images in one set must have the expected output dimensions and compatible image mode.
 
-Background source dimensions and aspect ratios are independent of configured output dimensions. Preparation composites packaged background layers in order using their declared `contain`, `cover`, `nine-slice`, or `anchor` methods; the optional method defaults to `cover`. A standalone PNG uses centered `cover`. All layers composite over the paper-white base while preserving source alpha. A missing or invalid packaged-background layer makes that selected background unusable, and normal fallback behavior uses paper-white without changing the committed quotation, captured preferences, selection identity, or reveal progression. Any derived preparation or publication metadata describes the background actually rendered, including the paper-white fallback. Background and decoration slice coordinates and transformations do not determine the literary insets.
+Each prepared image is a complete independently displayable lossless PNG.
 
-A missing or invalid optional visual resource must not invalidate the committed quotation or its reveal progression. Other preparation errors, including malformed required selection data or an unrenderable literary composition, remain errors.
+Validate image completeness, decoding integrity, output dimensions, stage association, selection association, and compatibility with the required effective presentation.
 
-The daily background and decoration system does not alter the independent composition or recovery policies of the information view.
+Missing, damaged, truncated, mismatched, or inconsistent files make the affected set unusable.
 
-The durable daily selection record, including its canonical presentation, not the image cache, is authoritative. If required variants are missing, damaged, incomplete, or unusable, regenerate the required complete stage sets using the selected content, effective schedule, persisted canonical choices, current destination overrides, output specifications, and currently available assets. Prepare variants coherently with shared canonical selections, and safely publish complete usable artifacts.
+Internal cache integrity and association metadata must not invent another public publication-document form. The public [Publication schema](../schemas/PUBLICATION.md#metadata-document-shapes) defines the shared checkpoints and completed publication documents.
 
-Regeneration preserves the selected quotation, content identity, canonical presentation, schedule, selection revision, and highest reached reveal stage. A changed output or override requirement may add variants prepared from this existing committed selection; it must not trigger canonical or quotation reselection or alter reveal progress. Regeneration does not consult the original content library, modify repetition history, or move reveal progression backward. Visual appearance may differ from the prior cache after output, override, or resource changes; exact pixel reproduction is not required.
+Completed scheduled publication metadata is constructed from the committed content, the validated shared presentation checkpoint, and the actual effective choices and output specification associated with the prepared image.
 
-If image generation fails, the application must report the error and preserve the existing display image where practical.
+Do not infer resource choices, colors, fonts, QR availability, or geometry from finished pixels.
 
-Complete prepared-variant sets are disposable caches and are reused rather than regenerated at every scheduled reveal.
+The completed publication contains one resolved effective presentation, not simultaneous canonical and effective presentation objects or an embedded authored content entry.
 
-Missing or unusable variants can be prepared from the committed selection and persisted canonical presentation without reselection, history changes, or reveal regression.
+Publication-event identity, destination, timestamp, output specification, and destination-filtered actions are populated at finalization. Do not invent completed publication values while preparing the shared checkpoint.
 
-Persist all images required for the current committed selection.
+Finalization must not mutate the shared checkpoint, alter cached image pixels, rerandomize canonical choices, or reinterpret the actions.
 
-Prepared files must be associated with the current selection revision and expected reveal stages.
+A valid complete compatible stage set remains reusable throughout ordinary operation and after restart without checking for changes to configuration files, fonts, palette definitions, backgrounds, decorations, or rendering code.
 
-Incomplete or invalid image files must not be treated as valid artifacts.
+A changed output or effective presentation requirement prevents reuse of an incompatible set but does not invalidate unrelated compatible sets.
 
-Use a supported image representation that preserves the required output fidelity.
+If a required set is missing, damaged, incomplete, or incompatible, regenerate only the required complete set using:
 
-Avoid recompressing, resizing, or converting images unnecessarily during scheduled display updates.
+- authoritative committed literary content and reveal schedule;
+- the valid complete presentation checkpoint;
+- current applicable destination overrides;
+- current requested output specifications;
+- currently available rendering resources.
 
-Generated image files should be managed separately from user-authored content.
+Regeneration must not reread the original content entry, choose a different quotation, modify repetition history, or regress reveal progress.
 
-Do not accumulate unlimited obsolete prepared images during ordinary operation.
+If the presentation checkpoint is lost, recover it according to [Recovery and state compatibility](30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility) before preparing affected images.
 
-The prepared-image cache is derived output, not authoritative state. Associate the complete required variant collection with the committed selection revision and persisted canonical presentation, effective presentation requirements/compatible preparation groups, output specifications, and ordered reveal stages. Cache the resolved preparation metadata alongside its exact image collection using the existing versioned publication-metadata schema. Do not define a separate prepared-presentation descriptor, rendering snapshot type, or intermediate translation schema. The schema fields and preparation-stage validation contract are defined in [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes). Persist stage metadata and image integrity associations in the same complete-set transaction. The preparation metadata records both the canonical presentation and the actual effective destination presentation used to produce the images, including resolved resource and palette identifiers, font bundle and role-specific faces, effective QR inclusion or suppression, and effective insets and font-size bounds. Publication-event fields that do not yet exist remain explicitly nullable as that schema specifies; do not invent publication IDs or timestamps. Every required stage for every output specification and preparation group must be present with valid associated metadata. Each stage is a complete, independently displayable lossless PNG. Files for one output specification must have its exact expected dimensions and a compatible image mode; dimensions may differ between specifications. Validate image/metadata association, collection completeness, and integrity, detecting missing, damaged, truncated, mismatched, or inconsistent files.
+Previously cached images must not be considered compatible with newly re-resolved artistic choices solely because their selection revision and dimensions match.
 
-Reuse a complete compatible cached collection and its original resolved choices after restart. Do not repeat random resource selection or infer choices from finished pixels to reconstruct metadata for existing images. Missing, damaged, inconsistent, or incompatible metadata makes a reconstruction-capable collection unusable; regenerate the compatible images and metadata together from the committed selection, without changing its identity, history, or reveal progression. The metadata remains disposable derived presentation data.
+After checkpoint recovery, compatible image sets must correspond to the artistic choices now authoritative for the committed selection.
 
-Associate variants with effective presentation requirements as well as output specification, selection revision, and the persisted canonical presentation. Destinations with different effective overrides must not reuse one another's cached images, even when their output specifications match. Keep matching requirements in a coherent preparation group so that the canonical artistic selections remain shared across that group's output specifications. A change to destination overrides changes effective requirements and cannot change or reselect the canonical presentation. This distinguishes required override inputs without requiring a fingerprint of every resolved rendering decision or every installed asset.
+If the original presentation checkpoint remains valid, reuse its resolved artistic choices across regeneration and destination changes. Current resource availability may require ordinary effective fallbacks without modifying the checkpoint.
 
-In the current Version 0.1 model, reuse a complete valid set during ordinary operation without checking whether configuration, fonts, palette, or image assets have changed. If the set is absent, incomplete, damaged, or otherwise unusable, use the persisted canonical selections with current destination overrides, output specifications, and available resources to prepare the complete required variant collection together. Resolve canonical selections only if they were not yet durably attached to the committed selection. Publish the replacement safely only after the complete new collection is ready. A replacement may look different from the prior set.
+Do not guarantee pixel-identical regeneration after resources, renderer behavior, or output requirements have changed.
 
-Changes to effective destination overrides change the required variant identity, so an image prepared for different requirements must not be treated as a cache hit. Changes to installed assets or rendering behavior alone do not promise archival reproduction; only missing or invalid required artifacts trigger regeneration. Regenerate a missing or invalid compatible collection's images and metadata together from the persisted canonical presentation, without changing committed selection, canonical selections, or reveal progression. Preserve and reuse other valid preparation groups when only one group is incompatible or incomplete.
+Preserve healthy prepared sets when regenerating a missing or invalid set. Safely replace an affected set only after its complete replacement is ready.
 
-Storage writes every PNG and its small association/integrity manifest into a unique temporary directory, flushing and synchronizing each file. Publish the complete prepared set atomically so an interrupted write leaves the previous complete set or no usable cache, never a partial set presented as valid.
+Cache cleanup must not remove images referenced by active or pending backend operations.
 
-Use atomic file replacement and appropriate synchronization where supported. Cache durability need only protect safe reuse and replacement; loss of a cache is recoverable from current operational state.
+Avoid unnecessary image duplication, recompression, or decoding. The runtime must not keep all prepared images decoded simultaneously.
 
-Remove obsolete cache files without disturbing active readers or the complete set being published. Keep cleanup simple and bounded; artifact retention must not become a second source of application state.
+Keep cache storage separate from user-authored content and bounded against accumulation of obsolete artifacts.
 
-The cache store must not modify authoritative selection state. Cache errors are reported and handled by regeneration from the valid daily selection; they must never authorize reselection or reveal regression.
+Finished transient images bypass scheduled cache identity and destination artistic overrides. They are published using their supplied pixels and separate completed transient metadata.
 
-Distinguish assertions on the design canvas, presentation canvas, and output image. Verify stage completeness and stable layout geometry. All reveal stages for one output specification and preparation group have identical output dimensions. Destinations share prepared images only when both their output specification and effective presentation requirements match. Do not require variants for different output specifications to have identical dimensions. Verify that different effective overrides produce separate prepared variants at identical output specifications, while matching requirements share coherent presentation-wide choices. Verify that the prepared variant set covers each unique output-specification/effective-requirements combination.
+Tests must cover:
+
+- independent complete-set atomicity and failure isolation;
+- missing, damaged, truncated, or inconsistent images;
+- selection, stage, output, and effective-requirement association;
+- independent compatible sets for differing output requirements;
+- shared pixels for identical geometry and effective presentation;
+- separate pixels for differing QR or other effective overrides;
+- cache reuse after configuration or asset changes;
+- regeneration from a valid completed checkpoint;
+- checkpoint loss and new artistic resolution invalidating incompatible old cache associations;
+- preservation of healthy sets when another preparation group fails;
+- metadata describing actual effective rendered choices;
+- absence of duplicate canonical/effective public presentation objects;
+- safe cache cleanup while backend operations retain images;
+- independence from transient image publication.
 
 ## Cache compatibility constraints
 
-Follow-up implementation work must inspect the existing code and remove responsibilities that only support exact-rendering recovery or obsolete unreleased schemas. This includes artifact identities and fingerprints over every visual decision, cache invalidation when settings or assets change, regeneration rules that preserve old destination-specific pixels, special-case compatibility handling for obsolete prerelease configuration fields, legacy state and single-image manifest readers, and tests for historical-schema recovery or pixel-identical regeneration. Do not remove the required canonical artistic selections from authoritative daily-selection state; persist only their stable identifiers and policy, not a destination-specific rendering plan or raster geometry.
+Prepared-image compatibility must preserve the committed selection, valid checkpoint artistic identity, effective presentation requirements, output specification, and expected reveal stages.
 
-Retain the machinery needed to atomically commit selected content and scheduling state, attach canonical artistic selections once without changing selection identity, protect repetition identity and monotonic reveal progress, associate complete image and publication-metadata collections with the right canonical selection, effective preparation group, output specifications, and stages, detect damaged cache data, safely replace a complete set, reuse it during ordinary operation, and regenerate compatible images and metadata together after cache failure. Canonical artistic selections belong in authoritative daily-selection state; effective destination choices belong in derived preparation metadata. Do not introduce a separate rendering snapshot or metadata translation layer.
+Do not retain legacy prerelease cache readers, obsolete rendering snapshots, or compatibility branches solely to reproduce old development artifacts.
+
+Do not make normal cache reuse depend on detecting changes to every configuration or asset file.
+
+Do not persist raster geometry, font bytes, source assets, or rendered-image fingerprints in operational state or the shared publication checkpoint solely for exact visual reproduction.
+
+Keep the atomic operational-state commitment and progressive publication checkpoint independent of disposable cache publication.
+
+The implementation must preserve correct associations, detect unusable cache data, safely publish independent complete stage sets, and regenerate affected sets without selection or reveal regression.
+
+The shared presentation checkpoint is the durable artistic authority. Derived effective presentation and cache associations must not be promoted into competing authoritative state.
 
 ## Destination visual conversion
 
-Destination presentation overrides are resolved before rendering and never implemented by post-processing a completed output image. The hardware-independent post-processing contract is limited to backend-specific output conversion, returns destination-final pixels without modifying the caller's image, and does not alter artistic presentation choices; `window` and `image-server` use identity processing. The viewer and configured backend publication paths use this same contract. It does not initialize or require a display backend.
+Destination artistic overrides are resolved before rendering. They are never applied by post-processing a completed output image.
+
+Hardware-independent destination visual conversion is limited to explicitly supported destination pixel-format or orientation requirements. It must not alter artistic choices or geometrically resize, crop, pad, or otherwise adapt an image without an explicit backend contract.
+
+The conversion operation returns destination-final pixels without mutating the caller's original RGB output image.
+
+`window` and `publish` use identity visual processing.
+
+The Waveshare conversion uses the same shared hardware-independent RGB-to-seven-index palette implementation for runtime publication and viewer inspection/export.
+
+The active seven-index palette order is:
+
+1. Black
+2. White
+3. Yellow
+4. Red
+5. Black
+6. Blue
+7. Green
+
+Preserve the duplicate black entry and its index identity. Do not substitute the vendored driver's commented alternative palette order.
+
+Conversion must be deterministic for identical input pixels and settings.
+
+Quantize each complete RGB image exactly once. The specific dithering algorithm remains an implementation choice; do not introduce different viewer and backend algorithms or independently quantize the same image at multiple stages.
+
+The Waveshare backend receives the resulting palette indices. Its driver may rotate and pack those indices for controller transport but must not requantize or recolor them.
+
+Keep the shared converter independent of vendor driver, GPIO, and SPI dependencies. The viewer must be able to exercise it without physical display hardware.
+
+The fixed Waveshare output geometry is 1600 × 1200. Conversion does not authorize resizing an incorrectly dimensioned image.
+
+Tests must verify:
+
+- deterministic palette conversion;
+- correct active palette ordering, including duplicate black;
+- unchanged caller-owned RGB pixels;
+- one quantization pass;
+- identical viewer and backend conversion results;
+- transport rotation and packing without a second quantization;
+- import and software execution without hardware dependencies;
+- rejection of incorrect Waveshare dimensions.
+
+Physical validation must compare representative viewer-processed previews with the supported panel, accounting for differences between monitor colorimetry and physical e-paper pigments.
+
+Hardware-independent conversion tests do not establish physical panel correctness.
 
 ## Information-view composition
 
@@ -677,61 +988,75 @@ The information view contains:
 - optional source and attribution identifying the quotation's context;
 - the Refrain and ControlForge project identity;
 - application version and available build or commit information;
-- basic platform and Python runtime
-- the configured display backend types;
+- basic platform and Python runtime information;
+- configured display backend types;
 - an appropriate copyright notice.
 
-The curated quotation is supplied by the application rather than selected from the user content library. It remains consistent for a given release and does not participate in daily selection, priority, repetition history, or global selection history.
+The curated quotation is supplied by the application rather than selected from user content.
 
-The information-view background generator owns branding, runtime information, and other non-literary presentation elements.
+It remains consistent for a given release and does not participate in daily selection, priority, repetition history, or global selection history.
 
-The shared quotation renderer presents the curated quotation and its optional source and attribution using the same composition and typography facilities as normal daily quotations.
+The same exact curated quotation is used for the no-eligible-content fallback defined in [Startup and daily transitions](40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#no-eligible-content-fallback). That fallback attributes the quotation to `Forge, Refrain Development Team` and uses ordinary fully revealed literary rendering rather than the information-view layout.
 
-The literary composition remains visually primary. The initial design favors approximately 70% literary presentation and 30% supporting information, without prescribing rigid layout proportions.
+The information-view background generator owns branding, runtime information, and other non-literary elements.
 
-Branding and runtime information must remain visually subordinate and must not compromise readability.
+The shared literary renderer presents the quotation and optional source and attribution using the normal composition and typography facilities.
 
-The initial information view uses one application-owned layout. Multiple configurable information-view styles are not required.
+The literary composition remains visually primary. The initial design favors approximately 70% literary presentation and 30% supporting information, without enforcing rigid layout proportions.
 
-Runtime information is a snapshot of available information at the time the view is prepared, not a continuously updated monitoring interface.
+Branding and runtime information must remain subordinate and must not compromise readability.
 
-Version information should identify the running application release. Build or commit information may be included when available without requiring access to a Git checkout at runtime.
+Version 0.1 uses one application-owned information-view layout. Additional configurable information-view styles are not required.
 
-Configured display backend types are reported without attempting to represent their current health or publication status.
+Runtime information is a snapshot of information available when the view is prepared, not a continuously updated monitoring interface.
 
-Optional runtime details must be omitted gracefully when unavailable. Missing diagnostic information must not prevent preparation of the information view.
+Use the installed application version as the primary version identifier. Build or commit information may be included when reliably available without requiring a Git working tree.
 
-The information view is prepared for the required output specifications, with consistent presentation-wide choices and raster-specific rendering. Each configured backend receives the matching complete image through the normal publication facilities.
+Report configured backend types without implying current backend health or publication status.
 
-Prepare the information view using the existing Pillow image-composition facilities.
+Optional runtime information must be omitted gracefully when unavailable. Missing diagnostics must not prevent preparation.
 
-Keep view-specific background composition separate from the shared quotation renderer. The background generator is responsible for project identity, build information, runtime details, and copyright information. The quotation renderer remains responsible for the literary composition.
+Prepare the information view for the required output specifications using consistent presentation-wide choices and output-dependent rendering.
 
-Supply the information view's curated quotation from application-owned release resources rather than the user content library.
+Each destination receives its matching complete image through normal publication facilities.
 
-Render the information view as one complete, fully visible image. Do not introduce reveal stages or daily-selection artifacts for this view.
+Use the existing Pillow composition pipeline. Keep view-specific background generation separate from the shared quotation renderer.
 
-Keep optional runtime-data collection lightweight and tolerant of unavailable platform facilities. Do not require network connectivity, Git, hardware-specific dependencies, or additional background services merely to prepare the view.
+Render the information view as one complete fully visible image. Do not create reveal stages, committed selections, repetition records, or daily-selection cache artifacts for it.
 
-Use the installed application version as the primary version identifier. Include build or commit metadata when reliably available without requiring a Git working tree.
+Keep runtime-data collection lightweight and tolerant of unavailable platform facilities.
 
-Collect basic environment details through appropriate Python or platform facilities. Avoid unnecessary subprocesses, external service calls, broad network enumeration, or repeated system probing.
+Do not require network connectivity, Git, hardware-specific dependencies, external monitoring services, or unnecessary subprocesses.
 
 Do not include credentials, tokens, private configuration contents, or privileged filesystem information in the rendered view.
 
-Include hardware-independent automated tests covering:
+Automated tests must cover:
 
-- preparation when optional build, network, or environment information is unavailable;
-- correct use of application-owned literary content independently of the content library;
+- preparation with unavailable optional build and environment information;
+- application-owned quotation independent of the content library;
+- absence of selection, repetition-history, reveal-progress, and publication-checkpoint changes;
+- correct output specifications and backend-independent image preparation;
+- exclusion of sensitive runtime information;
+- use of the same exact quotation for the no-eligible-content fallback without using the branded information layout.
 
-Inspect representative information-view images at the target resolution to evaluate typography, branding, information density, and visual hierarchy.
+Inspect representative information-view images at target resolutions to evaluate typography, branding, information density, and visual hierarchy.
 
-The initial implementation needs one application-owned information-view layout. Do not introduce an independent styling system, plugin interface, interactive control service, or general-purpose diagnostic framework.
+Do not introduce a separate styling framework, plugin interface, interactive control service, or general-purpose diagnostic subsystem.
 
 ## Rendering validation
 
+Rendering tests must distinguish literary semantics, resolved artistic choices, effective destination presentation, raster geometry, image integrity, and physical display behavior.
+
+Automated validation should use deterministic random sources, controlled resource registries, fault injection, geometric assertions, and representative image inspection where appropriate.
+
 Visual inspection remains appropriate for typography and layout quality.
 
-Automated image comparisons may be used where they provide stable, meaningful regression coverage.
+Automated image comparisons may be used when they provide stable, meaningful regression coverage.
 
-Do not rely exclusively on exact pixel comparisons for behavior that is better validated through semantic or geometric assertions.
+Do not rely exclusively on exact pixel comparisons for behavior better validated through semantic or geometric assertions.
+
+Test the established rendering pipeline on hardware-independent supported development platforms. Physical Waveshare validation must be separately identified and performed on the supported panel before claiming hardware correctness.
+
+Do not treat temporary failure fallbacks, incompatible cache artifacts, malformed explicit viewer requests, or invalid resource files as successful canonical artistic reselection.
+
+Validate complete stage sets, effective-value metadata, independent failure isolation, bounded image allocations, and preservation of committed literary selection and reveal progress.
