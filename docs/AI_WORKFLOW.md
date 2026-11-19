@@ -28,20 +28,21 @@ Implementation prompts should direct agents to these sources rather than duplica
 
 ## Documentation ownership and changes
 
-Read `docs/ARCHITECTURE.md` and `docs/ENGINEERING.md` in full before beginning implementation or revision work. Read other documentation relevant to the assigned task.
+Read every Markdown document under `docs/specifications/` in full before beginning implementation, revision, or review work, regardless of the assigned scope. Read other documentation relevant to the assigned task.
 
 The authoritative documentation has distinct responsibilities:
 
-- `docs/ARCHITECTURE.md` defines system behavior, component boundaries, persistent-state semantics, and architectural invariants.
-- `docs/ENGINEERING.md` defines technical implementation standards, supported platforms, dependency constraints, and testing requirements.
+- `docs/specifications/` defines Refrain's required system behavior, component responsibilities, state ownership, architectural invariants, implementation constraints, and testing requirements.
 - `docs/CLI.md` defines the public command-line interface, including commands, arguments, accepted values, results, and diagnostics.
 - `docs/schemas/` contains the authoritative definitions of Refrain's data formats, including configuration, content, resources, publication, and persistent state where applicable.
 
-Schema documents define data structures, field types, valid values, defaults, and validation constraints. They do not independently define runtime behavior. Runtime behavior belongs in Architecture; implementation requirements belong in Engineering.
+The specifications are primarily intended for implementation agents. Requirements must be precise, complete, and unambiguous without unnecessary explanatory prose or repetition.
+
+Schema documents define data structures, field types, valid values, defaults, and validation constraints. They do not independently define runtime behavior or implementation mechanisms, which belong in the specifications.
 
 Each requirement must have one authoritative owner. Reference that owner rather than duplicating requirements across documents. Report inconsistencies or ambiguities instead of silently choosing an interpretation.
 
-Follow the document-editing restrictions in `AGENTS.md`. In particular, implementation work does not authorize changes to Architecture or Engineering unless the assigned instructions explicitly permit changes to the specific document.
+Follow the document-editing restrictions in `AGENTS.md`. Implementation work does not authorize changes to specifications unless the assigned instructions explicitly permit changes to the specific document.
 
 When implementing an approved public-interface change, update the relevant CLI and schema documentation as part of the implementation. These updates must accurately describe the approved interface and must not introduce additional fields, commands, defaults, validation rules, or behavior beyond the authorized scope.
 
@@ -88,7 +89,7 @@ Preserve the original pull-request description and chronological review discussi
 
 ## Validation
 
-Follow the testing and validation requirements in `docs/ENGINEERING.md` and the assigned issue.
+Follow the testing and validation requirements in `docs/specifications/` and the assigned issue.
 
 Run applicable automated tests in the implementation environment and report their results, including any tests that could not be performed.
 

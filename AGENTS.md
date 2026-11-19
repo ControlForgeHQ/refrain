@@ -10,7 +10,7 @@ Never modify the following files:
 - `docs/AI_WORKFLOW.md`
 - `README.md` (repository root)
 
-Modify `docs/ARCHITECTURE.md` or `docs/ENGINEERING.md` only when explicitly authorized to modify the specific document. Permission must not be inferred from an implementation request, even when the implementation affects documented behavior.
+Modify any document under `docs/specifications/` only when explicitly authorized to modify that specific document. Permission must not be inferred from an implementation request, even when the implementation affects documented behavior.
 
 If implementation reveals that a protected document is incorrect, ambiguous, contradictory, or outdated, report the discrepancy and recommend a specific correction without modifying the document.
 
