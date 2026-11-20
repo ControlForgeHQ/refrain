@@ -444,14 +444,6 @@ Filesystem-publication recovery belongs to [Dataset commit and consumer recovery
 
 Application updates must not silently discard valid current-format committed selections, publication checkpoints, or global-history records.
 
-Only the current prerelease internal operational-state schema is supported.
+The current internal operational-state schema is authoritative. Migration from earlier development-state schemas is not required; incompatible persisted data may require the established recovery or reset procedures.
 
-Earlier development-state schemas do not require migration, compatibility readers, or historical rendering branches.
-
-Incompatible prerelease state may require the explicit recovery or reset procedure described above.
-
-Changes to public configuration, content, asset, publication, CLI, or consumer interfaces still require review against their authoritative schemas and approved compatibility requirements.
-
-Reassess persistent-format compatibility when Refrain establishes its first public release.
-
-The initial release does not require automatic application updates, remote deployment management, or a custom upgrade service.
+Changes to public configuration, content, asset, publication, CLI, or consumer interfaces require review against their authoritative schemas and approved compatibility requirements.

@@ -403,7 +403,7 @@ If those lines cannot fit at the minimum permitted size, automatic word wrapping
 
 Quotations without explicit line breaks use automatic wrapping and largest-fitting-font behavior.
 
-Version 0.1 provides two presentation styles:
+The supported presentation styles are:
 
 - `centered`: Each quotation line is independently centered horizontally. The quotation block is vertically centered in its allocated space, with the byline centered beneath it.
 - `left-aligned`: Quotation lines share a left edge. The resulting quotation block remains horizontally centered according to its widest line, rather than being anchored to the literary region's left edge. The block is vertically centered, and the byline is right-aligned.
@@ -681,7 +681,7 @@ If an unusable decoration is discarded during ordinary preparation, reevaluate Q
 
 Conditional `always`, `qr`, and `no-qr` artwork is selected from the final effective QR availability state.
 
-For Version 0.1, an available literary QR code encodes:
+An available literary QR code encodes:
 
 `https://github.com/ControlForgeHQ/refrain`
 
@@ -689,7 +689,7 @@ The payload is independent of the selected quotation, content entry, display dat
 
 Do not add a configurable QR destination or depend on a deferred companion service.
 
-Version 0.1 uses:
+The literary QR code uses:
 
 - QR version 4;
 - error-correction level M;
@@ -1006,7 +1006,7 @@ The literary composition remains visually primary. The initial design favors app
 
 Branding and runtime information must remain subordinate and must not compromise readability.
 
-Version 0.1 uses one application-owned information-view layout. Additional configurable information-view styles are not required.
+The information view uses one application-owned layout.
 
 Runtime information is a snapshot of information available when the view is prepared, not a continuously updated monitoring interface.
 

@@ -91,7 +91,7 @@ refrain-viewer --image candidate.png
 refrain-viewer --image candidate.png --window
 ```
 
-Version 0.1 accepts only a valid, single-frame 8-bit RGB PNG with width 1–3840 pixels and height 1–2400 pixels, independently. Square and portrait images are valid. The local window uses the existing viewer and may fit a private desktop copy to the screen; the supplied file and its pixels are not changed. This mode does not load application configuration, content, assets, runtime destinations, or persistence.
+Finished-image input accepts only valid, single-frame 8-bit RGB PNG files with width 1–3840 pixels and height 1–2400 pixels, independently. Square and portrait images are valid. The local window uses the existing viewer and may fit a private desktop copy to the screen; the supplied file and its pixels are not changed. This mode does not load application configuration, content, assets, runtime destinations, or persistence.
 
 The finished image may also be published through the existing transient push path:
 
@@ -121,7 +121,7 @@ refrain-viewer --list-destinations
 
 This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its exact configured ID, declared presentation aspect ratio, requested output resolution, transient-publication capability, participation/withdrawal status, external delivery availability, and whether the current scheduled publication was accepted. Destination IDs are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
 
-`--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, `--render-as`, local output geometry, presentation selection, or presentation overrides. Its table or whitespace layout is not a machine-readable interface in Version 0.1. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
+`--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, `--render-as`, local output geometry, presentation selection, or presentation overrides. The command’s table or whitespace layout is intended for human inspection and is not a machine-readable interface. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
 
 ### Entry selection
 

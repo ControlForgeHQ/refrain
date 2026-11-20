@@ -8,7 +8,7 @@ The normal resident application selects an eligible quotation for each logical d
 
 Refrain is intended primarily for personal and household use while remaining configurable and reusable by others.
 
-The initial deployment includes a physical e-paper display, but the architecture must not assume that e-paper is the only presentation destination or that quotations can originate only from song lyrics.
+Refrain supports physical e-paper and other presentation destinations, and accepts quotations beyond song lyrics.
 
 Content discovery, validation, eligibility, selection, persistence, scheduling, artistic resolution, and rendering must operate independently of physical display hardware.
 
@@ -65,9 +65,9 @@ Material architectural changes require approval before implementation establishe
 
 The primary deployment target is Raspberry Pi OS Lite, 64-bit, on Raspberry Pi hardware using Python 3.13 or newer.
 
-The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1 and the initial hardware-validation platform.
+The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform and the hardware-validation baseline.
 
-The initial physical display is the Waveshare 13.3-inch e-Paper HAT+ (E), with its fixed 1600 × 1200 landscape output and Spectra 6 color technology.
+The supported Waveshare 13.3-inch e-Paper HAT+ (E) has a fixed 1600 × 1200 landscape output and uses Spectra 6 color technology.
 
 The hardware backend owns the vendor driver, SPI/GPIO integration, controller lifecycle, and physical transfer requirements.
 
@@ -75,7 +75,7 @@ The renderer and other hardware-independent components must not depend on Raspbe
 
 The system must not rely on hardware characteristics exclusive to the Raspberry Pi 3B+ when those assumptions are unrelated to the supported device contract.
 
-The initial physical display uses full-frame updates. Refrain must not require partial refresh, animation, or frequent screen updates.
+The Waveshare backend uses full-frame updates. Refrain must not require partial refresh, animation, or frequent screen updates.
 
 The intended presentation emphasizes readable dark typography, a predominantly paper-white background, generous whitespace, and restrained decorative color.
 
@@ -358,27 +358,3 @@ The following invariants must remain true as the project evolves:
 
 Architectural changes must be evaluated against these invariants before implementation is accepted.
 
-## Integration limits and non-goals
-
-Version 0.1 does not require:
-
-- A general plugin or dynamic backend framework.
-- A database server.
-- A content-editing interface.
-- A browser-based administration console.
-- Public network exposure.
-- Remote administration.
-- Arbitrary layout scripting or externally supplied themes.
-- Animated or continuously refreshed display content.
-- Multiple synchronized e-paper controllers.
-- External music or media playback.
-- Background content retrieval from internet services.
-- A general service-registration or custom supervision framework.
-
-The defined architecture includes resident filesystem publication and independently supervised consumers, including `refrain-image-server`.
-
-The deferred web companion, public presentation, and external action execution must not be implemented merely for anticipated future extensibility.
-
-Future integrations must preserve the resident's authority over daily selection and must not make ordinary quotation presentation dependent on cloud services, external consumers, or privileged remote interfaces.
-
-Additional capabilities require demonstrated needs and separately approved requirements.

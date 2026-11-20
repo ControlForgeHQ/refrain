@@ -15,7 +15,7 @@ The contract does not prescribe a particular Python method signature.
 
 For destinations requiring publication metadata, the application supplies the corresponding completed, validated publication document independently of image rendering. Metadata finalization belongs to the application; backend storage and delivery responsibilities do not include literary interpretation or artistic resolution.
 
-Version 0.1 has three resident backend types:
+The resident backend types are:
 
 - `window`: Presents complete images in a graphical desktop window.
 - `waveshare-13in3-e`: Presents complete images on the supported Waveshare 13.3-inch e-Paper HAT+ (E).

@@ -18,8 +18,6 @@ Do not introduce complexity solely to accommodate hypothetical future features.
 
 A small amount of duplication is preferable to introducing an abstraction without a demonstrated benefit.
 
-The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1.
-
 Favor implementations that can operate within modest memory, CPU, and storage budgets.
 
 Avoid unnecessary resident data, polling, heavyweight dependencies, and background processing.
@@ -280,9 +278,7 @@ Record validation limitations honestly.
 
 Use semantic versioning for project releases.
 
-Version 0.1 establishes the initial usable release.
-
-During pre-1.0 development, compatibility-breaking changes may be necessary, but they must be deliberate and documented.
+Compatibility-breaking changes must be deliberate and documented.
 
 Treat published content and configuration formats as user-facing interfaces.
 
