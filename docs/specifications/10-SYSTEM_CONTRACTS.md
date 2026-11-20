@@ -2,276 +2,383 @@
 
 ## Operating model and boundaries
 
-Refrain is a self-contained, open-source e-paper presentation system for quotations and other short-form content.
+Refrain is a self-contained, open-source presentation system for quotations and other short-form literary content.
 
-The application selects an eligible quotation for each logical display day, progressively reveals information according to a configured schedule, and presents pre-rendered images on a physical e-paper display.
+The normal resident application selects an eligible quotation for each logical display day, progressively reveals associated information according to its committed schedule, prepares complete images, and publishes the currently required presentation to configured destinations.
 
 Refrain is intended primarily for personal and household use while remaining configurable and reusable by others.
 
-Content loading, eligibility evaluation, quotation selection, scheduling, and image composition must be executable without physical display hardware.
+The initial deployment includes a physical e-paper display, but the architecture must not assume that e-paper is the only presentation destination or that quotations can originate only from song lyrics.
 
-The e-paper display is an output device, not an authority over application state or content policy.
+Content discovery, validation, eligibility, selection, persistence, scheduling, artistic resolution, and rendering must operate independently of physical display hardware.
 
-Hardware-specific code must not determine which quotation is selected or what information should be visible.
+The resident application coordinates these responsibilities within one Python process.
 
-Refrain operates as a single Python application with internally separated responsibilities.
+Independent publication consumers are separately executed and supervised. They are not part of the resident process and are not required for ordinary resident operation.
 
 Ordinary operation must not require:
 
-- an internet connection;
-- a cloud service;
-- a database server;
-- a web server;
-- a message broker;
-- an external content-management application.
+- Internet connectivity.
+- A cloud service.
+- A database server.
+- An HTTP server.
+- A message broker.
+- An external content-management application.
+- An independent publication consumer.
 
-Use existing Linux facilities for process management, logging, and timekeeping where appropriate.
+Use existing operating-system facilities for process management, logging, local timekeeping, filesystem storage, and service supervision where appropriate.
 
-Do not introduce additional long-running services or infrastructure without a demonstrated requirement.
+Do not introduce additional mandatory infrastructure, a custom service manager, or general-purpose extensibility frameworks without a demonstrated requirement.
 
-Content entries organize quotations and their shared metadata.
-
-Selection determines which quotation is assigned to a display day.
-
-Commitment makes the selected quotation and its associated presentation information authoritative.
-
-Preparation generates and persists all images required for the committed selection and its configured output specifications.
-
-Scheduling determines which reveal stage should currently be presented.
-
-Display output publishes the prepared image variant appropriate to each configured destination.
-
-Each responsibility must remain independently understandable and testable.
-
-The initial architecture must not assume that content can only originate from song lyrics or that a physical display is the only possible presentation destination.
-
-Future web presentation, public publishing, and external actions must be possible without replacing the core quotation-selection model.
-
-These capabilities must not be implemented merely to demonstrate extensibility.
-
-Content selection does not depend on physical display hardware.
-
-Rendering can be tested without physical display hardware.
-
-Ordinary operation does not require internet access or external services.
-
-Implementations must conform to the applicable authoritative system and subsystem specifications under `docs/specifications/`.
+### Responsibility boundaries
 
 Maintain separation between:
 
-- content loading and validation;
-- quotation eligibility and selection;
-- persistent state and commitment;
-- reveal scheduling;
-- image preparation and rendering;
-- display output;
-- application lifecycle coordination.
+- Content discovery and validation.
+- Quotation eligibility and selection.
+- Authoritative operational-state commitment.
+- Publication checkpoint construction and recovery.
+- Reveal scheduling.
+- Artistic resolution and image preparation.
+- Literary rendering and destination visual conversion.
+- Publication coordination and acknowledgement.
+- Backend delivery and filesystem publication.
+- Application lifecycle and resource ownership.
 
-Components should communicate through narrow, explicit interfaces.
+Components must communicate through narrow, explicit interfaces.
 
-Do not move content-selection policy into the renderer or display backend.
+Content selection must not depend on physical hardware, network delivery, or publication consumers.
 
-Do not introduce hardware dependencies into code that is intended to run without physical display hardware.
+Rendering and artistic preparation must not determine literary eligibility, choose a new committed quotation, or advance authoritative reveal progression.
 
-If an implementation appears to require a material architectural change, the change must be reviewed before the implementation establishes new behavior.
+Backends must not perform literary selection, scheduling, or artistic resource resolution.
+
+Independent consumers must not modify resident operational state, publication checkpoints, prepared-image caches, or Refrain-owned publication datasets.
+
+An explicitly selected daily quotation remains authoritative independently of image preparation or destination delivery success.
+
+The application must not introduce capabilities merely to demonstrate extensibility. Future integrations should reuse the established selection, persistence, preparation, and publication boundaries where appropriate.
+
+Material architectural changes require approval before implementation establishes new behavior.
 
 ## Supported platform and portability
 
-The initial hardware deployment targets:
-
-- Raspberry Pi OS Lite;
-- Python;
-- Waveshare 13.3-inch e-Paper HAT+ (E), with its native 1600 × 1200 landscape panel.
+The primary deployment target is Raspberry Pi OS Lite, 64-bit, on Raspberry Pi hardware using Python 3.13 or newer.
 
 The Raspberry Pi 3B+ is the minimum supported Raspberry Pi platform for Version 0.1 and the initial hardware-validation platform.
 
-The application must not depend on performance, memory capacity, peripheral availability, or other characteristics exclusive to the Raspberry Pi 3B+.
+The initial physical display is the Waveshare 13.3-inch e-Paper HAT+ (E), with its fixed 1600 × 1200 landscape output and Spectra 6 color technology.
 
-The display uses Spectra 6 color e-paper technology.
+The hardware backend owns the vendor driver, SPI/GPIO integration, controller lifecycle, and physical transfer requirements.
 
-The intended presentation is predominantly black typography on a paper-white background. Color is available for restrained decorative use.
+The renderer and other hardware-independent components must not depend on Raspberry Pi-specific drivers or interfaces.
 
-The initial display is a full-frame output device. Refrain must not depend on partial refresh, animation, or frequent screen updates.
+The system must not rely on hardware characteristics exclusive to the Raspberry Pi 3B+ when those assumptions are unrelated to the supported device contract.
 
-The renderer must produce images independently of the display backend and physical display characteristics. Backend-specific orientation and pixel format do not constrain the renderer's supported presentation aspects or requested raster resolutions.
+The initial physical display uses full-frame updates. Refrain must not require partial refresh, animation, or frequent screen updates.
 
-Hardware-independent content, selection, scheduling, persistence, and rendering components must remain portable across operating systems supported by the Python runtime and required dependencies, without unnecessary operating-system-specific assumptions. This permits their development and testing on non-Linux systems but does not imply that full application deployment has been validated or is supported there.
+The intended presentation emphasizes readable dark typography, a predominantly paper-white background, generous whitespace, and restrained decorative color.
 
-The display backend owns hardware-specific integration, including the Waveshare driver and its platform dependencies.
+### Platform commitments
 
-Support for additional display hardware is not an initial product requirement, although display resolution, supported color capabilities, and hardware-specific operations must remain isolated from core content and scheduling logic.
+Raspberry Pi OS Lite is the primary supported deployment platform.
 
-The runtime should avoid unnecessary memory use and background processing. Quality decisions for infrequent daily image preparation must not be rejected solely because they require additional processing.
+Windows is a supported hardware-independent development and resident-testing platform. Its applicable functionality includes content processing, selection, scheduling, persistence, rendering, desktop presentation, filesystem publication, and local runtime control.
+
+Windows does not provide the Raspberry Pi-specific Waveshare hardware interface.
+
+Other Linux distributions may work with compatible system facilities but are not individually validated or maintained as supported deployments.
+
+macOS is not a supported or maintained platform. Existing harmless path conventions or portable code may remain, but their presence does not establish a support or testing commitment.
+
+Hardware-independent components must avoid unnecessary operating-system assumptions and remain testable on the supported Windows and Linux environments.
+
+Backend-specific dependencies must be isolated so that ordinary imports, rendering, configuration, persistence, and non-hardware destinations do not require GPIO, SPI, a vendor driver, or a graphical desktop environment.
+
+Requested presentation aspect ratios and output resolutions are independent of the physical Waveshare panel's fixed geometry, subject to the supported finished-image limits.
+
+The output backend owns only its defined delivery and hardware-format responsibilities.
+
+Physical hardware validation is distinct from hardware-independent testing. Mocked driver success does not establish correct physical display behavior.
+
+The runtime must use bounded memory and avoid unnecessary background processing. Quality requirements for infrequent daily image preparation must not be rejected solely because preparation requires additional computation.
+
+Platform paths, deployment requirements, service supervision, and permissions belong to [Installation and Service Operation](80-INSTALLATION_AND_SERVICE_OPERATION.md).
 
 ## Shared terminology
 
-**Content Entry:** A uniquely identified collection of one or more quotations and shared configuration metadata.
+**Content Entry:** A uniquely identified collection of one or more quotations and shared authored metadata.
 
-**Quotation:** An individual message contained within a content entry. Quotations are the units of daily selection and repetition tracking.
+**Quotation:** One individual literary message within a content entry. Quotations are the units of daily selection.
 
-**Quotation Identity:** The normalized text of a quotation, used to determine whether the same message has previously been selected.
+**Quotation Identity:** The normalized quotation text used for repetition tracking. Identical normalized text has one repetition identity across content-entry occurrences.
 
-**Content Library:** The validated collection of available content entries.
+**Content Library:** The collection of content entries accepted through completed discovery and validation. Incomplete source enumeration does not establish a usable effective library for new selection.
 
-**Display Day:** The logical presentation interval determined by host-local time and Refrain's configured day-start time.
+**Display Day:** The logical presentation interval determined by host-local civil time and the configured day-start boundary.
 
-**Display Date:** The local calendar date associated with a daily selection. This date determines content eligibility.
+**Display Date:** The local calendar date associated with the logical display day. It determines content eligibility and identifies the committed daily selection's date.
 
-**Date Specificity:** The degree to which an eligibility rule identifies a particular calendar date, ordered from most to least specific: year-month-day, month-day, day, month, and ordinary eligibility.
+**Date Specificity:** The priority of a matching calendar eligibility context, from highest to lowest: year-month-day, month-day, day, month, and ordinary eligibility.
 
-**Selection Pool:** The quotations eligible within the highest matching date-specificity context for a particular display date.
+**Selection Pool:** The quotations eligible within the highest applicable date-specificity context for a display date.
 
-**Priority:** An optional signed integer associated with a content entry and inherited by its quotations. Higher values indicate greater selection preference. The default is zero.
+**Priority:** An optional signed integer inherited by quotations from their content entry. Higher values receive selection preference. The default is zero.
 
-**Selection Revision:** A monotonically increasing identifier assigned to each committed daily selection and maintained in authoritative operational state.
+**Repetition History:** Persistent, selectively resettable quotation identities used to avoid repetition until the relevant eligible pool is exhausted.
 
-**Global History:** A chronological, retention-bounded record of committed quotation selection events, maintained independently of authoritative operational state.
+**Global History:** A retention-bounded, best-effort chronological record of committed selection events. It is not authoritative for recovery, current selection, repetition eligibility, or reveal progression.
 
-**Repetition History:** A persistent but selectively resettable collection of quotation identities used to prevent repetition until an eligible selection pool is exhausted. Identities no longer present in the validated content library may also be removed.
+**Daily Selection:** The quotation committed for one logical display date.
 
-**Daily Selection:** The individual quotation assigned to the current display day.
+**Selection Revision:** A monotonically increasing identifier assigned to each successful operational-state selection commitment.
 
-**Daily Selection Record:** A persistent copy of the selected quotation, its captured content properties, and its resolved canonical presentation, independent of the original content entry. Destination-specific effective values and raster geometry are resolved during image preparation.
+**Daily Selection Record:** The authoritative operational-state snapshot of the committed quotation, complete selected literary content, captured content preferences and actions, effective schedule, display date, and selection revision. It does not contain resolved artistic presentation choices or output-specific raster data.
 
-**Canonical Presentation:** The destination-independent artistic presentation resolved once for a committed daily selection, including its presentation style, selected visual resources, font and faces, colors, and QR policy.
+**Selection Commitment:** The successful atomic persistence of a daily selection, its revision, updated repetition history, initial reveal progression, and scheduling context in authoritative operational state.
 
-**Effective Presentation:** The canonical presentation after applying one destination's supported overrides and resolving any resulting geometry defaults.
+**Persistent State:** The authoritative `state.json` operational record containing the current committed selection, selection revision, repetition history, scheduling context, and highest reveal stage reached.
 
-**Selection Commitment:** The successful durable recording of a daily selection, updated repetition history, selection revision, reveal progress, and scheduling context as one consistent authoritative state.
+**Publication Checkpoint:** The single evolving `publication.json` record associated with a committed selection. Its content-only form records committed literary data; its completed content-and-presentation form additionally records destination-independent artistic choices.
 
-**Reveal Stage:** A cumulative set of content fields eligible for presentation at a particular point in the configured reveal schedule.
+**Canonical Presentation:** The resolved destination-independent artistic choices persisted in the completed publication checkpoint, including style, visual resources, font and role faces, colors, presentation geometry settings, and QR policy.
 
-**Presentation Aspect Ratio:** The declared ratio that selects the design canvas and determines the exact-ratio dimensions of the presentation canvas.
+**Effective Presentation:** The resolved presentation used to prepare one destination's image after applying applicable destination overrides, resource recovery, and output-dependent decisions. It does not replace or modify the persisted canonical presentation.
 
-**Design Canvas:** The high-resolution, aspect-specific graphical composition and authored-layout space selected from the fixed 3840 × 2400 reference envelope. It is independent of requested output resolution.
+**Reveal Stage:** One cumulative visibility state in the committed selection's ordered reveal sequence. Fields resolved to the same absolute reveal instant share a stage.
 
-**Presentation Canvas:** The raster on which literary layout, text, QR, and diagnostic overlays are resolved and rendered for one output specification.
+**Presentation Aspect Ratio:** The declared ratio selecting the aspect-specific design canvas and determining the exact-ratio presentation canvas.
 
-**Output Image:** The completed presentation canvas, optionally resized once as a whole to the exact requested dimensions. It is the image persisted as a prepared PNG and delivered to display backends.
+**Design Canvas:** The high-resolution, aspect-specific graphical-composition and authored-layout space derived from the fixed 3840 × 2400 reference envelope.
 
-**Output Specification:** The declared presentation aspect ratio and requested output resolution for a configured destination, according to that backend's configuration and defaults.
+**Presentation Canvas:** The raster on which literary text, QR, and diagnostic overlays are laid out and rendered for one output specification.
 
-**Destination Identifier:** The runtime-supplied opaque identifier for one configured output destination. It is used only to route a runtime-control request.
+**Output Specification:** One declared presentation aspect ratio and requested output resolution, independently supplied by the applicable destination or viewer operation.
 
-**Prepared Image:** A persisted output image representing one reveal stage of a committed daily selection for one output specification and its effective presentation requirements. Destinations may share it only when both the output specification and preparation requirements match.
+**Output Image:** The completed presentation image, optionally resized exactly once as a whole from the presentation canvas to the requested output dimensions.
 
-**Presentation:** The selected quotation, associated metadata, reveal schedule, and applicable layout configuration used to produce prepared output images. A scheduled presentation has one canonical presentation and a derived effective presentation for each destination.
+**Prepared Image:** A complete, persisted output image representing one reveal stage for a committed selection, output specification, and compatible effective presentation requirements.
 
-**Renderer:** The hardware-independent component responsible for composing complete presentation images.
+**Prepared Stage Set:** The independently committed complete collection of compatible reveal-stage images for one preparation group and output specification.
 
-**Display Backend:** The component responsible for presenting the prepared output image matching its configured output specification through a destination, including directly connected display hardware or a network-accessible image service.
+**Destination:** One configured publication target with its own identity, output specification, audience, effective presentation requirements, participation state, and acknowledgement.
 
-**Persistent State:** The authoritative operational state containing the current daily selection, selection revision, active repetition history, reveal progress, and scheduling context required for recovery across application restarts.
+**Destination Identifier:** The globally unique, opaque configured ID identifying one destination for runtime routing, publication metadata, and applicable filesystem storage. Its spelling does not imply backend type or capabilities.
+
+**Display Backend:** A resident-owned component that synchronously publishes a complete image through a configured destination. Direct backends present images on local hardware or desktop windows; `publish` commits completed filesystem datasets.
+
+**Publication Event:** One completed destination publication attempt identified by its publication ID, timestamp, destination, type, and output specification. Completed scheduled events additionally describe literary content and effective presentation.
+
+**Publication Metadata:** A versioned JSON document following the checkpoint, completed scheduled, or completed transient forms defined by the Publication schema.
+
+**Filesystem Publication Dataset:** One complete image and completed metadata document referenced by a verified current manifest in a Refrain-owned destination directory.
+
+**Independent Consumer:** A separately supervised process that reads validated filesystem publications without participating in resident selection, scheduling, backend ownership, or publication commitment.
+
+**Renderer:** The hardware-independent literary rendering component that measures, fits, positions, and draws the quotation and optional literary fields within resolved presentation geometry.
+
+**Presentation:** The literary content, visibility, and resolved artistic requirements used to construct a complete output image. Scheduled publication derives its effective presentation from the committed selection and its canonical publication checkpoint.
 
 ## Component responsibilities and processing flow
 
-Refrain operates as a single Python application with four primary phases:
+The normal resident coordinates four primary phases:
 
-1. Selection
-2. Commitment
-3. Preparation
-4. Presentation
+1. Selection.
+2. Commitment.
+3. Preparation.
+4. Publication.
 
-The logical flow is:
+A committed selection has one authoritative literary identity and reveal schedule, regardless of the number or types of configured destinations.
+
+The normal logical flow is:
 
 ```text
-Content files
-    |
-    v
-Content library
-    |
-    v
-Eligible quotation candidates
-    |
-    v
-Specificity, repetition, and priority
-    |
-    v
+Content discovery and validation
+        |
+        v
+Eligibility, specificity, repetition, and priority
+        |
+        v
 Quotation selection
-    |
-    v
-Daily selection record + updated repetition history
-    |
-    v
+        |
+        v
 Atomic operational-state commitment
-    |
-    +----> Best-effort global-history recording
-    |
-    v
-Presentation preparation
-    |
-    v
-Persisted output variants for every reveal stage
-    |
-    v
-Display scheduler
-    |
-    v
-Display backend
-    |
-    v
-Physical e-paper display
+(state.json: content, revision, history, reveal, schedule)
+        |
+        +----> Best-effort global-history recording
+        |
+        v
+Content-only publication checkpoint
+(publication.json)
+        |
+        v
+Destination-independent artistic resolution
+        |
+        v
+Complete presentation checkpoint
+(publication.json)
+        |
+        v
+Destination overrides and effective requirements
+        |
+        v
+Complete compatible reveal-stage image sets
+        |
+        v
+Scheduling and publication coordinator
+        |
+        +----> Direct display backends
+        |       window / waveshare-13in3-e
+        |
+        +----> publish backend
+                |
+                v
+        Image + completed publication metadata
+                |
+                v
+        Verified filesystem manifest commit
+                |
+                v
+        Independent read-only consumers
 ```
 
-The application controller coordinates these responsibilities within one process.
+The diagram describes logical ownership and required dependencies rather than a mandatory class hierarchy or strictly sequential execution of independent activities.
 
-The flow describes responsibility and ownership, not a required class hierarchy, directory structure, or strict ordering between independent post-commit operations.
+Operational-state commitment precedes publication checkpoint construction. The content-only checkpoint precedes completion of destination-independent artistic resolution. The completed presentation checkpoint precedes destination-specific scheduled image preparation.
+
+The publication checkpoint is a single evolving file, not separate durable canonical and effective presentation records.
+
+Global-history recording is best-effort and does not participate in operational-state or checkpoint atomicity.
+
+A failed post-commit operation must not cause quotation reselection or erase a valid committed selection.
+
+A successful reveal advancement updates authoritative operational state before synchronizing checkpoint visibility. Destination publication acknowledgement is independent of reveal progression.
+
+For each destination, image preparation uses the committed selection and completed checkpoint, then derives its effective presentation without modifying canonical artistic choices.
+
+Complete compatible stage sets are cached independently. Destinations share images only when their output specifications and effective presentation requirements are compatible.
+
+The coordinator selects the currently required prepared stage and maintains acknowledgement separately for each destination.
+
+A direct backend receives the corresponding complete image. A `publish` destination receives its complete image and independently finalized metadata, then commits a verified filesystem dataset.
+
+The application supplies each scheduled publication's actual effective presentation, output specification, event identity, timestamp, and audience-filtered actions.
+
+Independent consumers read verified publication datasets. They do not participate in the resident's selection, commitment, or acknowledgement.
+
+Externally submitted transient finished images bypass scheduled literary selection and artistic preparation. They are published through the resident's existing coordinator without modifying committed selection, checkpoint, history, or reveal progression.
+
+Startup information views and the no-eligible-content fallback follow their separately specified lifecycle behavior. Neither creates a synthetic daily selection.
+
+The detailed contracts belong to the applicable subsystem specifications.
 
 ## Ownership of mutable state
 
-Mutable application state must have an identifiable owner.
+Every mutable application resource must have one identifiable authoritative owner.
 
-Distinguish between:
+The principal ownership boundaries are:
 
-- validated source content;
-- uncommitted selection candidates;
-- authoritative operational state, including the current daily selection, selection revision, active repetition history, and reveal progress;
-- independently retained global selection history;
-- prepared presentation artifacts;
-- backend-owned presentation state.
+| Resource | Owner |
+|---|---|
+| Authored content and resource files | User or installed package |
+| Validated content and resource registries | Content and resource-loading components |
+| Committed selection, revision, repetition history, schedule, and reveal progress | Operational state (`state.json`) |
+| Destination-independent resolved artistic choices | Completed publication checkpoint (`publication.json`) |
+| Global selection-event history | Best-effort global-history recorder |
+| Complete prepared image sets and integrity associations | Derived prepared-image cache |
+| Effective destination presentation and completed metadata construction | Preparation and application publication-finalization components |
+| Desired scheduled presentation and per-destination acknowledgements | Resident publication coordinator |
+| Backend resources and active publication operations | Resident backend instances and their coordinator |
+| Current filesystem publication datasets | Resident `publish` backend |
+| HTTP serving and other consumer-side state | Independent consumer processes |
 
-Components must not modify state owned by unrelated responsibilities merely because a reference to that state is available.
+Validated source content and committed selection snapshots should be represented with immutable values where practical.
 
-Prefer immutable values for validated content, committed selections, and resolved presentation configuration where practical.
+Components must not modify state owned by another responsibility merely because a mutable object reference is available.
+
+The current committed selection remains authoritative until a different logical display date requires and successfully commits another selection.
+
+A valid completed publication checkpoint preserves canonical artistic choices across restart, configuration changes, and resource-pool changes.
+
+Losing derived prepared images does not invalidate the selection or authorize canonical reselection.
+
+Losing the artistic checkpoint permits reconstruction from authoritative operational state with an actionable warning that resolved appearance may differ.
+
+Destination-specific effective values and publication acknowledgements must not become competing authorities for literary selection or canonical presentation.
+
+Completed publication metadata represents the event at which it was finalized and is not retroactively rewritten when later reveal progress occurs.
+
+Independent consumers cannot acquire resident authority by reading a publication dataset.
 
 ## Failure isolation and recovery boundaries
 
-Recoverable failures should not require manual intervention.
+Failure handling must preserve the ownership boundaries above.
 
-Failure handling must respect the boundaries established by the architecture.
+The following behaviors are required:
 
-In particular:
+- Failed content discovery or validation must not create an incomplete committed selection.
+- A healthy effective library with no eligible quotation uses the approved literary fallback without synthetic selection or history changes.
+- A failed publication checkpoint update must not invalidate a successfully committed quotation.
+- A damaged or missing checkpoint must not replace committed literary content or reduce reveal progress.
+- A rendering or prepared-image cache failure must not trigger literary reselection.
+- An invalid reveal-stage value must not be committed or silently treated as valid progression.
+- Global-history failure must not prevent ordinary committed selection recovery or presentation.
+- A failed destination must not invalidate successful publication to independent destinations.
+- A failure affecting one shared backend instance must be reported for the destinations actually dependent on that instance.
+- A slow or blocked backend operation must not prevent independent backend instances or scheduling evaluation from progressing.
+- An uncertain publication outcome must not be reported as confirmed success or failure.
+- A failed independent consumer must not invalidate a completed filesystem publication.
+- Restart must preserve valid current-format committed selection state and nonregressing reveal progression.
+- Unsafe operational recovery must not intentionally clear retained physical e-paper content.
 
-- selection failure must not create an incomplete committed selection;
-- rendering failure must not trigger reselection;
-- display failure must not alter quotation history;
-- restart must not discard valid current-format selection state;
-- recovery must not hide previously reached reveal stages.
+Use bounded retries and explicit recovery opportunities where applicable. Do not introduce a general transaction framework, replay journal, or complex recovery subsystem without an established requirement.
 
-Do not add an elaborate recovery framework when a simple, bounded retry or restart-safe operation is sufficient.
+Scheduled destination acknowledgement, transient admission, backend retry, and shutdown behavior belong to [Destinations and Runtime Control](60-DESTINATIONS_AND_RUNTIME_CONTROL.md) and [Scheduling and Application Lifecycle](40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md).
+
+Persistent recovery belongs to [Selection and Persistence](30-SELECTION_AND_PERSISTENCE.md).
+
+Filesystem dataset commitment and consumer recovery belong to [Filesystem Publication and Consumers](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md).
 
 ## Architectural guarantees
 
-The following must remain true as the project evolves:
+The following invariants must remain true as the project evolves:
 
-Architectural changes must be evaluated against these invariants before implementation work is accepted.
+1. One normal resident owns the configured backend instances and protected runtime resources for a per-user installation.
+2. Literary selection and scheduling are independent of physical hardware, publication delivery, and independent consumer availability.
+3. Authoritative operational state owns committed literary selection, repetition history, revision, scheduling context, and highest reveal progress.
+4. The completed publication checkpoint is the sole durable authority for destination-independent resolved artistic choices.
+5. A committed quotation must not be reselected because checkpoint construction, artistic preparation, cache regeneration, global-history recording, or destination delivery failed.
+6. Reveal progression never regresses within one committed selection; destination acknowledgement does not determine authoritative reveal progress.
+7. Every destination has independent identity, output requirements, participation, publication status, and acknowledgement, even when images or backend instances are shared.
+8. Destination-specific preparation and completed publication metadata must reflect effective rendering decisions without modifying canonical artistic choices.
+9. Transient publications do not mutate scheduled selection, persistent checkpoints, repetition history, reveal progression, or scheduled publication acknowledgement.
+10. The resident has no HTTP-service responsibility. Filesystem `publish` is its sole non-direct backend, and independent consumers do not own resident scheduling or publication commitment.
+11. Completed scheduled publication actions are filtered to the destination's explicitly configured audience before exposure; filtering does not grant filesystem or operational access.
+12. Failures and uncertain results must remain isolated and accurately reported without fabricating success, silently substituting content, or damaging unrelated committed state.
+
+Architectural changes must be evaluated against these invariants before implementation is accepted.
 
 ## Integration limits and non-goals
 
-The initial Version 0.1 implementation does not require:
+Version 0.1 does not require:
 
-- a general plugin framework;
-- a database server;
-- a content-editing interface;
-- a browser-based management console;
-- public network exposure;
-- remote administration;
-- arbitrary layout templates;
-- animated display content;
-- multiple synchronized e-paper displays;
-- external music or media playback;
-- background content retrieval from internet services.
+- A general plugin or dynamic backend framework.
+- A database server.
+- A content-editing interface.
+- A browser-based administration console.
+- Public network exposure.
+- Remote administration.
+- Arbitrary layout scripting or externally supplied themes.
+- Animated or continuously refreshed display content.
+- Multiple synchronized e-paper controllers.
+- External music or media playback.
+- Background content retrieval from internet services.
+- A general service-registration or custom supervision framework.
 
-The target architecture does include separately supervised publication consumers, but no general service-registration or service-management framework. Other capabilities may be reconsidered when a concrete use case justifies them.
+The defined architecture includes resident filesystem publication and independently supervised consumers, including `refrain-image-server`.
 
-Future integrations must not become prerequisites for displaying ordinary quotations.
+The deferred web companion, public presentation, and external action execution must not be implemented merely for anticipated future extensibility.
+
+Future integrations must preserve the resident's authority over daily selection and must not make ordinary quotation presentation dependent on cloud services, external consumers, or privileged remote interfaces.
+
+Additional capabilities require demonstrated needs and separately approved requirements.
