@@ -265,27 +265,9 @@ Reset does not use runtime configuration or infer custom storage paths.
 
 ### Purge
 
-`refrain --purge` removes the complete standard per-user Refrain installation after exact interactive confirmation of `PURGE REFRAIN`.
+`refrain --purge` deletes everything physically located within Refrain's standard configuration, state, cache, and publication directories. It must not follow symlinks, junctions, or other filesystem redirections or delete anything outside those directories.
 
-Both input and output must be interactive terminals. There is no noninteractive bypass.
-
-Cancellation must leave the installation unchanged.
-
-Purge removes the Refrain-owned standard directory trees for:
-
-- Configuration, including standard content and user assets.
-- Operational data, including state, publication checkpoints, global history, and filesystem publications.
-- Generated caches and artifacts.
-
-The complete standard publication root is within purge scope. Every contained destination directory, completed dataset, temporary file, and other object is subject to safe removal.
-
-Purge removes all contents physically within its owned deletion roots, not only recognized filenames or generated artifacts.
-
-It must not remove shared parent directories or unrelated user and application data.
-
-The runtime ownership lock and control metadata are kept outside the owned installation trees so deletion does not remove the lock used to exclude a concurrent resident.
-
-Configured custom state, content, artifact, and publication paths are never followed or deleted by purge.
+The command requires interactive standard input and output and exact confirmation of `PURGE REFRAIN`. There is no noninteractive bypass; cancellation leaves the installation unchanged.
 
 ### Filesystem deletion safety
 
