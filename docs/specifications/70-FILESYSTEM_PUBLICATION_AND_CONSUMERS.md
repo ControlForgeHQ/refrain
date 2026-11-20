@@ -529,34 +529,7 @@ Do not introduce a custom service manager, service-registration framework, manda
 
 ### Image-server consumer
 
-`refrain-image-server` is an independently supervised read-only HTTP consumer of filesystem publications.
-
-It replaces the retired integrated resident HTTP backend.
-
-The resident contains no `image-server` destination backend and hosts no HTTP listener.
-
-The image-server consumer reads and verifies configured `publish` destinations, then exposes their verified current images through the narrow HTTP interface defined in [Independent image-server delivery](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#independent-image-server-delivery).
-
-Its HTTP availability is independent of resident publication acknowledgement.
-
-A stopped, failing, or unavailable image-server consumer does not invalidate a successfully committed filesystem publication.
-
-The consumer must not:
-
-- Select literary content.
-- Advance reveal schedules.
-- Render or modify published image pixels.
-- Write to the publication root.
-- Acquire resident backend ownership.
-- Act as an authenticated runtime-control endpoint.
-
-A consumer may retain a previously verified image for explicitly stale presentation when its current dataset becomes unavailable.
-
-It must not silently claim an outdated image is the current verified publication.
-
-Configuration of independent consumers belongs to [Application Configuration](../schemas/CONFIGURATION.md).
-
-Consumer enablement in configuration is distinct from operating-system service enablement.
+The independently supervised `refrain-image-server` is specified in [Image Server](75-IMAGE_SERVER.md). It follows the consumer validation and service boundaries established in this specification.
 
 ### Consumer service boundaries
 

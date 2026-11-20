@@ -26,6 +26,8 @@ The service must not modify publication datasets, authoritative operational stat
 
 The service provides read-only HTTP access to verified published images.
 
+HTTP binding controls network exposure but provides neither authentication nor encryption. Network-accessible deployments must be limited to trusted local networks and must not be exposed directly to untrusted networks or the public Internet.
+
 HTTP requests must not permit filesystem traversal, publication modification, resident control, or disclosure of application configuration, content libraries, operational state, or credentials.
 
 Unavailable or invalid current publications must produce an explicit unavailable result rather than unverified image content.

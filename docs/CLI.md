@@ -58,6 +58,20 @@ Refresh is a synchronous one-shot control request, not another resident runtime.
 
 Refresh is a standalone control-client mode and uses the already-running resident's configuration and destinations; it does not select or start a runtime configuration. `--config PATH` cannot be combined with `--refresh`. Refresh failures return `1`; invalid arguments or conflicting modes return `2`. An unconfirmed outcome means publication may have occurred; do not retry automatically.
 
+## Independent image server
+
+```text
+refrain-image-server [--config PATH]
+```
+
+`refrain-image-server` runs as a standalone HTTP service. `--config PATH` selects the application configuration; when omitted, the standard configuration is used.
+
+Startup requires a valid `image-server` section identifying at least one configured `publish` destination. Missing or invalid required configuration prevents startup with an actionable diagnostic. Invalid optional settings follow the schema's warning-and-default rules.
+
+The service operates independently of the resident and can serve verified filesystem publications while the resident is stopped.
+
+See [Image Server](specifications/75-IMAGE_SERVER.md) for component requirements and [Application Configuration](schemas/CONFIGURATION.md#independent-image-server-settings) for configuration syntax.
+
 ## Presentation viewer
 
 `refrain-viewer` renders one Refrain presentation, fully revealed by default. With no arguments it uses the standard configuration, selects `@preview:2` (the medium built-in preview quotation), and opens a simple local window:

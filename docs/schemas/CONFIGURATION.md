@@ -222,7 +222,7 @@ image-server:
 
 This is a section fragment to use in an otherwise complete configuration. Omit the section when no image-server consumer is configured. Invalid optional host or port values produce warnings and use their defaults.
 
-Listener lifecycle, image retention, routing, and delivery semantics belong to [Independent image-server delivery](../specifications/60-DESTINATIONS_AND_RUNTIME_CONTROL.md#independent-image-server-delivery). The default loopback host does not permit remote-device connections. A network-accessible binding provides neither authentication nor encryption; use only on trusted local networks, without direct exposure to untrusted networks or the public Internet.
+Image-server behavior and network-exposure requirements are defined in [Image Server](../specifications/75-IMAGE_SERVER.md).
 
 ## Storage
 

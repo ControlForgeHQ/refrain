@@ -23,7 +23,7 @@ Version 0.1 has three resident backend types:
 
 `publish` is the sole non-direct resident backend. The resident does not host HTTP services, manage network clients, or require network availability for publication.
 
-Network image delivery belongs to the independently supervised `refrain-image-server` consumer, specified under [Independent image-server delivery](#independent-image-server-delivery).
+Network image delivery is provided by the independent [Image Server](75-IMAGE_SERVER.md).
 
 A valid application configuration contains a nonempty `destinations` sequence.
 
@@ -853,89 +853,6 @@ A working vendor demonstration alone does not prove reliable unattended operatio
 
 Do not claim another Raspberry Pi model is supported solely because it exposes compatible GPIO connections.
 
-## Independent image-server delivery
-
-Network image delivery is provided by an independent `refrain-image-server` consumer of filesystem publication datasets.
-
-It is not a resident display backend.
-
-The resident's `publish` backend remains the sole non-direct publication mechanism. Refrain does not construct, supervise, host, or depend on an HTTP listener.
-
-A `publish` destination's successful resident acknowledgement occurs after its complete filesystem publication has been committed according to [Filesystem Publication and Consumers](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md).
-
-Consumer availability does not alter that acknowledgement.
-
-The independent consumer is separately started, stopped, and supervised using normal operating-system service facilities.
-
-It reads Refrain-owned publication directories without modifying their contents, acquiring the resident ownership lock, or accessing authoritative operational selection state.
-
-The consumer must verify the current publication manifest, referenced image and metadata files, hashes, and applicable association constraints before exposing a dataset.
-
-It may maintain an in-memory representation of the latest verified image and its entity tag for each configured consumed destination.
-
-The HTTP service exposes one read-only resource per destination:
-
-`GET /display/<destination_id>/current`
-
-The configured destination ID is used unchanged as the resource identifier after validation.
-
-A successful request returns the destination's complete currently verified PNG representation with the correct HTTP content type.
-
-Support standard HTTP ETags derived from the served image content.
-
-A conditional request with matching `If-None-Match` may receive `304 Not Modified` without the image body.
-
-When no valid current image is available, return an explicit unavailable response such as `503 Service Unavailable`.
-
-A consumer may retain and serve a previously verified image only when its stale or unavailable status is explicitly represented. It must not silently represent obsolete content as the latest verified publication.
-
-A consumer reading during manifest replacement must use bounded retries and restart verification from the current manifest rather than combining files from different publication generations.
-
-The consumer must never expose a partially written image, mismatched metadata, or an unverified dataset.
-
-Consumer dataset validation and bounded reader recovery are owned by [Filesystem Publication and Consumers](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#dataset-writer-and-reader-validation).
-
-A failed HTTP listener, unavailable network, or disconnected client does not invalidate the resident's committed publication dataset.
-
-The consumer does not independently select quotations, render literary content, advance reveal stages, or acknowledge physical display.
-
-Network clients determine when to retrieve images and may miss intermediate reveal stages.
-
-The consumer does not manage client devices, polling intervals, display refresh, power management, or image retention on those devices.
-
-The service must remain responsive between publication changes without requiring the resident scheduler to process HTTP requests.
-
-Keep the HTTP surface narrowly scoped and read-only. Do not expose application configuration, content-library files, filesystem traversal, operational state, credentials, or administrative operations.
-
-Use appropriately bounded standard HTTP facilities. Prefer the Python standard library unless an additional dependency has a demonstrated benefit.
-
-HTTP binding controls network exposure and must not be treated as authentication or encryption. A network-accessible listener is intended only for explicitly trusted local-network deployments and must not be directly exposed to untrusted networks or the public Internet.
-
-Configuration syntax for the independently supervised consumer belongs to [Application Configuration](../schemas/CONFIGURATION.md). Do not interpret legacy integrated-listener configuration as authorization for the resident to host HTTP.
-
-The resident must remain usable when the independent consumer is disabled, absent, stopped, or failing.
-
-Automated consumer tests must cover:
-
-- independent startup and shutdown;
-- correct retrieval of configured destination images;
-- content type and image bytes;
-- per-destination ETags and conditional GET requests;
-- publication replacement and changed ETags;
-- consistent reads during concurrent manifest replacement;
-- absent, corrupt, or unverified datasets;
-- bounded retry exhaustion;
-- explicitly stale representation when permitted;
-- invalid methods and paths;
-- malformed requests and disconnected clients;
-- listener bind and startup failures;
-- complete separation from resident backend and selection state;
-- operation without physical display hardware or external network services.
-
-Use locally allocated test ports. Do not assume an externally reachable network or a fixed free port.
-
-Do not add another network-control API, independent quotation-selection service, or custom service supervisor.
-
 ## Retained content and delivery failures
 
 E-paper retains its displayed image without continuous power.
@@ -947,8 +864,6 @@ Do not clear a physical display merely because a recoverable software error occu
 An incomplete or failed replacement must not intentionally destroy a healthy existing e-paper image.
 
 Filesystem publication preserves its last verified complete dataset according to the manifest commit and recovery contract. The resident does not keep a separate authoritative network-image history.
-
-An independent image-server consumer may retain its last verified image in memory while delivery is temporarily unavailable, subject to its explicit stale-status behavior.
 
 Network consumers and physical receiving devices are responsible for retention of already displayed content when publication or connectivity is unavailable.
 
