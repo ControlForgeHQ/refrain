@@ -148,7 +148,7 @@ Resource and palette identifiers use the shared case-sensitive ASCII syntax `[A-
 
 `@default` and `@builtin` are references within the corresponding category. `none` is a reserved suppression value for backgrounds and decorations only; it is not a generic null, font suppression, or color suppression value.
 
-Named-pool declarations and reserved membership are defined in [Application Configuration](CONFIGURATION.md#resources-and-named-pools). Pool expansion, equal-probability selection among distinct candidates, fallback from empty preferences, and diagnostic behavior belong to [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection). Referencing a pool does not embed or define it in an entry.
+Named-pool declarations and reserved membership are defined in [Application Configuration](CONFIGURATION.md#resources-and-named-pools). Pool expansion and invalid-member diagnostics are specified in [Named pools and membership](../specifications/20-CONTENT_AND_CONFIGURATION.md#named-pools-and-membership). Artistic selection and fallback are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence).
 
 A syntactically valid but unavailable font, background, or decoration preference does not invalidate the entry. This permits sharing libraries across installations with different resources. Absence of an entry preference permits the established lower-level preference or automatic selection; it does not itself specify a concrete selected resource.
 
