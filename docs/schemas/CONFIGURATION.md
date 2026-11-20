@@ -208,7 +208,7 @@ The optional top-level `image-server` mapping configures the separately supervis
 | Field | Type | Default | Constraint |
 |---|---|---|---|
 | `destinations` | Nonempty sequence of strings | Required; no default | Unique IDs of configured `publish` destinations. |
-| `host` | String | `"127.0.0.1"` | Nonempty bind address or hostname. |
+| `host` | String | `"127.0.0.1"` | IPv4 or IPv6 address literal, or a hostname valid after IDNA conversion. Hostnames may have one trailing dot; the converted name must be 1–253 ASCII characters, with dot-separated labels of 1–63 characters containing letters, digits, or internal hyphens. |
 | `port` | Integer | `8080` | 1 through 65535, inclusive. |
 
 Every `destinations` member must identify an existing configured `publish` destination. Duplicates, non-string values, unknown IDs, non-`publish` IDs, and `@all` are invalid. No destination is included implicitly.
