@@ -14,7 +14,7 @@ refrain [--config PATH]
 
 With no mode option, `refrain` starts the normal resident runtime. `--config PATH` selects the application configuration; when omitted, the standard Refrain configuration path is used. The selected configuration file must exist. Normal startup does not substitute the packaged default configuration, initialize installation directories, or copy sample content.
 
-The resident owns its configured backends and display resources. A second normal or demo invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). `--config` is the only normal-mode option apart from `-h`/`--help`, which displays command help and exits. Orderly shutdown returns exit status `0`; reported startup or runtime errors return `1`. Invalid arguments or conflicting modes return `2`.
+The resident owns its configured backends and display resources. A second normal invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). `--config` is the only normal-mode option apart from `-h`/`--help`, which displays command help and exits. Orderly shutdown returns exit status `0`; reported startup or runtime errors return `1`. Invalid arguments or conflicting modes return `2`.
 
 ### Accelerated demo
 
@@ -64,13 +64,13 @@ The primary `refrain --refresh` command requires an already-running normal Refra
 
 Refresh republishes the runtime's current scheduled presentation and does not require destinations to support transient publication of externally supplied images, such as `refrain-viewer --push`.
 
-Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all participating destinations completes or fails. Exit status zero means every included destination succeeded. Busy, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. Refresh does not start Refrain or access configured backends independently.
+Refresh is a synchronous one-shot control request, not another resident runtime. It reports entry into the accepted refresh/publication phase before waiting on backend work and remains attached until publication to all participating destinations completes or fails. Exit status zero means every included destination succeeded. No-target, busy, stale-presentation, failed, unavailable-runtime, and unconfirmed outcomes exit nonzero. A refresh is rejected as stale before publication when its prepared selection, reveal stage, effective presentation, or destination requirements no longer match the resident's currently required presentation. Refresh does not start Refrain or access configured backends independently.
 
 Refresh is a standalone control-client mode and uses the already-running resident's configuration and destinations; it does not select or start a runtime configuration. `--config PATH` cannot be combined with `--refresh`. Refresh failures return `1`; invalid arguments or conflicting modes return `2`. An unconfirmed outcome means publication may have occurred; do not retry automatically.
 
 ## Presentation viewer
 
-`refrain-viewer` renders one fully revealed Refrain presentation. With no arguments it uses the standard configuration, selects `@preview:2` (the medium built-in preview quotation), and opens a simple local window:
+`refrain-viewer` renders one Refrain presentation, fully revealed by default. With no arguments it uses the standard configuration, selects `@preview:2` (the medium built-in preview quotation), and opens a simple local window:
 
 ```text
 refrain-viewer
@@ -87,7 +87,7 @@ refrain-viewer --image candidate.png
 refrain-viewer --image candidate.png --window
 ```
 
-Version 0.1 accepts only a valid, single-frame 8-bit RGB PNG with positive dimensions. The local window uses the existing viewer and may fit a private desktop copy to the screen; the supplied file and its pixels are not changed. This mode does not load application configuration, content, assets, runtime destinations, or persistence.
+Version 0.1 accepts only a valid, single-frame 8-bit RGB PNG with width 1–3840 pixels and height 1–2400 pixels, independently. Square and portrait images are valid. The local window uses the existing viewer and may fit a private desktop copy to the screen; the supplied file and its pixels are not changed. This mode does not load application configuration, content, assets, runtime destinations, or persistence.
 
 The finished image may also be published through the existing transient push path:
 
@@ -130,6 +130,14 @@ Select an entry and an optional 1-based quotation number with:
 Quotation numbers are positive integers starting at `1`; if omitted, quotation `1` is selected. The built-in `@preview` pseudo-entry provides its documented short, medium, and long preview quotations: bare `@preview` selects `@preview:1`. Without `--entry`, the viewer selects `@preview:2`.
 
 Malformed selectors, unknown entries, and quotation numbers outside the selected entry are errors. Selecting an entry in the viewer ignores normal eligibility, priority, repetition history, and scheduling.
+
+### Reveal-stage inspection
+
+Use `--reveal-stage N` to render one cumulative reveal stage of an explicitly selected quotation. `N` is a zero-based integer index into the quotation's resolved reveal-stage sequence; stage `0` is the first stage. Fields revealing simultaneously share a stage, and absent optional fields create no stages. Negative, malformed, and out-of-range indexes are errors.
+
+`--reveal-stage` requires an explicit `--entry`, including for `@preview`. Without this option, viewer presentations are fully revealed. It affects only the locally rendered image and does not advance or persist resident reveal progress.
+
+`--reveal-stage` may be combined with ordinary local inspection, `--output`, or `--render-as`. It cannot be combined with `--publication`, `--image`, `--push`, or `--list-destinations`.
 
 ### Presentation overrides
 
@@ -222,7 +230,7 @@ Local inspection and export accept these controls:
 | Option | Behavior |
 |---|---|
 | `--aspect ASPECT` | Select a supported presentation aspect: `4:3`, `5:3`, `16:9`, or `16:10`. |
-| `--resolution WIDTH HEIGHT` | Set requested output width and height in positive integer pixels. |
+| `--resolution WIDTH HEIGHT` | Set requested output width (1–3840) and height (1–2400) in integer pixels. Square and portrait outputs are valid. |
 | `--render-as DESTINATION_ID` | Use a destination's configured output specification and apply its visual post-processing. |
 | `--output PATH` | Write the completed output PNG to `PATH`. |
 | `--window` | Open the simple local viewer window. |
@@ -236,7 +244,7 @@ refrain-viewer --render-as waveshare-13in3-e --output panel-preview.png
 refrain-viewer --render-as portrait --window
 ```
 
-This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `image-server` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. The Waveshare PNG retains the resolved palette indices; the viewer creates an RGB copy only for local-window display. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected. Visual post-processing currently supports only `window`, `image-server`, and `waveshare-13in3-e`; a configured `publish` destination is rejected by `--render-as`.
+This is local inspection/export only: it does not query the resident runtime, read runtime persistence, or construct configured display backends. `window` and `publish` preserve pixels; `waveshare-13in3-e` previews its panel palette quantization and dithering. The Waveshare PNG retains the resolved palette indices; the viewer creates an RGB copy only for local-window display. `--render-as` is mutually exclusive with `--aspect` and `--resolution`; it cannot be combined with `--image`, `--push`, or standalone `--list-destinations`. Presentation selection and overrides, `--config`, `--output`, and `--window` remain valid. An identifier not present in the selected configuration is rejected. Visual post-processing supports `window`, `publish`, and `waveshare-13in3-e`.
 
 `--output` writes the PNG without opening a window unless `--window` is also supplied. Without `--output`, the normal default behavior opens the simple local viewer window.
 
@@ -256,7 +264,13 @@ refrain-viewer [presentation selection and overrides...] --push TARGET
 
 `TARGET` is `@all` or one exact configured destination ID returned by `--list-destinations`. Identifiers are supplied by the runtime and are opaque. `@all` means every configured destination still participating in publication; it skips intentionally withdrawn destinations but does not silently omit failed or unavailable destinations. A bare `all` is an ordinary destination ID and has no selector meaning.
 
+If target selection yields no participating destinations, the command fails with an actionable no-target result rather than reporting success.
+
 Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected, and an explicitly selected intentionally withdrawn destination is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push @all` is likewise rejected before rendering if any participating destination does not support it; it does not omit unsupported or failed destinations, and excludes only those intentionally withdrawn. The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
+
+A transient request supports at most 64 selected destinations and 64 complete image variants. Each variant must be a single-frame RGB PNG, at most 3840 pixels wide and 2400 pixels high, with no more than 9,216,000 decoded pixels or 32 MiB of encoded data. The aggregate encoded image data per request must not exceed 192 MiB.
+
+The resident must accept metadata preflight before image transfer. Invalid destinations, unsupported capabilities, mismatched geometry, exceeded limits, and unavailable immediate admission are rejected before backend publication begins.
 
 `--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, `--render-as`, and `--list-destinations`. Presentation selection and presentation overrides, including `--config` and `--entry`, remain valid with push.
 
