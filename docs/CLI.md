@@ -14,7 +14,7 @@ refrain [--config PATH]
 
 With no mode option, `refrain` starts the normal resident runtime. `--config PATH` selects the application configuration; when omitted, the standard Refrain configuration path is used. The selected configuration file must exist. Normal startup does not substitute the packaged default configuration, initialize installation directories, or copy sample content.
 
-The resident owns its configured backends and display resources. A second normal invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). `--config` is the only normal-mode option apart from `-h`/`--help`, which displays command help and exits. Orderly shutdown returns exit status `0`; reported startup or runtime errors return `1`. Invalid arguments or conflicting modes return `2`.
+The resident owns its configured backends and display resources. A second normal invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup behavior is defined in [Startup and daily transitions](specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#startup-and-daily-transitions); selection and recovery in [Selection and Persistence](specifications/30-SELECTION_AND_PERSISTENCE.md); and backend failure behavior in [Failure handling and retries](specifications/60-DESTINATIONS_AND_RUNTIME_CONTROL.md#failure-handling-and-retries). `--config` is the only normal-mode option apart from `-h`/`--help`, which displays command help and exits. Orderly shutdown returns exit status `0`; reported startup or runtime errors return `1`. Invalid arguments or conflicting modes return `2`.
 
 ### Initialize
 
@@ -22,7 +22,7 @@ The resident owns its configured backends and display resources. A second normal
 refrain --initialize
 ```
 
-Initialization is noninteractive and repeatable. It creates or reuses the standard per-user installation, including the standard publication root without replacing existing contents, and does not start the resident runtime. It operates on standard installation paths; runtime storage settings do not redirect it. A conflicting resident owner prevents the operation and produces an actionable diagnostic. Successful initialization leaves existing user configuration and content intact according to the [installation contract](ARCHITECTURE.md#application-paths-and-initialization); failures report the affected operation and path.
+Initialization is noninteractive and repeatable. It creates or reuses the standard per-user installation, including the standard publication root without replacing existing contents, and does not start the resident runtime. It operates on standard installation paths; runtime storage settings do not redirect it. A conflicting resident owner prevents the operation and produces an actionable diagnostic. Successful initialization leaves existing user configuration and content intact according to the [installation contract](specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md#initialization); failures report the affected operation and path.
 
 `--config PATH` cannot be combined with `--initialize`. Successful initialization returns `0`; a reported initialization failure returns `1`, and invalid arguments return `2`.
 
@@ -32,7 +32,7 @@ Initialization is noninteractive and repeatable. It creates or reuses the standa
 refrain --reset
 ```
 
-Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. Both input and output must be interactive terminals, and the confirmation must be exactly `RESET` (case-sensitive, without extra spaces). There is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset preserves publication storage and does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Architecture](ARCHITECTURE.md#application-paths-and-initialization).
+Reset is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. Both input and output must be interactive terminals, and the confirmation must be exactly `RESET` (case-sensitive, without extra spaces). There is no noninteractive bypass. Cancellation leaves the installation unchanged. Reset preserves publication storage and does not use configured storage paths or remove custom storage locations. Its deletion scope and ownership protections are defined in [Reset](specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md#reset).
 
 `--config PATH` cannot be combined with `--reset`. Successful reset returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`.
 
@@ -44,7 +44,7 @@ refrain --purge
 
 Purge is an interactive destructive operation on the standard per-user installation and must be run while Refrain is stopped. Both input and output must be interactive terminals, and the confirmation must be exactly `PURGE REFRAIN` (case-sensitive, with one space between the words and no extra spaces). There is no noninteractive bypass. Cancellation leaves the installation unchanged. Purge includes the standard user assets and publication root but does not follow configured custom paths. Stop any independent consumer that may read publication data before purging it.
 
-`--config PATH` cannot be combined with `--purge`. Successful purge returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`. See [Architecture](ARCHITECTURE.md#application-paths-and-initialization) for deletion scope and safety.
+`--config PATH` cannot be combined with `--purge`. Successful purge returns `0`; cancellation, a noninteractive terminal, or a reported operation failure returns `1`. Invalid arguments return `2`. See [Purge](specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md#purge) for deletion scope and safety.
 
 ## Resident runtime control
 
@@ -225,7 +225,7 @@ Local inspection and export accept these controls:
 | `--output PATH` | Write the completed output PNG to `PATH`. |
 | `--window` | Open the simple local viewer window. |
 
-When omitted, the aspect defaults to `16:10` and the resolution uses the full design canvas for the selected aspect. The [architecture](ARCHITECTURE.md#image-spaces-and-output-geometry) defines the design-canvas, presentation-canvas, and output-image geometry; the CLI does not redefine that pipeline.
+When omitted, the aspect defaults to `16:10` and the resolution uses the full design canvas for the selected aspect. The [Image spaces and raster geometry section](specifications/50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry) defines the design-canvas, presentation-canvas, and output-image geometry; the CLI does not redefine that pipeline.
 
 `--render-as` resolves the exact destination ID from the viewer's validated configuration, then uses its declared aspect ratio and requested resolution for the normal viewer rendering pipeline. It applies the destination's visual post-processing to the completed output image before local display or PNG export. For example:
 

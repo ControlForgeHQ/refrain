@@ -123,7 +123,7 @@ decorations:
       complete: ["@builtin"]
 ```
 
-The installed distribution supplies `config.default.yaml` as an editable starting point. Its explicit selections are not universal defaults for omitted fields. In particular, its `@builtin` pools and italic source-face preference are configured choices. Initialization and preservation of installed configuration are defined in [CLI](../CLI.md#initialize) and [Architecture](../ARCHITECTURE.md#application-paths-and-initialization).
+The installed distribution supplies `config.default.yaml` as an editable starting point. Its explicit selections are not universal defaults for omitted fields. In particular, its `@builtin` pools and italic source-face preference are configured choices. Initialization and preservation of installed configuration are defined in [CLI](../CLI.md#initialize) and [Initialization](../specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md#initialization).
 
 ## Destinations
 
@@ -199,7 +199,7 @@ All values are case-sensitive strings. A supplied `overrides` value must be a ma
 
 These fields do not accept pool references, fallback lists, direct RGB values, booleans, or nested QR mappings. Background and decoration overrides cannot select alternative resources. Unknown keys, wrong types, unknown font or palette identifiers, and unsupported values are configuration errors, with no warning-and-ignore or fallback substitution.
 
-Overrides affect scheduled image preparation. They do not define independent artistic selection or transformations of finished transient images. Decoration suppression uses global insets and quotation font bounds, including their documented defaults; background suppression does not reset geometry. A decoration color has no rendering effect without a decoration layer. Runtime application, face resolution, grouping, and geometry validation belong to [Architecture](../ARCHITECTURE.md#prepared-images).
+Overrides affect scheduled image preparation. They do not define independent artistic selection or transformations of finished transient images. Decoration suppression uses global insets and quotation font bounds, including their documented defaults; background suppression does not reset geometry. A decoration color has no rendering effect without a decoration layer. Runtime application, face resolution, grouping, and geometry validation belong to [Presentation and Rendering](../specifications/50-PRESENTATION_AND_RENDERING.md).
 
 ## Independent image-server settings
 
@@ -259,7 +259,7 @@ The standard storage-directory defaults are:
 
 On Linux, an unset, empty, or nonabsolute `XDG_STATE_HOME` uses `~/.local/state`; the corresponding `XDG_CACHE_HOME` fallback is `~/.cache`. These environment variables are host path inputs, not YAML fields.
 
-Platform path resolution and storage lifecycles belong to [Architecture](../ARCHITECTURE.md#application-paths-and-initialization).
+Platform path resolution and storage lifecycles belong to [Installation and Service Operation](../specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md).
 
 A supplied `storage` value must be a mapping. An invalid `storage.content` value produces a warning and uses its default. Invalid explicitly supplied `state`, `artifacts`, or `publish` values are errors; they do not fall back to platform paths. Unknown storage fields are warned about and ignored.
 
@@ -301,7 +301,7 @@ scheduling:
 
 Reveal times must be on the same local calendar date as the configured day start and must not precede it.
 
-Per-entry reveal declarations are defined in [Content Entries](CONTENT.md#per-entry-reveal-overrides). Display-date calculation, cumulative stages, commitment, clock changes, and missed events belong to [Architecture](../ARCHITECTURE.md#progressive-reveal).
+Per-entry reveal declarations are defined in [Content Entries](CONTENT.md#per-entry-reveal-overrides). Display-date calculation, cumulative stages, clock changes, and missed events belong to [Scheduling and Application Lifecycle](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md); commitment belongs to [Selection commitment](../specifications/30-SELECTION_AND_PERSISTENCE.md#selection-commitment).
 
 ## Presentation defaults
 
@@ -333,7 +333,7 @@ Insets are measured inward from the aspect-specific design canvas, not the reque
 
 For the active design canvas, `left + right` must be less than its width and `top + bottom` less than its height. The resulting literary rectangle must have positive width and height.
 
-A selected decoration's complete `presentation_insets` replaces the global mapping; otherwise the global mapping applies. Asset-side declarations are defined in [Assets](ASSETS.md#presentation-insets). Content entries cannot directly specify insets. Scaling, rounding, composition, and fitting requirements belong to [Architecture](../ARCHITECTURE.md#literary-presentation-geometry).
+A selected decoration's complete `presentation_insets` replaces the global mapping; otherwise the global mapping applies. Asset-side declarations are defined in [Assets](ASSETS.md#presentation-insets). Content entries cannot directly specify insets. Scaling, rounding, composition, and fitting requirements belong to [Literary composition and fitting](../specifications/50-PRESENTATION_AND_RENDERING.md#literary-composition-and-fitting).
 
 ### Information view
 
@@ -343,7 +343,7 @@ A selected decoration's complete `presentation_insets` replaces the global mappi
 
 `information_view` must be a mapping when supplied. A duration of `0` disables automatic startup information-view presentation; `1` through `300` requests that duration. Strings, booleans, floating-point values, negative values, and values greater than 300 are invalid, warn, and use `60`.
 
-This is a startup-presentation setting, not an external request interface or an additional schedule. Timing, initial publication attempts, and lifecycle belong to [Architecture](../ARCHITECTURE.md#information-view).
+This is a startup-presentation setting, not an external request interface or an additional schedule. Timing, initial publication attempts, and lifecycle belong to [Startup information-view timing](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#startup-information-view-timing).
 
 ### Literary QR
 
@@ -355,7 +355,7 @@ This is a startup-presentation setting, not an external request interface or an 
 
 This setting controls literary presentations and does not affect the standalone information view. A selected decoration may suppress QR through its asset-side `qr_ready` field; a destination may suppress it using `overrides.qr: "none"`.
 
-The QR payload, placement, and size are not configurable through application configuration or content entries. QR generation, output-dependent availability, conditional artwork, placement, and raster rules are defined in [Architecture](../ARCHITECTURE.md#qr-generation-and-conditional-artwork). Decoration positioning fields are defined in [Assets](ASSETS.md#qr-readiness-and-positioning).
+The QR payload, placement, and size are not configurable through application configuration or content entries. QR generation, output-dependent availability, conditional artwork, placement, and raster rules are defined in [QR placement and conditional artwork](../specifications/50-PRESENTATION_AND_RENDERING.md#qr-placement-and-conditional-artwork). Decoration positioning fields are defined in [Assets](ASSETS.md#qr-readiness-and-positioning).
 
 ## Palette
 
@@ -424,13 +424,13 @@ The `@` reference syntax applies only in supported resource-selection positions.
 
 ### Pool validity and effective membership
 
-Invalid pool names or malformed definitions are diagnosed without discarding unrelated valid definitions. Malformed or unknown references and invalid or unavailable identifiers warn and contribute no candidates. Duplicate resolved identifiers contribute one candidate, retaining the first occurrence. Duplicate font and color identifiers are diagnosed. Cyclic pool references are permitted; their expansion is specified in [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection).
+Invalid pool names or malformed definitions are diagnosed without discarding unrelated valid definitions. Malformed or unknown references and invalid or unavailable identifiers warn and contribute no candidates. Duplicate resolved identifiers contribute one candidate, retaining the first occurrence. Duplicate font and color identifiers are diagnosed. Cyclic pool references are permitted; their expansion is specified in [Named pools and membership](../specifications/20-CONTENT_AND_CONFIGURATION.md#named-pools-and-membership).
 
 Each named pool retains its actual expanded membership, including an empty `default`. Runtime fallbacks do not insert `none` or `black` into an empty named pool. An explicit reference to that pool remains empty; it does not acquire an implicit `builtin` pool.
 
 A missing or malformed required `fonts.pools.default`, including an explicitly empty sequence, is an error. Invalid or unavailable font members are excluded with warnings. A nonempty font declaration whose usable expansion is empty does not by itself prohibit operation with an otherwise usable explicit content or decoration font preference. When no configured font candidate is usable, ordinary preparation uses the unconditional packaged `source-sans-3/regular` fallback without adding it to any named pool.
 
-Missing background or decoration defaults use `["none"]`. Missing color defaults use `["black"]`. Invalid optional default declarations warn; unusable members are excluded. Automatic background, decoration, and color fallbacks are defined in [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection), separately from named-pool membership.
+Missing background or decoration defaults use `["none"]`. Missing color defaults use `["black"]`. Invalid optional default declarations warn; unusable members are excluded. Automatic background, decoration, and color fallbacks are defined in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence), separately from named-pool membership.
 
 ### Global font faces
 
@@ -444,7 +444,7 @@ The optional `fonts.faces` mapping accepts only these roles:
 
 Values match `[A-Za-z0-9][A-Za-z0-9_-]*` and are case-sensitive identifiers, not font paths or pool references. Roles may be omitted; omission expresses no preference. There is no implicit italic preference.
 
-A malformed mapping, unsupported role, or invalid identifier warns and causes the mapping to be ignored without invalidating the font registry. A syntactically valid identifier may be absent from the ultimately selected bundle. Its resolution and `regular` fallback belong to [Architecture](../ARCHITECTURE.md#font-selection).
+A malformed mapping, unsupported role, or invalid identifier warns and causes the mapping to be ignored without invalidating the font registry. A syntactically valid identifier may be absent from the ultimately selected bundle. Its resolution and `regular` fallback belong to [Font bundles, role faces and recovery](../specifications/50-PRESENTATION_AND_RENDERING.md#font-bundles-role-faces-and-recovery).
 
 `fonts.faces` supplies global role preferences; it does not register faces, change bundle selection, or add candidates to pools.
 

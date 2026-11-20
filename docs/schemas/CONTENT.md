@@ -75,7 +75,7 @@ Use short, descriptive, stable identifiers, such as `"amazing-grace"`. File name
 
 `quotations` is a nonempty sequence. Each member must be a string containing meaningful text. Empty and whitespace-only strings are invalid; an invalid member invalidates the entry rather than silently removing a quotation.
 
-Quotation strings retain parsed Unicode content, punctuation, and intended line breaks. There is no project-defined maximum quotation count or arbitrary quotation-length limit. A valid quotation may still fail presentation validation or image preparation if it cannot fit the supported layout. Quotation identity and repetition tracking are defined by [Architecture](../ARCHITECTURE.md#quotation-identity), separately from displayed text.
+Quotation strings retain parsed Unicode content, punctuation, and intended line breaks. There is no project-defined maximum quotation count or arbitrary quotation-length limit. A valid quotation may still fail presentation validation or image preparation if it cannot fit the supported layout. Quotation identity is defined by [Entry and quotation identity](../specifications/20-CONTENT_AND_CONFIGURATION.md#entry-and-quotation-identity) and repetition tracking by [Repetition cleanup and pool exhaustion](../specifications/30-SELECTION_AND_PERSISTENCE.md#repetition-cleanup-and-pool-exhaustion), separately from displayed text.
 
 `source` identifies where a quotation originates. `attribution` identifies the person, group, or other entity to which it is attributed. Both are optional; each must be a nonblank string when supplied, containing at least one non-whitespace character. Leading and trailing whitespace in otherwise valid metadata is preserved without trimming or normalization. They are not restricted to song titles or artists:
 
@@ -118,7 +118,7 @@ A malformed action is discarded with a warning, without rejecting its entry or o
 
 These recovery rules do not repair invalid YAML or override required-entry validation. Invalid YAML still excludes the file.
 
-Destination-audience filtering, capture in the committed selection, snapshot recovery, and publication inclusion are owned by [Architecture](../ARCHITECTURE.md#destination-specific-metadata-and-audiences). Publication serialization is outside this content schema.
+Capture in the committed selection and snapshot recovery are owned by [Selection and Persistence](../specifications/30-SELECTION_AND_PERSISTENCE.md); destination-audience filtering and publication inclusion are owned by [Destination metadata and audience filtering](../specifications/70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#destination-metadata-and-audience-filtering). Publication serialization is outside this content schema.
 
 ## Priority
 
@@ -128,7 +128,7 @@ Destination-audience filtering, capture in the committed selection, snapshot rec
 priority: -5
 ```
 
-Priority is inherited by every quotation. Its place after date specificity and repetition eligibility belongs to [Architecture](../ARCHITECTURE.md#selection-priority).
+Priority is inherited by every quotation. Its place after date specificity and repetition eligibility belongs to [Candidate identity and priority](../specifications/30-SELECTION_AND_PERSISTENCE.md#candidate-identity-and-priority).
 
 ## Presentation preferences
 
@@ -290,7 +290,7 @@ eligibility:
 
 Recurring February 29 is valid and matches only leap years. A full date such as February 29 in a non-leap year is invalid. `day: 31` is valid and does not match months without a 31st day. No arbitrary upper limit on the positive year field is defined here.
 
-Matching, highest-specificity interpretation (year-month-day, month-day, day, month, ordinary), display-date calculation, priority, repetition, and pool exhaustion are owned by [Architecture](../ARCHITECTURE.md#content-eligibility-and-selection).
+Matching, highest-specificity interpretation (year-month-day, month-day, day, month, ordinary), priority, repetition, and pool exhaustion are owned by [Selection and Persistence](../specifications/30-SELECTION_AND_PERSISTENCE.md); display-date calculation is owned by [Civil time and logical-date evaluation](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#civil-time-and-logical-date-evaluation).
 
 ## Per-entry reveal overrides
 

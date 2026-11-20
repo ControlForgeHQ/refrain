@@ -69,7 +69,7 @@ An invalid optional face is diagnosed and excluded individually, leaving an othe
 
 Every referenced face must obey the package path-confinement rules. Optional-face recovery does not permit references outside the package or relax validation of the required `regular` face.
 
-Bundled font directories retain their applicable license and copyright files. Redistribution requirements are described in [Engineering](../ENGINEERING.md#font-loading-and-resolution).
+Bundled font directories retain their applicable license and copyright files. Redistribution requirements are described in [Font bundles, role faces and recovery](../specifications/50-PRESENTATION_AND_RENDERING.md#font-bundles-role-faces-and-recovery).
 
 ### Literary-role face preferences
 
@@ -77,7 +77,7 @@ The optional `font_faces` mapping in a font or decoration manifest accepts only 
 
 A malformed mapping, unknown role, or invalid face identifier produces a warning and causes the complete preference mapping to be ignored without excluding the containing asset. A syntactically valid preference may name a face absent from the selected bundle.
 
-The `faces` mapping registers files; `font_faces` expresses role preferences. A role preference does not select a bundle. Winning-role resolution and fallback to that bundle's `regular` face are specified in [Architecture](../ARCHITECTURE.md#font-selection).
+The `faces` mapping registers files; `font_faces` expresses role preferences. A role preference does not select a bundle. Winning-role resolution and fallback to that bundle's `regular` face are specified in [Font bundles, role faces and recovery](../specifications/50-PRESENTATION_AND_RENDERING.md#font-bundles-role-faces-and-recovery).
 
 ### Bundled font bundles
 
@@ -178,7 +178,7 @@ Validation uses the design canvases corresponding to configured destination aspe
 
 Missing edges, negative values, booleans, fractional values, strings, and null are invalid. Invalid inset metadata excludes the decoration without affecting unrelated valid resources.
 
-The literary rectangle contains the complete quotation and any source and attribution, including fields awaiting reveal. Insets do not reserve QR space or detect artwork overlap. Authors must check the resulting composition. Geometry resolution, scaling, and stable fitting follow [Architecture](../ARCHITECTURE.md#literary-presentation-geometry).
+The literary rectangle contains the complete quotation and any source and attribution, including fields awaiting reveal. Insets do not reserve QR space or detect artwork overlap. Authors must check the resulting composition. Geometry resolution, scaling, and stable fitting follow [Literary composition and fitting](../specifications/50-PRESENTATION_AND_RENDERING.md#literary-composition-and-fitting).
 
 ### Resource and color preferences
 
@@ -192,7 +192,7 @@ Pool names use the shared identifier syntax. A malformed or unavailable optional
 
 Malformed outer values and invalid or unavailable members are diagnosed and ignored without excluding an otherwise usable asset. Valid members remain usable; duplicates do not add weight. A preference with no usable candidates expresses no effective preference. Omitted preferences express no preference.
 
-Palette definitions and pool declarations are specified in [Application Configuration](CONFIGURATION.md#palette). Selection precedence and fallthrough are specified in [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection), with decoration-color resolution in [Decoration tinting](../ARCHITECTURE.md#decoration-tinting).
+Palette definitions and pool declarations are specified in [Application Configuration](CONFIGURATION.md#palette). Selection precedence and fallthrough are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence), with decoration-color resolution in [Colors and tinting](../specifications/50-PRESENTATION_AND_RENDERING.md#colors-and-tinting).
 
 ### Tintability
 
@@ -219,7 +219,7 @@ Directional offsets are nonnegative integer distances inward from the named desi
 
 Malformed positioning, conflicting anchors, or an out-of-bounds complete allocation suppresses QR for that preparation with an actionable warning. The decoration remains usable. No precedence, clamping, alternate position, or position fallback is inferred.
 
-Effective availability also requires sufficient presentation-canvas pixels. Availability is resolved before selecting conditional artwork. QR rasterization and composition, fixed encoding, rounding, and output-dependent viability are specified in [Architecture](../ARCHITECTURE.md#qr-generation-and-conditional-artwork).
+Effective availability also requires sufficient presentation-canvas pixels. Availability is resolved before selecting conditional artwork. QR rasterization and composition, fixed encoding, rounding, and output-dependent viability are specified in [QR placement and conditional artwork](../specifications/50-PRESENTATION_AND_RENDERING.md#qr-placement-and-conditional-artwork).
 
 ## Image layers
 
@@ -239,7 +239,7 @@ Values are case-sensitive. Layers composite in declaration order. All decoration
 
 Full-canvas artwork should use the 3840 × 2400 reference-quality authoring size. Smaller PNGs are accepted but may lose sharpness when enlarged. Source dimensions do not establish an alternate reference coordinate system.
 
-Transformations use the design canvas. The completed graphical composition is scaled to the presentation canvas; an aspect-mismatched requested output is produced through the complete-image resize specified in [Architecture](../ARCHITECTURE.md#image-spaces-and-output-geometry).
+Transformations use the design canvas. The completed graphical composition is scaled to the presentation canvas; an aspect-mismatched requested output is produced through the complete-image resize specified in [Image spaces and raster geometry](../specifications/50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry).
 
 ### Contain and cover
 
@@ -289,7 +289,7 @@ The four distances partition the actual source into nine regions and also specif
 
 Corners retain their widths and heights. Horizontal edge segments adapt along their length using `slices.horizontal`; vertical edge segments use `slices.vertical`. `stretch` adapts length; `crop` retains scale and trims opposite ends symmetrically. A crop destination longer than its source segment is invalid. The center stretches in both dimensions. Edge tiling is unsupported.
 
-The design canvas must accommodate opposing preserved edge thicknesses. Transformation viability depends on the selected canvas as well as source dimensions. Shared boundaries and rounding follow [Architecture](../ARCHITECTURE.md#decoration-layers).
+The design canvas must accommodate opposing preserved edge thicknesses. Transformation viability depends on the selected canvas as well as source dimensions. Shared boundaries and rounding follow [Graphical layers and transformations](../specifications/50-PRESENTATION_AND_RENDERING.md#graphical-layers-and-transformations).
 
 ### Decoration conditions
 
@@ -319,7 +319,7 @@ Recoverable optional metadata uses only its stated fallback: ignored preferences
 
 Warnings must identify the affected file/resource and field where applicable and explain exclusion, ignoring, or fallback.
 
-Resource-selection fallback, regular-face fallback, paper-white or omitted-artwork recovery, complete-image cache reuse, and canonical-selection stability follow [Architecture](../ARCHITECTURE.md#presentation-and-rendering). Registration does not require membership in a default pool. Empty pool membership is not repaired by adding fallback identifiers; pool validity is specified in [Application Configuration](CONFIGURATION.md#pool-validity-and-effective-membership). Strict viewer override behavior is specified in [CLI](../CLI.md#presentation-overrides).
+Resource-selection fallback, regular-face fallback, paper-white or omitted-artwork recovery, complete-image cache reuse, and canonical-selection stability follow [Presentation and Rendering](../specifications/50-PRESENTATION_AND_RENDERING.md). Registration does not require membership in a default pool. Empty pool membership is not repaired by adding fallback identifiers; pool validity is specified in [Application Configuration](CONFIGURATION.md#pool-validity-and-effective-membership). Strict viewer override behavior is specified in [CLI](../CLI.md#presentation-overrides).
 
 ## Complete examples
 

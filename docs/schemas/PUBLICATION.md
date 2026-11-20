@@ -42,7 +42,7 @@ A completed scheduled document has `publication.type: "scheduled"`; a completed 
 
 Quotation, source, and attribution strings preserve their original text, including Unicode, whitespace, and meaningful line breaks, under the literary string definitions in [Content Entries](CONTENT.md#quotations-source-and-attribution). Complete text remains present independently of visibility flags. No entry wrapper, entry identifier, quotation list, quotation identity, priority, eligibility, authored preference, duplicated schedule, or reveal-stage ordinal is part of this object.
 
-The reveal schedule includes the quotation's display-day start and the effective source and attribution times. The flags express visibility: in checkpoints, the recorded current visibility; in completed scheduled metadata, visibility of that publication's image. They are not publication acknowledgements or an implicit stage index. The time format alone does not establish the flags' values. Scheduling semantics are defined in [Architecture](../ARCHITECTURE.md#progressive-reveal).
+The reveal schedule includes the quotation's display-day start and the effective source and attribution times. The flags express visibility: in checkpoints, the recorded current visibility; in completed scheduled metadata, visibility of that publication's image. They are not publication acknowledgements or an implicit stage index. The time format alone does not establish the flags' values. Scheduling semantics are defined in [Reveal progress and missed events](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#reveal-progress-and-missed-events).
 
 `reveal_stage.quotation` must be `true`. When `source` or `attribution` is absent, its corresponding reveal-stage flag must be `false`. Otherwise, visibility flags are independent of the schedule's time strings; validation does not recalculate reveal-stage progression.
 
@@ -148,7 +148,7 @@ A valid filesystem dataset contains the manifest, both referenced regular files 
 
 The completed metadata's `publication.id` equals the manifest's `id`; `publication.destination_id` equals the owning directory's destination ID. The image is a complete single-frame PNG with dimensions equal to `publication.output_specification.requested_output_size`. Scheduled and transient completed documents are both valid dataset metadata; checkpoints are not.
 
-Digests describe exact file bytes, including JSON whitespace and PNG encoding. Equivalent parsed JSON does not imply equal hashes. Filesystem behavior is defined in [Architecture](../ARCHITECTURE.md#dataset-publication-and-recovery).
+Digests describe exact file bytes, including JSON whitespace and PNG encoding. Equivalent parsed JSON does not imply equal hashes. Filesystem behavior is defined in [Dataset commit and consumer recovery](../specifications/70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#dataset-commit-and-consumer-recovery).
 
 ## Complete examples
 
