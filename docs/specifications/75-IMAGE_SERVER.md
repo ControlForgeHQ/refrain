@@ -10,7 +10,7 @@ The service operates independently of the resident application. Resident publica
 
 The service loads the selected application configuration, or the standard configuration when none is selected.
 
-Startup requires a valid `image-server` configuration section identifying at least one configured `publish` destination. Missing or invalid configuration prevents startup and produces an actionable diagnostic.
+Startup requires an `image-server` section with a valid, nonempty `destinations` sequence referencing configured `publish` destinations. Missing or invalid required configuration prevents startup with an actionable diagnostic. Invalid optional settings follow the schema's warning-and-default rules.
 
 Configuration fields and validation are defined in [Application Configuration](../schemas/CONFIGURATION.md#independent-image-server-settings). Command-line invocation belongs to [CLI](../CLI.md). Service supervision and filesystem permissions belong to [Installation and Service Operation](80-INSTALLATION_AND_SERVICE_OPERATION.md).
 
