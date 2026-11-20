@@ -263,14 +263,9 @@ The documented fallback order is entry, selected background, selected decoration
 
 ### Presentation style
 
-`presentation_style` accepts exactly one of these case-sensitive strings:
+`presentation_style` accepts exactly `"centered"` or `"left-aligned"` (case-sensitive). Omission uses `"centered"`. Unknown identifiers, empty strings, null, and non-string values invalidate the entry. The field applies to every quotation in the entry; per-quotation styles are unsupported.
 
-| Value | Meaning |
-|---|---|
-| `"centered"` | Quotation lines are independently centered horizontally; the quotation block is vertically centered in its allocated space. |
-| `"left-aligned"` | Quotation lines share a left edge. The complete block is horizontally centered by its widest rendered line, rather than anchored to the literary rectangle's left edge, and vertically centered in its allocated space. The byline is right-aligned in the literary rectangle. |
-
-Omission uses `"centered"`. Unknown identifiers, empty strings, null, and non-string values invalidate the entry. Both styles use subordinate source and attribution presentation. There are no per-quotation styles. Detailed layout and stable progressive composition belong to [Architecture](../ARCHITECTURE.md#initial-visual-design).
+Style-specific layout and byline behavior are specified in [Literary composition and fitting](../specifications/50-PRESENTATION_AND_RENDERING.md#literary-composition-and-fitting).
 
 ## Eligibility
 
