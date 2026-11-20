@@ -40,18 +40,6 @@ destinations:
       decoration_color: "sage"
       qr: "none"
 
-  - id: "kitchen"
-    type: "image-server"
-    audience: "public"
-    aspect_ratio: "16:10"
-    resolution: [3840, 2400]
-
-  - id: "hallway"
-    type: "image-server"
-    audience: "private"
-    aspect_ratio: "4:3"
-    resolution: [1600, 1200]
-
   - id: "web-public"
     type: "publish"
     audience: "public"
@@ -67,6 +55,7 @@ destinations:
     resolution: [3840, 2400]
 
 image-server:
+  destinations: ["web-public"]
   host: "127.0.0.1"
   port: 8080
 
@@ -143,7 +132,7 @@ The installed distribution supplies `config.default.yaml` as an editable startin
 | Field | Type | Required | Constraint |
 |---|---|---|---|
 | `id` | String | Yes | Globally unique; matches `[A-Za-z0-9][A-Za-z0-9_-]*`; at most 256 characters. |
-| `type` | String | Yes | Exactly `window`, `waveshare-13in3-e`, `image-server`, or `publish`. |
+| `type` | String | Yes | Exactly `window`, `waveshare-13in3-e`, or `publish`. |
 | `audience` | String | Yes | Exactly `public` or `private`; no default or fallback. |
 | `aspect_ratio` | String | Paired with `resolution` where supported | Exactly `4:3`, `5:3`, `16:9`, or `16:10`. |
 | `resolution` | Sequence of two integers | Paired with `aspect_ratio` where supported | Positive pixel dimensions in width, height order. |
@@ -151,16 +140,15 @@ The installed distribution supplies `config.default.yaml` as an editable startin
 
 Identifiers and enumerated values are case-sensitive. Missing, null, empty, non-string, or unsupported audiences are errors. Invalid or duplicate destination IDs and capacity excesses are errors. `all` is an ordinary valid ID; `@all` is reserved for CLI publication selection and does not satisfy the ID syntax.
 
-For `publish` destinations, IDs must additionally avoid Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, and `LPT1`–`LPT9`), regardless of case. IDs of different `publish` destinations must also be unique under case-insensitive comparison, ensuring their publication directories remain distinct on case-insensitive filesystems.
+For `publish` destinations, IDs must additionally contain at most 255 ASCII characters and avoid Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, and `LPT1`–`LPT9`), regardless of case. IDs of different `publish` destinations must also be unique under case-insensitive comparison, ensuring their publication directories remain distinct on case-insensitive filesystems.
 
 | Destination type | Maximum configured destinations | Default aspect ratio | Default resolution | Explicit geometry |
 |---|---:|---|---|---|
 | `window` | 1 | `16:9` | `[1920, 1080]` | Supply both fields or neither. |
 | `waveshare-13in3-e` | 1 | Fixed `4:3` | Fixed `[1600, 1200]` | Both fields prohibited. |
-| `image-server` | Multiple | `16:10` | `[3840, 2400]` | Supply both fields or neither. |
 | `publish` | Multiple | `16:10` | `[3840, 2400]` | Supply both fields or neither. |
 
-A declared aspect ratio and requested resolution are independent values. Dimensions need not exactly match the aspect ratio; `aspect_ratio: "4:3"` with `resolution: [1600, 1190]` is valid. Requested dimensions are not limited by the 3840 × 2400 design reference envelope. Unsupported aspect ratios, boolean or non-integer dimensions, zero or negative dimensions, incomplete geometry pairs, and geometry fields on the fixed Waveshare destination are errors.
+A declared aspect ratio and requested resolution are independent values. Dimensions need not exactly match the aspect ratio; `aspect_ratio: "4:3"` with `resolution: [1600, 1190]` is valid. Each requested width must be between 1 and 3840 pixels and each height between 1 and 2400 pixels, independently; square and portrait outputs are valid. Unsupported aspect ratios, boolean or non-integer dimensions, zero or negative dimensions, incomplete geometry pairs, and geometry fields on the fixed Waveshare destination are errors.
 
 The following are alternative declarations, not fields to combine in one destination:
 
@@ -213,30 +201,28 @@ These fields do not accept pool references, fallback lists, direct RGB values, b
 
 Overrides affect scheduled image preparation. They do not define independent artistic selection or transformations of finished transient images. Decoration suppression uses global insets and quotation font bounds, including their documented defaults; background suppression does not reset geometry. A decoration color has no rendering effect without a decoration layer. Runtime application, face resolution, grouping, and geometry validation belong to [Architecture](../ARCHITECTURE.md#prepared-images).
 
-## Shared image-server settings
+## Independent image-server settings
 
-The optional top-level `image-server` mapping contains only:
+The optional top-level `image-server` mapping configures the separately supervised `refrain-image-server` consumer and contains only:
 
 | Field | Type | Default | Constraint |
 |---|---|---|---|
+| `destinations` | Nonempty sequence of strings | Required; no default | Unique IDs of configured `publish` destinations. |
 | `host` | String | `"127.0.0.1"` | Nonempty bind address or hostname. |
 | `port` | Integer | `8080` | 1 through 65535, inclusive. |
 
-The section's presence enables the shared HTTP listener. An empty mapping and a null value written as a bare `image-server:` key are equivalent:
+Every `destinations` member must identify an existing configured `publish` destination. Duplicates, non-string values, unknown IDs, non-`publish` IDs, and `@all` are invalid. No destination is included implicitly.
 
-```yaml
-image-server: {}
-```
-
-Alternatively:
+A present section must be a mapping containing the required nonempty `destinations` sequence; an empty mapping or null section is invalid:
 
 ```yaml
 image-server:
+  destinations: ["web-public"]
 ```
 
-These are section fragments to use in an otherwise complete configuration. Omit the section to leave external HTTP delivery disabled; image-server destinations may still be configured. Invalid optional host or port values produce warnings and use their defaults.
+This is a section fragment to use in an otherwise complete configuration. Omit the section when no image-server consumer is configured. Invalid optional host or port values produce warnings and use their defaults.
 
-Listener lifecycle, image retention, routing, and delivery semantics belong to [Architecture](../ARCHITECTURE.md#network-image-service). The default loopback host does not permit remote-device connections. A network-accessible binding provides neither authentication nor encryption; use only on trusted local networks, without direct exposure to untrusted networks or the public Internet.
+Listener lifecycle, image retention, routing, and delivery semantics belong to [Independent image-server delivery](../specifications/60-DESTINATIONS_AND_RUNTIME_CONTROL.md#independent-image-server-delivery). The default loopback host does not permit remote-device connections. A network-accessible binding provides neither authentication nor encryption; use only on trusted local networks, without direct exposure to untrusted networks or the public Internet.
 
 ## Storage
 
@@ -442,7 +428,7 @@ Invalid pool names or malformed definitions are diagnosed without discarding unr
 
 Each named pool retains its actual expanded membership, including an empty `default`. Runtime fallbacks do not insert `none` or `black` into an empty named pool. An explicit reference to that pool remains empty; it does not acquire an implicit `builtin` pool.
 
-A missing or malformed required `fonts.pools.default`, including an explicitly empty sequence, is an error. Invalid or unavailable font members are excluded with warnings. A nonempty font declaration whose usable expansion is empty does not by itself prohibit operation with an otherwise usable explicit content or decoration font preference. Preparation requiring automatic font selection needs at least one usable default candidate; there is no unrelated bundled-font fallback.
+A missing or malformed required `fonts.pools.default`, including an explicitly empty sequence, is an error. Invalid or unavailable font members are excluded with warnings. A nonempty font declaration whose usable expansion is empty does not by itself prohibit operation with an otherwise usable explicit content or decoration font preference. When no configured font candidate is usable, ordinary preparation uses the unconditional packaged `source-sans-3/regular` fallback without adding it to any named pool.
 
 Missing background or decoration defaults use `["none"]`. Missing color defaults use `["black"]`. Invalid optional default declarations warn; unusable members are excluded. Automatic background, decoration, and color fallbacks are defined in [Architecture](../ARCHITECTURE.md#daily-background-and-decoration-selection), separately from named-pool membership.
 
