@@ -255,27 +255,29 @@ The publication root and every destination directory are Refrain-owned storage, 
 
 ### Protected-path separation
 
-Before creating a publication destination or performing destructive cleanup, verify that the effective publication root cannot overlap protected Refrain data.
+Before creating a publication destination or performing destructive cleanup, verify that the effective publication root and its cleanup scope do not overlap protected Refrain data.
 
 Protected data includes:
 
 - Configuration files and directories.
 - Content libraries.
 - User-owned assets.
-- Authoritative operational-state files and their containing state directory.
+- Authoritative operational-state files.
 - Global history and publication checkpoints.
 - Prepared-image artifact and cache directories.
 - Other configured protected application storage.
 
 Compare effective standard and custom locations, including configuration-relative and absolute paths.
 
-Reject a publication root equal to, contained within, or an ancestor of protected data whenever publication cleanup could affect that data.
+Reject a publication root equal to, contained within, or an ancestor of protected storage when publication cleanup could affect that storage.
 
-The platform-standard publication root may share a common operational-data parent with independently owned state directories. Such shared parentage is valid when the publication root and its cleanup scope remain disjoint from the protected state.
+The standard Linux layout deliberately places `$XDG_STATE_HOME/refrain/publish` inside the standard `$XDG_STATE_HOME/refrain` state directory. This arrangement is valid because publication cleanup is confined to the `publish` subtree, while `state.json`, `publication.json`, and active and rotated global-history files remain outside that subtree.
 
-Do not reject standard sibling publication and state directories merely because they share a platform data parent.
+This exception applies only to the established standard layout. It does not authorize arbitrary overlap with custom state, content, asset, artifact, or other protected storage. Verify that no protected files or directories fall within the effective publication cleanup scope.
 
-If safe separation cannot be established, fail before writing or removing publication objects.
+On Windows, the standard publication and state directories are separate children of the local Refrain operational-data directory. Sharing that parent is valid and must not be rejected as an overlap.
+
+If safe separation or containment cannot be established, fail before writing or removing publication objects.
 
 ### Path and component safety
 
