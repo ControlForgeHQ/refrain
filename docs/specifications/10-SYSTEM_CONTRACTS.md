@@ -57,7 +57,7 @@ Independent consumers must not modify resident operational state, publication ch
 
 An explicitly selected daily quotation remains authoritative independently of image preparation or destination delivery success.
 
-The application must not introduce capabilities merely to demonstrate extensibility. Future integrations should reuse the established selection, persistence, preparation, and publication boundaries where appropriate.
+Do not introduce capabilities solely to demonstrate extensibility.
 
 Material architectural changes require approval before implementation establishes new behavior.
 

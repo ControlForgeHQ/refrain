@@ -545,31 +545,11 @@ Do not add consumer-specific publication formats when the established manifest a
 
 Automated tests must cover independent consumer lifecycle, read-only filesystem access, concurrent consumers, resident independence, and safe recovery after missing or invalid current datasets.
 
-## Consumer integrations and trust boundaries
-
-The optional `refrain-web-companion` is deferred to a later release.
-
-A future implementation may consume completed publication metadata and reconstruct literary presentations at browser-appropriate geometry using the installed viewer or shared rendering facilities.
-
-It must not own daily quotation selection or require browser and physical-display clients to consume identical raster images.
-
-Public presentation must not expose privileged resident control interfaces.
-
-The architecture distinguishes publicly consumable presentation information from privileged local operational control.
-
-A future public deployment may run outside the trusted local network.
-
-Its publication mechanism, access controls, and trust boundaries must be specified before implementation.
-
-An outbound-only publication path is preferred where it satisfies demonstrated requirements.
+## Consumer access boundaries
 
 Consumer access to a publication directory does not confer permission to access other destination directories, operational state, credentials, or private content.
 
 Destination audience filtering restricts which action declarations enter a completed scheduled publication. It is not a substitute for filesystem access controls or consumer authorization.
-
-External HTTP consumers must not interpret publication metadata as authority to execute actions or invoke privileged commands.
-
-Public presentation must not introduce mandatory network, cloud, or web-service dependencies into ordinary Refrain operation.
 
 ## External action publication
 
@@ -580,11 +560,3 @@ Completed scheduled publication includes only actions eligible for the destinati
 Completed transient publications contain no actions.
 
 Publication and consumer infrastructure must not implicitly execute an action merely because its declaration appears in completed metadata.
-
-Additional external action integrations are deferred.
-
-Future consumers may interpret supported actions only through separately specified, explicitly configured behavior and appropriate trust boundaries.
-
-Privileged operations must not become available to anonymous or public viewers merely because associated literary content is publicly visible.
-
-Do not add new action execution interfaces, implicit privileges, cloud dependencies, or public control channels as part of the filesystem-publication implementation.

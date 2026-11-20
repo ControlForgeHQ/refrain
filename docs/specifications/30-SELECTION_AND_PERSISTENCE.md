@@ -33,8 +33,6 @@ Prepared images are disposable cache entries derived from the committed selectio
 
 Within a committed selection, the currently required reveal stage is the later of the stage required by the committed schedule and current time, or the highest stage already reached. Reveal progression must not move backward and must survive restarts while the committed selection's display date matches the current logical display date.
 
-The future calendar archive is a separate historical presentation resource and is not authoritative for the active display.
-
 Persistent storage uses ordinary local filesystem facilities. Its representation must remain simple, inspectable, and recoverable after unexpected termination. No database service is required.
 
 ## Eligibility and specificity
@@ -428,7 +426,7 @@ Rotation occurs only between complete records. Before appending a record that wo
 
 A single record exceeding the segment limit must not be recorded and must produce a diagnostic without affecting operational state.
 
-Rotation and retention must not modify authoritative operational state, publication checkpoints, prepared images, or future calendar presentation archives.
+Rotation and retention must not modify authoritative operational state, publication checkpoints, or prepared images.
 
 ### Interrupted append recovery
 
@@ -459,21 +457,3 @@ Automated tests must cover:
 - preservation of complete records, including valid records missing a final newline;
 - history write, repair, and rotation failures without affecting operational state or ordinary presentation;
 - absence of transactional dependencies between global history and authoritative operational state.
-
-## Calendar archive boundaries
-
-A future calendar presentation archive may preserve the fully revealed presentation image and associated metadata for previously selected display dates.
-
-Calendar history and global history serve different purposes.
-
-Global history records every committed selection event in chronological order, including multiple selections for the same logical display date.
-
-Calendar history provides at most one current archived presentation for each logical display date. When a later committed selection uses a previously recorded display date, that selection supersedes the earlier calendar presentation for that date.
-
-A calendar presentation is associated with the revision that produced it.
-
-The calendar archive is independent of active selection, repetition history, and global-history retention.
-
-Its records need not contain embedded font resources or complete rendering snapshots when the final prepared image and relevant presentation metadata are retained.
-
-Calendar archive publication, retrieval, storage, and retention are deferred until the corresponding interface capability is implemented.

@@ -410,8 +410,6 @@ The supported presentation styles are:
 
 The content entry selects the presentation style for all quotations it contains. The default is `centered`.
 
-Additional built-in styles may be added without changing content-selection, persistence, scheduling, or physical display contracts. Do not introduce arbitrary layout scripting, externally supplied styles, a styling plugin interface, or a general-purpose layout framework without a demonstrated requirement.
-
 Use Pillow font metrics and text-measurement facilities.
 
 Measurement must account for actual glyph dimensions, line spacing, authored line breaks, paragraph spacing, source and attribution, role-specific face metrics, the complete effective literary rectangle, and the selected presentation style.
@@ -458,11 +456,9 @@ Different output specifications may have different raster dimensions, fitted fon
 
 The concealment treatment must prevent readable text from appearing through insufficient distortion or produce artifacts outside a field's allocated area.
 
-Additional configurable concealment styles are not required.
-
 Presentation styles determine geometry. Image drawing consumes resolved layout geometry rather than independently interpreting style names.
 
-Keep style-specific layout behavior isolated so additional built-in styles do not require changes to selection, persistence, scheduling, or display integration.
+Keep style-specific layout behavior isolated from selection, persistence, scheduling, and display integration.
 
 If the complete composition cannot fit within its supported presentation region, report a meaningful error. Do not clip, truncate, overlap, or omit required text merely to produce an image.
 
@@ -686,8 +682,6 @@ An available literary QR code encodes:
 `https://github.com/ControlForgeHQ/refrain`
 
 The payload is independent of the selected quotation, content entry, display date, and reveal stage.
-
-Do not add a configurable QR destination or depend on a deferred companion service.
 
 The literary QR code uses:
 
