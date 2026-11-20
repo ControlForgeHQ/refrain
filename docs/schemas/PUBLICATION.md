@@ -136,7 +136,7 @@ The manifest contains no destination audience, reconstruction fields, history in
 
 ### Identity and filenames
 
-For filesystem publication, `id` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,239}` and must not be a Windows-reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, or `LPT1` through `LPT9`, without regard to case. This 240-character maximum applies to the filesystem dataset identity; metadata's standalone publication-ID requirement is a nonblank string.
+For filesystem publication, `id` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,239}` and must not equal `manifest` or a Windows-reserved device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, or `LPT1` through `LPT9`), without regard to case. This 240-character maximum applies to the filesystem dataset identity; metadata's standalone publication-ID requirement is a nonblank string.
 
 Both referenced filenames are relative single-component names in the same destination directory, derived exactly from that identity. Arbitrary paths, separators, dots in the ID, traversal components, drive-qualified paths, and absolute paths are invalid. The stable manifest filename is always `manifest.json`.
 

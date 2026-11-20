@@ -289,8 +289,6 @@ Validate component lengths for supported Windows and Linux filesystems before cr
 
 The filesystem publication-event ID follows the exact identity and filename constraints in [Publication manifest](../schemas/PUBLICATION.md#identity-and-filenames).
 
-Publication IDs must not generate names colliding with `manifest.json` or other reserved dataset filenames. In particular, reject `manifest` as a publication ID without regard to case.
-
 Reject collisions with currently owned publication filenames, including case-insensitive collisions that would be unsafe on Windows.
 
 Use paths derived solely from validated destination IDs, publication IDs, and fixed dataset filenames.
