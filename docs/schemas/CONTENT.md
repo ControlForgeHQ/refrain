@@ -168,7 +168,7 @@ font: "@literary"
 
 A registered font need not belong to the default pool to be preferred explicitly. There is no list form or direct font-file path interface. The reserved value `none` is not a font preference and invalidates the entry. Empty, whitespace-only, malformed, null, and non-string values are also invalid. A syntactically valid but unavailable font identifier does not invalidate the entry; normal resource fallback applies.
 
-The documented resolution order is the entry preference, selected decoration preference, then automatic selection from the effective default font pool. A usable explicit entry or decoration preference does not require a usable default pool.
+Font preference precedence and fallback are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence).
 
 ### Font faces
 
@@ -183,7 +183,7 @@ font_faces:
 
 Each value must be a nonempty, case-sensitive ASCII face identifier using the shared identifier syntax. Unknown roles, non-mapping values, explicit nulls, empty strings, and invalid identifiers reject the entry without rejecting unrelated entries.
 
-A syntactically valid face need not exist in every bundle. This mapping does not select a bundle and has no catch-all role or per-quotation form. The first defined role preference wins in the order entry, decoration, bundle manifest, global `fonts.faces`, then implicit `regular`. An explicit `regular` overrides lower preferences. If the winning face is unavailable, that bundle's `regular` face is used with a warning; lower-level face preferences are not consulted.
+A syntactically valid face need not exist in every bundle. This mapping does not select a bundle and has no catch-all role or per-quotation form. Role preference precedence and unavailable-face recovery are specified in [Font bundles, role faces and recovery](../specifications/50-PRESENTATION_AND_RENDERING.md#font-bundles-role-faces-and-recovery).
 
 ### Background
 
