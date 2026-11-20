@@ -32,17 +32,19 @@ Correctness and maintainability take precedence over speculative micro-optimizat
 
 ## Python compatibility and continuous integration
 
-Refrain is implemented in Python 3.
+Refrain requires Python 3.13 or newer.
 
-Use a Python version supported by the targeted Raspberry Pi OS release.
+Use a compatible Python interpreter on the targeted Raspberry Pi OS release.
 
 Do not require a separately installed interpreter when the operating system's supported Python version meets the project's needs.
 
 Avoid language features or third-party packages that unnecessarily exclude supported deployment platforms.
 
-The project's minimum supported Python version must be established in the project metadata once implementation begins.
+Declare Python 3.13 or newer as the minimum supported version in project metadata.
 
 Refrain's hardware-independent components must remain compatible with Linux and Windows development environments. Prefer platform-neutral Python interfaces and avoid unnecessary operating-system-specific assumptions.
+
+macOS is not a supported or maintained platform.
 
 The repository's GitHub Actions CI workflow provides the standard automated validation for pull requests and changes to the default branch. It must run:
 
@@ -192,8 +194,7 @@ Global selection history is structured application data and must remain separate
 Log meaningful lifecycle and state changes, including:
 
 - application startup and shutdown;
-- application configuration defaults and recoverable validation problems;
-- output-specification defaults and paired-field validation for window and image-server outputs, fixed Waveshare dimensions, unique named output IDs, and preparation of all unique required specifications;
+- recoverable configuration and input-validation problems;
 - excluded content files and entries;
 - fatal configuration or content-library failures;
 - daily selection commitments;
@@ -202,15 +203,13 @@ Log meaningful lifecycle and state changes, including:
 - physical display failures and recovery;
 - significant scheduling or clock-related events.
 
-Use `INFO` for ordinary operational events and documented defaults applied to omitted optional settings.
+Use `INFO` for ordinary operational events. Applying documented defaults for omitted optional settings does not itself require a diagnostic.
 
 Use `WARNING` for invalid or unrecognized values that were ignored, replaced by defaults, or excluded without preventing operation.
 
 Use `ERROR` for failures that prevent a required operation from proceeding.
 
 Log warnings with enough context to identify the affected file, field, entry, or resource and explain the action taken.
-
-Consolidate informational default notices where practical.
 
 Do not log every scheduler iteration or repeatedly emit identical errors during unchanged retry conditions.
 
@@ -238,7 +237,7 @@ Tests of application behavior must use explicit test inputs rather than dependin
 
 Keep three configuration-testing responsibilities separate:
 
-- Application-default tests omit optional settings and verify documented fallback values, required settings, and effective constraints. Exercise operation when its actual prerequisites are satisfied.
+- Application-default tests omit optional settings and verify documented fallback values, required settings, and effective constraints without informational notices solely for omitted defaults. Exercise operation when its actual prerequisites are satisfied.
 - Configuration-processing tests supply controlled inputs for parsing, validation, precedence, ordering, and diagnostics. Prefer small synthetic resources where resource characteristics matter; avoid fixtures that inherit unrelated shipped settings.
 - Shipped-configuration tests load the actual `config.default.yaml`, validate its effective settings and resource availability, and exercise representative preparation or rendering without freezing incidental choices.
 
@@ -299,7 +298,7 @@ Engineering practices should not introduce:
 
 - a mandatory container runtime;
 - a database server;
-- additional application daemons;
+- additional application daemons beyond explicitly specified independent publication consumers;
 - a general plugin framework;
 - an elaborate dependency-injection system;
 - a custom hardware abstraction framework;
