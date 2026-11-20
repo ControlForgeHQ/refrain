@@ -16,16 +16,6 @@ With no mode option, `refrain` starts the normal resident runtime. `--config PAT
 
 The resident owns its configured backends and display resources. A second normal invocation fails immediately with an actionable diagnostic while another backend-owning Refrain process holds the installation. Normal operation continues until shutdown. Startup, selection, recovery, and backend failure behavior are defined in [Architecture](ARCHITECTURE.md#startup). `--config` is the only normal-mode option apart from `-h`/`--help`, which displays command help and exits. Orderly shutdown returns exit status `0`; reported startup or runtime errors return `1`. Invalid arguments or conflicting modes return `2`.
 
-### Accelerated demo
-
-```text
-refrain [--config PATH] --demo SECONDS
-```
-
-`--config PATH` selects the application configuration for the demo, or the standard configuration is used when omitted. `SECONDS` must be a positive finite number of seconds, including fractional values such as `0.125`; zero, negative values, NaN, infinity, and nonnumeric values are rejected. It requests the minimum monotonic viewing interval for each reveal stage. Demo is a standalone backend-owning mode, but it uses fresh temporary session storage rather than configured or standard production persistence. It uses one eligibility display date for the session, suppresses the startup information view, and continues stage progression when destinations are unavailable, subject to preparation succeeding. The resident ownership rule prevents concurrent normal or demo runtimes.
-
-See [Architecture](ARCHITECTURE.md#accelerated-demo-operation) for stage progression. Demo continues until shutdown. Orderly shutdown returns `0`; reported startup or runtime errors return `1`, and invalid arguments return `2`.
-
 ### Initialize
 
 ```text
