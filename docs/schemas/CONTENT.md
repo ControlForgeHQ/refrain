@@ -205,7 +205,7 @@ Or explicitly suppress background selection:
 background: "none"
 ```
 
-An explicit `none` requests the paper-white base and overrides both the decoration's preferred background and the default background pool. Omission permits an available decoration preference, then automatic selection from the effective default pool. An unavailable identifier warns and follows the established fallback without invalidating the entry. Empty strings, non-string values, and null are invalid. There is no list form.
+Empty strings, non-string values, and null are invalid; there is no list form. Omission leaves the entry without a background preference. `"none"` is an explicit suppression value. Preference precedence and fallback, including the effect of `"none"`, are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence).
 
 ### Decoration
 
@@ -227,9 +227,7 @@ Or explicitly suppress decoration selection:
 decoration: "none"
 ```
 
-Omission means automatic selection from the effective default decoration pool. Explicit `none` suppresses that pool and uses the global presentation insets. An unavailable identifier warns and falls back to the default decoration pool without invalidating the entry. Empty strings, non-string values, and null are invalid. There is no list form.
-
-A selected decoration may supply insets, font and background preferences, and other asset-side presentation preferences. Entry font and background preferences take precedence over corresponding decoration preferences. Content entries cannot directly specify insets, font-size bounds, layers, transformations, or asset manifests.
+Empty strings, non-string values, and null are invalid; there is no list form. Omission leaves the entry without a decoration preference. `"none"` is an explicit suppression value. Decoration preference resolution and fallback are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence).
 
 ### Text color
 
