@@ -2,125 +2,476 @@
 
 ## Platform paths and publication root
 
-The optional `storage.publish` setting overrides the publication root using the existing storage-path semantics: absolute paths are used as specified and relative paths are resolved from the selected configuration file. Its omitted default is a platform-standard per-user operational-data path:
+Refrain uses platform-standard per-user directories for configuration, operational state, generated artifacts, filesystem publications, runtime ownership, and authenticated local control.
 
-| Platform | Default publication root |
+The application-path resolver is authoritative for standard path construction. Use one resolver at command-line boundaries rather than independently reconstructing platform paths in application components.
+
+The supported standard locations are:
+
+| Purpose | Linux | Windows |
+|---|---|---|
+| Configuration directory | `$XDG_CONFIG_HOME/refrain` | `%APPDATA%\Refrain` |
+| Configuration file | Configuration directory `/config.yaml` | Configuration directory `\config.yaml` |
+| Content directory | Configuration directory `/content` | Configuration directory `\content` |
+| User assets | Configuration directory `/assets` | Configuration directory `\assets` |
+| State directory | `$XDG_STATE_HOME/refrain` | `%LOCALAPPDATA%\Refrain\State` |
+| Prepared artifacts | `$XDG_CACHE_HOME/refrain/artifacts` | `%LOCALAPPDATA%\Refrain\Cache\artifacts` |
+| Publication root | `$XDG_STATE_HOME/refrain/publish` | `%LOCALAPPDATA%\Refrain\Publish` |
+
+On Linux, use these base-directory fallbacks when the corresponding XDG environment variable is absent, empty, or not absolute:
+
+| Variable | Fallback |
 |---|---|
-| Linux | `$XDG_STATE_HOME/refrain/publish`, using the existing per-user fallback when the variable is missing, empty, or relative |
-| Windows | `%LOCALAPPDATA%\Refrain\Publish` |
-| macOS | `~/Library/Application Support/Refrain/Publish` |
+| `XDG_CONFIG_HOME` | `~/.config` |
+| `XDG_STATE_HOME` | `~/.local/state` |
+| `XDG_CACHE_HOME` | `~/.cache` |
 
-The application-path resolver determines the effective root independently of the working directory. This extends the existing platform-aware path resolver rather than introducing a second path-selection mechanism. Standard maintenance commands always target the platform-standard installation locations, not a custom `storage.publish` override.
+On Windows, resolve the roaming configuration location from `APPDATA` and local operational locations from `LOCALAPPDATA`. Both must identify valid absolute per-user paths.
 
-Use platform-standard per-user application-data facilities as the defaults for configuration, operational state, global history, and derived artifacts. Resolve standard locations at the command-line boundary without adding a dependency solely for path selection. Optional runtime storage overrides belong to application configuration; keep lower-level application and persistence interfaces explicit about the effective paths they receive.
+The standard runtime ownership and local-control metadata locations are:
 
-On Linux, honor absolute XDG configuration, state, and cache bases and use the per-user fallbacks when those variables are missing, empty, or relative. On Windows, use the configured roaming and local application-data directories. Other supported desktop platforms should use their established per-user locations.
+| Purpose | Linux | Windows |
+|---|---|---|
+| Ownership lock | `$XDG_STATE_HOME/.refrain-ownership.lock` | `%LOCALAPPDATA%\.refrain-ownership.lock` |
+| Control metadata directory | `$XDG_STATE_HOME/.refrain-control` | `%LOCALAPPDATA%\.refrain-control` |
+| Control endpoint metadata | Control metadata directory `/endpoint.json` | Control metadata directory `\endpoint.json` |
 
-Use ordinary operating-system facilities where they satisfy the requirement. In particular:
+Apply the XDG fallback rules to runtime ownership and control metadata as well.
 
-- use systemd for supervised service operation;
-- use standard process streams for application logging;
-- use the local filesystem for ordinary application storage;
-- use the operating system's local-time facilities for local scheduling.
+The ownership lock and control metadata remain outside standard Refrain installation directories removed by `--reset` or `--purge`.
 
-Avoid creating a custom service manager, log daemon, database service, or scheduler without a demonstrated need.
+Endpoint and credential contents, authentication, permissions, stale-endpoint handling, and actual local socket or pipe naming are defined under [Resident ownership and authenticated control](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#resident-ownership-and-authenticated-control).
+
+Filesystem publication defaults to a Refrain-owned per-user directory and does not require an HTTP listener or network service.
+
+On Linux, the standard publication root is a child of the standard state directory. The root's ownership and cleanup scope must remain confined to `publish/` and must not affect sibling operational files.
+
+On Windows, state, cache, and publication directories are separate children of the local Refrain operational-data directory.
+
+A standard publication root may share a parent with protected operational storage. Path validation must distinguish permitted shared ancestry from actual overlap of publication cleanup scope with protected files or directories.
+
+### Effective runtime paths
+
+The optional `storage` configuration mapping supplies independent overrides for:
+
+- `content`
+- `state`
+- `artifacts`
+- `publish`
+
+The authoritative field names, defaults, and validation constraints are defined under [Storage](../schemas/CONFIGURATION.md#storage).
+
+An absolute configured path is used as specified. A relative configured path is resolved against the directory containing the selected configuration file, not the current working directory.
+
+An omitted path retains its own platform-standard default. Selecting an alternate configuration file does not automatically relocate state, artifacts, or publication storage.
+
+The omitted content path follows the selected configuration file as defined by the configuration schema.
+
+`storage.state` identifies one directory containing three fixed files:
+
+| Filename | Responsibility |
+|---|---|
+| `state.json` | Authoritative operational selection, scheduling, repetition history, and reveal progression. |
+| `publication.json` | Current publication checkpoint and durable destination-independent artistic choices. |
+| `global-history.jsonl` | Best-effort chronological selection history. |
+
+Rotated global-history segments reside in that same directory.
+
+Changing `storage.state` relocates these files together. Global history has no independent path override.
+
+Prepared-image artifacts are derived data under the effective `storage.artifacts` directory.
+
+Filesystem publication datasets are stored under the effective `storage.publish` directory. Each destination owns a direct child named from its validated destination ID.
+
+The effective publication root must satisfy the protected-path and filesystem-containment requirements in [Publication paths and containment](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-paths-and-containment).
+
+Standard installation-management commands use only standard paths, regardless of runtime configuration overrides.
+
+Application and persistence components receive resolved effective paths explicitly. They must not independently discover home directories, interpret relative configuration paths, or infer storage locations from the current working directory.
 
 Use `pathlib` for filesystem path handling.
 
-Do not assume that application files, content files, persistent state, and generated images are located in the same directory.
+Keep configuration, content, and user assets separate from operational state, publication checkpoints, generated artifacts, and published datasets.
 
-Keep configuration and user content separate from operational state, global history, and derived artifacts. Custom fonts, backgrounds, and decorations are user-owned resources under `assets/{fonts,backgrounds,decorations}/` beside the effective configuration file; they are separate from bundled package resources and generated artifacts. Manifest references are relative to their package and must not escape it. Content-directory paths retain their configuration-relative or explicit-absolute semantics. Configuration resolves explicit relative storage paths against its own file; the command-line entry point combines these optional values independently with platform-standard defaults. Application functions continue to receive effective paths rather than performing implicit home-directory lookup.
+Do not write operational data into the installed Python package directory.
 
-Avoid assumptions tied to a particular username, home directory, mount point, or installation path.
-
-Resolve relative paths consistently and document their interpretation.
-
-The planned publication root extends the existing platform-aware path resolver. Its default is `$XDG_STATE_HOME/refrain/publish` on Linux, using the existing per-user fallback; `%LOCALAPPDATA%\Refrain\Publish` on Windows; and `~/Library/Application Support/Refrain/Publish` on macOS. An explicit `storage.publish` path follows the established storage semantics, including configuration-relative resolution. Do not add a separate path-selection mechanism or use a Linux installation path as a cross-platform default.
+Standard per-user path conventions may be retained for macOS where existing code already provides them, but macOS is not a supported or maintained deployment or testing platform. Do not add macOS-specific support requirements or imply platform validation.
 
 ## Installed package resources
 
-Wheel and source-distribution tests must verify that bundled manifests, referenced images and fonts, applicable font licenses, and `assets/README.md` are included. Installed-package discovery must use package-resource APIs and must not depend on a source checkout.
+The installed Python distribution includes:
+
+- The editable default application configuration.
+- The packaged sample content library.
+- Bundled font, background, and decoration resources.
+- Their applicable manifests and referenced assets.
+- Required font licenses and copyright information.
+- `assets/README.md`.
+- Required service and deployment resources.
+
+Use package-resource APIs for bundled resource discovery. Installed operation must not require a source checkout or assume a development repository layout.
+
+Custom visual resources are user-owned and located beneath `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` beside the selected configuration file.
+
+Manifest resource paths are relative to their containing asset package and must not escape that package.
+
+User assets and bundled resources are distinct. Initialization must not copy packaged visual assets into the user's asset directories.
+
+Wheel and source-distribution tests must verify that the required manifests, referenced resources, licenses, sample content, configuration, and asset documentation are included and accessible after installation.
 
 ## Installation requirements
 
-For supported Linux deployments, use an unprivileged application identity and systemd supervision. Hardware setup and permissions are specified in the packaged Waveshare backend guide.
+The minimum supported Python version is 3.13.
 
-The installed package includes a complete default configuration and sample content library as package resources. Explicit initialization copies these resources to standard per-user locations, but ordinary startup never performs installation or repairs missing user configuration.
+The primary deployment target is Raspberry Pi OS Lite on Raspberry Pi hardware, initially validated on the Raspberry Pi 3B+ with the supported Waveshare 13.3-inch e-Paper HAT+ (E).
 
-A package repository, installer framework, or container runtime is not required.
+Raspberry Pi OS is the principal supported Linux deployment environment.
 
-Deployment instructions must identify the supported operating system, system dependencies, Python environment, configuration locations, and persistent-state requirements.
+Other Linux distributions may operate using compatible facilities but are not individually validated or promised as supported deployments.
 
-Installation must not depend on the developer's local directory structure.
+Windows supports hardware-independent development and resident testing, including configuration, content, scheduling, persistence, rendering, local runtime control, desktop presentation, and filesystem publication as applicable.
 
-Initialization is noninteractive and repeatable. Preflight every required path and destination type before writing. Reuse real directories, preserve an existing regular configuration file, and initially install samples only into a missing or empty standard content directory. Leave ordinary pre-existing nonempty content uninspected and untouched. A retry after interrupted sample installation may resume in the now-nonempty directory only when the temporary marker matches the packaged sample set and every existing expected sample matches its packaged bytes. Create only missing sample files exclusively and remove the marker after the sample set is complete. An invalid marker or conflicting sample requires manual inspection rather than treating arbitrary content as an interrupted installation. Create missing standard user asset category directories, accepting existing nonempty directories without inspecting or modifying their files; never copy bundled visual resources into them. Reuse state and cache directories without modifying existing state, history, or artifact files. Create the standard publication root without replacing its existing contents. Refuse links or unexpected objects that redirect or block safe access. On failure, report created destinations and leave them in place so a later initialization can retry safely when ownership is established.
+Windows does not provide the Raspberry Pi-specific Waveshare SPI/GPIO hardware integration.
 
-Reset and purge are destructive standard-path operations and require exact interactive confirmation; they must not offer a noninteractive bypass. Resolve deletion scope only from platform-standard Refrain-owned locations, never from configured runtime storage values. Do not remove shared parent directories or follow a POSIX symlink, Windows junction, reparse point, or other filesystem indirection into an external tree. A linked standard root cannot establish safe ownership and must be refused; links encountered inside an owned tree must never be traversed as directories. Report the failed operation and affected path on permission or I/O errors, and do not perform out-of-scope recovery.
+macOS is not a supported or maintained target.
 
-Reset removes only the standard state file, active and rotated global-history files, and Refrain-generated cache contents while preserving configuration, content, the complete user-assets tree, publication storage, and standard directory structure. Purge removes the Refrain-owned standard directory trees and their contents, including standard user assets under the configuration directory and the complete standard publication root after explicit confirmation. Configured custom publication paths are never reset or purged by these commands. Both operations are intended for use while Refrain is stopped; their standard-installation mutation paths must also participate in the runtime ownership lock described under [Resident ownership and authenticated control](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#resident-ownership-and-authenticated-control). Consumer shutdown is operator-managed, not enforced: consumers do not acquire the runtime ownership lock, and maintenance does not inspect or stop operating-system services. Operators must stop any consumer that may read data before purging that data or replacing its installation. Refrain does not guarantee safe concurrent reads if a consumer is left running. This ownership lock protects against cooperating Refrain processes, not arbitrary concurrent hostile filesystem mutation.
+Use ordinary operating-system facilities for process management, logging, local timekeeping, filesystem storage, and hardware access.
+
+Do not introduce a custom service manager, log daemon, database service, container requirement, or external scheduler without a demonstrated need.
+
+The installed package must operate independently of the developer's directory structure.
+
+Normal runtime startup requires an existing selected configuration file. It must not silently initialize the installation, copy sample content, or replace missing configuration with packaged defaults.
+
+Explicit installation is performed by `refrain --initialize`.
+
+The public syntax, confirmation requirements, and exit behavior of installation-management commands belong to [CLI](../CLI.md#primary-refrain-application).
+
+Installation and deployment documentation must identify the supported operating system, Python environment, required dependencies, persistent paths, service identity, and physical hardware permissions where applicable.
+
+Hardware-independent tests must run on Windows and Linux without requiring physical display hardware or systemd.
 
 ## Initialization and destructive maintenance
 
-`refrain --initialize` creates the standard publication root without replacing or cleaning existing contents. `refrain --reset` preserves publication storage. `refrain --purge` removes the entire standard publication root and everything beneath it, including all destination directories, completed publications, and temporary files. Existing ownership locking, confirmation, idempotence, and filesystem-safety requirements apply. Services do not acquire the resident's exclusive runtime lock; destructive maintenance must therefore be coordinated with running consumers, which must be stopped before their publication data or installation is removed or replaced.
+Installation-management commands operate only on the standard per-user Refrain installation.
 
-Consumer shutdown coordination is operator-managed, not enforced by Refrain. The resident ownership lock excludes a resident runtime and standard installation-maintenance command from each other; consumers do not acquire that lock, and maintenance does not query or stop system services. Operators must stop any consumer that may read data before purging that data or replacing its installation. This requirement does not promise protection from a consumer left running or from arbitrary concurrent filesystem access.
+They do not use configured custom storage paths, including paths relative to an alternate configuration file.
 
-The command-line entry point resolves omitted runtime storage paths to the independently defined platform-standard per-user locations, regardless of the current working directory. Optional state, history, artifact, and publication-root overrides belong to application configuration; each explicit relative path is resolved from the selected configuration file, while each omitted value retains its own platform-standard default. Selecting another configuration file does not itself relocate storage, and a custom state path does not relocate history. The entry point passes effective paths to application and storage components, which do not infer platform locations.
+`--initialize`, `--reset`, and `--purge` acquire the exclusive standard installation ownership lock non-blockingly before modifying installation data.
 
-Normal startup requires the selected configuration file to exist. It does not substitute the packaged default configuration, create an installation directory structure, or copy sample content. Relative content paths remain based on the selected configuration file. Custom visual resources are discovered by category beneath `assets/fonts/`, `assets/backgrounds/`, or `assets/decorations/` beside that effective configuration file and are referenced by registered identifier. Manifest image and font references are relative to their containing package and confined to that package. There is no arbitrary absolute-path custom-resource registration interface.
+If another Refrain runtime or installation-management operation owns the lock, the requested operation must fail with an actionable diagnostic and perform no mutation.
 
-The explicit, noninteractive `--initialize` operation manages only standard per-user destinations and ignores runtime storage settings in configuration. It reuses existing real directories, preserves an existing regular `config.yaml` byte-for-byte, and copies the packaged default only when that file is absent. It installs packaged sample content only when the standard content directory is missing or empty; ordinary pre-existing nonempty content is left untouched and uninspected. An interrupted sample installation may be resumed only when its installation marker and every existing expected sample file can be positively verified; missing expected files may then be installed without overwriting existing files. Invalid markers, conflicting sample contents, or uncertain ownership require manual inspection rather than automatic repair. It creates missing `assets/`, `assets/fonts/`, `assets/backgrounds/`, and `assets/decorations/` directories while preserving any existing contents. It copies no bundled visual resources into user assets and does not validate files already there. Initialization reuses existing state and cache directories and never modifies existing state, history, or prepared artifacts. It creates the standard publication root without replacing or cleaning its existing contents and rejects unsafe publication paths. New files use exclusive creation, no empty state or history files are created, and failures leave already-created destinations in place for a safe retry. Initialization does not start selection, preparation, or display lifecycle operations.
+One-shot runtime-control clients do not acquire this ownership lock.
 
-Configuration and content remain user-owned inputs. Operational state and global history remain authoritative and historical persistence respectively; prepared artifacts remain derived output. Runtime creation of those persistence and artifact files remains owned by their existing components.
+Independent consumers also do not acquire it. Operators must stop consumers before destructive maintenance affects their installation or publication data.
 
-`--reset` and `--purge` are separate interactive operations for the standard per-user installation and must be run while Refrain is stopped. Reset removes only the platform-standard operational-state file, global-history records and rotations, and generated cache contents while preserving configuration, content, all user assets, publication storage, and installation directories; configured custom storage paths are untouched. Purge removes the Refrain-owned standard configuration, operational, cache, and publication directory trees, including configuration, content, and assets stored beneath the standard configuration directory and every destination and temporary file beneath the standard publication root; it does not follow configured storage paths or remove shared application-data parents. Neither operation reads runtime storage settings or starts the application lifecycle. Before purging or otherwise removing consumer-readable publication data, independent consumer services must be stopped using the operating-system service facilities that supervise them. Their deletion checks and confirmation requirements are described in [Initialization and destructive maintenance](#initialization-and-destructive-maintenance).
+### Initialization
 
-Platform paths, installation, and service operation are documented under [Platform paths and publication root](#platform-paths-and-publication-root), [Installation requirements](#installation-requirements), and [Service supervision and clock readiness](#service-supervision-and-clock-readiness); public configuration is specified in [the application-configuration schema](../schemas/CONFIGURATION.md).
+`refrain --initialize` is noninteractive, repeatable, and limited to standard locations.
 
-Test path selection with injected platform and environment information. Exercise category-specific custom-resource discovery independently of the current working directory, including nested package references and manifest confinement, while verifying that content directories retain configuration-relative and explicit-absolute semantics. Exercise repeatable initialization, existing user data and assets, links, exclusive file creation, race-time destinations, marker-verified interrupted sample installation, partial failures, reset preservation, purge deletion, confirmation, and deletion boundaries using temporary locations; do not use developer application-data directories.
+Before writing:
+
+1. Resolve all standard paths.
+2. Validate packaged configuration and sample content.
+3. Preflight the required destination paths and existing filesystem objects.
+4. Reject links, redirection, unsafe objects, and conflicting destinations.
+5. Establish that existing data can be preserved without overwriting it.
+
+Initialization creates missing standard configuration, content, user-assets, state, artifact, and publication directories.
+
+It installs the packaged default `config.yaml` only when the standard configuration file is absent.
+
+An existing regular configuration file is preserved byte-for-byte.
+
+Initialization creates the standard user-assets directory and its `fonts`, `backgrounds`, and `decorations` category directories when missing.
+
+Existing user-asset files and nonempty category directories are preserved without inspecting or modifying their contents.
+
+Bundled visual assets remain package-owned and are not copied into the user-assets tree.
+
+Install packaged sample content only when the standard content directory is missing or empty, subject to verified interrupted-installation recovery.
+
+An ordinary pre-existing nonempty content directory must be left untouched and uninspected.
+
+### Interrupted sample installation
+
+Sample installation uses an installation-owned temporary marker identifying the packaged sample set.
+
+If sample installation was interrupted and the content directory is now nonempty, resume only when:
+
+- The marker identifies the expected packaged sample set.
+- Every existing expected sample file matches its packaged bytes.
+- Missing expected samples can be created safely without replacing existing files.
+
+Create only missing expected sample files, using exclusive file creation.
+
+Remove the marker after the complete sample set has been successfully installed.
+
+An absent or invalid marker, conflicting file content, or uncertain ownership in a nonempty directory must not be interpreted as a resumable installation.
+
+Report the condition and require manual inspection rather than overwriting user content.
+
+Initialization must tolerate an interrupted prior attempt without treating arbitrary files as owned installation artifacts.
+
+### Initialization persistence boundaries
+
+Initialization creates or reuses standard state and artifact directories without modifying existing persistent state, history, publication checkpoints, or generated image artifacts.
+
+It must not create placeholder `state.json`, `publication.json`, or global-history files.
+
+It creates the standard publication root when missing but must not replace, clean, or modify existing publication datasets during initialization.
+
+Use exclusive creation for new files and safe directory-creation procedures that reject unexpected objects appearing during the operation.
+
+A failure leaves successfully created destinations in place for a safe subsequent retry.
+
+Report the failed operation and the created or affected paths.
+
+Initialization does not select content, commit daily state, prepare images, start the resident, or initialize display backends.
+
+### Reset
+
+`refrain --reset` is an interactive destructive operation on standard runtime state and generated caches.
+
+It requires both standard input and output to be interactive terminals and an exact confirmation of `RESET`.
+
+There is no noninteractive confirmation bypass.
+
+Cancellation must leave the installation unchanged.
+
+Reset removes:
+
+- Standard `state.json`.
+- Standard `publication.json`.
+- Standard active global-history file.
+- Standard rotated global-history segments.
+- Refrain-generated contents of the standard cache and prepared-artifact directories.
+
+Reset preserves:
+
+- Standard `config.yaml`.
+- Content and user asset files.
+- Bundled package resources.
+- The complete standard publication root and its datasets.
+- Standard installation directory structure.
+- Runtime ownership and control metadata locations outside the reset scope.
+- Every configured custom storage path.
+
+Reset must not recursively delete the standard state directory merely to remove the three fixed persistent files.
+
+This is particularly important on Linux, where the standard publication root is a child of the standard state directory.
+
+Reset does not use runtime configuration or infer custom storage paths.
+
+### Purge
+
+`refrain --purge` removes the complete standard per-user Refrain installation after exact interactive confirmation of `PURGE REFRAIN`.
+
+Both input and output must be interactive terminals. There is no noninteractive bypass.
+
+Cancellation must leave the installation unchanged.
+
+Purge removes the Refrain-owned standard directory trees for:
+
+- Configuration, including standard content and user assets.
+- Operational data, including state, publication checkpoints, global history, and filesystem publications.
+- Generated caches and artifacts.
+
+The complete standard publication root is within purge scope. Every contained destination directory, completed dataset, temporary file, and other object is subject to safe removal.
+
+Purge removes all contents physically within its owned deletion roots, not only recognized filenames or generated artifacts.
+
+It must not remove shared parent directories or unrelated user and application data.
+
+The runtime ownership lock and control metadata are kept outside the owned installation trees so deletion does not remove the lock used to exclude a concurrent resident.
+
+Configured custom state, content, artifact, and publication paths are never followed or deleted by purge.
+
+### Filesystem deletion safety
+
+Resolve destructive-operation targets from standard application paths only.
+
+Before deletion, verify that each root is an actual directory owned by the standard installation and is not a symbolic link, junction, reparse point, or other redirected filesystem object.
+
+Reject unsafe roots rather than following their targets.
+
+When traversing an owned tree, inspect entries without following filesystem links.
+
+A link encountered within an owned tree may be removed as a contained object, but its target must never be traversed or deleted.
+
+Remove contained regular files and directories according to their actual ownership and location, including unfamiliar files beneath an established purge root.
+
+Do not traverse outside the declared deletion scope.
+
+Treat unexpected object types, unsafe root ownership, permission failures, and uncertain containment as actionable errors.
+
+Do not silently skip failed deletions or attempt recovery outside the standard owned paths.
+
+Use temporary test directories and injected path resolution for destructive-operation tests. Never run those tests against the developer's actual application-data directories.
+
+### Consumer maintenance exclusion
+
+Independent consumers do not participate in the resident ownership lock.
+
+Before purging publication data or replacing consumer installation files, the operator must stop affected consumer services through their operating-system service facilities.
+
+Maintenance commands do not query, stop, or manage consumer services automatically.
+
+The ownership lock excludes cooperating Refrain resident and installation-management processes; it does not promise protection against arbitrary external filesystem mutation or consumers left running during destructive maintenance.
+
+Automated tests must cover:
+
+- Standard path selection under injected Linux and Windows environments.
+- Omitted and explicit storage paths.
+- Standard-only initialization, reset, and purge behavior.
+- Configured custom storage isolation.
+- Exclusive ownership and busy-lock rejection.
+- Repeatable initialization and preservation of existing user data.
+- Exclusive file creation and race-time destination changes.
+- Marker-verified interrupted sample installation.
+- Preservation of nonempty content and user-assets trees.
+- Creation without placeholder state or history files.
+- Reset removal of all three fixed persistent files and rotated history.
+- Reset preservation of publication storage, including Linux's nested standard layout.
+- Purge removal of all contents beneath owned standard roots.
+- Root symlink, junction, and reparse-point rejection.
+- Safe removal of contained links without following their targets.
+- Permission failures and partial-operation diagnostics.
+- Independent consumer maintenance boundaries.
+- Windows and Linux filesystem behavior.
 
 ## Service supervision and clock readiness
 
-Use systemd for unattended deployment on Raspberry Pi OS.
+Use systemd for supervised unattended deployment on Raspberry Pi OS.
 
-The service should start automatically when enabled and recover from unexpected application termination according to a bounded restart policy.
+The resident service should start automatically when enabled and recover from unexpected process termination under a bounded restart policy.
 
-Service startup must not depend on network availability. A network-dependent destination must not prevent locally attached displays from operating.
+Normal resident startup must not require network availability.
 
-Configure the host timezone and provide reliable clock synchronization appropriate to the deployment. The supplied systemd unit does not guarantee that clock synchronization has completed before Refrain starts. Systems without a reliable real-time clock may initially select content using an incorrect date; operators requiring a trustworthy initial selection must arrange for clock readiness before service startup.
+The absence, failure, or delayed startup of an independent consumer must not prevent resident content selection, persistence, image preparation, or direct-display operation.
 
-Avoid duplicating systemd supervision in application code.
+Independent consumers use their own operating-system service lifecycles.
 
-Graceful termination must allow the display backend to release resources safely.
+The resident does not spawn, supervise, restart, or depend on consumer services.
 
-This currently describes supervision of the resident. In the target architecture, each consumer is a separate executable from the same installation, has an independent system-service lifecycle, and reads its own top-level section of the shared configuration. The resident does not spawn, supervise, or depend on consumers. Configuration enablement and system-service enablement are separate. Use existing operating-system service facilities; do not implement a service manager. Consumer shutdown before maintenance is an operator responsibility; maintenance does not query or stop consumer services and does not prevent an independently running consumer from reading during purge.
+Consumer enablement in application configuration is separate from operating-system service enablement.
+
+Do not introduce application-level service supervision merely to replace systemd.
+
+### Clock readiness
+
+Refrain uses the host operating system's local timezone and timekeeping facilities.
+
+Configure the deployment's local timezone and provide appropriate clock synchronization.
+
+The supplied systemd service does not guarantee that clock synchronization has completed before the resident starts.
+
+A device without a reliable real-time clock may initially evaluate an incorrect logical display date.
+
+Operators requiring correct initial selection must arrange for trustworthy clock readiness before service startup.
+
+A later clock correction is handled by the normal logical-date and reveal-scheduling rules in [Scheduling and Application Lifecycle](40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md).
+
+Do not add an independent timezone database, custom clock daemon, or network-time dependency inside Refrain.
+
+### Shutdown
+
+The resident must honor the single 60-second foreground shutdown deadline defined in [Shutdown coordination](40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#shutdown-coordination).
+
+Shutdown stops new publication admission and recoverable retries while allowing admitted operations to finish safely within the remaining deadline.
+
+Do not call backend cleanup concurrently with an active publication on the same instance.
+
+A blocked operation may require deferred cleanup or process exit for final resource release.
+
+Retain exclusive resident ownership while protected backend resources or control handlers remain active.
+
+The service supervisor may impose its own process-stop policy, but that policy must not be implemented as independent per-backend application shutdown deadlines.
+
+Service shutdown must not intentionally clear retained e-paper images.
+
+Document consumer shutdown and maintenance ordering separately from ordinary resident shutdown.
+
+Hardware-independent tests must cover bounded shutdown, concurrent backend operations, deferred cleanup, and safe ownership release.
 
 ## Service identity and permissions
 
-Run Refrain with the minimum practical operating-system privileges.
+Run the resident under the minimum practical operating-system privileges.
 
-Do not run the entire application as root merely because one hardware interface requires privileged access.
+Do not require root merely because the supported Waveshare hardware uses SPI and GPIO.
 
-Document required SPI and GPIO permissions for the supported deployment.
+Configure the relevant device nodes, GPIO character-device permissions, and service-group membership for the supported Raspberry Pi OS deployment.
 
-Persistent state and generated images must be writable by the service identity.
+Hardware-specific setup belongs to the packaged Waveshare backend guide and [Waveshare conversion and controller lifecycle](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#waveshare-conversion-and-controller-lifecycle).
 
-User-authored content and configuration should not require write access from the running application unless a defined feature requires it.
+The service identity must have appropriate access to:
+
+- The selected application configuration and content.
+- Registered user-owned rendering resources.
+- Effective operational-state storage.
+- Prepared-artifact storage.
+- Effective filesystem-publication destinations.
+- Protected resident ownership and local-control metadata.
+- Supported hardware devices when that backend is configured.
+
+User-authored configuration, content, and assets should remain read-only to the running application unless a defined operation requires modification.
+
+Operational state, publication checkpoints, generated artifacts, and owned publication datasets require write access by their responsible application components.
+
+Protect runtime-control credentials and endpoint metadata from other users using the platform-specific rules in [Resident ownership and authenticated control](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#resident-ownership-and-authenticated-control).
+
+Consumers require read access only to their configured publication datasets and relevant configuration.
+
+They must not require write access to Refrain-owned publication directories or authoritative operational state.
+
+A public consumer's access to publication files must be restricted appropriately for its configured audience and trust boundary.
+
+Do not rely on destination action filtering as a substitute for filesystem permissions or service authorization.
 
 ## Persistent data locations
 
-Keep user-authored content separate from application code and generated state.
+Keep user-authored content and configuration separate from installed code and generated operational data.
 
-Valid current-format selection state and histories must survive application restarts. Prepared images are disposable and may be regenerated. During prerelease development, incompatible state schemas do not require migration support. A diagnostic for incompatible platform-standard state may direct the operator to stop Refrain and run `refrain --reset`; for a configured state path outside the standard location, identify that path and require manual backup and quarantine/removal of only that file. `--reset` does not manage custom paths.
+Valid current-format `state.json`, `publication.json`, and global-history data must survive ordinary application restart.
 
-Avoid writing runtime state into the installed Python package directory.
+The operational state file owns the committed daily selection and reveal progression.
 
-Define and document platform-standard per-user paths rather than assuming a particular username or current working directory. Omitted state, global-history, and artifact paths independently retain their platform-standard defaults; demo persistence remains isolated in temporary storage.
+The publication checkpoint owns durable resolved destination-independent artistic choices.
+
+Global history is best-effort and is not authoritative for operational recovery.
+
+Prepared images are disposable cache entries that may be regenerated from the committed selection and valid publication checkpoint.
+
+Completed filesystem-publication datasets remain independently consumable through their verified manifests.
+
+Do not conflate these four responsibilities or introduce additional authoritative state through service or installation paths.
+
+An incompatible or corrupt standard operational-state file must produce an actionable diagnostic.
+
+For standard-path operational state, diagnostics may direct the operator to stop Refrain and run `refrain --reset`.
+
+For a configured state directory outside the standard location, identify the actual affected file and require manual backup and quarantine or removal of only that file.
+
+`--reset` must not operate on configured custom storage.
+
+Checkpoint recovery, reveal-progress reconciliation, and persistent compatibility belong to [Selection and Persistence](30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility).
+
+Filesystem-publication recovery belongs to [Dataset commit and consumer recovery](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#dataset-commit-and-consumer-recovery).
+
+No accelerated `--demo` runtime or separate demo persistence lifecycle is defined.
 
 ## Application update compatibility
 
-Application updates must not silently discard valid current-format selections or histories. Incompatible state from earlier prerelease development may require the explicit reset described above.
+Application updates must not silently discard valid current-format committed selections, publication checkpoints, or global-history records.
 
-Persistent-state changes before the first release do not require migration from prior development schemas. Reassess compatibility when Refrain has released a public format; changes to public YAML schemas still require review against the documented interface.
+Only the current prerelease internal operational-state schema is supported.
 
-The initial release does not require automatic updates or remote deployment management.
+Earlier development-state schemas do not require migration, compatibility readers, or historical rendering branches.
+
+Incompatible prerelease state may require the explicit recovery or reset procedure described above.
+
+Changes to public configuration, content, asset, publication, CLI, or consumer interfaces still require review against their authoritative schemas and approved compatibility requirements.
+
+Reassess persistent-format compatibility when Refrain establishes its first public release.
+
+The initial release does not require automatic application updates, remote deployment management, or a custom upgrade service.
