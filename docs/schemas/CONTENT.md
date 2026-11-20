@@ -247,7 +247,7 @@ text_color: ["black", "@neutral"]
 
 A declaration must be a string or a nonempty sequence. An invalid outer structure, including null, an empty sequence, a mapping, or another unsupported type, invalidates the entry. Within a structurally valid sequence, invalid member types, malformed identifiers, direct RGB literals, and unavailable identifiers are diagnosed and excluded individually without invalidating the entry. Valid members remain usable. If no usable members remain, the preference falls through to the next level. Duplicate identifiers do not add weight. Palette availability is evaluated during preparation.
 
-The documented fallback order is entry, selected background, selected decoration, effective global text-color pool, then built-in `black`. Candidates from different levels are not combined.
+Color preference precedence, selection, and fallback are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence).
 
 ### Decoration color
 
@@ -259,7 +259,7 @@ decoration_color: ["black", "@muted"]
 
 It uses the shared palette but an independent pool namespace. The same structural and member-level validation rules as `text_color` apply: an invalid outer structure invalidates the entry, while invalid or unavailable individual candidates are diagnosed and excluded without invalidating the entry. A preference with no usable candidates falls through. Duplicate identifiers do not add weight.
 
-The documented fallback order is entry, selected background, selected decoration, effective global decoration-color pool, then built-in `black`, without combining levels. This preference affects only effectively tintable selected decoration layers; it never recolors the background. No decoration color is resolved when no layer is effectively tintable.
+Decoration-color preference precedence and fallback are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence). Effective tinting behavior is specified in [Colors and tinting](../specifications/50-PRESENTATION_AND_RENDERING.md#colors-and-tinting).
 
 ### Presentation style
 
