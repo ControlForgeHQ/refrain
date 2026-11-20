@@ -347,7 +347,7 @@ Clock adjustments are evaluated according to the display-day and reveal-progress
 
 The application must not rely on busy waiting to determine ordinary reveal times.
 
-Normal operation does not include accelerated resident selection or a `refrain --demo` lifecycle. Explicit local quotation inspection and one-shot reveal-stage rendering belong to `refrain-viewer` and are defined by the [public CLI](../CLI.md).
+Explicit local quotation inspection and one-shot reveal-stage rendering belong to `refrain-viewer` and are defined by the [public CLI](../CLI.md).
 
 ## Lifecycle recovery
 

@@ -458,8 +458,6 @@ Checkpoint recovery, reveal-progress reconciliation, and persistent compatibilit
 
 Filesystem-publication recovery belongs to [Dataset commit and consumer recovery](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#dataset-commit-and-consumer-recovery).
 
-No accelerated `--demo` runtime or separate demo persistence lifecycle is defined.
-
 ## Application update compatibility
 
 Application updates must not silently discard valid current-format committed selections, publication checkpoints, or global-history records.
