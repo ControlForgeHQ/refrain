@@ -93,6 +93,8 @@ The packaged manifests declare these bundle and face identifiers:
 
 Registration depends on successful validation. These bundles do not constrain the face names available in custom bundles.
 
+The packaged `source-sans-3` bundle must provide a usable `regular` face for unconditional emergency font recovery, independently of configured pool membership.
+
 ## Background assets
 
 ### Standalone backgrounds
@@ -146,7 +148,7 @@ A decoration contains `decoration.yaml` and an ordered composition of PNG layers
 
 The bundled decoration identifiers are `ethereal`, `hex`, `lower-flourish`, `simple-border`, and `top-bottom-borders`.
 
-Decorations provide artwork and the listed preferences. They cannot supply arbitrary drawing instructions, independently positioned text fields, or new literary styles.
+Decorations provide artwork and the listed preferences. They cannot supply font-size bounds, arbitrary drawing instructions, independently positioned text fields, or new literary styles.
 
 ### Presentation insets
 
@@ -303,7 +305,9 @@ Conditions preserve the relative order of remaining layers. They neither enable 
 
 Malformed YAML, unsupported `format`, invalid identifiers, structurally invalid required data, invalid layer definitions or parameter combinations, invalid images, and invalid decoration insets exclude the affected resource without invalidating unrelated resources. Invalid optional font faces follow the font-specific recovery rule above.
 
-Discovery validates image metadata and integrity; successful registration does not guarantee that decoding or every canvas-dependent transformation will succeed later. Invalid nine-slice source boundaries exclude the resource. Canvas-dependent transformation failures are detected during preparation.
+Source PNGs, including standalone backgrounds and layer-referenced images, must contain no more than 36,864,000 decoded pixels.
+
+Discovery validates image metadata and integrity; successful registration does not guarantee that decoding or every canvas-dependent transformation will succeed later. Invalid nine-slice source boundaries exclude the resource. Canvas-dependent transformation failures are detected during preparation for the actual configured or viewer-selected aspect, not for unused aspects.
 
 If any eligible layer of a packaged background fails during preparation, the complete background composition is discarded and paper-white is used.
 
