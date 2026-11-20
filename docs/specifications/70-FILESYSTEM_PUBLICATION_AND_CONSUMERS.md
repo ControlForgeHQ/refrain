@@ -2,165 +2,616 @@
 
 ## Publication destinations and ownership
 
-Refrain remains responsible for content selection, scheduling, image preparation, and publication to directly attached displays. `window` and `waveshare-13in3-e` remain resident-owned direct-display backends. The built-in `publish` backend is the sole non-direct destination mechanism. The resident does not host HTTP services and does not require network availability. Publication support provides reusable storage, manifest validation, and maintenance behavior; backend registration integrates publication with the resident's existing destination coordinator and runtime-control path.
+Refrain owns literary selection, scheduling, image preparation, and publication to its configured destinations.
 
-Each `publish` destination has its own validated ID, resolved output specification, publication audience, presentation overrides, and directory. It publishes the destination-specific presentation prepared by Refrain. Scheduled preparation groups destinations only when their effective presentation requirements match; within a group, presentation-wide artistic choices are resolved once and kept consistent across output specifications. Different effective overrides, including backgrounds, decorations, fonts, colors, tint, or QR settings, must not share prepared images even when output specifications match. Prepared variants may be shared only when both the output specification and effective presentation requirements match. Destinations never share identity, audience, overrides, directory, or publication acknowledgement. A destination directory is a direct child of the publication root, derived only from that validated ID. Destination configuration never supplies an arbitrary deletion path. Publication directories belong to Refrain, not to consumers; multiple consumers may read the same directory.
+`window` and `waveshare-13in3-e` are resident-owned direct-display backends. The built-in `publish` backend is the sole non-direct resident backend.
 
-Destination overrides affect scheduled rendering only. A transient finished image supplied to push is already destination-ready: it is validated against the requested dimensions and published unchanged, without applying destination rendering overrides or preparation.
+The resident does not host HTTP services, supervise consumers, or require network availability for filesystem publication.
+
+Each `publish` destination has its own:
+
+- Validated destination ID.
+- Output specification.
+- Required publication audience.
+- Restricted presentation overrides.
+- Refrain-owned destination directory.
+- Independent publication acknowledgement.
+
+One shared `publish` backend instance may manage multiple destinations. Sharing the backend instance does not merge destination identity, audience, publication events, directory ownership, or acknowledgement.
+
+Scheduled destinations share prepared images only when their output specifications and effective presentation requirements are compatible. Audience does not change pixel compatibility.
+
+The application prepares destination-specific images and finalizes publication metadata before passing them to the filesystem writer.
+
+A transient finished image is already destination-ready. It bypasses scheduled artistic overrides and rendering preparation.
+
+Publication directories are exclusively Refrain-owned. Consumers may read their completed datasets but must not create, modify, rename, or remove objects within them.
+
+Multiple independent consumers may read one destination directory.
+
+Destination configuration does not supply arbitrary filesystem paths. Every destination directory is a direct child of the effective `storage.publish` root, named only from the validated destination ID.
+
+Filesystem publication uses the existing resident destination coordinator, per-backend serialization, failure isolation, and retry policy defined in [Destinations and Runtime Control](60-DESTINATIONS_AND_RUNTIME_CONTROL.md).
+
+A successful `publish` operation means its complete dataset passed the verified filesystem commit point. It does not imply that a consumer has retrieved, accepted, or displayed the image.
 
 ## Prepared metadata and event finalization
 
-The shared publication-metadata module defines one version-1 JSON schema for prepared scheduled-image metadata and completed scheduled or transient publication metadata. Preparation metadata captures the committed quotation identity, selection revision, logical display date, effective reveal schedule and stage, complete single-quotation reconstruction input, canonical presentation, effective destination presentation, actual output specification, and unfiltered ordered actions alongside the prepared image.
+Publication uses the four exact version-1 forms defined in [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes):
 
-The application-level finalizer accepts prepared metadata when completing a scheduled publication, or no prepared metadata for a transient publication. The caller supplies the publication-event ID and timezone-aware event timestamp, destination ID, actual output specification, and—when scheduled— the image's reveal stage and destination audience. Finalization validates that the image corresponds to the prepared output and stage, copies rather than mutates shared preparation data, and filters actions for exactly one nonhierarchical `public` or `private` audience. It does not choose content, resolve artistic resources, render images, inspect committed runtime state, access a display, or write files. The publication ID is supplied by the publication event owner; it is not generated during preparation.
+1. Content checkpoint.
+2. Content-and-presentation checkpoint.
+3. Completed scheduled publication.
+4. Completed transient publication.
 
-Transient finalization never reads selection or preparation state. Finished images submitted through `--image`, viewer previews, and information-view images all use the same minimal transient representation. Classification does not alter information-view scheduling, publication priority, duration, or acknowledgement behavior.
+No fifth public preparation-metadata shape, rendering snapshot, embedded content-entry representation, or dual canonical/effective presentation model is defined.
 
-The finalizer and JSON validator are hardware-independent application operations used by resident filesystem publication. Scheduled publication loads metadata from the same compatible prepared-image collection as the selected image, then independently finalizes it for each destination. Transient and information-view images use the minimal transient representation and do not read scheduled preparation or selection state.
+### Shared checkpoints and preparation
 
-Use the shared versioned schema and exact field contract in [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes) for both prepared and completed documents. Scheduled reconstruction metadata must preserve the canonical presentation separately from the effective destination presentation. The canonical stable selections come from authoritative operational state; effective metadata records the actual resolved choices, QR inclusion or suppression, and geometry used to prepare the destination image. Keep finalization, validation, parsing, and serialization hardware-independent and based on small JSON-compatible values. Use the standard-library JSON module; serialize deterministically as UTF-8 JSON, reject duplicate object keys and nonstandard numeric values, and validate both preparation and completed stages. Do not use pickle, executable payloads, raw resource paths, resource bytes, RGB values, or raster-layout calculations.
+The shared content checkpoint contains the committed selected quotation, effective reveal schedule, current visibility, and complete ordered action declarations.
 
-The application-level finalizer must receive the publication-event identity and timestamp, destination identity, actual output specification, and the appropriate prepared metadata and reveal stage for scheduled publication. It must receive no scheduled preparation for transient publication. Finalization must not select content, resolve resources, render images, access resident state or a display backend, mutate cached preparation, or write publication files. Validate destination audience filtering before serialization, including that public output contains no private-only actions in any nested content. Transient documents must contain no scheduled association, reconstruction data, or actions.
+The completed content-and-presentation checkpoint additionally contains the resolved destination-independent artistic choices.
 
-Automated tests must cover schema-stage validation, canonical/effective metadata separation and immutability, effective-value representation for every override including decoration-suppression geometry and QR suppression, Unicode JSON round trips, timezone-aware publication timestamps, exact destination/output association, public/private filtering and privacy leakage, order and duplicate preservation, transient metadata, and shared-preparation immutability. These operations must run without a resident process, display hardware, network service, systemd, or publication directory. Filesystem publication, manifest handling, and viewer reconstruction are separate capabilities; viewer reconstruction consumes this schema through the shared renderer, and the filesystem writer validates this completed metadata against its independent manifest contract. The resident `publish` backend supplies the image and exact compatible preparation metadata to the finalizer and writer; hardware-independent end-to-end coverage verifies manifest integrity, audience isolation, transient behavior, and viewer reconstruction independently of the content library.
+Both checkpoints belong to the current committed selection and are persisted in the single `publication.json` file under `storage.state`.
+
+Operational state remains authoritative for committed literary selection, selection revision, repetition history, and reveal progression. The completed publication checkpoint is the sole durable authority for resolved destination-independent artistic choices.
+
+Destination-specific preparation derives an independent effective presentation from the validated shared checkpoint, applicable destination overrides, output requirements, and currently available resources.
+
+The shared checkpoint must not be modified by destination preparation.
+
+Its `presentation.qr.enabled` records canonical QR policy. Output-dependent `presentation.qr.available` is omitted from the shared checkpoint and resolved separately for each destination.
+
+Prepared-image caches contain complete images and the internal association and integrity data needed to reuse them safely. They do not establish another public metadata form or independently authoritative artistic record.
+
+A compatible cached image must remain associated with the committed selection, effective presentation requirements, output specification, and reveal-stage visibility that produced it.
+
+A failed or incompatible cache is regenerated using the established recovery requirements without literary reselection or reveal regression.
+
+Prepared-image cache identity, complete-set atomicity, and regeneration belong to [Presentation and Rendering](50-PRESENTATION_AND_RENDERING.md#cache-identity-publication-and-regeneration).
+
+### Event finalization
+
+The application-level publication finalizer constructs one independent completed metadata document for each destination publication event.
+
+For scheduled publication, the finalizer receives:
+
+- The committed literary content and effective reveal schedule associated with the selected prepared image.
+- The visibility applicable to that image's reveal stage.
+- The actual resolved effective destination presentation associated with the prepared image.
+- The destination's required audience and original ordered action declarations.
+- The publication-event ID and UTC timestamp.
+- The exact destination ID and output specification.
+
+The finalizer validates the prepared image's applicable selection, visibility, effective-presentation, and output associations before completing metadata.
+
+It copies the required data into the completed scheduled form, filters actions for the destination audience, and populates the `publication` section.
+
+The completed scheduled publication contains exactly `schema_version`, `content`, `presentation`, and `publication`.
+
+Its `presentation` object records one effective set of resolved artistic values, not separate canonical and destination presentations.
+
+The completed `presentation.qr` object includes both effective `enabled` and actual `available` values.
+
+`content.reveal_stage` records the three Boolean visibility values represented by the published image. It does not contain a numeric reveal-stage index.
+
+The completed document records the applicable publication event, not subsequent changes to reveal progression or artistic configuration.
+
+Never retrospectively modify a completed publication document when the shared checkpoint changes.
+
+The finalizer must not:
+
+- Choose literary content or artistic resources.
+- Rerender or alter image pixels.
+- Read or modify operational state.
+- Change the shared publication checkpoint.
+- Interpret or execute actions.
+- Write filesystem publication data.
+- Access or initialize a display backend.
+
+Publication identity is supplied by the publication-event owner. Do not invent publication IDs or timestamps during image preparation.
+
+Use the shared hardware-independent metadata validation and serialization implementation.
+
+The finalizer must produce a complete document satisfying its selected form before passing it to the filesystem writer.
+
+The filesystem writer must validate the completed document independently before committing the dataset.
+
+### Publication validation boundaries
+
+Validate exact document forms, required and prohibited fields, types, identifiers, supported values, permitted nulls, output associations, destination identity, and applicable audience requirements.
+
+Reject unsupported versions, duplicate JSON keys, nonstandard numeric values, malformed Unicode, partial objects, unexpected fields, or unresolved required values.
+
+Enforce inexpensive semantic consistency needed to prevent unsafe consumption, including impossible QR policy/availability combinations and visibility flags inconsistent with absent literary fields.
+
+Do not recalculate reveal schedules, load rendering resources, measure text, perform QR placement, or repeat image composition merely to validate completed metadata.
+
+Preparation is responsible for producing semantically correct rendered images and matching metadata. The validator is responsible for enforcing the documented structural, association, and safety constraints.
+
+Use deterministic UTF-8 JSON serialization through the standard-library JSON module, preserving literary Unicode and action order.
+
+Do not use pickle or executable serialization. Do not embed source-asset bytes, font files, absolute resource paths, raw RGB values, or raster-layout plans in publication metadata.
+
+Automated tests must cover all four document forms, rejection of incomplete or wrong-stage metadata, exact effective values, reveal visibility, checkpoint immutability, event identity, output association, Unicode serialization, and independent finalization for multiple destinations.
 
 ## Destination metadata and audience filtering
 
-Metadata describes the presentation actually published by one destination, not a generic serialization of the resident's daily selection. Its versioned JSON document contains publication identity, type and timestamp; destination identity and actual output specification; applicable display date, selection identity and actual reveal stage; optional reconstruction data; and an ordered, audience-filtered action sequence. The destination's required `audience` is policy supplied to finalization; it is never a field in preparation or completed metadata, including nested reconstruction content. Publication type is `scheduled` or `transient`. Use explicit `null` values for inapplicable structured fields. The exact scheduled-publication field names, types, and preparation/completion validation stages are defined in [Publication metadata](../schemas/PUBLICATION.md).
+Every configured destination declares exactly one publication audience: `public` or `private`.
 
-Scheduled metadata provides sufficient reconstruction data for a `refrain-viewer` publication mode to render the prepared destination's presentation at another requested aspect ratio and resolution. It includes a valid generated single-quotation content entry derived from the committed selection, the canonical presentation, and the actual effective background and decoration identifiers, font identifier and role-specific faces, palette identifiers, presentation style, QR behavior, insets, and font-size bounds used for that destination. The embedded entry conforms to the authoritative [content-entry format](../schemas/CONTENT.md#entry-fields).
+The audience is validated as destination configuration before resident startup and is supplied independently to scheduled publication finalization.
 
-Persist canonical selections with the committed daily selection before destination preparation. Apply each destination's restricted overrides to derive the effective presentation; capture that actual effective result and the output specification from the same preparation operation that produces the image. Do not repeat random canonical selection, infer choices from finished pixels, or re-resolve either record when serializing metadata. The canonical presentation is authoritative selection state; effective destination values are derived prepared metadata. Preserve stable resource and palette identifiers rather than embedding asset contents or RGB values. Do not persist calculated text positions, crop geometry, or other output-dependent layout results. Future reconstruction recalculates geometry through the existing renderer for the requested output specification, using the currently installed Refrain assets and palette definitions; it does not promise archival reproduction if those resources or rendering behavior change. Metadata records the actual reveal stage, while reconstruction input has the complete committed quotation.
+The audience is not stored as a field in publication metadata and must not be inferred from the destination ID.
 
-Preparation caches the canonical and effective reconstruction metadata with the exact compatible image collection using this same publication-metadata schema. A complete compatible cache therefore includes valid images and valid associated metadata. Reusing the images reuses their recorded effective choices; do not repeat random selection or infer choices from finished pixels to reconstruct missing metadata. Missing, damaged, inconsistent, or incompatible required metadata makes that collection unusable for reconstruction-capable publication. Regenerate its compatible images and metadata together from the committed selection and persisted canonical presentation, without changing its identity, history, canonical choices, or reveal progression. The cache remains disposable derived storage.
+Audience affects published actions, not prepared image identity or artistic resource selection.
 
-The finalizer starts from cached metadata and derives an independent destination-specific instance. It finalizes publication identity and timestamp, actual destination and output specification, actual reveal stage, and audience-filtered actions. It preserves the committed literary identity, the unchanged canonical presentation, and the effective choices that produced the image; it validates the completed document before serialization and never mutates shared cached metadata. Distinct destinations may derive different completed documents from compatible preparations. The resident passes each completed document and its corresponding image to the filesystem writer; successful acknowledgement follows manifest commit.
+The committed selection and shared publication checkpoint preserve the complete ordered action declarations.
 
-Each configured destination declares exactly one audience: `public` or `private`. The application obtains this policy from the validated destination configuration and supplies it to finalization; the policy is not inferred or copied into metadata. It is independent of each action's visibility and of presentation overrides. Destinations with equivalent presentation requirements share prepared-image groups and unfiltered metadata even if their audiences differ; audience does not affect cache identity.
+Before serializing or exposing completed scheduled publication metadata, copy and filter those declarations for the destination's audience.
 
-Visibility is nonhierarchical: a public destination includes actions declaring `public`; a private destination includes actions declaring `private`; an action declaring both is included for either audience. Preserve eligible actions in their original order, including duplicates. Actions are metadata only and are never implicitly executed by publication or a consumer. Public metadata must never expose private-only actions. Audience filtering does not replace filesystem permissions, authentication, or consumer-side authorization.
+Visibility is nonhierarchical:
 
-Transient publications use the same minimal metadata contract whether their image originated from `--image` or a viewer-generated preview. Their metadata contains publication identity, destination identity, type, timestamp, and output specification, but no committed-presentation association, scheduled selection metadata, literary reconstruction data, or actions. The action sequence is always empty. Transient publication is an image-delivery event, not a reconstructable presentation. Do not extend transient IPC to transfer literary or rendering metadata.
+- A `public` destination includes an action only when its visibility explicitly includes `public`.
+- A `private` destination includes an action only when its visibility explicitly includes `private`.
+- An action declaring both audiences is included for either destination.
 
-Information-view images use this same transient metadata representation:
+Preserve the original order of included actions, including duplicate declarations, original payloads, and each included action's complete visibility declaration.
 
-```json
-{
-  "publication_type": "transient",
-  "presentation": null,
-  "reconstruction": null,
-  "actions": []
-}
-```
+Do not add an audience field or rewrite an included action's visibility values.
 
-The normal publication envelope still supplies publication identity, destination, timestamp, and output specification. The implemented `refrain-viewer --publication` mode rejects this and every other transient publication. The `publish` backend receives the image and corresponding finalized metadata from the application; it does not inspect operational state to infer presentation semantics.
+The completed scheduled publication contains only its filtered `content.actions` array.
 
-For reconstruction-capable publication, verify that preparation metadata uses the exact publication metadata schema and remains associated with its compatible image collection after cache reuse and process restart. Cover missing or corrupted metadata, mismatched image and metadata collections, compatible destinations sharing prepared images, destinations with different presentation overrides, and adding a `publish` destination that can reuse compatible cached images. Verify destination-specific finalization creates independent complete metadata without mutating shared cached metadata or another destination's result.
+A public destination must not expose private-only actions in its completed metadata, including through redundant or nested fields.
 
-Every configured destination must explicitly declare audience `public` or `private`; test missing, null, empty, wrong-type, and unsupported values for rejection before runtime startup. Verify audience is retained on the destination but excluded from publication metadata and prepared-image identity. Preparation keeps every committed action declaration unchanged; finalization filters by destination audience while preserving action order, duplicates, and each included declaration's complete visibility list. Completed scheduled serialization must require an audience and reject actions not visible to it. Test that prepared metadata cannot be serialized or consumed as a completed publication and that blank publication IDs are rejected consistently.
+The shared checkpoint remains unchanged, so another destination can independently filter the same original actions for its audience.
+
+### Completed-publication limits
+
+The committed content and shared checkpoints retain the authoring limits established by [Publication metadata](../schemas/PUBLICATION.md#actions).
+
+Completed scheduled publication has stricter external-delivery limits:
+
+- At most 16 audience-filtered action declarations.
+- At most 4,096 UTF-8 bytes per serialized action object.
+- At most 65,536 bytes for the entire serialized completed metadata document.
+
+Apply audience filtering before checking completed-publication action count and byte limits.
+
+Byte limits apply to the exact deterministic serialized UTF-8 representation, not Python character counts.
+
+Do not silently truncate, drop, reorder, or rewrite eligible actions or their payloads to satisfy these limits.
+
+If an otherwise valid selected quotation cannot produce completed metadata within the applicable limits, report a destination publication failure with an actionable diagnostic.
+
+Such failure must not invalidate committed selection, alter repetition history, modify the shared checkpoint, or prevent independent destinations from publishing valid datasets.
+
+Completed transient publications contain no actions and remain subject to the completed metadata size limit.
+
+Validate these constraints before writing a publication dataset.
+
+Audience filtering does not replace filesystem permissions, service authentication, or consumer-side authorization.
+
+Actions are opaque metadata. Neither finalization nor the filesystem publisher executes them.
+
+Automated tests must cover:
+
+- required destination audiences and invalid configuration values;
+- independently filtered public and private publications;
+- declarations visible to both audiences;
+- preservation of ordering, duplicates, visibility arrays, and payload text;
+- absence of private-only data from public metadata;
+- shared checkpoint immutability;
+- filtering before completed-publication size checks;
+- action-count, per-action byte, and total metadata byte limits;
+- no silent truncation or partial publication when limits are exceeded;
+- failure isolation across destinations with different audiences.
 
 ## Transient publication metadata
 
-When publication metadata is produced, an information-view image is a transient publication, like any other pushed transient image. It uses the minimal transient metadata representation and has no association with the committed daily quotation, scheduled-selection metadata, literary reconstruction data, or actions. Its publication envelope still identifies the publication, destination, timestamp, and output specification. Its transient classification does not make the internally scheduled startup view an external IPC request or change its publication priority, duration, or restoration behavior.
+A transient publication describes a completed image-delivery event without associating it with a committed daily literary selection.
 
-Treat an information-view image as transient for publication metadata, using the same minimal representation as other transient publications: `publication_type: transient`, `presentation: null`, `reconstruction: null`, and an empty `actions` sequence. It has no committed daily quotation association, scheduled-selection metadata, literary reconstruction data, or actions. Its normal publication envelope still identifies the publication, destination, timestamp, and output specification. Distinguish information-view publication identity from committed daily presentation identity without exposing view semantics to display backend implementations.
+Completed transient metadata contains exactly:
 
-Include hardware-independent automated tests covering:
+- `schema_version`.
+- `publication`.
 
-- the minimal transient publication metadata for information views, with no scheduled-selection association, reconstruction data, or actions;
+Its `publication.type` is `"transient"`.
+
+It contains no `content` or `presentation` object, action sequence, reconstruction input, or null placeholders for omitted sections.
+
+The publication section records the event ID, UTC timestamp, destination ID, and actual output specification.
+
+Finished-image viewer pushes and externally submitted transient images use this form.
+
+Information-view images also use the completed transient form when published to a `publish` destination.
+
+Their classification does not turn automatic startup information-view presentation into an external IPC request or alter its timing, publication priority, or scheduled-acknowledgement behavior.
+
+The no-eligible-content fallback likewise uses the completed transient form for filesystem publication, because it is not a committed daily selection and cannot truthfully provide a committed selection revision.
+
+That fallback remains an internally required literary presentation: render it with the established normal literary facilities and applicable destination presentation requirements, using the exact curated quotation and attribution defined in [No-eligible-content fallback](40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#no-eligible-content-fallback).
+
+Transient metadata classification does not require the fallback to bypass literary rendering or behave as an externally submitted push.
+
+Do not fabricate committed content, a selection revision, or scheduled checkpoint values to produce publication metadata for the fallback.
+
+Transient publication must not modify authoritative operational state, repetition history, reveal progress, or the shared publication checkpoint.
+
+Its filesystem dataset is independent of scheduled prepared-image persistence.
+
+`refrain-viewer --publication` accepts only completed scheduled metadata and must reject every transient publication, including information-view and fallback publications.
+
+Automated tests must cover exact transient document shape, omission of literary and artistic sections, independence from committed state, information-view classification, and no-eligible fallback publication without synthetic selection.
 
 ## Publication paths and containment
 
-Before any destructive publication operation, reject a resolved publication root that overlaps protected Refrain data: configuration, content, user assets, authoritative state or history files, prepared-artifact/cache directories, or other protected configured storage. Overlap includes a root equal to, inside, or an ancestor of a protected data path when cleanup could reach that data. Compare against effective custom paths as well as standard paths. The standard publication root may share the platform operational-data parent with sibling state and history files, but must not contain, replace, or be contained by those protected data targets. Perform these checks before creating or cleaning a destination; fail closed if safe separation cannot be established.
+The effective `storage.publish` value identifies Refrain's publication root.
 
-Path validation and destructive operations must prove that a destination stays within the publication root and must reject traversal, symbolic links, junctions, reparse points, and other filesystem redirection. Never follow a redirecting path or delete an object outside the owned destination directory. Reject unsafe destinations rather than attempting cleanup or repair.
+Each `publish` destination owns exactly one direct child directory of that root, named from its validated destination ID.
+
+Destination configuration must not supply a separate arbitrary publication directory or cleanup path.
+
+The publication root and every destination directory are Refrain-owned storage, not general-purpose user file directories.
+
+### Protected-path separation
+
+Before creating a publication destination or performing destructive cleanup, verify that the effective publication root cannot overlap protected Refrain data.
+
+Protected data includes:
+
+- Configuration files and directories.
+- Content libraries.
+- User-owned assets.
+- Authoritative operational-state files and their containing state directory.
+- Global history and publication checkpoints.
+- Prepared-image artifact and cache directories.
+- Other configured protected application storage.
+
+Compare effective standard and custom locations, including configuration-relative and absolute paths.
+
+Reject a publication root equal to, contained within, or an ancestor of protected data whenever publication cleanup could affect that data.
+
+The platform-standard publication root may share a common operational-data parent with independently owned state directories. Such shared parentage is valid when the publication root and its cleanup scope remain disjoint from the protected state.
+
+Do not reject standard sibling publication and state directories merely because they share a platform data parent.
+
+If safe separation cannot be established, fail before writing or removing publication objects.
+
+### Path and component safety
+
+Validate publication destination IDs according to [Application Configuration](../schemas/CONFIGURATION.md#destinations), including the additional filesystem-safe requirements for `publish`.
+
+Reject Windows-reserved device names and case-insensitive directory-name collisions even on case-sensitive development filesystems.
+
+Validate component lengths for supported Windows and Linux filesystems before creating publication directories.
+
+The filesystem publication-event ID follows the exact identity and filename constraints in [Publication manifest](../schemas/PUBLICATION.md#identity-and-filenames).
+
+Publication IDs must not generate names colliding with `manifest.json` or other reserved dataset filenames. In particular, reject `manifest` as a publication ID without regard to case.
+
+Reject collisions with currently owned publication filenames, including case-insensitive collisions that would be unsafe on Windows.
+
+Use paths derived solely from validated destination IDs, publication IDs, and fixed dataset filenames.
+
+Reject absolute paths, traversal, unexpected separators, drive-qualified components, and unsafe filesystem redirection.
+
+The publication root and selected destination directory must be actual directories, not symbolic links, junctions, reparse points, or redirected paths.
+
+Validate containment and ownership before destructive operations.
+
+Do not follow a symlink, junction, reparse point, or other redirecting filesystem object during cleanup.
+
+Once ownership of an actual destination directory has been established, its complete contents are within Refrain's cleanup scope. Unexpected files and subdirectories are not protected merely because they are unfamiliar.
+
+Delete contained non-current objects safely without following links outside the owned tree. A contained link may be unlinked as an object, but its target must never be traversed or deleted.
+
+If containment, ownership, or safe non-following deletion cannot be established, fail closed with an actionable diagnostic rather than guessing.
+
+The publication root must not be used as a mechanism to delete neighboring application or user data.
+
+Standard `--reset` preserves publication storage. Standard `--purge` operates only on standard Refrain-owned roots and never follows configured custom publication paths.
+
+Installation-management scope and confirmation requirements are defined by [Installation and Service Operation](80-INSTALLATION_AND_SERVICE_OPERATION.md).
+
+Automated tests must exercise standard and custom paths, overlapping protected storage, safe sibling directories, unsafe redirection, case-insensitive collisions, reserved filenames, and complete destination-directory ownership.
 
 ## Dataset commit and consumer recovery
 
-Each destination directory contains one current complete single-frame PNG image, one versioned JSON metadata document, and a stable `manifest.json`. For example:
+Every `publish` destination exposes one current complete dataset consisting of:
+
+- One single-frame PNG image.
+- One completed version-1 publication metadata JSON document.
+- One stable `manifest.json`.
+
+The image and metadata filenames are derived from the same publication-event ID.
+
+The stable manifest contains the exact fields and filename associations specified by [Publication manifest](../schemas/PUBLICATION.md#manifest-fields).
+
+For example:
 
 ```text
 <publish-root>/
-├── default/
+├── living-room/
 │   ├── manifest.json
-│   ├── <publication-id>.png
-│   └── <publication-id>.json
-├── web-public/
-└── web-private/
+│   ├── publication-42.png
+│   └── publication-42.json
+└── kitchen/
+    ├── manifest.json
+    ├── publication-87.png
+    └── publication-87.json
 ```
 
-The exact manifest fields, filename constraints, and version behavior are defined in [Publication manifest](../schemas/PUBLICATION.md#manifest-fields). The metadata schema is versioned independently in [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes). Image and metadata filenames derive from the publication ID in the completed metadata. Consumers read the manifest, verify both referenced files and their hashes, and accept only a complete matching dataset.
+The manifest's `id` must equal `metadata.publication.id`.
 
-The reusable writer receives a completed image and its already-finalized metadata. One publication follows this order:
+The metadata destination ID must match the owning destination directory.
 
-1. Validate their publication and destination identities, metadata contract,
-   and image dimensions.
-2. Write and complete uniquely named image and metadata files, then compute
-   their SHA-256 hashes.
-3. Write and complete a temporary versioned manifest describing those files.
-4. Atomically replace `manifest.json` with the complete temporary manifest.
-5. Remove superseded publication files and recognized temporary contents.
+The metadata output dimensions must match the complete image.
 
-Replacing `manifest.json` is the consumer-visible commit point; atomic replacement of a whole directory is not required. Never overwrite the files referenced by the current manifest before the replacement. A failure before commit leaves the prior valid dataset current. A failure after commit must not invalidate the new publication. A malformed manifest, missing referenced file, hash mismatch, unsafe directory object, or uncertain ownership is reported without repair or acceptance as a valid dataset. On a subsequent publication, the writer removes only recognized stale temporary or superseded files owned by the destination. Consumers tolerate incomplete or unavailable reads using bounded retries. A consumer that starts after publication recovers solely from the current manifest and its referenced files. Do not add publication history, backups, a filesystem transaction framework, or a separate publication daemon.
+Both referenced files must be regular files in the same destination directory without filesystem redirection.
 
-When this writer is integrated, publication failures will use the existing per-destination bounded retry and eventual-failure behavior; after exhaustion, a later publication opportunity will permit another attempt. This storage implementation does not schedule retries or alter committed selection state.
+The manifest records SHA-256 hashes of the exact image and metadata file bytes.
+
+A valid manifest alone does not establish a valid dataset. Consumers must verify the complete association.
+
+### Writer commit sequence
+
+The reusable filesystem writer receives one completed image and its already-finalized metadata.
+
+For each publication:
+
+1. Validate the destination, completed metadata form, publication identity, output specification, image representation and dimensions, and filesystem component safety.
+2. Verify ownership and containment of the publication root and destination directory.
+3. Write the new image and metadata under unique publication-derived filenames that do not overwrite the files referenced by the current manifest.
+4. Flush, synchronize, and close those files, then compute or verify their exact SHA-256 hashes.
+5. Construct and validate a complete temporary manifest referencing the new files.
+6. Flush, synchronize, and close the temporary manifest.
+7. Atomically replace the stable `manifest.json` using same-filesystem replacement.
+8. Verify the committed manifest and referenced dataset association before acknowledging publication success.
+9. Clean superseded and other non-current contents from the owned destination directory without following filesystem redirection.
+
+The atomic replacement of `manifest.json` is the consumer-visible commit point.
+
+Do not attempt atomic replacement of the entire destination directory or require a general filesystem transaction framework.
+
+Image and metadata files referenced by the current manifest must remain unchanged until another complete manifest has been committed.
+
+Readers must never encounter a current manifest referencing partially written new files.
+
+Use appropriate directory-metadata synchronization on POSIX where supported. Account for the weaker directory-entry durability available through standard-library facilities on Windows.
+
+A failure before manifest replacement leaves the preceding verified dataset current.
+
+An interruption after replacement may have committed the new dataset even when the writer did not receive confirmation. Reload and validate the current manifest and referenced files before deciding the result.
+
+If the new event ID, hashes, destination, metadata, and image association verify successfully, treat the new publication as committed rather than repeating it.
+
+If the preceding manifest remains current, the attempted publication was not committed.
+
+If the outcome cannot be verified, report it as unconfirmed rather than claiming either definite success or definite failure.
+
+Do not overwrite, remove, or replace a newly committed dataset merely because acknowledgement delivery failed.
+
+A failure during post-commit cleanup must produce an actionable warning without converting a verified successful commit into a failed publication.
+
+Cleanup may be retried at a later safe publication or maintenance opportunity.
+
+After a verified commit, remove all non-current contents within that Refrain-owned destination directory, not merely filenames matching a recognized temporary pattern. Preserve the current manifest and exactly its referenced files.
+
+Cleanup must not follow links, leave the destination directory, or remove files still required by an active safe publication operation.
+
+A subsequent publication must tolerate stale temporary or superseded contents from an interrupted earlier attempt and reconcile them safely.
+
+No additional dataset-history index, backup-generation scheme, transaction journal, or separate publication daemon is required.
+
+### Publication acknowledgement and failure
+
+The resident `publish` backend acknowledges success only after the complete dataset commit has been verified.
+
+It does not wait for independent consumers to read the dataset.
+
+A failed or unconfirmed publication must not alter committed literary selection, repetition history, reveal progression, or the shared publication checkpoint.
+
+The backend uses the normal per-destination retry and failure-isolation policy. Filesystem storage itself does not introduce an independent retry scheduler.
+
+Failure to publish one destination must not invalidate a successfully committed dataset belonging to another destination.
+
+A shared backend-instance failure must be reported for the destinations actually affected, without claiming success for operations that did not complete.
 
 ## Dataset writer and reader validation
 
-The hardware-independent filesystem writer stores one current dataset per validated destination ID. The resident-owned `publish` destination backend uses the existing per-backend coordinator and writes already-finalized metadata with its matching complete image. Follow the ownership and commit behavior in [Publication destinations and ownership](#publication-destinations-and-ownership) and [Dataset commit and consumer recovery](#dataset-commit-and-consumer-recovery), the root setting in [Storage](../schemas/CONFIGURATION.md#storage), the exact [manifest contract](../schemas/PUBLICATION.md#manifest-fields), and the independent [metadata contract](../schemas/PUBLICATION.md#metadata-validity). Use `pathlib` for path construction, keep every destination as a direct child of the effective publication root, and derive its name only from a validated destination ID. Destination configuration must not accept an arbitrary path to delete.
+The reusable writer and reader operate without a physical display, resident selection engine, or network service.
 
-Scheduled publication metadata must be loaded from the compatible prepared variant associated with the selected image, then finalized independently for each destination and audience. Transient publications use minimal metadata and must preserve submitted image pixels. Acknowledge scheduled publication only after the writer's manifest commit is verified; do not persist a second acknowledgement state or introduce a filesystem retry worker.
+Use the same exact completed-publication and manifest schemas for production validation and hardware-independent tests.
 
-Validate root and destination ownership before any destructive operation. Reject symbolic links, Windows junctions, reparse points, traversal, unexpected objects, and any other redirection at the root or along a destination path. Containment checks must not resolve an unsafe link and then treat its target as owned. Traverse owned directories without following links; never remove a destination outside the publication root. On uncertain ownership or unsafe objects, fail without attempting repair or deletion.
+### Writer validation
 
-Before creating or cleaning a destination, reject a publication root that overlaps protected configuration, content, asset, operational-state, history, cache, artifact, or other configured storage paths. Compare resolved standard and custom storage targets and reject equality, nesting, or an ancestor root whose cleanup could reach protected data. The standard publication root may share the operational-data parent with sibling state and history files, but must not overlap those protected file targets. If safe separation is uncertain, fail before the destructive operation. Standard `--purge` remains limited to platform-standard locations and never follows or deletes a custom `storage.publish` override.
+Before committing, the writer verifies:
 
-Validate already-finalized metadata with the shared completed-publication contract; verify its publication and destination identities and output dimensions against the image. Do not select content, alter metadata, resolve resources, or filter actions in storage. Write unique image and metadata files and close them before preparing and closing a temporary manifest. Replace the stable manifest atomically in the destination directory; this replacement is the commit point. Use same-filesystem replacement and synchronize directory metadata where supported. On Windows, report replacement failures without claiming a commit; if replacement has occurred, retain the new dataset and report a post-commit failure distinctly.
+- Destination ID and publication ID validity.
+- Filesystem-safe component and filename constraints.
+- Required completed scheduled or transient metadata form.
+- Matching metadata and manifest publication IDs.
+- Matching destination directory and metadata destination ID.
+- Image dimensions matching the publication output specification.
+- Single-frame supported PNG representation.
+- Actual image and metadata byte hashes.
+- Safe destination ownership and path containment.
+- Absence of overwrite or case-insensitive collisions with current dataset files.
 
-Consumers validate the manifest and referenced filenames as untrusted input, verify both SHA-256 hashes, validate metadata association, and accept only a complete matching dataset. A consumer reads but never rewrites, cleans, or claims ownership of publication directories. Keep retries bounded; recovery after consumer restart starts from the current manifest, not from process-local state or publication history. Do not add a transaction journal, backup generations, or an unbounded retry loop.
+Do not load content libraries, choose artistic resources, recalculate reveal schedules, filter actions, or render images in the filesystem writer.
 
-Automated tests cover initial publication and replacement, manifest and hash validation, destination and metadata association, image dimensions, failures before and after replacement, stale temporary cleanup, corrupted or missing current files, directory isolation, and controlled reader observations across manifest replacement. Filesystem validation must also cover protected-path overlaps and symbolic links, junctions, and reparse points where supported. Run the hardware-independent tests on both Linux and Windows; do not treat Linux-only execution as cross-platform validation.
+Those operations belong to application preparation and finalization.
 
-Test interruption and failure before and after the manifest replacement, concurrent readers observing replacement, hash mismatch, absent or superseded files, restart recovery, bounded retry exhaustion, and cleanup isolation among multiple destinations. Include traversal and symlink/junction/reparse-point cases where the platform supports them; skip only an unavailable filesystem capability with an explicit reason. Exercise filesystem behavior on both Linux and Windows. Consumer services and path handling must not assume systemd or Linux filesystem conventions in hardware-independent tests.
+A completed scheduled publication must already contain its destination-filtered actions. The writer verifies the required completed-document constraints without silently changing them.
 
-For filesystem publication, verify that standard and configuration-relative or absolute custom publication roots overlapping protected configuration, content, asset, operational-state, history, cache, artifact, or other storage targets are rejected before writes or cleanup. Also verify that the platform-standard publication root remains valid as a sibling of the authoritative state and history files beneath its operational-data parent, without overlapping either file path. Validate destination identifiers, manifest schema and hashes, completed metadata/image association, destination isolation, unsafe links and reparse points, and fail-closed handling of unexpected publication objects. Use fault injection to cover interrupted image, metadata, temporary-manifest, and stable-manifest writes; verify that pre-commit failures preserve the previous dataset and post-commit failures preserve the new one. Cover stale temporary recovery, corruption and missing files, reader behavior during manifest replacement, and initialize/reset/purge ownership exclusions on Linux and Windows.
+A completed transient publication must not contain content, presentation, or actions.
+
+The writer must reject checkpoint forms as completed publication inputs.
+
+### Consumer validation
+
+Consumers treat the current manifest and its referenced files as untrusted input.
+
+A consumer reading a destination:
+
+1. Reads and validates the current stable manifest.
+2. Validates both referenced filenames as confined single components.
+3. Opens the referenced regular files without following unsafe filesystem redirection.
+4. Reads each file with appropriate bounded allocation.
+5. Verifies both SHA-256 hashes.
+6. Validates the completed metadata form and its manifest, destination, and output associations.
+7. Validates the complete image representation and dimensions before accepting it.
+8. Confirms that the current stable manifest still identifies the verified dataset before reporting it as current.
+
+If the manifest changes during verification, discard the inconsistent attempt and retry from a newly read current manifest.
+
+Do not combine a manifest from one publication generation with image or metadata bytes from another.
+
+If the manifest or referenced files are temporarily unavailable because of replacement, use bounded retries starting from the current manifest on each attempt.
+
+An interrupted or failed verification must not cause the reader to accept an unverified or partially updated dataset.
+
+When the bounded retry allowance is exhausted, report an explicit unavailable or invalid-current-publication result.
+
+A consumer may continue displaying a previously verified image only when that image is explicitly represented as stale or unavailable, not as the current verified publication.
+
+A consumer restart must recover from the current manifest and referenced files. It must not depend on previously retained process-local state or a publication-history index.
+
+Consumers must not repair, rewrite, rename, or remove publication files or manifests.
+
+### Required validation
+
+Hardware-independent automated tests must cover:
+
+- Initial publication and complete replacement.
+- Independent destination directories.
+- Scheduled and transient completed metadata.
+- Exact manifest fields, publication identity, and filenames.
+- SHA-256 verification of image and metadata bytes.
+- Destination and output-specification associations.
+- Rejection of missing, damaged, truncated, or mismatched files.
+- Unsafe paths, symbolic links, junctions, reparse points, and traversal.
+- Case-insensitive collisions, reserved names, and component limits.
+- Protected-path overlap rejection.
+- Standard sibling state/publication roots remaining valid.
+- Interrupted image, metadata, temporary-manifest, and stable-manifest writes.
+- Ambiguous manifest-replacement outcomes and verification.
+- Pre-commit failure preserving the preceding dataset.
+- Post-commit cleanup failure preserving successful publication.
+- Cleanup of all non-current contents without escaping the owned directory.
+- Concurrent readers across manifest replacement.
+- Fresh-manifest retries and bounded exhaustion.
+- Restart recovery without historical publication state.
+- Preservation of healthy datasets during independent destination failure.
+- Publication and consumer operation without network or display hardware.
+
+Run applicable filesystem tests on Windows and Linux. Skip platform-specific link or redirection tests only when the capability is unavailable, with an explicit reason.
+
+Do not treat Linux-only execution as complete cross-platform filesystem validation.
 
 ## Independent consumers
 
-Consumer services are separate executables in the same Refrain installation and use the shared `config.yaml`. Each reads and validates its own top-level configuration section (including planned `image-server:` and `web-companion:` sections), identifies the publication destinations it consumes, and reads and verifies their datasets without modifying them. A service may invoke the installed `refrain-viewer` for custom rendering, but does not select quotations or modify Refrain operational state.
+Consumer services are separate executables in the same Refrain installation.
 
-Consumers start, stop, and recover independently of the resident. They do not acquire the resident's exclusive runtime lock. The resident does not spawn, supervise, or depend on them. Consumer enablement in application configuration is distinct from service enablement in systemd. Use existing operating-system service facilities, including systemd on supported Linux deployments; do not add a service manager, general plugin or service-registration framework, additional Python distribution, or network IPC mechanism. The integrated `image-server` remains in place until the independent `refrain-image-server` replacement is implemented and validated. Add future consumer integrations only when justified. Hardware-independent development and testing must remain usable on Windows without assuming systemd or Linux filesystem conventions.
+They use the shared application configuration where applicable and read validated destination publications.
 
-Filesystem publication is the sole non-direct destination mechanism; consumers read Refrain-owned publication data without modifying it or sharing the resident's lifecycle. The current integrated `image-server` is transitional and remains in place until its independent consumer replacement is implemented and validated.
+The resident does not spawn, supervise, restart, or depend on them.
+
+Consumers start, stop, fail, and recover independently.
+
+They do not acquire the resident's exclusive ownership lock or modify authoritative operational state, prepared-image artifacts, or publication directories.
+
+Use existing operating-system service-management facilities where appropriate, including systemd on supported Linux deployments.
+
+Windows development and hardware-independent tests must not require systemd or Linux-specific filesystem behavior.
+
+Do not introduce a custom service manager, service-registration framework, mandatory cloud service, additional Python distribution, or network IPC mechanism merely to support consumers.
+
+### Image-server consumer
+
+`refrain-image-server` is an independently supervised read-only HTTP consumer of filesystem publications.
+
+It replaces the retired integrated resident HTTP backend.
+
+The resident contains no `image-server` destination backend and hosts no HTTP listener.
+
+The image-server consumer reads and verifies configured `publish` destinations, then exposes their verified current images through the narrow HTTP interface defined in [Independent image-server delivery](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#independent-image-server-delivery).
+
+Its HTTP availability is independent of resident publication acknowledgement.
+
+A stopped, failing, or unavailable image-server consumer does not invalidate a successfully committed filesystem publication.
+
+The consumer must not:
+
+- Select literary content.
+- Advance reveal schedules.
+- Render or modify published image pixels.
+- Write to the publication root.
+- Acquire resident backend ownership.
+- Act as an authenticated runtime-control endpoint.
+
+A consumer may retain a previously verified image for explicitly stale presentation when its current dataset becomes unavailable.
+
+It must not silently claim an outdated image is the current verified publication.
+
+Configuration of independent consumers belongs to [Application Configuration](../schemas/CONFIGURATION.md).
+
+Consumer enablement in configuration is distinct from operating-system service enablement.
+
+### Consumer service boundaries
+
+Every consumer selects the configured destinations it reads and validates their completed datasets independently.
+
+Consumers may share one publication directory as read-only clients without coordinating through the resident backend.
+
+A consumer may invoke the installed `refrain-viewer` for explicitly supported publication reconstruction, provided that operation remains read-only and respects published destination metadata.
+
+Consumer failure and recovery must not block normal Refrain selection, scheduling, preparation, or publication.
+
+Do not add consumer-specific publication formats when the established manifest and completed metadata contracts are sufficient.
+
+Automated tests must cover independent consumer lifecycle, read-only filesystem access, concurrent consumers, resident independence, and safe recovery after missing or invalid current datasets.
 
 ## Consumer integrations and trust boundaries
 
-A `refrain-web-companion` consumer is planned for a later release. It runs as a separately supervised process in the same Refrain installation and reads destination publications without modifying them.
+The optional `refrain-web-companion` is deferred to a later release.
 
-It may use published metadata and invoke the installed `refrain-viewer` to reconstruct a presentation at browser-appropriate geometry. It does not own selection or require the browser and e-paper display to consume identical image files.
+A future implementation may consume completed publication metadata and reconstruct literary presentations at browser-appropriate geometry using the installed viewer or shared rendering facilities.
 
-Web presentation must not become responsible for daily quotation selection.
+It must not own daily quotation selection or require browser and physical-display clients to consume identical raster images.
 
-The current integrated `image-server` remains in place until its independent consumer replacement is implemented and validated. The target resident does not host HTTP services or depend on a consumer being enabled or running.
+Public presentation must not expose privileged resident control interfaces.
 
-Optional public presentation is deferred.
+The architecture distinguishes publicly consumable presentation information from privileged local operational control.
 
-The architecture distinguishes public presentation information from privileged local operations.
+A future public deployment may run outside the trusted local network.
 
-A future public deployment may operate on a separate device or service outside the trusted local network.
+Its publication mechanism, access controls, and trust boundaries must be specified before implementation.
 
-Public publishing must not require exposing privileged local application interfaces.
+An outbound-only publication path is preferred where it satisfies demonstrated requirements.
 
-An outbound-only publication path is preferred where it satisfies the future requirements.
+Consumer access to a publication directory does not confer permission to access other destination directories, operational state, credentials, or private content.
 
-The exact publication mechanism and trust boundaries will be specified before that feature is implemented.
+Destination audience filtering restricts which action declarations enter a completed scheduled publication. It is not a substitute for filesystem access controls or consumer authorization.
 
-Public presentation does not grant privileged local control.
+External HTTP consumers must not interpret publication metadata as authority to execute actions or invoke privileged commands.
+
+Public presentation must not introduce mandatory network, cloud, or web-service dependencies into ordinary Refrain operation.
 
 ## External action publication
 
-Publication of actions to external consumers is deferred. Future metadata publication must respect each action's explicitly declared visibility audiences and must not expose actions to destinations outside those audiences.
+Actions are captured as opaque semantic declarations with the committed selected quotation.
 
-Privileged operations must not become available to anonymous public viewers merely because associated content is publicly visible.
+Completed scheduled publication includes only actions eligible for the destination's explicitly configured audience, within the established completed-publication limits.
 
-External integrations must be explicitly configured and must not introduce mandatory cloud or network dependencies into ordinary display operation.
+Completed transient publications contain no actions.
+
+Publication and consumer infrastructure must not implicitly execute an action merely because its declaration appears in completed metadata.
+
+Additional external action integrations are deferred.
+
+Future consumers may interpret supported actions only through separately specified, explicitly configured behavior and appropriate trust boundaries.
+
+Privileged operations must not become available to anonymous or public viewers merely because associated literary content is publicly visible.
+
+Do not add new action execution interfaces, implicit privileges, cloud dependencies, or public control channels as part of the filesystem-publication implementation.
