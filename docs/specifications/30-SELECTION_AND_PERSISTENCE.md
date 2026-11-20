@@ -41,7 +41,7 @@ The content-selection system determines which quotations are eligible for the di
 
 Eligibility rules belong to content entries and are inherited by every quotation within those entries.
 
-The initial scheduling model supports:
+The supported eligibility rules are:
 
 - ordinary quotations eligible on any display date;
 - quotations matching a particular month;
@@ -56,8 +56,6 @@ An entry matches the highest specificity of any of its rules satisfied by the cu
 Quotations intended only for special occasions do not automatically participate in ordinary selection.
 
 An entry may participate in ordinary and special-date selection only when its eligibility explicitly permits both.
-
-Additional eligibility expressions may be introduced when required by an accepted feature.
 
 Matching date-specific eligibility takes absolute precedence over less-specific eligibility.
 
@@ -288,7 +286,7 @@ The committed record retains the authored presentation preferences needed to res
 
 Neither operational state nor the shared publication checkpoint stores destination-specific overrides, completed publication events, or raster-dependent rendering plans. Output dimensions, presentation-canvas geometry, fitted literary rectangles, QR placement and module sizes, layer transformations, and other raster-dependent results are derived during destination preparation.
 
-Only the current prerelease operational-state schema is supported. Do not maintain readers, migrations, normalization paths, rendering branches, or tests for earlier internal schemas. A numeric schema discriminator is unnecessary unless required by the implementation; if retained, its sole current prerelease value is `1`.
+Only the current operational-state schema is supported. Do not maintain readers, migrations, normalization paths, rendering branches, or tests for earlier development-state schemas. A numeric schema discriminator is unnecessary unless required by the implementation; if retained, its current value is `1`.
 
 For compatibility within the current version-1 operational-state schema, an absent `actions` field in an existing committed snapshot represents an empty action sequence. Newly committed snapshots must include `actions`. Present action declarations must be validated strictly; invalid persisted actions are operational-state errors and must not be silently repaired or discarded.
 
@@ -371,7 +369,7 @@ Missing, damaged, or inaccessible global history must not prevent operational re
 
 When recovery cannot safely complete, preserve the existing physical e-paper image rather than replacing it with an unverified presentation.
 
-Operational-state compatibility is limited to the current prerelease schema and the explicit version-1 missing-actions exception defined under [Committed selection snapshot](#committed-selection-snapshot). Do not introduce migrations or readers for earlier internal schemas.
+Operational-state compatibility is limited to the current schema and the explicit version-1 missing-actions exception defined under [Committed selection snapshot](#committed-selection-snapshot).
 
 Automated tests must cover:
 
@@ -415,7 +413,7 @@ Global history is not an authority for current selection identity, repetition el
 
 ### Rotation and retention
 
-History retention uses fixed size-based rotation without operator-configurable limits in the current prerelease:
+History retention uses fixed size-based rotation with the following limits:
 
 - Maximum segment size: 1 MiB (1,048,576 bytes).
 - Maximum retained storage: 20 MiB, consisting of one active segment and up to 19 rotated segments.

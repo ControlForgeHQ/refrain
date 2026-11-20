@@ -182,7 +182,7 @@ Remove endpoint and credential artifacts during orderly shutdown when safe.
 
 ### Protocol and limits
 
-Use a bounded, explicitly versioned local protocol. The initial internal protocol version is `1`.
+Use a bounded, explicitly versioned local protocol. The supported protocol version is `1`.
 
 Use byte-oriented transport operations such as `send_bytes()` and `recv_bytes()`.
 

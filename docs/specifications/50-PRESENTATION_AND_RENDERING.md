@@ -416,7 +416,7 @@ Measurement must account for actual glyph dimensions, line spacing, authored lin
 
 Do not fit text using character counts or average character-width assumptions alone.
 
-The initial fitting mechanism should remain deterministic and straightforward rather than becoming a general-purpose text-layout engine.
+Text fitting must be deterministic.
 
 Content that cannot fit at the minimum supported font size must produce a meaningful rendering error rather than silently clipping or omitting text.
 
@@ -911,8 +911,6 @@ Tests must cover:
 
 Prepared-image compatibility must preserve the committed selection, valid checkpoint artistic identity, effective presentation requirements, output specification, and expected reveal stages.
 
-Do not retain legacy prerelease cache readers, obsolete rendering snapshots, or compatibility branches solely to reproduce old development artifacts.
-
 Do not make normal cache reuse depend on detecting changes to every configuration or asset file.
 
 Do not persist raster geometry, font bytes, source assets, or rendered-image fingerprints in operational state or the shared publication checkpoint solely for exact visual reproduction.
@@ -978,7 +976,7 @@ Refrain provides an information view presenting application identity and selecte
 
 The information view contains:
 
-- a curated, application-owned quotation associated with the running release;
+- a curated, application-owned quotation;
 - optional source and attribution identifying the quotation's context;
 - the Refrain and ControlForge project identity;
 - application version and available build or commit information;
@@ -988,7 +986,7 @@ The information view contains:
 
 The curated quotation is supplied by the application rather than selected from user content.
 
-It remains consistent for a given release and does not participate in daily selection, priority, repetition history, or global selection history.
+The curated quotation remains stable during operation and does not participate in daily selection, priority, repetition history, or global selection history.
 
 The same exact curated quotation is used for the no-eligible-content fallback defined in [Startup and daily transitions](40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#no-eligible-content-fallback). That fallback attributes the quotation to `Forge, Refrain Development Team` and uses ordinary fully revealed literary rendering rather than the information-view layout.
 
@@ -996,7 +994,7 @@ The information-view background generator owns branding, runtime information, an
 
 The shared literary renderer presents the quotation and optional source and attribution using the normal composition and typography facilities.
 
-The literary composition remains visually primary. The initial design favors approximately 70% literary presentation and 30% supporting information, without enforcing rigid layout proportions.
+The literary composition remains visually primary. The information view targets approximately 70% literary presentation and 30% supporting information without imposing rigid layout proportions.
 
 Branding and runtime information must remain subordinate and must not compromise readability.
 
