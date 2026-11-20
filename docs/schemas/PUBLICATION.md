@@ -38,11 +38,13 @@ A completed scheduled document has `publication.type: "scheduled"`; a completed 
 | `quotation` | String | Yes | One complete selected quotation containing at least one non-whitespace character. |
 | `source` | String | No | Complete source text, nonblank when present; omit when absent. |
 | `attribution` | String | No | Complete attribution text, nonblank when present; omit when absent. |
-| `actions` | Array of action objects | Yes | Ordered sequence of zero to 100 declarations. |
+| `actions` | Array of action objects | Yes | Ordered sequence of zero to 100 declarations in checkpoints; zero to 16 audience-filtered declarations in completed scheduled publications. |
 
 Quotation, source, and attribution strings preserve their original text, including Unicode, whitespace, and meaningful line breaks, under the literary string definitions in [Content Entries](CONTENT.md#quotations-source-and-attribution). Complete text remains present independently of visibility flags. No entry wrapper, entry identifier, quotation list, quotation identity, priority, eligibility, authored preference, duplicated schedule, or reveal-stage ordinal is part of this object.
 
 The reveal schedule includes the quotation's display-day start and the effective source and attribution times. The flags express visibility: in checkpoints, the recorded current visibility; in completed scheduled metadata, visibility of that publication's image. They are not publication acknowledgements or an implicit stage index. The time format alone does not establish the flags' values. Scheduling semantics are defined in [Architecture](../ARCHITECTURE.md#progressive-reveal).
+
+`reveal_stage.quotation` must be `true`. When `source` or `attribution` is absent, its corresponding reveal-stage flag must be `false`. Otherwise, visibility flags are independent of the schedule's time strings; validation does not recalculate reveal-stage progression.
 
 ### Actions
 
@@ -59,6 +61,8 @@ Array order, duplicate declarations, payload whitespace and newlines, and each i
 Checkpoint `content.actions` contains all captured actions. Completed scheduled `content.actions` contains only declarations whose visibility explicitly includes the destination's independently supplied `public` or `private` audience. Visibility is nonhierarchical: `public` does not imply `private`, or conversely. An action declaring both is eligible for either. An empty filtered sequence is valid.
 
 Completed scheduled validation with a supplied audience rejects every action that lacks that audience. Completed scheduled serialization requires that audience check. Context-independent validation without an audience establishes structural validity only, not suitability for a destination. Audience is never inferred from `destination_id` or serialized into the document.
+
+Completed scheduled publication actions are subject to a maximum of 4,096 UTF-8 bytes per deterministically serialized action object. Apply the completed-publication action count and byte limits after audience filtering. Reject an oversized publication rather than silently truncating, omitting, or modifying otherwise eligible actions.
 
 ## Presentation
 
@@ -83,6 +87,8 @@ Resource, bundle, face, and palette identifiers are case-sensitive ASCII strings
 
 In a content-and-presentation checkpoint, `qr.enabled` records the canonical QR policy before destination suppression. `qr.available` must be omitted because output-dependent availability has not been resolved. In a completed scheduled publication, `qr.enabled` records the effective policy after destination suppression, and `qr.available` records whether a QR was actually included after decoration restrictions, placement validation, and output-geometry checks. Both fields are required in completed scheduled publication metadata. Neither field contains a QR payload, URL, content rule, placement, or module-size data.
 
+In completed scheduled metadata, `qr.available: true` requires `qr.enabled: true`. An enabled QR policy does not imply availability; placement, decoration readiness, and output geometry may still suppress QR.
+
 Font-size bounds and insets are effective configuration values in design-canvas pixels. They are not fitted raster font sizes, mapped rectangles, rendered positions, crop coordinates, or other raster-layout calculations. The presentation records one set of resolved choices; no canonical/effective duplicate objects exist.
 
 ## Publication
@@ -99,7 +105,7 @@ Font-size bounds and insets are effective configuration values in design-canvas 
 
 `id` identifies one publication event, independently of selection revision and visibility. `timestamp` denotes the event timestamp, not the logical display date. Naive timestamps and local-time strings without an offset are invalid; the JSON value is UTC with `Z`.
 
-`output_specification.aspect_ratio` is one of `"4:3"`, `"5:3"`, `"16:9"`, or `"16:10"`. `requested_output_size` is an array of exactly two positive integers, width then height, identifying the actual requested image size. Aspect and requested size are independent declared output values; the size need not have the declared aspect's mathematical ratio. This object contains no calculated layout dimensions.
+`output_specification.aspect_ratio` is one of `"4:3"`, `"5:3"`, `"16:9"`, or `"16:10"`. `requested_output_size` is an array of exactly two integers, width then height. Width must be 1–3840 and height must be 1–2400. These dimensions are independent of the declared aspect ratio; portrait and square outputs are valid. This object contains no calculated layout dimensions.
 
 Destination and output configuration are defined in [Application Configuration](CONFIGURATION.md#destinations).
 
@@ -108,6 +114,8 @@ Destination and output configuration are defined in [Application Configuration](
 Validation checks the selected document form, exact keys, field types, lexical and numeric constraints, and any supplied audience. It does not supply missing values, repair invalid data, look up content or resources, or establish rendering feasibility. Structural validity does not certify resource availability, typography, layout fit, QR placement, or identical reproduced pixels.
 
 Checkpoint forms have no publication event values or output specification. Completed scheduled metadata requires all three sections and destination-appropriate actions. Completed transient metadata requires only the version and publication object. No completed document may substitute a checkpoint or contain unresolved required values.
+
+Every completed scheduled or transient metadata document must be no more than 65,536 bytes in its deterministic serialized UTF-8 JSON representation. Apply this limit to the complete document after scheduled-publication audience filtering. Reject oversized completed metadata without truncation. Checkpoint forms do not have this external-delivery size limit.
 
 Deterministic serialization uses UTF-8 JSON, sorted object keys, compact separators, preserved array order, and unescaped literary Unicode. Parsing applies the same field and stage constraints. The completed scheduled form is the metadata input defined by [CLI publication reconstruction](../CLI.md#publication-reconstruction).
 
@@ -132,7 +140,7 @@ For filesystem publication, `id` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,239}` and m
 
 Both referenced filenames are relative single-component names in the same destination directory, derived exactly from that identity. Arbitrary paths, separators, dots in the ID, traversal components, drive-qualified paths, and absolute paths are invalid. The stable manifest filename is always `manifest.json`.
 
-The destination directory is a direct child of the effective `storage.publish` root and is named from the validated destination ID. That ID uses `[A-Za-z0-9][A-Za-z0-9_-]*`, at most 256 characters. Configured `publish` IDs also exclude the Windows-reserved device names above and are unique under case-insensitive comparison. Destination and storage configuration are defined in [Application Configuration](CONFIGURATION.md#destinations) and [Storage](CONFIGURATION.md#storage).
+The destination directory is a direct child of the effective `storage.publish` root and is named from the validated destination ID. That ID uses `[A-Za-z0-9][A-Za-z0-9_-]*`, at most 255 ASCII characters. Configured `publish` IDs also exclude the Windows-reserved device names above and are unique under case-insensitive comparison. Destination and storage configuration are defined in [Application Configuration](CONFIGURATION.md#destinations) and [Storage](CONFIGURATION.md#storage).
 
 ### Dataset consistency
 
@@ -248,8 +256,7 @@ The same content has a complete presentation section. Publication is absent.
       "decoration": null
     },
     "qr": {
-      "enabled": true,
-      "available": false
+      "enabled": true
     },
     "font_size_range": {
       "minimum": 56,
