@@ -315,7 +315,7 @@ Unspecified values inherit the global schedule from [Application Configuration](
 
 Effective source and attribution times must be on the same local calendar date as, and no earlier than, the configured day start. They may equal day start, equal each other, or occur in either order. An override producing an unsupported or contradictory effective schedule is invalid. An overnight time before day start is not interpreted as the following day.
 
-Intrinsic syntax validation does not replace effective-schedule validation against application configuration. Commitment, cumulative stages, absent metadata, clock changes, and recovery belong to [Architecture](../ARCHITECTURE.md#progressive-reveal). Later edits to content or global scheduling do not change the committed schedule.
+Validate every supplied reveal override against the effective global schedule before admitting the entry to selection, including overrides for source or attribution fields absent from the entry. Later edits to content or global scheduling do not change the committed schedule. Commitment, cumulative stages, absent metadata, clock changes, and recovery belong to [Scheduling and Application Lifecycle](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md).
 
 ## Complete examples
 
@@ -464,13 +464,15 @@ One entry per file is the supported format, so excluding an entry excludes that 
 
 A partial library is usable when discovery and loading complete and at least one valid quotation remains. Invalid individual files or entries must not invalidate unrelated valid content.
 
+Recursive source discovery, symbolic-link exclusion, incomplete enumeration, and library-level failure handling are specified in [Content and Configuration](../specifications/20-CONTENT_AND_CONFIGURATION.md#library-loading-and-validation). A successfully loaded, usable library containing no quotation eligible for the current display date follows the [no-eligible-content fallback](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#no-eligible-content-fallback), not the library-failure behavior.
+
 Diagnostics identify the affected file and field or entry, where applicable, and explain whether an item was rejected, excluded, or ignored. Warnings must be actionable and must not repeatedly flood ordinary logs.
 
 Omitted optional content-entry fields use their documented defaults or absence semantics silently. No informational diagnostic is required or emitted solely because an optional field was omitted.
 
 For content diagnostics, `INFO` denotes useful operational information that does not indicate a configuration or content problem. `WARNING` identifies a recoverable problem or rejected item when usable content remains available. `ERROR` identifies an unsatisfied required library condition. Application-configuration diagnostic behavior is defined in [Application Configuration](CONFIGURATION.md#validation-and-compatibility).
 
-Repetition-history cleanup, the effect of rejected entries on repetition identity, successful-selection commitment, and independence of an already committed selection belong to [Architecture](../ARCHITECTURE.md#selection-pools-and-repetition). A library-level failure must not be treated as an intentionally empty library for cleanup.
+Repetition-history cleanup, the effect of rejected entries on repetition identity, successful selection commitment, and independence of an already committed selection belong to [Selection and Persistence](../specifications/30-SELECTION_AND_PERSISTENCE.md). A library-level failure must not be treated as an intentionally empty library for cleanup.
 
 ## Interface constraints
 
