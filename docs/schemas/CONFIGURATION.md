@@ -249,6 +249,8 @@ The optional `storage` mapping contains only the following nonempty path strings
 | `global-history.jsonl` | Chronological global selection history. |
 | `publication.json` | Current publication checkpoint. |
 
+The serialized formats of `state.json` and `global-history.jsonl` are defined in [Operational State and Global History](STATE.md). The format of `publication.json` is defined in [Publication metadata](PUBLICATION.md#metadata-document-shapes).
+
 Global history is not independently configurable. Its existing recording, rotation, and retention semantics are unchanged.
 
 Absolute paths are used as specified. Relative paths are resolved from the directory containing the selected configuration file, not from the current working directory.

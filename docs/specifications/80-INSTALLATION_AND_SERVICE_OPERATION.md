@@ -75,6 +75,8 @@ The omitted content path follows the selected configuration file as defined by t
 | `publication.json` | Current publication checkpoint and durable destination-independent artistic choices. |
 | `global-history.jsonl` | Best-effort chronological selection history. |
 
+The serialized formats of `state.json` and `global-history.jsonl` are defined in [Operational State and Global History](../schemas/STATE.md). The format of `publication.json` is defined in [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes).
+
 Rotated global-history segments reside in that same directory.
 
 Changing `storage.state` relocates these files together. Global history has no independent path override.

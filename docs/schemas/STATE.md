@@ -80,7 +80,7 @@ A non-null `source` or `attribution` must contain non-whitespace text. Preserve 
 
 `font_faces` maps zero or more of `quotation`, `source`, and `attribution` to valid face identifiers. No other keys are permitted.
 
-Color-preference arrays preserve their authored member order and duplicates. Their elements are valid palette identifiers or applicable named-pool references. Do not resolve preference pools or select presentation resources while validating the committed snapshot.
+Color-preference arrays preserve their authored member order and duplicates. Their elements are valid palette identifiers or applicable named-pool references.
 
 The snapshot contains semantic preferences, not resolved artistic resources, raster geometry, destination overrides, or publication events.
 
@@ -126,13 +126,7 @@ Stage indexes are zero-based array positions. The sequence is subject to all of 
 - Each stage represents a distinct resolved reveal instant; fields resolving to the same instant share one stage.
 - A stage must introduce visibility of at least one previously hidden field, except that stage zero establishes initial visibility.
 
-The sequence is resolved using the host-local timezone and civil-time rules applicable at selection commitment. It is committed atomically with the snapshot.
-
-After commitment, the recorded instants, ordering, and visibility are authoritative. Recovery must not re-resolve them using the host's current timezone or daylight-saving rules.
-
-Do not persist a timezone identifier or replace the frozen sequence when the host timezone changes.
-
-The effective `reveal_schedule` remains available as committed semantic content, but it does not authorize reconstructing or altering `resolved_reveal_stages` after recovery.
+The resolution, commitment, recovery, and timezone-change behavior of the frozen sequence are defined in [Selection and Persistence](../specifications/30-SELECTION_AND_PERSISTENCE.md#selection-commitment) and [Scheduling interfaces and waits](../specifications/40-SCHEDULING_AND_APPLICATION_LIFECYCLE.md#scheduling-interfaces-and-waits).
 
 ### Scheduling context
 
@@ -249,7 +243,7 @@ The committed reveal sequence has three stages:
 - Stage 1 additionally reveals the source.
 - Stage 2 additionally reveals the attribution.
 
-The persisted `highest_reveal_stage` value of `1` means the quotation and source have already been revealed. Reveal progression cannot move backward, even if the host clock is adjusted.
+The persisted `highest_reveal_stage` value of `1` means the quotation and source have already been revealed.
 
 The `repetition_history` includes the current quotation's normalized identity. The `actions` array preserves the committed declaration independently of its visibility at the current reveal stage.
 
@@ -287,7 +281,5 @@ For example:
 ```
 
 For absent source and attribution, both fields remain present with JSON null values.
-
-Global history is an append-only, best-effort record of selection events. It is not authoritative operational state and does not participate in selection revision assignment, repetition eligibility, or reveal progression.
 
 Rotation, retention, interrupted-append recovery, consistency, and concurrency requirements belong to [Global history and retention](../specifications/30-SELECTION_AND_PERSISTENCE.md#global-history-and-retention).

@@ -144,6 +144,8 @@ The canonical ordered `CompositionVisibility` sequence is resolved at selection 
 
 When committing a new selection, resolve and persist the complete sequence of absolute reveal instants and cumulative visibility. Scheduling evaluation, deadline calculation, image preparation, and recovery use this frozen sequence for the committed selection. They must not independently resolve its authored reveal times using subsequently changed host-timezone rules.
 
+The serialized representation and validation constraints of the committed reveal-stage sequence are defined in [Frozen resolved reveal stages](../schemas/STATE.md#frozen-resolved-reveal-stages).
+
 `refrain.resolve_reveal_stages(selection)` returns the committed cumulative visibility sequence. New selections resolve their sequence using the host-local civil-time rules applicable at commitment.
 
 The coordinator uses this same cumulative sequence for image preparation and cache validation. Scheduling evaluation derives its required stage index from the sequence. Stage ordering and equality are determined by resolved instants, not by comparing local `HH:MM` values alone.
