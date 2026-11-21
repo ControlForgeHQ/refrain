@@ -280,7 +280,7 @@ The committed record retains the authored presentation preferences needed to res
 
 Neither operational state nor the shared publication checkpoint stores destination-specific overrides, completed publication events, or raster-dependent rendering plans. Output dimensions, presentation-canvas geometry, fitted literary rectangles, QR placement and module sizes, layer transformations, and other raster-dependent results are derived during destination preparation.
 
-Only the currentoperational-state schema defined in [Operational State and Global History](../schemas/STATE.md) is supported. Its `format_version` remains `1`. The complete committed snapshot requires `actions` and `resolved_reveal_stages`. Older development-state representations are unsupported, even when they carry the same format-version value. Do not introduce migration readers, fallback reconstruction, or compatibility exceptions for incomplete earlier snapshots.
+Only the current operational-state schema defined in [Operational State and Global History](../schemas/STATE.md) is supported. Its `format_version` remains `1`. The complete committed snapshot requires `actions` and `resolved_reveal_stages`. Older development-state representations are unsupported, even when they carry the same format-version value. Do not introduce migration readers, fallback reconstruction, or compatibility exceptions for incomplete earlier snapshots.
 
 ## Selection revisions and atomic writes
 
