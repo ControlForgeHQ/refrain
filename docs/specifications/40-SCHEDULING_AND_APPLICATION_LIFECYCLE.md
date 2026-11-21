@@ -28,19 +28,7 @@ Whenever the current logical display date differs from the committed selection's
 
 Repeated scheduling evaluations for the same committed logical date must not generate duplicate selections. Display failures, content-library changes, and missed reveal events do not independently trigger reselection.
 
-When the logical date is unchanged, the existing selection remains authoritative and its reveal progression never moves backward. A transition to another logical date requires evaluation of a new selection, even if a quotation was previously selected for that date.
-
-The current logical display date is calculated from resolved day-start boundaries as defined under Logical-date evaluation. When the clock advances within that logical date, Refrain advances to the reveal stage appropriate to the new time.
-
-When the logical display date differs from the committed selection's date, Refrain selects a quotation for the current logical date when eligible content is available, including after a forward jump across one or more day-start boundaries.
-
 Skipped display dates do not require retrospective selection or presentation.
-
-For example, if the clock advances from October 17 to November 28, Refrain evaluates a new selection for November 28 and presents the appropriate reveal stage when selection succeeds.
-
-Moving the clock backward does not reverse reveal progression while the logical display date remains unchanged.
-
-If the backward adjustment changes the logical display date, Refrain evaluates a new selection for that date.
 
 With `day_start: "06:00"`:
 
@@ -67,12 +55,6 @@ On startup, Refrain recovers the committed selection and its highest previously 
 
 The active stage must be at least the previously reached stage.
 
-A restart retains the committed selection and reveal progression when its display date matches the current logical display date. If the date differs, startup evaluates a new selection for the current logical date.
-
-Backward clock adjustments must not cause previously revealed fields to become hidden.
-
-Reveal progression remains monotonic within the lifetime of the committed selection.
-
 When a new daily selection is committed, reveal progress begins according to that selection's applicable schedule and current time.
 
 Clock adjustments that establish a new display day follow the rules defined in the display-day model.
@@ -89,17 +71,13 @@ The scheduler should ordinarily wait until the next meaningful event rather than
 
 `next_scheduling_deadline()` derives reveal deadlines from the committed selection's effective schedule and combines them with the next configured day-start time. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline. Scheduling is based on comparing the current logical display date with the committed selection's date, not on a boundary-observation event.
 
-Implement the documented forward- and backward-clock behavior without allowing previous reveal stages to become hidden.
-
-If a clock change alters the logical display date, evaluate a new selection for the current logical date regardless of adjustment direction. If the date is unchanged, retain the selection and its monotonic reveal progression. Tests must cover these cases without requiring the host operating-system clock to be modified.
-
 Separate the current time source from scheduling policy sufficiently to permit controlled test inputs.
 
 Use monotonic elapsed time for retry intervals and other durations that should not be affected by wall-clock adjustments.
 
-Persist the display date and day-start context required by the logical-date model. On startup, compare the current logical display date with the committed date: retain the selection when they match and evaluate a new selection for the current logical date when they differ.
+Persist the display date and day-start context required by the logical-date model.
 
-Test logical-date comparison across restarts, missed day starts, backward and forward clock adjustments, and large forward jumps. Repeated evaluations for the same committed logical date must not duplicate a selection. Do not add or infer clock-observation history.
+Test logical-date comparison across restarts, missed day starts, backward and forward clock adjustments, and large forward jumps.
 
 Require deterministic hardware-independent tests with explicit current instants and injected local-time rules, without changing the host operating-system clock or process timezone. Cover:
 
@@ -112,12 +90,6 @@ Require deterministic hardware-independent tests with explicit current instants 
 - startup, restart, and fresh evaluation within those transition intervals without prior boundary observations;
 - repeated evaluation and restart with a committed selection for the evaluated logical date, producing only one selection and no duplicate history records while retaining monotonic reveal progression;
 - reveal-stage coalescing when distinct local wall times resolve to the same instant during daylight-saving gaps, including cumulative visibility, stage-zero coalescing, and absence of duplicate stages.
-
-Automated testing should cover:
-
-- cumulative reveal progression;
-- forward and backward clock adjustments;
-- display-day boundaries and restart behavior.
 
 ## Reveal progress and missed events
 
@@ -139,7 +111,7 @@ A global reveal schedule defines the default timing for supported semantic field
 
 Individual content entries may override that schedule.
 
-The effective schedule is resolved and validated before the daily selection record is committed. Every supplied entry reveal override must be validated against the configured day start and inherited schedule before the entry can participate in selection, including overrides for absent source or attribution fields. Invalid effective schedules exclude the affected entry without invalidating unrelated eligible content.
+The effective reveal schedule must be resolved before committing the daily selection record. Entry reveal overrides are validated according to [Content-entry semantics](20-CONTENT_AND_CONFIGURATION.md#content-entry-semantics).
 
 Subsequent changes to global configuration or the original entry do not alter the committed schedule.
 

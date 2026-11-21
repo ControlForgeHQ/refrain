@@ -52,10 +52,6 @@ The default aspect ratio is `16:10`, with requested dimensions equal to that asp
 
 Explicit `--aspect` and `--resolution` values select the viewer's output specification. They use the normal design-canvas, presentation-canvas, and output-image pipeline in [Image spaces and raster geometry](50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry).
 
-A viewer output must have positive integer dimensions with width at most 3840 pixels and height at most 2400 pixels.
-
-Width and height are validated independently. Portrait and square outputs are supported. The requested output dimensions do not need to mathematically match the declared aspect ratio.
-
 Validate the actual requested output specification before allocating an image. Do not reject a viewer request merely because an unused supported aspect would make a decoration's insets or transformation invalid.
 
 Viewer preparation validates the selected aspect and all resources actually needed for its composition.
@@ -295,15 +291,7 @@ The viewer discovers the required destination specifications before rendering or
 
 A destination identifier is an opaque routing value. Do not infer backend type, hardware, transport, capabilities, or geometry from its spelling.
 
-`--push TARGET` accepts one exact configured destination identifier or the reserved selector `@all`.
-
-The bare identifier `all` is an ordinary destination ID and selects only that destination.
-
-`@all` selects every configured destination still participating in publication. It skips intentionally withdrawn destinations but does not silently exclude failed, unavailable, or transient-unsupported destinations.
-
-An explicitly named withdrawn destination is rejected.
-
-A request selecting no participating destinations must fail with an actionable no-target result rather than reporting success.
+Push target syntax and user-facing selection behavior are defined in [Push to configured destinations](../CLI.md#push-to-configured-destinations). Resident target-selection semantics are defined in [Transient target selection](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-target-selection).
 
 ### Discovery and preflight
 
@@ -331,20 +319,11 @@ Use coherent viewer-owned artistic choices across variants generated together. O
 
 Variants with identical output specifications may share one rendered image and transfer.
 
-The runtime revalidates the complete destination set, current specifications, capabilities, required variants, and admission conditions before backend publication.
-
-A destination removed or reconfigured after discovery must cause rejection rather than automatic adaptation or substitution.
+Resident revalidation of discovered destinations and submitted image variants is defined in [Complete-request validation](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#complete-request-validation).
 
 ### Transport limits and admission
 
-Transient requests must obey the established runtime-control limits:
-
-- at most 64 selected destinations;
-- at most 64 complete single-frame RGB PNG variants;
-- at most 3840 pixels in width and 2400 pixels in height for each image;
-- at most 9,216,000 decoded pixels per image;
-- at most 32 MiB encoded for each image;
-- at most 192 MiB total encoded image data per request.
+Transient requests must obey the image and request limits defined in [Protocol and limits](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#protocol-and-limits).
 
 Check image dimensions and encoded sizes before expensive decoding or transfer where possible.
 
@@ -354,19 +333,7 @@ Do not decode and retain every transferred image simultaneously. Runtime staging
 
 Obtain the runtime's metadata preflight response before transferring image payloads. A rejected request must not race image transfer or backend publication.
 
-Transient publication is opportunistic, not queued. Admission is atomic across the complete selected destination set.
-
-If any destination or shared backend instance cannot safely accept the request immediately, reject the entire request as busy without starting publication to any selected destination.
-
-The admitted destination membership is fixed for that operation. Do not add or remove targets silently after admission.
-
-Ordinary scheduled publication has priority until transient admission succeeds.
-
-After admission, the resident owns the complete operation, including every destination outcome. Client disconnection must not cancel, preempt, or roll back admitted publication.
-
-A newer required scheduled presentation may follow an admitted transient operation on the same backend instance, but must not overlap, interrupt, or replace it.
-
-Transient push does not change scheduled publication identity or acknowledgement. Routine scheduler reevaluation of an unchanged scheduled identity must not automatically overwrite the preview.
+Resident transient admission, backend execution, and scheduled-presentation independence are governed by [Transient admission and refresh](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-admission-and-refresh) and [Transient and information-view independence](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-and-information-view-independence).
 
 An explicit `refrain --refresh` requests the runtime's currently required scheduled presentation. Refresh admission and stale-identity checks belong to [Transient admission and refresh](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-admission-and-refresh), not the viewer's rendering path.
 
@@ -396,19 +363,9 @@ Distinguish:
 - unavailable resident runtime;
 - unconfirmed outcome after loss of a terminal response.
 
-A rejection before admission means no requested backend publication began.
-
 A lost terminal acknowledgement after admission is not proof of success or failure. Report the outcome as unconfirmed and do not automatically replay the request.
 
-Publication across destinations is not transactional and cannot be rolled back.
-
-A transient push does not modify committed literary content, operational selection revision, repetition history, global history, reveal progression, current publication checkpoint, scheduled prepared-image cache, or scheduled publication acknowledgement.
-
-Completed transient publication metadata uses the transient form defined by [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes), containing only `schema_version` and the completed `publication` section.
-
-It contains no synthetic literary content, resolved presentation section, or action declarations.
-
-Finished transient pixels bypass scheduled destination presentation overrides and ordinary literary preparation.
+Transient state isolation and finished-image handling are defined in [Transient admission and refresh](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#transient-admission-and-refresh) and [Complete-request validation](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#complete-request-validation). Completed transient metadata must conform to [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes).
 
 ### Resident push validation
 

@@ -2,11 +2,7 @@
 
 ## Publication destinations and ownership
 
-Refrain owns literary selection, scheduling, image preparation, and publication to its configured destinations.
-
-`window` and `waveshare-13in3-e` are resident-owned direct-display backends. The built-in `publish` backend is the sole non-direct resident backend.
-
-The resident does not host HTTP services, supervise consumers, or require network availability for filesystem publication.
+Filesystem publications use the resident `publish` backend defined in [Backend contracts and destination validation](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#backend-contracts-and-destination-validation).
 
 Each `publish` destination has its own:
 
@@ -48,25 +44,13 @@ No fifth public preparation-metadata shape, rendering snapshot, embedded content
 
 ### Shared checkpoints and preparation
 
-The shared content checkpoint contains the committed selected quotation, effective reveal schedule, current visibility, and complete ordered action declarations.
-
-The completed content-and-presentation checkpoint additionally contains the resolved destination-independent artistic choices.
-
-Both checkpoints belong to the current committed selection and are persisted in the single `publication.json` file under `storage.state`.
-
-Operational state remains authoritative for committed literary selection, selection revision, repetition history, and reveal progression. The completed publication checkpoint is the sole durable authority for resolved destination-independent artistic choices.
+Shared checkpoint contents, persistence, and authoritative state boundaries are defined in [Authoritative and derived state](30-SELECTION_AND_PERSISTENCE.md#authoritative-and-derived-state).
 
 Destination-specific preparation derives an independent effective presentation from the validated shared checkpoint, applicable destination overrides, output requirements, and currently available resources.
 
 The shared checkpoint must not be modified by destination preparation.
 
 Its `presentation.qr.enabled` records canonical QR policy. Output-dependent `presentation.qr.available` is omitted from the shared checkpoint and resolved separately for each destination.
-
-Prepared-image caches contain complete images and the internal association and integrity data needed to reuse them safely. They do not establish another public metadata form or independently authoritative artistic record.
-
-A compatible cached image must remain associated with the committed selection, effective presentation requirements, output specification, and reveal-stage visibility that produced it.
-
-A failed or incompatible cache is regenerated using the established recovery requirements without literary reselection or reveal regression.
 
 Prepared-image cache identity, complete-set atomicity, and regeneration belong to [Presentation and Rendering](50-PRESENTATION_AND_RENDERING.md#cache-identity-publication-and-regeneration).
 
@@ -84,6 +68,8 @@ For scheduled publication, the finalizer receives:
 - The exact destination ID and output specification.
 
 The finalizer validates the prepared image's applicable selection, visibility, effective-presentation, and output associations before completing metadata.
+
+Do not infer resource choices, colors, fonts, QR availability, or geometry from finished pixels.
 
 It copies the required data into the completed scheduled form, filters actions for the destination audience, and populates the `publication` section.
 
@@ -169,11 +155,7 @@ The shared checkpoint remains unchanged, so another destination can independentl
 
 The committed content and shared checkpoints retain the authoring limits established by [Publication metadata](../schemas/PUBLICATION.md#actions).
 
-Completed scheduled publication has stricter external-delivery limits:
-
-- At most 16 audience-filtered action declarations.
-- At most 4,096 UTF-8 bytes per serialized action object.
-- At most 65,536 bytes for the entire serialized completed metadata document.
+Completed scheduled publication must satisfy the audience-filtered action-count, serialized per-action size, and complete-document size limits defined in [Publication metadata](../schemas/PUBLICATION.md#actions) and [Metadata validity](../schemas/PUBLICATION.md#metadata-validity).
 
 Apply audience filtering before checking completed-publication action count and byte limits.
 
@@ -210,16 +192,7 @@ Automated tests must cover:
 
 A transient publication describes a completed image-delivery event without associating it with a committed daily literary selection.
 
-Completed transient metadata contains exactly:
-
-- `schema_version`.
-- `publication`.
-
-Its `publication.type` is `"transient"`.
-
-It contains no `content` or `presentation` object, action sequence, reconstruction input, or null placeholders for omitted sections.
-
-The publication section records the event ID, UTC timestamp, destination ID, and actual output specification.
+Completed transient metadata must conform to the [Metadata document shapes](../schemas/PUBLICATION.md#metadata-document-shapes) and [Publication](../schemas/PUBLICATION.md#publication) contracts.
 
 Finished-image viewer pushes and externally submitted transient images use this form.
 

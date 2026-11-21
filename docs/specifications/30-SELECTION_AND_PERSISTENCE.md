@@ -179,18 +179,6 @@ Repetition history is authoritative operational state and must not be reconstruc
 
 Persist cleaned repetition history only as part of the next successful new selection commitment. No separate startup write, maintenance operation or service, periodic background service, or periodic pruning task is required.
 
-Repetition history contains normalized identities of quotations consumed within active selection cycles.
-
-It is maintained in authoritative operational state and persists across application restarts.
-
-Unlike global history, repetition history may have identities removed when the currently eligible highest-specificity pool becomes exhausted.
-
-For a new selection, Refrain also removes identities no longer represented in the nonempty effective content library.
-
-Repetition-history resets and cleanup do not alter previously recorded global selection history.
-
-Repetition identities absent from a nonempty effective content library may be removed during a new selection, but failed source discovery or an empty effective library must never trigger repetition-history cleanup.
-
 Before selecting a quotation, successfully discover and examine the content sources and construct a nonempty effective content library from accepted entries.
 
 Derive the set of normalized quotation identities belonging to every accepted entry in the effective library.

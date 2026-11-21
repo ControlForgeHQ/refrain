@@ -121,19 +121,7 @@ Wheel and source-distribution tests must verify that the required manifests, ref
 
 ## Installation requirements
 
-The minimum supported Python version is 3.13.
-
-The primary deployment target is Raspberry Pi OS Lite on Raspberry Pi hardware, initially validated on the Raspberry Pi 3B+ with the supported Waveshare 13.3-inch e-Paper HAT+ (E).
-
-Raspberry Pi OS is the principal supported Linux deployment environment.
-
-Other Linux distributions may operate using compatible facilities but are not individually validated or promised as supported deployments.
-
-Windows supports hardware-independent development and resident testing, including configuration, content, scheduling, persistence, rendering, local runtime control, desktop presentation, and filesystem publication as applicable.
-
-Windows does not provide the Raspberry Pi-specific Waveshare SPI/GPIO hardware integration.
-
-macOS is not a supported or maintained target.
+Supported platforms, hardware, and minimum Python version are defined in [Supported platform and portability](10-SYSTEM_CONTRACTS.md#supported-platform-and-portability).
 
 Use ordinary operating-system facilities for process management, logging, local timekeeping, filesystem storage, and hardware access.
 

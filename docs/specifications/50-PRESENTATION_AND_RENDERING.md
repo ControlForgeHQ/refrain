@@ -20,7 +20,7 @@ Display-specific conversion is permitted only at the defined destination visual-
 
 For each committed daily selection, resolve destination-independent artistic choices from the captured content preferences, effective configuration, and available resources. Persist those choices in the complete content-and-presentation checkpoint in `publication.json` before destination-specific preparation.
 
-Operational state does not contain resolved artistic choices. The completed publication checkpoint is their sole durable authority, as specified in [Selection and Persistence](30-SELECTION_AND_PERSISTENCE.md#authoritative-and-derived-state).
+State ownership for resolved artistic choices is defined in [Authoritative and derived state](30-SELECTION_AND_PERSISTENCE.md#authoritative-and-derived-state).
 
 A valid matching presentation checkpoint must be reused without reselecting artistic choices. Changes to resource pools, configuration, or destination overrides do not independently authorize canonical reselection. Recovery after checkpoint loss follows [Recovery and state compatibility](30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility).
 
@@ -822,6 +822,8 @@ A changed QR override, decoration suppression, font override, color override, or
 
 Do not require a fingerprint of every asset, rendering decision, configuration field, or source file merely to permit cache reuse.
 
+Do not persist raster geometry, font bytes, source assets, or rendered-image fingerprints in operational state or the shared publication checkpoint solely for exact visual reproduction.
+
 Each output specification and compatible preparation group owns an independently committed complete reveal-stage set.
 
 A failure to prepare or persist one set must not invalidate or remove another healthy compatible set. Do not require a single global transaction spanning all destinations, output specifications, or preparation groups.
@@ -846,15 +848,7 @@ Missing, damaged, truncated, mismatched, or inconsistent files make the affected
 
 Internal cache integrity and association metadata must not invent another public publication-document form. The public [Publication schema](../schemas/PUBLICATION.md#metadata-document-shapes) defines the shared checkpoints and completed publication documents.
 
-Completed scheduled publication metadata is constructed from the committed content, the validated shared presentation checkpoint, and the actual effective choices and output specification associated with the prepared image.
-
-Do not infer resource choices, colors, fonts, QR availability, or geometry from finished pixels.
-
-The completed publication contains one resolved effective presentation, not simultaneous canonical and effective presentation objects or an embedded authored content entry.
-
-Publication-event identity, destination, timestamp, output specification, and destination-filtered actions are populated at finalization. Do not invent completed publication values while preparing the shared checkpoint.
-
-Finalization must not mutate the shared checkpoint, alter cached image pixels, rerandomize canonical choices, or reinterpret the actions.
+Completed-publication metadata construction and finalization are defined in [Event finalization](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#event-finalization).
 
 A valid complete compatible stage set remains reusable throughout ordinary operation and after restart without checking for changes to configuration files, fonts, palette definitions, backgrounds, decorations, or rendering code.
 
@@ -906,20 +900,6 @@ Tests must cover:
 - absence of duplicate canonical/effective public presentation objects;
 - safe cache cleanup while backend operations retain images;
 - independence from transient image publication.
-
-## Cache compatibility constraints
-
-Prepared-image compatibility must preserve the committed selection, valid checkpoint artistic identity, effective presentation requirements, output specification, and expected reveal stages.
-
-Do not make normal cache reuse depend on detecting changes to every configuration or asset file.
-
-Do not persist raster geometry, font bytes, source assets, or rendered-image fingerprints in operational state or the shared publication checkpoint solely for exact visual reproduction.
-
-Keep the atomic operational-state commitment and progressive publication checkpoint independent of disposable cache publication.
-
-The implementation must preserve correct associations, detect unusable cache data, safely publish independent complete stage sets, and regenerate affected sets without selection or reveal regression.
-
-The shared presentation checkpoint is the durable artistic authority. Derived effective presentation and cache associations must not be promoted into competing authoritative state.
 
 ## Destination visual conversion
 
