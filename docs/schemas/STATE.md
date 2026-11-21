@@ -161,6 +161,100 @@ The payload field is required even when it is the empty string.
 
 All newly committed snapshots require the `actions` field. An absent or invalid `actions` field is an operational-state validation error.
 
+### Complete `state.json` example
+
+The following example represents a committed selection with three reveal stages, one action, and reveal progress advanced to stage 1.
+
+For illustration, the host's local UTC offset is -05:00 on November 20, 2026. The configured local reveal times of 05:00, 12:00, and 18:00 therefore resolve to 10:00Z, 17:00Z, and 23:00Z respectively.
+
+The example is formatted for readability. The `sha256` value is the actual SHA-256 digest of the canonical JSON serialization of the complete `state` object, not of the formatted document. The writer emits canonical JSON with sorted object keys, no insignificant whitespace, and a terminating newline.
+
+```json
+{
+  "format_version": 1,
+  "state": {
+    "revision": 1,
+    "snapshot": {
+      "entry_id": "example-entry",
+      "quotation_text": "A quiet morning.",
+      "quotation_identity": "A quiet morning.",
+      "source": "A Collection of Thoughts",
+      "attribution": "Example Author",
+      "presentation_style": "centered",
+      "font": null,
+      "font_faces": {},
+      "background": null,
+      "decoration": null,
+      "text_color": [
+        "black"
+      ],
+      "decoration_color": null,
+      "reveal_schedule": {
+        "quotation": "05:00",
+        "source": "12:00",
+        "attribution": "18:00"
+      },
+      "resolved_reveal_stages": [
+        {
+          "instant": "2026-11-20T10:00:00Z",
+          "visibility": {
+            "quotation": true,
+            "source": false,
+            "attribution": false
+          }
+        },
+        {
+          "instant": "2026-11-20T17:00:00Z",
+          "visibility": {
+            "quotation": true,
+            "source": true,
+            "attribution": false
+          }
+        },
+        {
+          "instant": "2026-11-20T23:00:00Z",
+          "visibility": {
+            "quotation": true,
+            "source": true,
+            "attribution": true
+          }
+        }
+      ],
+      "scheduling": {
+        "display_date": "2026-11-20",
+        "day_start": "05:00"
+      },
+      "actions": [
+        {
+          "type": "play",
+          "visibility": [
+            "private"
+          ],
+          "payload": ""
+        }
+      ]
+    },
+    "repetition_history": [
+      "A quiet morning."
+    ],
+    "highest_reveal_stage": 1
+  },
+  "sha256": "67ca1661aa2f3d97a2f9ec5dd403c7df85931131016b6a17dfe473f67d7afe8d"
+}
+```
+
+The committed reveal sequence has three stages:
+
+- Stage 0 reveals the quotation.
+- Stage 1 additionally reveals the source.
+- Stage 2 additionally reveals the attribution.
+
+The persisted `highest_reveal_stage` value of `1` means the quotation and source have already been revealed. Reveal progression cannot move backward, even if the host clock is adjusted.
+
+The `repetition_history` includes the current quotation's normalized identity. The `actions` array preserves the committed declaration independently of its visibility at the current reveal stage.
+
+The null artistic-preference fields represent absent authored preferences. Actual resolved fonts, backgrounds, decorations, and colors belong to the separate publication checkpoint, not authoritative operational state.
+
 ## Global history
 
 The active history file is `global-history.jsonl` in the effective state directory.
