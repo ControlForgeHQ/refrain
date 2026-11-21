@@ -263,8 +263,14 @@ refrain-viewer --config ./experimental.yaml --background aged-paper --output pre
 The push form is:
 
 ```text
-refrain-viewer [presentation selection and overrides...] --push TARGET
+refrain-viewer [presentation selection and overrides...] --push TARGET [--all-day]
 ```
+
+`--all-day` keeps a successfully pushed image displayed on its destination until the current logical display day ends, unless the hold is cleared earlier. Normal scheduled presentation updates do not replace the image during that period. The option requires `--push` and is supported with both generated presentations and `--image` input.
+
+A subsequent successful push without `--all-day` clears the hold for its destination and resumes normal scheduled updates without forcing immediate restoration. An accepted `refrain --refresh` clears all holds and requests the current scheduled presentation. Restarting Refrain also clears all holds.
+
+Rejected requests do not affect existing holds. For partially successful pushes, hold changes apply only to destinations where publication succeeds.
 
 `TARGET` is `@all` or one exact configured destination ID returned by `--list-destinations`. Identifiers are supplied by the runtime and are opaque. `@all` means every configured destination still participating in publication; it skips intentionally withdrawn destinations but does not silently omit failed or unavailable destinations. A bare `all` is an ordinary destination ID and has no selector meaning.
 

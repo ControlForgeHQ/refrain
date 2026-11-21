@@ -291,6 +291,8 @@ Filesystem publication integration tests must also verify reconstruction from a 
 
 The viewer submits transient complete-image publication requests through the already-running normal Refrain process.
 
+The viewer accepts `--all-day` only with `--push` and transmits the requested hold behavior as part of the transient request. This option is valid for both generated Refrain presentations and finished-image input. The viewer does not maintain destination holds, persist their lifetime, or retain published images after completion. The resident owns hold establishment, expiration, clearing, and scheduled-publication suppression as defined in [All-day transient holds](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#all-day-transient-holds).
+
 It does not access resident backends, construct backend-specific transport operations, or modify the normal desired scheduled presentation.
 
 The resident runtime is authoritative for configured destination identifiers, participation, withdrawal, transient-publication capability, declared output aspects, and requested resolutions.
@@ -403,5 +405,8 @@ Hardware-independent tests using controlled runtime discovery, fake backends, an
 - no changes to authoritative state, publication checkpoints, scheduled cache, or scheduled acknowledgement;
 - completed transient metadata containing no literary or presentation sections;
 - correct resource lifetime and shutdown handling.
+- `--all-day` acceptance only with push, including finished-image pushes;
+- correct forwarding of the all-day request without viewer-owned persistence or image retention;
+- per-destination hold results and truthful reporting of partial publication success.
 
 Physical Waveshare validation must separately confirm that a viewer preview is published through the existing resident backend, cannot overlap another physical refresh, remains displayed after push completion, and can be replaced by `refrain --refresh` without restarting Refrain.

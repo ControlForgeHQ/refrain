@@ -489,13 +489,41 @@ Normal scheduled work has priority until a transient request is admitted.
 
 After admission, the resident owns the entire fixed destination set.
 
-A newer scheduled presentation may follow the admitted transient operation but must not interrupt, replace, or overlap it on the same backend instance.
+A newer scheduled presentation may follow the admitted transient operation, subject to any active all-day hold. It must not interrupt, replace, or overlap the admitted transient operation on the same backend instance.
 
 Only one transient request may be in transfer, validation, or admitted publication at a time.
 
 A second transient request is rejected as busy until the active transient operation reaches a terminal result.
 
 Different backend instances may progress concurrently within one admitted transient operation while preserving per-instance serialization.
+
+### All-day transient holds
+
+An all-day transient request temporarily suppresses ordinary scheduled publication to destinations where the request successfully publishes an image. It uses the existing transient-publication path and completed transient metadata form. It does not create a scheduled publication or alter committed content, repetition or global history, reveal progression, publication checkpoints, prepared images, desired scheduled identities, or scheduled acknowledgements.
+
+The resident owns at most one process-local all-day hold per destination. Each hold records the logical display date determined from host-local time and the configured day start when its request was admitted. Holds do not retain image bytes and are not persisted.
+
+A hold remains effective only while its recorded logical display date is current. When the current logical display date differs, clear the hold without reactivating it if the clock later returns to the earlier date. Resident restart or shutdown discards all holds.
+
+An all-day request follows the existing complete-request validation, atomic admission, backend serialization, completion, and failure-isolation requirements. Its hold intent must be carried explicitly in the validated transient request. An omitted hold intent means an ordinary transient push; invalid values are rejected. The internal protocol remains version 1.
+
+At admission, temporarily protect the request's destinations against scheduled publication until their transient publication results are resolved. Prevent unstarted scheduled work and subsequently required scheduled updates from overwriting an admitted all-day request. Do not interrupt already active backend operations or relax existing busy-admission and backend-serialization requirements.
+
+For each destination with a known successful all-day publication, establish or replace its hold for the admission display date, provided that date remains current. A failed or uncertain publication does not establish a new hold or clear an existing successful hold. Remove provisional protection after the result, retaining the established hold when applicable. If no hold remains, ordinary scheduled-delivery eligibility resumes.
+
+A subsequent ordinary transient push clears an existing hold only for a destination where that push successfully publishes its image. Rejected, failed, and uncertain destination publications preserve prior holds. Clearing a hold does not force scheduled restoration or guarantee continued display of the ordinary transient image. Existing scheduled-publication, acknowledgement, and retry behavior resumes.
+
+While a hold is effective, suppress scheduled publication and recoverable scheduled-publication retries to that destination, including unstarted pending scheduled requests. Continue computing the required scheduled presentation, advancing global reveal progress, preparing images, and maintaining scheduled identities independently of the hold. Do not mark suppressed scheduled work as successfully acknowledged.
+
+Expiration resumes normal scheduled-delivery eligibility and allows publication of the latest required presentation when available. Do not replay intermediate reveal stages that were suppressed during the hold.
+
+An admitted `refrain --refresh` clears all process-local all-day holds before executing its forced scheduled publication. A rejected or stale refresh leaves all holds unchanged. Once refresh is admitted, later backend failure does not restore the cleared holds.
+
+A hold does not alter destination participation, withdrawal, backend availability, or another destination's publication behavior. Destinations sharing a backend instance retain the existing operation-serialization requirements.
+
+A lost client connection or terminal acknowledgement does not cancel an admitted request or alter resident-owned publication results. Holds follow known resident publication outcomes, not the client's ability to receive confirmation.
+
+Holds require no new persistent document, publication metadata shape, public destination-discovery field, or retained image store.
 
 ### Forced scheduled refresh
 
@@ -576,6 +604,15 @@ Tests using controlled concurrent requests and fake backends must cover:
 - stale scheduled identity rejected atomically at refresh admission;
 - scheduled work following admitted one-shot operations;
 - absence of mutation to committed state, checkpoints, history, or scheduled acknowledgements.
+- all-day hold establishment, renewal, expiration, and resident-restart clearing;
+- scheduled reveal progression and image preparation while per-destination delivery is held;
+- suppression of pending and newly required scheduled publications during admission and active holds;
+- successful ordinary pushes clearing only their destinations' holds without forced restoration;
+- rejected, failed, uncertain, and partially successful pushes preserving or changing holds according to known per-destination outcomes;
+- admitted refresh clearing all holds, including when subsequent delivery fails, and rejected refresh preserving them;
+- logical-date changes during an admitted push and safe resumption of current scheduled publication;
+- independent holds for destinations sharing one backend instance;
+- no mutation of authoritative state, histories, checkpoints, scheduled acknowledgements, or publication metadata forms.
 
 ## Transient transfer and staging
 
