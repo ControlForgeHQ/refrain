@@ -14,6 +14,8 @@ Logical-date evaluation orders the current instant and resolved display-day boun
 
 Changing the host timezone is an operating-system operation. Refrain does not need to adapt its scheduling while running; restarting afterward is acceptable. At the next scheduling evaluation, the current host-local logical display date determines whether the committed selection remains active. Reveal progression does not move backward while that logical date remains unchanged.
 
+For an existing committed selection whose display date remains the current logical display date, retain the committed resolved reveal-stage sequence after a host-timezone change. Do not recalculate its reveal instants, merge or split its stages, or remap its persisted stage ordinal. The active host-local timezone continues to determine the current logical display date and the resolution of future selections.
+
 Clock changes must be handled according to the established display-day transition and reveal-progression policies.
 
 The display day begins at a configured local time.
@@ -59,7 +61,7 @@ When a new daily selection is committed, reveal progress begins according to tha
 
 Clock adjustments that establish a new display day follow the rules defined in the display-day model.
 
-Use operating-system local civil time for display-day and reveal calculations. Resolve future wall-time deadlines with operating-system local-time rules; a timezone-aware value returned by `datetime.now().astimezone()` may contain only the current offset and is not sufficient to resolve future dates.
+Use operating-system local civil time for display-day calculations and reveal resolution at selection commitment. Resolve future day-start boundaries and new selections with operating-system local-time rules; a timezone-aware value returned by `datetime.now().astimezone()` may contain only the current offset and is not sufficient to resolve future dates.
 
 Keep local wall-time conversion isolated so tests can inject deterministic local-time rules without changing the process timezone.
 
@@ -69,7 +71,7 @@ Do not use fixed-duration sleeps as a substitute for correct calendar-boundary c
 
 The scheduler should ordinarily wait until the next meaningful event rather than polling continuously.
 
-`next_scheduling_deadline()` derives reveal deadlines from the committed selection's effective schedule and combines them with the next configured day-start time. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline. Scheduling is based on comparing the current logical display date with the committed selection's date, not on a boundary-observation event.
+`next_scheduling_deadline()` derives reveal deadlines from the committed selection's frozen absolute UTC instants and combines them with the next configured day-start boundary resolved using the active host-local timezone. `wait_for_scheduling_event()` waits interruptibly and periodically rechecks wall time, returning control after a clock adjustment so the coordinator can recalculate an obsolete deadline. Scheduling is based on comparing the current logical display date with the committed selection's date, not on a boundary-observation event.
 
 Separate the current time source from scheduling policy sufficiently to permit controlled test inputs.
 
@@ -89,6 +91,7 @@ Require deterministic hardware-independent tests with explicit current instants 
 - non-hour offset folds and gaps where supported by the injected local-time rules;
 - startup, restart, and fresh evaluation within those transition intervals without prior boundary observations;
 - repeated evaluation and restart with a committed selection for the evaluated logical date, producing only one selection and no duplicate history records while retaining monotonic reveal progression;
+- frozen reveal deadlines after restart and host-timezone changes while the logical display date remains unchanged;
 - reveal-stage coalescing when distinct local wall times resolve to the same instant during daylight-saving gaps, including cumulative visibility, stage-zero coalescing, and absence of duplicate stages.
 
 ## Reveal progress and missed events
@@ -137,15 +140,19 @@ The public interface is `refrain.evaluate_scheduling(current_time, configuration
 
 The evaluator calculates the current logical display date from resolved host-local day-start boundary instants as defined under Logical-date evaluation, using `scheduling.day_start`. With a committed selection, a different logical date requires a new selection for that date; the same date retains the selection and advances reveal progress monotonically. Repeated evaluation for one committed logical date does not request another selection. Evaluations are pure; they do not select content, persist state, prepare images, or operate a display.
 
-`refrain.resolve_reveal_stages(selection)` returns the canonical ordered `CompositionVisibility` sequence for a committed daily selection. Resolve each present field's scheduled local time to an absolute instant using the established civil-time rules before grouping reveal stages. Fields whose resolved instants are identical share one stage, even when their configured wall times differ. Each stage reveals every field scheduled for its instant and retains all fields revealed by preceding stages. The quotation and any fields resolving to its initial instant appear in stage zero. Missing optional fields do not create stages. Source and attribution may reveal in either order. The final stage includes every available optional field.
+The canonical ordered `CompositionVisibility` sequence is resolved at selection commitment. Resolve each present field's scheduled local time to an absolute instant using the established civil-time rules before grouping reveal stages. Fields whose resolved instants are identical share one stage, even when their configured wall times differ. Each stage reveals every field scheduled for its instant and retains all fields revealed by preceding stages. The quotation and any fields resolving to its initial instant appear in stage zero. Missing optional fields do not create stages. Source and attribution may reveal in either order. The final stage includes every available optional field.
+
+When committing a new selection, resolve and persist the complete sequence of absolute reveal instants and cumulative visibility. Scheduling evaluation, deadline calculation, image preparation, and recovery use this frozen sequence for the committed selection. They must not independently resolve its authored reveal times using subsequently changed host-timezone rules.
+
+`refrain.resolve_reveal_stages(selection)` returns the committed cumulative visibility sequence. New selections resolve their sequence using the host-local civil-time rules applicable at commitment.
 
 The coordinator uses this same cumulative sequence for image preparation and cache validation. Scheduling evaluation derives its required stage index from the sequence. Stage ordering and equality are determined by resolved instants, not by comparing local `HH:MM` values alone.
 
 The required scheduling contract does not include `DisplayDayBoundary`, `DisplayDayBoundaryObserver`, and the `observed_boundary` argument to `evaluate_scheduling()`. Do not introduce a boundary-history subsystem in their place.
 
-`refrain.next_scheduling_deadline(current_time, configuration, state)` returns the current time immediately when initial selection or a logical-date mismatch requires a selection; otherwise, it returns the next applicable committed reveal time or configured day-start time. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; waiting does not select content, mutate persistent state, prepare images, or operate a display.
+`refrain.next_scheduling_deadline(current_time, configuration, state)` returns the current time immediately when initial selection or a logical-date mismatch requires a selection; otherwise, it returns the next applicable frozen absolute UTC reveal instant or configured day-start boundary resolved using the active host-local timezone. `refrain.wait_for_scheduling_event(deadline, wake_event, ...)` waits for that deadline or an external wake event and returns control for reevaluation after a detected wall-clock adjustment. The coordinator remains responsible for calling `evaluate_scheduling()` and executing its decisions; waiting does not select content, mutate persistent state, prepare images, or operate a display.
 
-The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its effective schedule in host-local time and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage.
+The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its frozen resolved reveal-stage sequence at the current instant and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage.
 
 A persisted stage beyond the sequence's final index is invalid, and evaluation raises `SchedulingEvaluationError`. The application coordinator must report the failure and suspend reveal progression for the affected selection without treating the invalid value as a valid stage, terminating unrelated destination operations, or replacing committed literary content.
 
@@ -203,6 +210,16 @@ If no committed selection exists and a usable effective content library cannot b
 
 If a new selection is required during continuous operation but content directories are missing or inaccessible, source enumeration is incomplete, or the effective content library contains no valid quotations, Refrain must not clear repetition history, commit an empty selection, or replace previously committed operational state. It must preserve existing prepared images where practical and report the failure.
 
+When a new selection is required during continuous operation but no usable effective content library can be constructed, the application coordinator retries the selection attempt after a five-minute monotonic delay. While the same logical display date remains current, scheduling reevaluation or an external wake event must not bypass this retry delay.
+
+A change to a different logical display date permits an immediate new selection attempt, regardless of the preceding retry delay. Successful content recovery resumes normal selection and scheduling.
+
+The retry deadline is process-local coordinator state. Do not persist it or incorporate retry policy into the pure scheduling evaluator. Restarting permits an immediate attempt.
+
+This retry behavior does not apply to a healthy effective library with no quotation eligible for the current logical display date. That condition continues to use the no-eligible-content fallback without repeated same-date selection attempts.
+
+Startup without an existing committed selection and without a usable content library retains its established actionable startup error.
+
 ### No-eligible-content fallback
 
 When content discovery completes successfully and produces a usable effective library containing valid quotations but none eligible for the current logical display date, Refrain must present a fallback instead of treating the library as unavailable.
@@ -249,6 +266,7 @@ The implementation may organize these operations differently provided their exte
 Automated tests must cover:
 
 - unavailable sources, incomplete discovery, and libraries with no valid quotations;
+- five-minute monotonic retry timing, external wakes, logical-date changes, restart, successful content recovery, and isolation from healthy no-eligible-content fallback;
 - healthy effective libraries with no eligible quotation, including the exact information-view quotation, required attribution, full reveal, and normal literary rendering;
 - no synthetic selection, repetition-history mutation, publication checkpoint update, or global-history event for the fallback;
 - preservation of an existing committed selection for another display date during fallback presentation;
@@ -327,7 +345,7 @@ Recovery is performed according to the stage at which an interruption occurred.
 
 An interruption before successful operational-state selection commitment permits normal selection to be repeated when required.
 
-An interruption after commitment preserves the committed selection, its revision, repetition history, effective reveal schedule, and highest reached reveal stage.
+An interruption after commitment preserves the committed selection, its revision, repetition history, effective reveal schedule, frozen resolved reveal-stage sequence, and highest reached reveal stage.
 
 On startup, recover and validate operational state before publication checkpoints or prepared images. The publication checkpoint must match the current committed selection and satisfy its required schema form.
 

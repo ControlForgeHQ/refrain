@@ -90,9 +90,13 @@ The option requires explicit `--entry` selection, including an explicitly select
 
 When omitted, local viewer rendering presents every available literary field fully revealed.
 
-Resolve the requested stage using the shared canonical cumulative reveal-stage sequence. The first stage has index 0. Fields sharing the same resolved reveal instant appear in one stage; absent optional fields create no stages.
+For explicit reveal-stage inspection, determine the current host-local logical display date once at invocation using the effective configuration's `scheduling.day_start` and the established civil-time rules. Resolve the selected quotation's effective reveal schedule for that date using the shared canonical cumulative reveal-stage rules. Do not consult resident operational state or persist the resulting sequence.
 
-A stage index must be an integer within the resolved sequence. Negative values, booleans, malformed values, and indexes beyond the final stage are invalid.
+The first stage has index 0. Fields sharing the same resolved reveal instant appear in one stage; absent optional fields create no stages.
+
+A requested stage index must be an integer from 0 through 2, inclusive. Negative values, booleans, malformed values, and indexes greater than 2 are errors.
+
+If a valid requested index exceeds the final stage available in the resolved sequence for the selected quotation and logical display date, emit a warning identifying the requested and final available indexes, then render the final available stage. Do not treat an unavailable but otherwise valid stage index as an error.
 
 The requested stage controls only the visibility of fields in the one locally rendered image. Its layout must use the complete literary composition, preserving final field positions and concealment behavior.
 
@@ -226,6 +230,10 @@ If a required published resource, font bundle, font face, or palette identifier 
 Explicit viewer overrides remain available and replace only their corresponding published choices.
 
 Unspecified properties retain the published values.
+
+When an explicit decoration override introduces effectively tintable layers and the published `presentation.colors.decoration` is null, reconstruction requires an explicit usable `--tint` override. Otherwise, fail with an actionable diagnostic. Do not resolve a new tint through content, decoration, or global preference pools.
+
+When the selected decoration has no effectively tintable layers, no tint is required.
 
 The viewer does not infer the original destination's audience or apply its destination configuration. Actions are validated as metadata but are never interpreted, executed, or used to select rendering behavior.
 

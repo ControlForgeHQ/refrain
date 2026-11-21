@@ -929,7 +929,9 @@ Conversion must be deterministic for identical input pixels and settings.
 
 Quantize each complete RGB image exactly once. The specific dithering algorithm remains an implementation choice; do not introduce different viewer and backend algorithms or independently quantize the same image at multiple stages.
 
-The Waveshare backend receives the resulting palette indices. Its driver may rotate and pack those indices for controller transport but must not requantize or recolor them.
+The Waveshare backend receives the complete RGB output image and invokes the shared hardware-independent converter. The converter produces palette-indexed pixels that the backend passes to the driver for controller transport. The driver may rotate and pack those indices but must not requantize or recolor them.
+
+The same converter is independently available to `refrain-viewer` for destination-specific inspection and export without constructing or accessing the Waveshare backend or driver.
 
 Keep the shared converter independent of vendor driver, GPIO, and SPI dependencies. The viewer must be able to exercise it without physical display hardware.
 

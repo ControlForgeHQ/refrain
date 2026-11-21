@@ -61,7 +61,7 @@ The common interface does not expose hardware initialization, SPI, GPIO, control
 
 Backends do not perform content selection, reveal scheduling, artistic resource selection, image composition, destination overrides, or persistent operational-state updates.
 
-Destination overrides and required visual conversion are resolved before delivery according to [Presentation and Rendering](50-PRESENTATION_AND_RENDERING.md).
+Destination artisticoverrides are resolved before backend delivery according to [Presentation and Rendering](50-PRESENTATION_AND_RENDERING.md). Backend-specific visual conversion occurs at the boundary defined by the relevant backend contract.
 
 Backend-specific pixel-format or orientation conversion is permitted only where explicitly defined by the relevant backend contract.
 
@@ -435,6 +435,8 @@ Transient publication does not modify:
 The runtime-control interface supports destination discovery, transient complete-image publication, and forced refresh.
 
 Discovery reports each configured destination's exact ID, declared aspect ratio, requested resolution, participation, withdrawal, transient-publication capability, external delivery availability, and scheduled acceptance status.
+
+For `publish` destinations, external delivery availability is unobserved and must be reported as `unknown`. A verified filesystem publication or successful resident acknowledgement does not establish whether an independent consumer is running, has retrieved the image, or has displayed it. Discovery must not infer consumer availability from publication success or require consumer liveness probing.
 
 Destination discovery does not reserve targets or guarantee future availability.
 

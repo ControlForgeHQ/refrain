@@ -137,7 +137,7 @@ Malformed selectors, unknown entries, and quotation numbers outside the selected
 
 ### Reveal-stage inspection
 
-Use `--reveal-stage N` to render one cumulative reveal stage of an explicitly selected quotation. `N` is a zero-based integer index into the quotation's resolved reveal-stage sequence; stage `0` is the first stage. Fields revealing simultaneously share a stage, and absent optional fields create no stages. Negative, malformed, and out-of-range indexes are errors.
+Use `--reveal-stage N` to render one cumulative reveal stage of an explicitly selected quotation. `N` is a zero-based integer from 0 through 2, inclusive; stage `0` is the first stage. Fields revealing simultaneously share a stage, and absent optional fields create no stages. Negative, malformed, and greater-than-2 indexes are errors. When a valid requested index exceeds the final stage available for the selected quotation on the current logical display date, the viewer warns and renders the final available stage instead.
 
 `--reveal-stage` requires an explicit `--entry`, including for `@preview`. Without this option, viewer presentations are fully revealed. It affects only the locally rendered image and does not advance or persist resident reveal progress.
 

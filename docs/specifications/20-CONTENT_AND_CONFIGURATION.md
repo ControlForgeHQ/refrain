@@ -104,7 +104,7 @@ The supported authored format is exactly one content-entry mapping per file, as 
 
 Discover content files recursively beneath the effective `storage.content` directory.
 
-Recognize supported YAML source files independently of directory depth.
+Recognize files with `.yaml` or `.yml` extensions, case-insensitively, independently of directory depth or filesystem case sensitivity. Other filename extensions are not content sources.
 
 Do not follow symbolic-link directories or content-file symlinks during discovery.
 

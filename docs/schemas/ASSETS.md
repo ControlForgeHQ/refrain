@@ -165,12 +165,7 @@ The complete mapping replaces the global `presentation.insets` mapping; edges ar
 
 Insets are measured inward from the selected aspect-specific design canvas, independently of PNG dimensions, slices, and artwork transformations. They are pixel distances, not normalized coordinates.
 
-| Declared aspect | Design canvas |
-|---|---|
-| `4:3` | 3200 × 2400 |
-| `5:3` | 3840 × 2304 |
-| `16:9` | 3840 × 2160 |
-| `16:10` | 3840 × 2400 |
+The aspect-specific design-canvas dimensions are defined in [Image spaces and raster geometry](../specifications/50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry).
 
 Opposing insets must leave positive width and height for every aspect ratio used by the configured destinations: `left + right < canvas width` and `top + bottom < canvas height`.
 

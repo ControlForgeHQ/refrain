@@ -153,6 +153,8 @@ The shared checkpoint remains unchanged, so another destination can independentl
 
 ### Completed-publication limits
 
+Completed-publication limits apply only to destinations that emit completed publication metadata. Direct image-only backends must not be prevented from displaying an otherwise valid prepared image because its corresponding completed metadata would exceed those limits.
+
 The committed content and shared checkpoints retain the authoring limits established by [Publication metadata](../schemas/PUBLICATION.md#actions).
 
 Completed scheduled publication must satisfy the audience-filtered action-count, serialized per-action size, and complete-document size limits defined in [Publication metadata](../schemas/PUBLICATION.md#actions) and [Metadata validity](../schemas/PUBLICATION.md#metadata-validity).
@@ -242,13 +244,15 @@ Protected data includes:
 
 Compare effective standard and custom locations, including configuration-relative and absolute paths.
 
-Reject a publication root equal to, contained within, or an ancestor of protected storage when publication cleanup could affect that storage.
+A publication root may be a dedicated subtree beneath the directory containing the selected configuration file, provided publication cleanup cannot affect the configuration file or other protected storage. The configuration directory itself must not be used as the publication root.
+
+Validate the effective publication root and its actual cleanup scope against protected files and directories. Shared ancestry alone does not constitute unsafe overlap. Reject configurations in which publication cleanup could remove, replace, or traverse protected storage.
 
 The standard Linux layout deliberately places `$XDG_STATE_HOME/refrain/publish` inside the standard `$XDG_STATE_HOME/refrain` state directory. This arrangement is valid because publication cleanup is confined to the `publish` subtree, while `state.json`, `publication.json`, and active and rotated global-history files remain outside that subtree.
 
-This exception applies only to the established standard layout. It does not authorize arbitrary overlap with custom state, content, asset, artifact, or other protected storage. Verify that no protected files or directories fall within the effective publication cleanup scope.
+On Windows, the standard publication and state directories are separate children of the local Refrain operational-data directory. Sharing that parent is valid.
 
-On Windows, the standard publication and state directories are separate children of the local Refrain operational-data directory. Sharing that parent is valid and must not be rejected as an overlap.
+Neither the standard layouts nor permitted configuration-directory nesting authorize publication cleanup to overlap protected storage.
 
 If safe separation or containment cannot be established, fail before writing or removing publication objects.
 
@@ -271,6 +275,22 @@ Reject absolute paths, traversal, unexpected separators, drive-qualified compone
 The publication root and selected destination directory must be actual directories, not symbolic links, junctions, reparse points, or redirected paths.
 
 Validate containment and ownership before destructive operations.
+
+Each publication destination directory contains a permanent ownership marker named `.refrain-owned`. The marker is a zero-byte regular file. It is not part of the consumer-visible publication dataset.
+
+When creating a new destination directory, establish ownership by exclusively creating the marker before writing publication data.
+
+An existing empty destination directory may be adopted by exclusively creating the marker after verifying that it contains no other objects.
+
+An existing unmarked directory containing a complete, independently verified Refrain publication dataset may be adopted by creating the ownership marker. Dataset verification must use the established manifest, metadata, image, identity, and hash requirements.
+
+A valid ownership marker establishes directory ownership even if a previously published dataset later becomes damaged or incomplete. It does not establish dataset validity.
+
+An existing nonempty destination directory with neither a valid ownership marker nor a verified Refrain publication dataset must not be adopted, cleaned, or overwritten. Report an actionable ownership error.
+
+An existing `.refrain-owned` object that is not a zero-byte regular file, including a symbolic link or other redirected object, is invalid. Reject uncertain ownership rather than replacing or repairing the marker.
+
+Once ownership is established, the marker must be retained during publication, recovery, and cleanup. It is never considered a superseded publication object.
 
 Do not follow a symlink, junction, reparse point, or other redirecting filesystem object during cleanup.
 
@@ -305,10 +325,12 @@ For example:
 ```text
 <publish-root>/
 ├── living-room/
+│   ├── .refrain-owned
 │   ├── manifest.json
 │   ├── publication-42.png
 │   └── publication-42.json
 └── kitchen/
+    ├── .refrain-owned
     ├── manifest.json
     ├── publication-87.png
     └── publication-87.json
@@ -368,7 +390,7 @@ A failure during post-commit cleanup must produce an actionable warning without 
 
 Cleanup may be retried at a later safe publication or maintenance opportunity.
 
-After a verified commit, remove all non-current contents within that Refrain-owned destination directory, not merely filenames matching a recognized temporary pattern. Preserve the current manifest and exactly its referenced files.
+After verified commitment, preserve the valid `.refrain-owned` marker, current `manifest.json`, and exactly the image and metadata files referenced by that manifest. Remove other non-current contents of the owned destination directory using the established non-following deletion rules.
 
 Cleanup must not follow links, leave the destination directory, or remove files still required by an active safe publication operation.
 

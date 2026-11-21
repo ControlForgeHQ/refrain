@@ -8,9 +8,11 @@ Authoritative operational state (`state.json`) owns:
 
 - the current committed daily selection and its monotonically increasing revision;
 - the immutable selected literary content, captured content preferences, and ordered action declarations;
-- the effective reveal schedule and scheduling context required for recovery;
+- the effective reveal schedule, frozen resolved reveal-stage sequence, and scheduling context required for recovery;
 - active repetition history;
 - the highest reveal stage reached for the committed selection.
+
+Its serialized format is defined in [Operational State and Global History](../schemas/STATE.md).
 
 Operational state is authoritative for selection identity, scheduling, repetition history, and reveal progression. It must not depend on global history, publication checkpoints, or prepared images to establish the current selection or its revision.
 
@@ -31,7 +33,7 @@ Global history (`global-history.jsonl`) records committed selection events chron
 
 Prepared images are disposable cache entries derived from the committed selection, its reveal stages, output specifications, and compatible effective presentation requirements. Complete valid cached images remain reusable without reevaluating configuration or asset changes. Unusable sets are regenerated from the committed selection, available persisted artistic choices, and current applicable preparation inputs. Pixel-identical regeneration is not required.
 
-Within a committed selection, the currently required reveal stage is the later of the stage required by the committed schedule and current time, or the highest stage already reached. Reveal progression must not move backward and must survive restarts while the committed selection's display date matches the current logical display date.
+Within a committed selection, the currently required reveal stage is the later of the stage required by the frozen resolved reveal-stage sequence and current time, or the highest stage already reached. Reveal progression must not move backward and must survive restarts while the committed selection's display date matches the current logical display date.
 
 Persistent storage uses ordinary local filesystem facilities. Its representation must remain simple, inspectable, and recoverable after unexpected termination. No database service is required.
 
@@ -264,6 +266,10 @@ The committed daily selection record preserves:
 - the selected entry's content properties and presentation preferences required to interpret or present the quotation;
 - the selected entry's complete ordered action declarations.
 
+At selection commitment, resolve the effective reveal schedule into the complete ordered sequence of absolute UTC reveal instants and associated cumulative field visibility. Persist this sequence as immutable committed selection data alongside the effective authored reveal schedule.
+
+The serialized operational-state fields, validation constraints, and frozen reveal-stage representation are defined in [Operational State and Global History](../schemas/STATE.md).
+
 The record contains only the selected quotation, not other quotations from its containing entry. Actions are preserved as opaque semantic declarations, including their type, declared audiences, and payload. They are not rendering inputs.
 
 Operational state additionally preserves the selection revision, active repetition history, highest reached reveal stage, and scheduling context required for recovery.
@@ -274,9 +280,7 @@ The committed record retains the authored presentation preferences needed to res
 
 Neither operational state nor the shared publication checkpoint stores destination-specific overrides, completed publication events, or raster-dependent rendering plans. Output dimensions, presentation-canvas geometry, fitted literary rectangles, QR placement and module sizes, layer transformations, and other raster-dependent results are derived during destination preparation.
 
-Only the current operational-state schema is supported. Do not maintain readers, migrations, normalization paths, rendering branches, or tests for earlier development-state schemas. A numeric schema discriminator is unnecessary unless required by the implementation; if retained, its current value is `1`.
-
-For compatibility within the current version-1 operational-state schema, an absent `actions` field in an existing committed snapshot represents an empty action sequence. Newly committed snapshots must include `actions`. Present action declarations must be validated strictly; invalid persisted actions are operational-state errors and must not be silently repaired or discarded.
+Only the currentoperational-state schema defined in [Operational State and Global History](../schemas/STATE.md) is supported. Its `format_version` remains `1`. The complete committed snapshot requires `actions` and `resolved_reveal_stages`. Older development-state representations are unsupported, even when they carry the same format-version value. Do not introduce migration readers, fallback reconstruction, or compatibility exceptions for incomplete earlier snapshots.
 
 ## Selection revisions and atomic writes
 
@@ -286,7 +290,7 @@ Each `SelectionProposal` carries the base state revision supplied to `select_quo
 
 A selection commitment is accepted only when its base revision matches the current operational revision, except for an exact idempotent retry of an already committed selection event.
 
-An idempotent retry must match the committed selection revision, display date, complete immutable daily selection record, and resulting repetition history. Equality includes the selected occurrence's captured semantic properties and actions, not merely its normalized quotation identity. Subsequent reveal progression, scheduling updates permitted after commitment, and publication checkpoint contents do not participate in this comparison. An idempotent retry does not rewrite operational state or change the committed selection.
+An idempotent retry must match the committed selection revision, display date, complete immutable daily selection record, and resulting repetition history. Equality includes the selected occurrence's captured semantic properties and actions, not merely its normalized quotation identity. Subsequent reveal progression and publication checkpoint contents do not participate in this comparison. An idempotent retry does not rewrite operational state or change the committed selection.
 
 The store assumes one writer at a time. Revision checks reject stale proposals and reveal-progress updates but do not provide cross-process compare-and-swap semantics. Callers must serialize writes sharing the same effective state directory. Resident process exclusivity is defined under [runtime ownership](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#resident-ownership-and-authenticated-control). No general transaction framework or additional state-store locking mechanism is required.
 
@@ -345,7 +349,7 @@ Recovery follows these rules:
 
 A checkpoint associated with another selection revision must never override the current committed selection. An invalid checkpoint must not be treated as a valid source of artistic choices or partially repaired by accepting unvalidated presentation data.
 
-Recovery must preserve the committed selection revision, repetition history, selected literary content, effective reveal schedule, and highest committed reveal stage. Reconstructing or completing publication checkpoints must not modify those authoritative values.
+Recovery must preserve the committed selection revision, repetition history, selected literary content, effective reveal schedule, frozen resolved reveal-stage sequence, and highest committed reveal stage. Reconstructing or completing publication checkpoints must not modify those authoritative values.
 
 Checkpoint recovery uses the same state-first ordering and atomic replacement requirements as ordinary processing. Destination-specific preparation must not proceed from newly resolved artistic choices until the completed checkpoint has been durably persisted. A checkpoint persistence failure leaves operational state authoritative and must be reported without triggering literary reselection.
 
@@ -356,8 +360,6 @@ If operational state is invalid or incompatible, report an actionable diagnostic
 Missing, damaged, or inaccessible global history must not prevent operational recovery. Global history must not determine selection revisions, repetition eligibility, or reveal progress.
 
 When recovery cannot safely complete, preserve the existing physical e-paper image rather than replacing it with an unverified presentation.
-
-Operational-state compatibility is limited to the current schema and the explicit version-1 missing-actions exception defined under [Committed selection snapshot](#committed-selection-snapshot).
 
 Automated tests must cover:
 
@@ -371,7 +373,7 @@ Automated tests must cover:
 - failure to persist a recovered checkpoint;
 - prepared-image loss, corruption, and regeneration using compatible persisted presentation choices;
 - rejection of invalid operational state without modifying it, including correct standard and custom path diagnostics;
-- current-schema state round trips, missing-actions compatibility, and rejection of invalid persisted actions;
+- current-schema state round trips, rejection of missing actions or resolved reveal stages, and rejection of invalid persisted actions;
 - recovery using newly initialized application instances after controlled interruptions at meaningful persistence boundaries.
 
 ## Global history and retention
@@ -380,14 +382,16 @@ Global history is a best-effort chronological record of committed quotation-sele
 
 The active history file is `global-history.jsonl`, located directly within the effective `storage.state` directory. Rotated history segments use the same directory.
 
-Each committed selection event is eligible for one history record containing:
+Each committed selection event is eligible for one history record containing exactly:
 
 - the committed selection revision;
 - the logical display date;
 - the UTC timestamp of the selection event;
-- the selected quotation's complete original text;
-- its normalized repetition identity;
-- any additional non-rendering selection metadata required by the history contract.
+- the selected quotation's complete original text, under the field name `quotation`;
+- the selected quotation's complete committed source, or null when absent;
+- the selected quotation's complete committed attribution, or null when absent.
+
+The exact serialized field names, types, and validation constraints are defined in [Operational State and Global History](../schemas/STATE.md). Global history does not store normalized quotation identities.
 
 Global history records selection events rather than unique display dates. Multiple committed selections for the same logical display date remain distinct events, including selections following clock adjustments.
 

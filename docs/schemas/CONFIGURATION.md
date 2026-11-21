@@ -203,6 +203,12 @@ Overrides affect scheduled image preparation. They do not define independent art
 
 ## Independent image-server settings
 
+Only `refrain-image-server` interprets and validates the `image-server` mapping and its members. Resident Refrain and other executables that do not consume this section must treat it as opaque configuration data: do not validate its type, fields, values, destination references, or resource availability, and do not emit diagnostics about its contents.
+
+Shared YAML document parsing requirements still apply. Invalid YAML syntax, invalid UTF-8, or an invalid top-level document prevents configuration loading regardless of which section contains the error.
+
+The standalone image server validates the required `image-server` settings, applicable publication destination definitions, and storage paths needed for its own operation. It does not require content-library loading, font-resource resolution, artistic preparation, or other resident-only services merely to consume verified publication datasets.
+
 The optional top-level `image-server` mapping configures the separately supervised `refrain-image-server` consumer and contains only:
 
 | Field | Type | Default | Constraint |
@@ -249,15 +255,7 @@ Absolute paths are used as specified. Relative paths are resolved from the direc
 
 Each omitted storage path retains its independent platform-standard default. Selecting a different configuration file or setting one storage path does not relocate the others. Only omitted `storage.content` follows the selected configuration file.
 
-The standard storage-directory defaults are:
-
-| Platform | `state` | `artifacts` | `publish` |
-|---|---|---|---|
-| Linux | `$XDG_STATE_HOME/refrain` | `$XDG_CACHE_HOME/refrain/artifacts` | `$XDG_STATE_HOME/refrain/publish` |
-| Windows | `%LOCALAPPDATA%\Refrain\State` | `%LOCALAPPDATA%\Refrain\Cache\artifacts` | `%LOCALAPPDATA%\Refrain\Publish` |
-| macOS | `~/Library/Application Support/Refrain/State` | `~/Library/Caches/Refrain/artifacts` | `~/Library/Application Support/Refrain/Publish` |
-
-On Linux, an unset, empty, or nonabsolute `XDG_STATE_HOME` uses `~/.local/state`; the corresponding `XDG_CACHE_HOME` fallback is `~/.cache`. These environment variables are host path inputs, not YAML fields.
+Standard storage-directory locations and platform-specific path-resolution rules are defined in [Platform paths and publication root](../specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md#platform-paths-and-publication-root).
 
 Platform path resolution and storage lifecycles belong to [Installation and Service Operation](../specifications/80-INSTALLATION_AND_SERVICE_OPERATION.md).
 
@@ -324,12 +322,7 @@ When supplied, `insets` must be a mapping with all four edges. Each edge must be
 
 Insets are measured inward from the aspect-specific design canvas, not the requested output image or the full reference envelope.
 
-| Declared aspect | Design canvas |
-|---|---|
-| `4:3` | 3200 × 2400 |
-| `5:3` | 3840 × 2304 |
-| `16:9` | 3840 × 2160 |
-| `16:10` | 3840 × 2400 |
+The aspect-specific design-canvas dimensions are defined in [Image spaces and raster geometry](../specifications/50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry).
 
 For the active design canvas, `left + right` must be less than its width and `top + bottom` less than its height. The resulting literary rectangle must have positive width and height.
 
@@ -462,6 +455,8 @@ Bounds default independently when omitted. Explicit invalid bounds, including bo
 These are automatic primary-quotation sizing limits, not a fixed size and not automatic source or attribution limits. Their units are design-canvas pixels, not requested output-image pixels. Content entries cannot directly set these bounds.
 
 ## Validation and compatibility
+
+The following validation rules apply to fields relevant to the requested operation. Executables that do not consume `image-server` ignore its contents as specified under [Independent image-server settings](#independent-image-server-settings); shared YAML document parsing requirements still apply.
 
 Configuration is accepted as an effective configuration of valid supplied values, documented defaults, and usable resources. Do not reinterpret invalid values as different accepted meanings or invent fallback values.
 
