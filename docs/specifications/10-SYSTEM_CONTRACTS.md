@@ -141,7 +141,7 @@ Platform paths, deployment requirements, service supervision, and permissions be
 
 **Publication Checkpoint:** The single evolving `publication.json` record associated with a committed selection. Its content-only form records committed literary data; its completed content-and-presentation form additionally records destination-independent artistic choices.
 
-**Canonical Presentation:** The resolved destination-independent artistic choices persisted in the completed publication checkpoint, including style, visual resources, font and role faces, colors, presentation geometry settings, and QR policy.
+**Canonical Presentation:** The resolved destination-independent artistic choices persisted in the completed publication checkpoint, including style, visual resources, font and role faces, colors, and presentation geometry settings.
 
 **Effective Presentation:** The resolved presentation used to prepare one destination's image after applying applicable destination overrides, resource recovery, and output-dependent decisions. It does not replace or modify the persisted canonical presentation.
 

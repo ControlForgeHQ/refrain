@@ -199,7 +199,7 @@ There is no per-layer palette choice or separate tint-activation field. `text_co
 
 ### QR readiness and positioning
 
-`qr_ready` must be a YAML boolean and defaults to `true`. A malformed value warns and uses `true`. A valid `false` suppresses QR for the selected decoration without warning; `true` permits QR subject to presentation policy, valid placement, and raster viability.
+`qr_ready` must be a YAML boolean and defaults to `true`. A malformed value warns and uses `true`. A valid `false` suppresses QR for the selected decoration without warning; `true` permits QR subject to an effective payload, destination suppression, valid placement, and raster viability.
 
 The positioning fields locate the complete fixed 246 × 246 design-canvas pixel QR allocation, including its quiet zone. They do not configure the payload, encoding, allocation dimensions, literary insets, or a separate QR region.
 
@@ -294,7 +294,7 @@ The design canvas must accommodate opposing preserved edge thicknesses. Transfor
 | `qr` | QR is effectively available. |
 | `no-qr` | QR is effectively unavailable. |
 
-Conditions preserve the relative order of remaining layers. They neither enable nor disable QR. Availability includes policy, readiness, valid placement, and sufficient presentation-canvas pixels. Invalid conditions exclude the containing decoration.
+Conditions preserve the relative order of remaining layers. They neither enable nor disable QR. Availability depends on the effective payload, destination suppression, decoration readiness, valid placement, and sufficient presentation-canvas pixels. Invalid conditions exclude the containing decoration.
 
 ## Validation and fallback contracts
 
