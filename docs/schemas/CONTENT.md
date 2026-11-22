@@ -48,6 +48,7 @@ The `-` after `>` or `|` suppresses the final trailing newline. Otherwise that n
 | `source` | String | No | Absent. |
 | `attribution` | String | No | Absent. |
 | `actions` | Sequence of action mappings | No | Empty sequence. |
+| `qr` | Sequence of QR declaration mappings | No | No entry-level QR overrides. |
 | `priority` | Integer | No | `0`. |
 | `font` | Resource identifier or font-pool reference string | No | No entry preference. |
 | `font_faces` | Mapping of literary roles to face identifier strings | No | No role preferences. |
@@ -59,9 +60,9 @@ The `-` after `>` or `|` suppresses the final trailing newline. Otherwise that n
 | `eligibility` | Nonempty sequence of eligibility-rule mappings | No | Ordinary eligibility. |
 | `reveal` | Mapping of reveal-time overrides | No | No entry overrides; inherit the global schedule. |
 
-No other entry-level fields are defined. All quotations inherit all entry-level properties, including `font_faces` and both color preferences. They have no independently assigned identifiers, metadata, actions, or overrides.
+No other entry-level fields are defined. All quotations inherit all entry-level properties, including QR declarations, `font_faces`, and both color preferences. They have no independently assigned identifiers, metadata, actions, or overrides.
 
-Unknown fields invalidate the entry, subject to the explicitly recoverable action and color-member cases below. Omitting an optional field uses its documented absence or default; it does not make an explicitly invalid value equivalent to omission.
+Unknown fields invalidate the entry, subject to the explicitly recoverable action, QR, and color-member cases below. Omitting an optional field uses its documented absence or default; it does not make an explicitly invalid value equivalent to omission.
 
 ## Entry identifiers
 
@@ -119,6 +120,35 @@ A malformed action is discarded with a warning, without rejecting its entry or o
 These recovery rules do not repair invalid YAML or override required-entry validation. Invalid YAML still excludes the file.
 
 Capture in the committed selection and snapshot recovery are owned by [Selection and Persistence](../specifications/30-SELECTION_AND_PERSISTENCE.md); destination-audience filtering and publication inclusion are owned by [Destination metadata and audience filtering](../specifications/70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#destination-metadata-and-audience-filtering). Publication serialization is outside this content schema.
+
+## QR payloads
+
+An entry may declare QR payload overrides for the `public` and `private` audiences. These declarations apply to every quotation in the entry.
+
+```yaml
+qr:
+  - visibility: ["public"]
+    payload: "https://example.org"
+  - visibility: ["private"]
+    payload: null
+```
+
+Each declaration contains exactly:
+
+| Field | Type | Required | Constraint |
+|---|---|---|---|
+| `visibility` | Sequence of one string | Yes | Exactly `["public"]` or `["private"]`. |
+| `payload` | String or null | Yes | Nonempty UTF-8 string of at most 62 bytes, or null. |
+
+String payloads are opaque and preserved exactly after YAML parsing. No payload-specific interpretation or normalization is performed.
+
+A null payload explicitly suppresses the inherited payload for its audience. An omitted declaration leaves that audience's configured default unchanged. A missing payload field is invalid, not an instruction to suppress QR.
+
+Accept the first valid declaration for each audience. Warn and discard subsequent declarations for that audience, including those following an accepted null declaration.
+
+Malformed declarations are discarded with warnings without invalidating the entry. A malformed top-level `qr` value provides no entry-level overrides. Discarded declarations do not suppress inherited defaults. Valid declarations for the other audience remain effective.
+
+QR precedence is defined in [QR payload resolution](../specifications/20-CONTENT_AND_CONFIGURATION.md#qr-payload-resolution). Resolved publication data is defined in [Publication](PUBLICATION.md#qr-payloads).
 
 ## Priority
 
@@ -452,6 +482,7 @@ Content must be parsed and validated before acceptance. Validation must not sile
 | Syntactically valid but unavailable font, background, or decoration preference | Keep the entry; warn and follow Architecture's resource fallback rules. |
 | Unusable color preference members | Diagnose and exclude those members; follow the color preference recovery contract. |
 | Missing or inaccessible content directory, unsuccessful source discovery, no content files, or no valid quotations | Content-library failure; no new selection from that library. |
+| Malformed QR declaration, duplicate audience, or malformed QR collection | Apply the QR-specific recovery rules; preserve the entry. |
 
 One entry per file is the supported format, so excluding an entry excludes that file's entry. General references elsewhere to independently validated entries do not authorize a multi-entry format.
 

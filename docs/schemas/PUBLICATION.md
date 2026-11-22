@@ -39,6 +39,7 @@ A completed scheduled document has `publication.type: "scheduled"`; a completed 
 | `source` | String | No | Complete source text, nonblank when present; omit when absent. |
 | `attribution` | String | No | Complete attribution text, nonblank when present; omit when absent. |
 | `actions` | Array of action objects | Yes | Ordered sequence of zero to 100 declarations in checkpoints; zero to 16 audience-filtered declarations in completed scheduled publications. |
+| `qr` | Array of QR declaration objects | Yes | Zero to two declarations in checkpoints; zero or one in completed scheduled publications. |
 
 Quotation, source, and attribution strings preserve their original text, including Unicode, whitespace, and meaningful line breaks, under the literary string definitions in [Content Entries](CONTENT.md#quotations-source-and-attribution). Complete text remains present independently of visibility flags. No entry wrapper, entry identifier, quotation list, quotation identity, priority, eligibility, authored preference, duplicated schedule, or reveal-stage ordinal is part of this object.
 
@@ -64,6 +65,27 @@ Completed scheduled validation with a supplied audience rejects every action tha
 
 Completed scheduled publication actions are subject to a maximum of 4,096 UTF-8 bytes per deterministically serialized action object. Apply the completed-publication action count and byte limits after audience filtering. Reject an oversized publication rather than silently truncating, omitting, or modifying otherwise eligible actions.
 
+### QR payloads
+
+`content.qr` is required in both checkpoint forms and completed scheduled publications.
+
+Each declaration contains exactly:
+
+| Field | Type | Constraint |
+|---|---|---|
+| `payload` | String | Nonempty opaque UTF-8 string of at most 62 bytes. |
+| `visibility` | Array of one string | Exactly `["public"]` or `["private"]`. |
+
+Payloads preserve their original Unicode content, whitespace, and newlines. Null payloads, duplicate audience declarations, and additional declaration fields are invalid.
+
+Both checkpoint forms contain zero to two resolved declarations, with at most one declaration per audience. Different audiences retain separate declarations even when their payloads are identical.
+
+Completed scheduled publications contain zero or one declaration. A present declaration identifies the QR payload rendered in the associated image and retains its original visibility. An empty array means no literary QR was rendered.
+
+Completed scheduled serialization requires the declaration's visibility to match the destination audience. When an audience is supplied for validation, a mismatched declaration is invalid. Context-independent validation establishes structural validity only.
+
+Completed transient publications omit the entire `content` section.
+
 ## Presentation
 
 `presentation` contains exactly:
@@ -75,7 +97,6 @@ Completed scheduled publication actions are subject to a maximum of 4,096 UTF-8 
 | `decoration` | String | Resolved stable decoration identifier or `"none"`. |
 | `fonts` | Object | Exactly `bundle` and `faces`, as below. |
 | `colors` | Object | Exactly `text` and `decoration`, as below. |
-| `qr` | Object | Content-and-presentation checkpoints contain exactly Boolean `enabled`. Completed scheduled publications contain exactly Boolean `enabled` and `available`. |
 | `font_size_range` | Object | Exactly positive integer `minimum` and `maximum`; `maximum >= minimum`. |
 | `insets` | Object | Exactly nonnegative integer `left`, `right`, `top`, `bottom`. |
 
@@ -84,10 +105,6 @@ Resource, bundle, face, and palette identifiers are case-sensitive ASCII strings
 `fonts.bundle` is a resolved bundle identifier. `fonts.faces` contains exactly the `quotation`, `source`, and `attribution` roles, each mapped to its resolved face identifier, even when a literary field is absent or hidden.
 
 `colors.text` is a resolved palette identifier. `colors.decoration` is a resolved palette identifier or null; null denotes absence of a resolved tint color.
-
-In a content-and-presentation checkpoint, `qr.enabled` records the canonical QR policy before destination suppression. `qr.available` must be omitted because output-dependent availability has not been resolved. In a completed scheduled publication, `qr.enabled` records the effective policy after destination suppression, and `qr.available` records whether a QR was actually included after decoration restrictions, placement validation, and output-geometry checks. Both fields are required in completed scheduled publication metadata. Neither field contains a QR payload, URL, content rule, placement, or module-size data.
-
-In completed scheduled metadata, `qr.available: true` requires `qr.enabled: true`. An enabled QR policy does not imply availability; placement, decoration readiness, and output geometry may still suppress QR.
 
 Font-size bounds and insets are effective configuration values in design-canvas pixels. They are not fitted raster font sizes, mapped rectangles, rendered positions, crop coordinates, or other raster-layout calculations. The presentation records one set of resolved choices; no canonical/effective duplicate objects exist.
 
@@ -113,7 +130,7 @@ Destination and output configuration are defined in [Application Configuration](
 
 Validation checks the selected document form, exact keys, field types, lexical and numeric constraints, and any supplied audience. It does not supply missing values, repair invalid data, look up content or resources, or establish rendering feasibility. Structural validity does not certify resource availability, typography, layout fit, QR placement, or identical reproduced pixels.
 
-Checkpoint forms have no publication event values or output specification. Completed scheduled metadata requires all three sections and destination-appropriate actions. Completed transient metadata requires only the version and publication object. No completed document may substitute a checkpoint or contain unresolved required values.
+Checkpoint forms have no publication event values or output specification. Completed scheduled metadata requires all three sections and destination-appropriate actions and QR declarations. Completed transient metadata requires only the version and publication object. No completed document may substitute a checkpoint or contain unresolved required values.
 
 Every completed scheduled or transient metadata document must be no more than 65,536 bytes in its deterministic serialized UTF-8 JSON representation. Apply this limit to the complete document after scheduled-publication audience filtering. Reject oversized completed metadata without truncation. Checkpoint forms do not have this external-delivery size limit.
 
@@ -193,6 +210,20 @@ All captured actions are present; presentation and publication are absent.
         ],
         "payload": "Private consumer text."
       }
+    ],
+    "qr": [
+      {
+        "payload": "https://github.com/ControlForgeHQ/refrain",
+        "visibility": [
+          "public"
+        ]
+      },
+      {
+        "payload": "https://example.org/private",
+        "visibility": [
+          "private"
+        ]
+      }
     ]
   }
 }
@@ -237,6 +268,20 @@ The same content has a complete presentation section. Publication is absent.
         ],
         "payload": "Private consumer text."
       }
+    ],
+    "qr": [
+      {
+        "payload": "https://github.com/ControlForgeHQ/refrain",
+        "visibility": [
+          "public"
+        ]
+      },
+      {
+        "payload": "https://example.org/private",
+        "visibility": [
+          "private"
+        ]
+      }
     ]
   },
   "presentation": {
@@ -254,9 +299,6 @@ The same content has a complete presentation section. Publication is absent.
     "colors": {
       "text": "black",
       "decoration": null
-    },
-    "qr": {
-      "enabled": true
     },
     "font_size_range": {
       "minimum": 56,
@@ -304,6 +346,14 @@ This public destination record has source visibility enabled and includes only t
         ],
         "payload": "Opaque consumer text."
       }
+    ],
+    "qr": [
+      {
+        "payload": "https://github.com/ControlForgeHQ/refrain",
+        "visibility": [
+          "public"
+        ]
+      }
     ]
   },
   "presentation": {
@@ -321,10 +371,6 @@ This public destination record has source visibility enabled and includes only t
     "colors": {
       "text": "black",
       "decoration": null
-    },
-    "qr": {
-      "enabled": true,
-      "available": false
     },
     "font_size_range": {
       "minimum": 56,

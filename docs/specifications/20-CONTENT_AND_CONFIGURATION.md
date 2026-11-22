@@ -23,8 +23,9 @@ Supported entry-level semantics include:
 - Effective reveal-schedule overrides.
 - Font, role-face, background, decoration, color, and presentation-style preferences.
 - Ordered opaque action declarations.
+- Audience-specific QR payload overrides.
 
-All quotations within an entry inherit its metadata, eligibility, reveal overrides, presentation preferences, and actions.
+All quotations within an entry inherit its metadata, eligibility, reveal overrides, presentation preferences, QR declarations, and actions.
 
 Individual quotations do not have independent identifiers or overrides. A quotation requiring different authored treatment belongs in another entry.
 
@@ -483,6 +484,14 @@ Automated tests must cover:
 - Strict destination font overrides.
 - Content color outer-structure rejection and member-level recovery.
 - Preservation of canonical choices during runtime fallback.
+
+## QR payload resolution
+
+Resolve QR payloads independently for `public` and `private` audiences, using viewer override, content-entry declaration, configuration default, then null, in descending precedence.
+
+An explicit null declaration suppresses inherited content. An omitted or discarded declaration does not. Authored values and validation are defined in [Content Entries](../schemas/CONTENT.md#qr-payloads) and [Application Configuration](../schemas/CONFIGURATION.md#literary-qr).
+
+New scheduled selections resolve QR payloads for publication checkpoint construction as defined in [Selection commitment](30-SELECTION_AND_PERSISTENCE.md#selection-commitment).
 
 ## Opaque action declarations
 

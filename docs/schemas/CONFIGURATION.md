@@ -80,7 +80,8 @@ presentation:
   information_view:
     duration: 60
   qr:
-    enabled: true
+    public: "https://github.com/ControlForgeHQ/refrain"
+    private: "https://github.com/ControlForgeHQ/refrain"
 
 palette:
   black: "#000000"
@@ -342,15 +343,22 @@ This is a startup-presentation setting, not an external request interface or an 
 
 ### Literary QR
 
+The optional `presentation.qr` mapping defines default QR payloads by audience:
+
 | Field | Type | Default | Constraint |
 |---|---|---|---|
-| `presentation.qr.enabled` | Boolean | `true` | YAML `true` or `false` only. |
+| `public` | String or null | `null` | Nonempty UTF-8 string of at most 62 bytes, or null. |
+| `private` | String or null | `null` | Nonempty UTF-8 string of at most 62 bytes, or null. |
 
-`qr` must be a mapping when supplied. Missing enablement uses `true`; an invalid optional value warns and uses `true`. Strings and integers are invalid.
+Each audience is independent. An omitted or null value supplies no default payload for that audience.
 
-This setting controls literary presentations and does not affect the standalone information view. A selected decoration may suppress QR through its asset-side `qr_ready` field; a destination may suppress it using `overrides.qr: "none"`.
+An invalid `qr` mapping warns and uses null for both audiences. An invalid audience value warns and uses null for that audience without affecting the other. Empty strings, oversized payloads, and non-string non-null values are invalid. Unknown keys follow the general optional-configuration validation policy.
 
-The QR payload, placement, and size are not configurable through application configuration or content entries. QR generation, output-dependent availability, conditional artwork, placement, and raster rules are defined in [QR placement and conditional artwork](../specifications/50-PRESENTATION_AND_RENDERING.md#qr-placement-and-conditional-artwork). Decoration positioning fields are defined in [Assets](ASSETS.md#qr-readiness-and-positioning).
+Payloads are opaque strings, preserved exactly after YAML parsing. No URL, Wi-Fi, or other payload-specific interpretation is performed.
+
+The installed default configuration explicitly supplies the Refrain repository URL for both audiences. This does not change the application fallback of null for omitted values.
+
+Content-entry overrides are defined in [Content Entries](CONTENT.md#qr-payloads). Payload precedence is defined in [QR payload resolution](../specifications/20-CONTENT_AND_CONFIGURATION.md#qr-payload-resolution). Destination suppression and rendering belong to [Presentation and Rendering](../specifications/50-PRESENTATION_AND_RENDERING.md#qr-placement-and-conditional-artwork).
 
 ## Palette
 

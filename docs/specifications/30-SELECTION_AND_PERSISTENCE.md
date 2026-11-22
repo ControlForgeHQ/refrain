@@ -18,8 +18,10 @@ Operational state is authoritative for selection identity, scheduling, repetitio
 
 The publication checkpoint (`publication.json`) is a single evolving record associated with the current committed selection revision. It has two successive complete forms, defined by [Publication metadata](../schemas/PUBLICATION.md#metadata-document-shapes):
 
-- A content checkpoint containing the committed literary content, effective reveal schedule, current visibility, and complete ordered action declarations.
+- A content checkpoint containing the committed literary content, effective reveal schedule, current visibility, complete ordered action declarations, and resolved audience-specific QR payloads.
 - A content-and-presentation checkpoint additionally containing the resolved destination-independent artistic choices.
+
+Resolved QR payloads belong exclusively to the publication checkpoint. They are not stored in authoritative operational state or global history.
 
 The completed presentation checkpoint is the sole durable authority for those resolved artistic choices. They must not be duplicated in operational state. A valid checkpoint associated with the current selection preserves those choices across restarts, changes to resource pools or configuration, and preparation for different destinations.
 
@@ -238,7 +240,7 @@ Selection commitment does not require visual-resource resolution, image preparat
 
 After successful operational-state commitment, Refrain persists the publication checkpoint in the following order:
 
-1. Construct the content checkpoint from the committed operational selection, including the selected literary content, effective reveal schedule, current reveal visibility, and complete ordered action declarations. Atomically write this checkpoint to `publication.json`.
+1. Construct the content checkpoint from the committed operational selection, including the selected literary content, effective reveal schedule, current reveal visibility, complete ordered action declarations, and QR payloads resolved from the accepted content entry and effective configuration. Atomically write this checkpoint to `publication.json`.
 2. Resolve destination-independent artistic choices using the committed selection's captured presentation preferences and applicable configuration and resources. Atomically replace `publication.json` with the complete content-and-presentation checkpoint.
 3. Begin destination-specific preparation using independent copies of the completed checkpoint.
 
@@ -343,9 +345,11 @@ After recovering valid operational state, Refrain must validate the publication 
 Recovery follows these rules:
 
 - **Valid content-and-presentation checkpoint:** Reuse its resolved artistic choices without reselection. Changes to current configuration, resource pools, or destination overrides do not invalidate those choices.
-- **Valid content-only checkpoint:** Resume destination-independent artistic resolution from the committed content and captured preferences, then atomically persist the completed presentation checkpoint before destination preparation.
-- **Missing, corrupt, stale, or otherwise unusable checkpoint:** Reconstruct the content checkpoint from authoritative operational state and persist it. Resolve destination-independent artistic choices again and persist the completed presentation checkpoint. When previously resolved artistic choices cannot be recovered, emit an actionable warning that the new choices may differ from the original presentation.
+- **Valid content-only checkpoint:** Preserve its resolved QR declarations, resume destination-independent artistic resolution from the committed content and captured preferences, then atomically persist the completed presentation checkpoint before destination preparation.
+- **Missing, corrupt, stale, or otherwise unusable checkpoint:** Reconstruct the content checkpoint from authoritative operational state with `content.qr: []` and emit an actionable warning that the original QR payloads could not be recovered. Do not recover QR payloads from current configuration, the original content entry, completed publications, global history, or prepared images. Resolve destination-independent artistic choices again and persist the completed presentation checkpoint. When previously resolved artistic choices cannot be recovered, warn that the resulting appearance may differ.
 - **Checkpoint visibility inconsistent with operational reveal progress:** Reconcile `content.reveal_stage` from authoritative operational state. Preserve otherwise valid checkpoint content and resolved artistic choices. Do not reduce committed reveal progress or retrospectively alter completed publication metadata.
+
+A valid matching checkpoint preserves its QR declarations across restart and subsequent content-entry or configuration changes. Reconstructed QR absence remains effective until a new selection is committed. Checkpoint recovery must not reuse prepared images incompatible with the recovered QR content.
 
 A checkpoint associated with another selection revision must never override the current committed selection. An invalid checkpoint must not be treated as a valid source of artistic choices or partially repaired by accepting unvalidated presentation data.
 
@@ -366,6 +370,8 @@ Automated tests must cover:
 - recovery of a valid committed selection independently of the original content library;
 - interrupted operational-state commits and ambiguous replacement outcomes;
 - recovery from valid content-only and complete presentation checkpoints;
+- preservation of resolved QR payloads across restart and content-entry or configuration changes;
+- recovery of missing or invalid checkpoints with empty QR declarations, actionable warnings, and rejection of incompatible cached images;
 - preservation of resolved artistic choices across restart, resource-pool changes, and destination override changes;
 - recovery from missing, corrupt, stale, and mismatched checkpoints without literary reselection or reveal regression;
 - actionable warnings and artistic re-resolution when the completed presentation checkpoint is lost;

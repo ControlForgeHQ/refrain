@@ -74,9 +74,9 @@ When the selected decoration contains at least one effectively tintable layer, r
 
 Text-color and decoration-color pools are independent namespaces. Do not merge their candidates.
 
-The canonical presentation also records the resolved presentation style, QR policy, and applicable design-space presentation configuration. Its fields follow the stage-appropriate [Publication schema](../schemas/PUBLICATION.md#presentation).
+The canonical presentation records the resolved presentation style and applicable design-space presentation configuration. Its fields are defined in [Publication](../schemas/PUBLICATION.md#presentation).
 
-The shared presentation checkpoint records destination-independent resolved choices. Output-dependent QR availability is unresolved at this stage: record canonical `presentation.qr.enabled` but omit `presentation.qr.available` until destination preparation. Completed scheduled publication metadata records the actual effective values, including QR availability.
+Resolved QR payloads belong to checkpoint `content.qr`, not `presentation`. Destination-specific QR rendering uses those preserved declarations without modifying the shared checkpoint.
 
 Do not persist destination-specific overrides, raster-layout calculations, output dimensions, fitted font pixel sizes, or rendered pixels in the shared publication checkpoint.
 
@@ -111,9 +111,9 @@ Suppressing background does not reset literary geometry.
 
 Decoration-color overrides have no rendering effect when no effective decoration layer is tintable.
 
-Destination QR suppression changes only that destination's effective QR policy and availability. It must not modify canonical QR policy or affect another destination.
+Destination QR suppression affects only that destination's rendering. It must not modify checkpoint QR declarations or affect another destination.
 
-For each destination, derive and validate the effective presentation before rendering. Record the actual effective values used, including resource fallbacks, suppression, resolved font and faces, colors, insets, font bounds, and QR availability, in its completed publication metadata.
+For each destination, derive and validate the effective presentation before rendering. Record the actual effective presentation values used, including resource fallbacks, suppression, resolved fonts and faces, colors, insets, and font bounds, in its completed publication metadata. Rendered QR content is recorded separately under `content.qr` according to [Publication](../schemas/PUBLICATION.md#qr-payloads).
 
 Do not serialize override requests as substitutes for resolved effective presentation values.
 
@@ -629,11 +629,9 @@ Tests must verify color precedence, unavailable candidates, pool membership, dup
 
 ## QR placement and conditional artwork
 
-The presentation-level literary QR policy defaults to enabled and may be disabled. Destination `overrides.qr: "none"` suppresses QR for that destination.
+Select the QR payload from checkpoint `content.qr` using the destination's configured audience. No matching declaration means no QR. Destination `overrides.qr: "none"` suppresses rendering without modifying the checkpoint.
 
-The shared presentation checkpoint persists canonical QR policy without computing output-dependent QR availability. Its `presentation.qr.enabled` records the canonical policy; `presentation.qr.available` remains omitted until destination-specific preparation.
-
-Completed scheduled publication metadata records both effective `qr.enabled` and actual `qr.available`, using the established field meanings.
+Determine whether the selected payload can be rendered before choosing conditional decoration artwork. The resulting rendering decision must remain consistent across every reveal stage in the prepared set.
 
 Resolve QR allocation and placement in design-canvas coordinates, then map the allocation's four edges independently to presentation-canvas coordinates using deterministic nearest-integer, half-up rounding.
 
@@ -659,15 +657,16 @@ rasterize and composite QR
 
 Effective QR availability is resolved separately for every output specification before selecting conditional decoration artwork.
 
-QR is available only when:
+QR is rendered only when:
 
-- the effective policy permits rendering;
+- the destination has a selected QR payload;
+- no destination override suppresses QR;
 - the effective decoration's `qr_ready` value permits QR;
 - placement metadata is valid;
 - the complete allocation remains within the design canvas;
 - the mapped presentation-canvas allocation can contain the complete QR symbol with at least one pixel per module.
 
-Disabled policy, destination suppression, or valid `qr_ready: false` suppress QR without warning.
+An absent payload, destination suppression, or valid `qr_ready: false` suppresses QR without warning.
 
 Invalid placement metadata, conflicting anchors, out-of-bounds allocation, or insufficient presentation-canvas pixels produce an actionable warning and suppress QR for that output specification.
 
@@ -677,11 +676,7 @@ If an unusable decoration is discarded during ordinary preparation, reevaluate Q
 
 Conditional `always`, `qr`, and `no-qr` artwork is selected from the final effective QR availability state.
 
-An available literary QR code encodes:
-
-`https://github.com/ControlForgeHQ/refrain`
-
-The payload is independent of the selected quotation, content entry, display date, and reveal stage.
+An available literary QR code encodes the selected payload exactly, without interpretation or normalization.
 
 The literary QR code uses:
 
@@ -733,7 +728,7 @@ Composite QR after literary text.
 
 QR placement does not alter literary insets, reserve additional text space, rearrange quotation layout, or introduce QR/text collision detection.
 
-A complete valid prepared-image cache remains reusable without reevaluating QR placement. Regeneration uses the persisted canonical QR policy and current output geometry without changing committed selection state.
+A complete compatible prepared-image cache remains reusable without reevaluating QR placement. Regeneration uses the checkpoint's preserved QR declarations and current effective destination requirements.
 
 The information view remains independent of literary QR behavior.
 
@@ -750,16 +745,20 @@ Tests must cover:
 - edge rounding and odd centering;
 - exact QR version, correction level, encoding, and quiet zone;
 - insufficient presentation-canvas raster size;
-- policy and decoration-readiness suppression;
+- absent-payload, destination, and decoration-readiness suppression;
 - conditional decoration-layer selection before graphical composition;
 - QR rasterization after literary rendering;
 - destination-specific QR suppression without canonical mutation;
 - QR reevaluation after all-or-nothing decoration fallback;
 - stable QR results across reveal stages;
-- output-dependent availability in completed metadata;
-- absence of output-dependent `qr.available` from the shared checkpoint.
+- accurate rendered QR declarations in completed metadata;
+- preservation of resolved checkpoint QR declarations without destination-specific modification;
+- audience-specific payload selection and exact encoding;
+- compatible cache sharing across audiences with identical effective QR rendering;
+- incompatible preparation groups for differing QR payloads;
+- cache rejection when checkpoint recovery suppresses previously rendered QR;
 
-Do not implement automatic collision avoidance, modify literary insets to accommodate QR, or introduce new QR configuration fields.
+Do not implement automatic collision avoidance or modify literary insets to accommodate QR.
 
 ## Complete stage preparation
 
@@ -818,7 +817,9 @@ Destination identity alone does not partition a preparation group.
 
 Different effective presentation requirements must not share prepared images merely because their output dimensions match.
 
-A changed QR override, decoration suppression, font override, color override, or other effective requirement changes compatibility when it affects rendered pixels.
+Preparation compatibility includes the effective QR payload and rendering decision. Destinations with different audiences may share images when their effective rendering requirements are otherwise identical. Different QR payloads or QR suppression must not share prepared pixels.
+
+A changed decoration, font, color, or other effective requirement changes compatibility when it affects rendered pixels.
 
 Do not require a fingerprint of every asset, rendering decision, configuration field, or source file merely to permit cache reuse.
 
@@ -847,6 +848,8 @@ Validate image completeness, decoding integrity, output dimensions, stage associ
 Missing, damaged, truncated, mismatched, or inconsistent files make the affected set unusable.
 
 Internal cache integrity and association metadata must not invent another public publication-document form. The public [Publication schema](../schemas/PUBLICATION.md#metadata-document-shapes) defines the shared checkpoints and completed publication documents.
+
+The preparation result must retain the QR declaration actually rendered, or its absence, for completed-publication finalization. Reusing a cached image must preserve that association without independently resolving QR content.
 
 Completed-publication metadata construction and finalization are defined in [Event finalization](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#event-finalization).
 

@@ -188,6 +188,8 @@ Use byte-oriented transport operations such as `send_bytes()` and `recv_bytes()`
 
 JSON may carry operation metadata, destination identities, output specifications, and publication results. Transfer complete images as separately bounded binary PNG payloads.
 
+Transient destination associations include the audience reported by discovery. The resident validates that association against its current destination configuration before admission.
+
 Do not use pickle-based `send()` or `recv()` for control payloads.
 
 Reject unsupported versions or operations, invalid authentication, malformed or inconsistent metadata, invalid encodings, oversized payloads, and incomplete transfers before backend access.
@@ -434,7 +436,7 @@ Transient publication does not modify:
 
 The runtime-control interface supports destination discovery, transient complete-image publication, and forced refresh.
 
-Discovery reports each configured destination's exact ID, declared aspect ratio, requested resolution, participation, withdrawal, transient-publication capability, external delivery availability, and scheduled acceptance status.
+Discovery reports each configured destination's exact ID, audience, declared aspect ratio, requested resolution, participation, withdrawal, transient-publication capability, external delivery availability, and scheduled acceptance status.
 
 For `publish` destinations, external delivery availability is unobserved and must be reported as `unknown`. A verified filesystem publication or successful resident acknowledgement does not establish whether an independent consumer is running, has retrieved the image, or has displayed it. Discovery must not infer consumer availability from publication success or require consumer liveness probing.
 
@@ -468,6 +470,7 @@ Before backend access, the resident validates:
 - Current destination identity and participation.
 - Applicable transient capability.
 - Current output specifications.
+- Current destination audiences matching the submitted discovery associations.
 - Exact image-variant association.
 - Image dimensions and encoded transport limits.
 - Required output representation.
@@ -590,7 +593,7 @@ Tests using controlled concurrent requests and fake backends must cover:
 - intentionally withdrawn, unavailable, failed, and unsupported destinations;
 - no-target failures;
 - complete-request validation before backend access;
-- destination or geometry changes after discovery;
+- destination, audience, or geometry changes after discovery, with complete-request rejection before backend publication;
 - atomic busy rejection with no partial publication;
 - shared-backend-instance admission conflicts;
 - one active transient request at a time;

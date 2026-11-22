@@ -50,6 +50,10 @@ Local presentation inspection and export use one viewer-owned output specificati
 
 The default aspect ratio is `16:10`, with requested dimensions equal to that aspect's full design canvas.
 
+Ordinary local presentation rendering uses the `private` audience unless `--audience` selects `public`. The selected audience determines the effective QR payload.
+
+`--render-as` uses the named destination's configured audience and cannot be combined with an explicit `--audience`.
+
 Explicit `--aspect` and `--resolution` values select the viewer's output specification. They use the normal design-canvas, presentation-canvas, and output-image pipeline in [Image spaces and raster geometry](50-PRESENTATION_AND_RENDERING.md#image-spaces-and-raster-geometry).
 
 Validate the actual requested output specification before allocating an image. Do not reject a viewer request merely because an unused supported aspect would make a decoration's insets or transformation invalid.
@@ -173,9 +177,9 @@ An explicit `--font` override may select a registered font bundle or supported n
 
 Explicit background and decoration `"none"` values suppress those resources.
 
-`--qr` and `--no-qr` control the viewer's literary QR policy. They do not override mandatory resource-readiness, placement-validity, or raster-viability conditions.
+`--qr-public` and `--qr-private` independently override the corresponding audience's QR payload. The literal `none` suppresses that audience's payload. Explicit invalid payloads are errors.
 
-The viewer must calculate effective QR availability using the same output-specific pipeline as ordinary preparation, including reevaluation after a failed decoration is discarded.
+`--no-qr` suppresses QR unconditionally and cannot be combined with either payload override. The viewer applies the shared [QR payload resolution](20-CONTENT_AND_CONFIGURATION.md#qr-payload-resolution) and [rendering rules](50-PRESENTATION_AND_RENDERING.md#qr-placement-and-conditional-artwork).
 
 Supported minimum and maximum quotation font-size overrides are design-canvas measurements. Each supplied bound overrides only that bound. The resulting effective minimum must not exceed the maximum.
 
@@ -239,13 +243,15 @@ The viewer does not infer the original destination's audience or apply its desti
 
 The original publication's `content.reveal_stage` records visibility at its publication event. By default, reconstruction renders all available literary fields fully revealed; it does not replay the original reveal sequence or modify that recorded event.
 
-The published QR policy is the baseline for reconstruction. Reevaluate effective QR availability for the newly requested geometry and selected decoration.
+Completed `content.qr` supplies the reconstruction QR payload, if present. Preserve its recorded visibility without inferring a destination audience or resolving payloads from current configuration or content entries.
 
-The original `presentation.qr.available` flag describes the source publication and does not constrain QR viability for a new output specification.
+Reevaluate QR rendering viability for the requested output and effective decoration. An empty published QR array must not acquire a payload during reconstruction.
 
 Resolve layout, wrapping, font fitting, graphical transformations, QR placement, and raster-dependent geometry using the shared presentation pipeline.
 
 Published insets and quotation font-size bounds remain design-canvas measurements unless explicitly overridden by supported viewer controls.
+
+`--no-qr` may suppress the published QR payload. `--audience`, `--qr-public`, and `--qr-private` are invalid in publication-reconstruction mode.
 
 `--publication` may be combined with supported local aspect, resolution, output, window, debug, and artistic override controls.
 
@@ -281,6 +287,8 @@ Tests must cover:
 - fully revealed default presentation;
 - changed output geometry and output-size limits;
 - QR viability reevaluation;
+- reconstruction from recorded QR content without audience inference or current payload defaults;
+- suppression of published QR content and rejection of audience or payload overrides;
 - local PNG export and window display;
 - rejection of incompatible CLI modes;
 - absence of action execution, audience inference, backend access, and persistent-state mutation.
@@ -295,7 +303,7 @@ The viewer accepts `--all-day` only with `--push` and transmits the requested ho
 
 It does not access resident backends, construct backend-specific transport operations, or modify the normal desired scheduled presentation.
 
-The resident runtime is authoritative for configured destination identifiers, participation, withdrawal, transient-publication capability, declared output aspects, and requested resolutions.
+The resident runtime is authoritative for configured destination identifiers, audiences, participation, withdrawal, transient-publication capability, declared output aspects, and requested resolutions.
 
 The viewer discovers the required destination specifications before rendering or submitting an image.
 
@@ -323,11 +331,9 @@ If `@all` includes any participating destination lacking transient capability, r
 
 For finished-image input, reject the complete request if the supplied PNG dimensions differ from any selected destination's requested dimensions.
 
-For Refrain-presentation push, group destinations by their discovered output specifications and render one complete variant for each unique required specification.
+For Refrain-presentation push, select each destination's QR payload using its discovered audience before rendering. Group destinations by compatible output specifications and effective rendering requirements, including QR content, as defined in [Cache identity, publication and regeneration](50-PRESENTATION_AND_RENDERING.md#cache-identity-publication-and-regeneration).
 
-Use coherent viewer-owned artistic choices across variants generated together. Output-dependent QR availability, layout, and geometry are resolved separately for each specification.
-
-Variants with identical output specifications may share one rendered image and transfer.
+Each submitted destination association includes the discovered audience for resident validation. The viewer must not substitute another audience after rendering.
 
 Resident revalidation of discovered destinations and submitted image variants is defined in [Complete-request validation](60-DESTINATIONS_AND_RUNTIME_CONTROL.md#complete-request-validation).
 
@@ -381,6 +387,8 @@ Transient state isolation and finished-image handling are defined in [Transient 
 
 Hardware-independent tests using controlled runtime discovery, fake backends, and deterministic synchronization must cover:
 
+- audience-specific QR variants and sharing across audiences with compatible rendering requirements;
+- rejection when a destination's configured audience changes between discovery and admission;
 - generic destination routing without backend-type conditionals;
 - exact destination IDs, including literal `all` versus reserved `@all`;
 - direct destination selection, withdrawn targets, and no-target results;

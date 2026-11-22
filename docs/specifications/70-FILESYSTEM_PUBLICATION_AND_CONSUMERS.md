@@ -15,7 +15,7 @@ Each `publish` destination has its own:
 
 One shared `publish` backend instance may manage multiple destinations. Sharing the backend instance does not merge destination identity, audience, publication events, directory ownership, or acknowledgement.
 
-Scheduled destinations share prepared images only when their output specifications and effective presentation requirements are compatible. Audience does not change pixel compatibility.
+Scheduled destinations share prepared images only when their output specifications and effective rendering requirements are compatible, including QR content as defined in [Cache identity, publication and regeneration](50-PRESENTATION_AND_RENDERING.md#cache-identity-publication-and-regeneration).
 
 The application prepares destination-specific images and finalizes publication metadata before passing them to the filesystem writer.
 
@@ -50,8 +50,6 @@ Destination-specific preparation derives an independent effective presentation f
 
 The shared checkpoint must not be modified by destination preparation.
 
-Its `presentation.qr.enabled` records canonical QR policy. Output-dependent `presentation.qr.available` is omitted from the shared checkpoint and resolved separately for each destination.
-
 Prepared-image cache identity, complete-set atomicity, and regeneration belong to [Presentation and Rendering](50-PRESENTATION_AND_RENDERING.md#cache-identity-publication-and-regeneration).
 
 ### Event finalization
@@ -63,13 +61,14 @@ For scheduled publication, the finalizer receives:
 - The committed literary content and effective reveal schedule associated with the selected prepared image.
 - The visibility applicable to that image's reveal stage.
 - The actual resolved effective destination presentation associated with the prepared image.
+- The QR declaration actually rendered in the prepared image, or its absence.
 - The destination's required audience and original ordered action declarations.
 - The publication-event ID and UTC timestamp.
 - The exact destination ID and output specification.
 
 The finalizer validates the prepared image's applicable selection, visibility, effective-presentation, and output associations before completing metadata.
 
-Do not infer resource choices, colors, fonts, QR availability, or geometry from finished pixels.
+Do not infer resource choices, colors, fonts, QR content, or geometry from finished pixels.
 
 It copies the required data into the completed scheduled form, filters actions for the destination audience, and populates the `publication` section.
 
@@ -77,7 +76,7 @@ The completed scheduled publication contains exactly `schema_version`, `content`
 
 Its `presentation` object records one effective set of resolved artistic values, not separate canonical and destination presentations.
 
-The completed `presentation.qr` object includes both effective `enabled` and actual `available` values.
+Completed `content.qr` records the rendered declaration, or an empty array when no QR was rendered. The finalizer must preserve the declaration's payload and visibility without independently resolving QR content.
 
 `content.reveal_stage` records the three Boolean visibility values represented by the published image. It does not contain a numeric reveal-stage index.
 
@@ -103,13 +102,15 @@ The finalizer must produce a complete document satisfying its selected form befo
 
 The filesystem writer must validate the completed document independently before committing the dataset.
 
+Automated tests must also verify that finalization preserves the QR declaration associated with the prepared image, records an empty array when QR was suppressed, and rejects inconsistent destination-audience associations.
+
 ### Publication validation boundaries
 
 Validate exact document forms, required and prohibited fields, types, identifiers, supported values, permitted nulls, output associations, destination identity, and applicable audience requirements.
 
 Reject unsupported versions, duplicate JSON keys, nonstandard numeric values, malformed Unicode, partial objects, unexpected fields, or unresolved required values.
 
-Enforce inexpensive semantic consistency needed to prevent unsafe consumption, including impossible QR policy/availability combinations and visibility flags inconsistent with absent literary fields.
+Enforce semantic consistency required by [Publication](../schemas/PUBLICATION.md), including destination-appropriate QR declarations and reveal visibility consistent with absent literary fields.
 
 Do not recalculate reveal schedules, load rendering resources, measure text, perform QR placement, or repeat image composition merely to validate completed metadata.
 
@@ -129,7 +130,7 @@ The audience is validated as destination configuration before resident startup a
 
 The audience is not stored as a field in publication metadata and must not be inferred from the destination ID.
 
-Audience affects published actions, not prepared image identity or artistic resource selection.
+Destination audience governs action filtering and QR content selection. QR selection affects prepared-image compatibility as defined in [Presentation and Rendering](50-PRESENTATION_AND_RENDERING.md#cache-identity-publication-and-regeneration).
 
 The committed selection and shared publication checkpoint preserve the complete ordered action declarations.
 
@@ -146,6 +147,8 @@ Preserve the original order of included actions, including duplicate declaration
 Do not add an audience field or rewrite an included action's visibility values.
 
 The completed scheduled publication contains only its filtered `content.actions` array.
+
+Completed `content.qr` contains only the declaration rendered for the destination's audience, or an empty array. The finalizer must reject a rendered declaration whose visibility does not match that audience.
 
 A public destination must not expose private-only actions in its completed metadata, including through redundant or nested fields.
 
