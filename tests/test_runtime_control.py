@@ -1180,7 +1180,7 @@ def test_invalid_image_descriptor_or_payload_never_publishes(runtime, encoding, 
         connection.send_bytes(json.dumps(message).encode())
         if encoding == "png" and size == [16, 9]:
             connection.send_bytes(payload)
-        assert json.loads(connection.recv_bytes())["status"] == ("unsupported" if size == [9000, 9] else "invalid")
+        assert json.loads(connection.recv_bytes())["status"] == "invalid"
     assert seen == []
 
 
