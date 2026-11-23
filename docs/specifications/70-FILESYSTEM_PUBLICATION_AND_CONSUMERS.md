@@ -142,8 +142,8 @@ Before serializing or exposing completed scheduled publication metadata, copy an
 
 Visibility is nonhierarchical:
 
-- A `external` destination includes an action only when its visibility explicitly includes `external`.
-- A `internal` destination includes an action only when its visibility explicitly includes `internal`.
+- An `external` destination includes an action only when its visibility explicitly includes `external`.
+- An `internal` destination includes an action only when its visibility explicitly includes `internal`.
 - An action declaring both audiences is included for either destination.
 
 Preserve the original order of included actions, including duplicate declarations, original payloads, and each included action's complete visibility declaration.
