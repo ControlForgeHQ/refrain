@@ -392,6 +392,22 @@ def test_publication_reconstruction_uses_committed_content_and_resolved_choices(
     assert {path: path.read_bytes() for path in sentinels} == sentinels
 
 
+@pytest.mark.parametrize("size", [(320, 200), (240, 320), (300, 300)])
+def test_viewer_generation_and_reconstruction_use_requested_dimensions(tmp_path: Path, size: tuple[int, int]) -> None:
+    config_path, _, publication_path, _ = _completed_publication(tmp_path)
+    configuration = load_application_config(config_path)
+    specification = viewer._output_specification("16:10", size)
+    document = viewer._read_publication_metadata(publication_path)
+    for image in (
+        viewer.render_preview(configuration, ("@preview", 1), specification),
+        viewer.render_publication(configuration, document, specification),
+    ):
+        try:
+            assert image.size == size
+        finally:
+            image.close()
+
+
 @pytest.mark.parametrize(
     ("source", "attribution"),
     [
@@ -1226,6 +1242,19 @@ def test_finished_png_local_inspection_avoids_configuration_and_closes_image(
     with Image.open(source_path) as original:
         assert original.size == (32, 24)
         assert original.getpixel((0, 0)) == (10, 20, 30)
+
+
+@pytest.mark.parametrize("size", [(3841, 1), (1, 2401), (3840, 2401)])
+def test_finished_png_rejects_oversized_dimensions_before_decoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int]
+) -> None:
+    path = tmp_path / "oversized.png"
+    with Image.new("RGB", size) as image:
+        image.save(path)
+    monkeypatch.setattr(Image.Image, "load", lambda self: pytest.fail("oversized raster was decoded"))
+
+    with pytest.raises(viewer.ViewerError, match="dimensions"):
+        viewer._load_finished_image(path)
 
 
 @pytest.mark.parametrize(

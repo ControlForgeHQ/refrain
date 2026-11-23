@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import refrain.geometry as geometry_module
 from refrain.geometry import (
     PresentationGeometryError,
     PresentationInsets,
@@ -58,13 +59,32 @@ def test_mismatched_aspect_specification_derives_exact_ratio_presentation_canvas
         (16,),
         (16, 9, 1),
         "16:9",
-        (1, 1),
-        (9, 16),
+        (3841, 1),
+        (1, 2401),
+        (3840, 2401),
+        (3841, 2400),
     ],
 )
 def test_invalid_requested_output_dimensions_are_rejected(requested_size: object) -> None:
     with pytest.raises(PresentationGeometryError):
         ResolvedOutputSpecification("16:9", requested_size)
+
+
+@pytest.mark.parametrize("size", [(1, 1), (1, 2400), (3840, 1), (3840, 2400), (600, 800), (800, 800)])
+def test_finished_output_dimensions_are_independent(size: tuple[int, int]) -> None:
+    assert ResolvedOutputSpecification("4:3", size).requested_output_size == size
+
+
+def test_projected_canvas_is_not_restricted_by_finished_output_limits() -> None:
+    specification = ResolvedOutputSpecification("4:3", (3840, 2400))
+    assert specification.presentation_canvas_size == (3608, 2706)
+    assert specification.requires_output_resize
+
+
+def test_projected_canvas_allocation_is_preflighted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(geometry_module, "_MAX_RASTER_BYTES", 4 * 9_500_000)
+    with pytest.raises(PresentationGeometryError, match="image allocation"):
+        ResolvedOutputSpecification("4:3", (3840, 2400))
 
 
 def test_unsupported_aspect_is_rejected() -> None:

@@ -9,6 +9,7 @@ from typing import Mapping
 
 REFERENCE_SIZE = (3840, 2400)
 DEFAULT_PRESENTATION_INSETS = (384, 384, 324, 324)
+_MAX_RASTER_BYTES = 2**31 - 1
 
 PixelBounds = tuple[int, int, int, int]
 
@@ -54,6 +55,12 @@ class ResolvedOutputSpecification:
         if not isinstance(self.aspect_ratio, str) or self.aspect_ratio not in SUPPORTED_PRESENTATION_ASPECTS:
             raise PresentationGeometryError(f"unsupported presentation aspect ratio: {self.aspect_ratio!r}")
         object.__setattr__(self, "requested_output_size", validate_requested_size(self.requested_output_size))
+        for size in (
+            SUPPORTED_PRESENTATION_ASPECTS[self.aspect_ratio].design_canvas_size,
+            self.presentation_canvas_size,
+            self.requested_output_size,
+        ):
+            _validate_raster_allocation(size)
 
     @property
     def presentation_canvas_size(self) -> tuple[int, int]:
@@ -106,7 +113,7 @@ class PresentationGeometry:
 
 
 def validate_requested_size(requested_output_size: object) -> tuple[int, int]:
-    """Validate positive integer landscape output dimensions."""
+    """Validate independently bounded finished-output dimensions."""
     if (
         not isinstance(requested_output_size, (tuple, list))
         or len(requested_output_size) != 2
@@ -115,9 +122,16 @@ def validate_requested_size(requested_output_size: object) -> tuple[int, int]:
         raise PresentationGeometryError("requested output size must contain two positive integer pixel dimensions")
 
     width, height = requested_output_size
-    if width <= height:
-        raise PresentationGeometryError("requested output dimensions must be landscape")
+    if width > REFERENCE_SIZE[0] or height > REFERENCE_SIZE[1]:
+        raise PresentationGeometryError("requested output dimensions must not exceed 3840 x 2400 pixels")
     return width, height
+
+
+def _validate_raster_allocation(size: tuple[int, int]) -> None:
+    """Preflight a Pillow raster using four bytes per pixel, including RGB storage."""
+    width, height = size
+    if width <= 0 or height <= 0 or width * height * 4 > _MAX_RASTER_BYTES:
+        raise PresentationGeometryError(f"image allocation for {width} x {height} pixels is unsupported")
 
 
 def design_canvas_for_aspect(aspect_ratio: str) -> tuple[tuple[int, int], tuple[int, int]]:

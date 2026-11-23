@@ -21,9 +21,11 @@ from .display.coordinator import PublicationResult, PublicationStatus
 from .display.postprocessing import post_process_destination_image
 from .geometry import (
     SUPPORTED_PRESENTATION_ASPECTS,
+    PresentationGeometryError,
     PresentationInsets,
     ResolvedOutputSpecification,
     design_canvas_for_aspect,
+    validate_requested_size,
 )
 from .paths import ApplicationPathError, resolve_application_paths
 from .persistence import DailySnapshot, SchedulingContext
@@ -417,12 +419,14 @@ def _load_finished_image(path: str | Path) -> Image.Image:
         with Image.open(path) as source:
             if source.format != "PNG":
                 raise ViewerError(f"finished image {str(path)!r} must be a PNG")
+            try:
+                validate_requested_size(source.size)
+            except PresentationGeometryError as error:
+                raise ViewerError(f"invalid finished PNG dimensions for {str(path)!r}: {error}") from error
             if getattr(source, "n_frames", 1) != 1:
                 raise ViewerError(f"finished PNG {str(path)!r} must contain exactly one frame")
             if source.mode != "RGB":
                 raise ViewerError(f"finished PNG {str(path)!r} must use RGB mode; found {source.mode}")
-            if source.width <= 0 or source.height <= 0:
-                raise ViewerError(f"finished PNG {str(path)!r} must have positive dimensions")
             expected_size = source.size
             source.verify()
         if _finished_png_bit_depth(path) != 8:
