@@ -257,15 +257,14 @@ def test_decoration_color_pool_uses_shared_palette_and_distinct_members(tmp_path
 
 
 @pytest.mark.parametrize("pool", [None, [], "bad", ["missing"], ["", None]])
-def test_unusable_decoration_color_pool_falls_back_to_black(tmp_path: Path, caplog, pool: object) -> None:
+def test_unusable_decoration_color_pool_remains_empty(tmp_path: Path, caplog, pool: object) -> None:
     data = configuration_data()
     data["decorations"]["colors"]["pools"] = {"default": pool}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.default_decoration_colors == ("black",)
+    assert config.default_decoration_colors == ()
     assert "decorations.colors.pools" in caplog.text
-    assert "using ['black']" in caplog.text
 
 
 def test_named_pools_expand_recursively_in_order_with_cycle_and_duplicate_handling(tmp_path: Path, caplog) -> None:
@@ -369,21 +368,22 @@ def test_named_pool_invalid_and_reserved_definitions_are_excluded_independently(
     assert "circular" not in caplog.text.lower()
 
 
-def test_empty_named_default_pools_keep_each_category_fallback(tmp_path: Path) -> None:
+def test_empty_named_default_pools_preserve_expanded_membership(tmp_path: Path) -> None:
     data = configuration_data()
     data.update(
         {
-            "fonts": {"pools": {"default": ["@empty"], "empty": []}},
-            "backgrounds": {"pools": {"default": ["@empty"], "empty": []}},
+            "fonts": {"pools": {"default": ["@empty"], "empty": [], "nested": ["@default"]}},
+            "backgrounds": {"pools": {"default": ["@empty"], "empty": [], "nested": ["@default"]}},
             "decorations": {
                 "pools": {
                     "default": ["@empty"],
                     "empty": [],
+                    "nested": ["@default"],
                 },
-                "colors": {"pools": {"default": ["@empty"], "empty": []}},
+                "colors": {"pools": {"default": ["@empty"], "empty": [], "nested": ["@default"]}},
             },
             "text": {
-                "colors": {"pools": {"default": ["@empty"], "empty": []}},
+                "colors": {"pools": {"default": ["@empty"], "empty": [], "nested": ["@default"]}},
                 "min_font_size": 28,
                 "max_font_size": 100,
             },
@@ -392,11 +392,38 @@ def test_empty_named_default_pools_keep_each_category_fallback(tmp_path: Path) -
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.default_fonts == ()
-    assert config.default_backgrounds == ("none",)
-    assert config.default_decorations == ("none",)
-    assert config.default_text_colors == ("black",)
-    assert config.default_decoration_colors == ("black",)
+    for pools, default in (
+        (config.font_pools, config.default_fonts),
+        (config.background_pools, config.default_backgrounds),
+        (config.decoration_pools, config.default_decorations),
+        (config.text_color_pools, config.default_text_colors),
+        (config.decoration_color_pools, config.default_decoration_colors),
+    ):
+        assert default == pools["default"] == pools["empty"] == pools["nested"] == ()
+
+
+@pytest.mark.parametrize("default", [None, [], "bad", ["missing"]])
+def test_invalid_optional_default_declarations_do_not_gain_fallback_members(tmp_path: Path, default: object) -> None:
+    data = configuration_data(
+        backgrounds={"pools": {"default": default}},
+        decorations={"pools": {"default": default}, "colors": {"pools": {"default": default}}},
+        text={"colors": {"pools": {"default": default}}},
+    )
+    config = load_application_config(write_config(tmp_path / "config.yaml", data))
+    for pools in (
+        config.background_pools,
+        config.decoration_pools,
+        config.text_color_pools,
+        config.decoration_color_pools,
+    ):
+        assert pools["default"] == ()
+
+
+@pytest.mark.parametrize("fonts", [{}, {"pools": {}}, {"pools": {"default": None}}, {"pools": {"default": []}}])
+def test_required_font_default_declaration_cannot_be_missing_or_malformed(tmp_path: Path, fonts: object) -> None:
+    assert "fonts.pools.default" in diagnostic_fields(
+        write_config(tmp_path / "config.yaml", configuration_data(fonts=fonts))
+    )
 
 
 def test_builtin_pools_follow_successful_bundled_registration_and_exclude_custom_assets(
@@ -557,15 +584,14 @@ def test_text_color_pool_filters_unavailable_and_duplicate_members(tmp_path: Pat
 
 
 @pytest.mark.parametrize("pool", [None, [], "bad", ["missing"], ["", None]])
-def test_unusable_text_color_pool_falls_back_to_black(tmp_path: Path, caplog, pool: object) -> None:
+def test_unusable_text_color_pool_remains_empty(tmp_path: Path, caplog, pool: object) -> None:
     data = configuration_data()
     data["text"]["colors"]["pools"] = {"default": pool}
 
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
-    assert config.default_text_colors == ("black",)
+    assert config.default_text_colors == ()
     assert "text.colors.pools" in caplog.text
-    assert "using ['black']" in caplog.text
 
 
 def test_global_role_face_preferences(tmp_path: Path) -> None:
@@ -695,12 +721,11 @@ def test_default_background_pool_deduplicates_and_excludes_invalid_values(tmp_pa
 
 
 @pytest.mark.parametrize("pool", [None, [], {}, "pool-a", False, ["missing"], ["", None, " "]])
-def test_unusable_background_pool_falls_back_to_none(tmp_path: Path, pool: object, caplog) -> None:
+def test_unusable_background_pool_remains_empty(tmp_path: Path, pool: object, caplog) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", background_configuration(default=pool)))
 
-    assert config.default_backgrounds == ("none",)
+    assert config.default_backgrounds == ()
     assert "backgrounds.pools.default" in caplog.text
-    assert "has no usable members; using ['none']" in caplog.text
 
 
 @pytest.mark.parametrize("section", [None, [], "bad"])
@@ -770,7 +795,7 @@ def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch
     config = load_application_config(config_path)
 
     assert "paper" not in config.backgrounds
-    assert config.default_backgrounds == ("none",)
+    assert config.default_backgrounds == ()
     assert "assets.background.paper" in caplog.text
     assert "background read denied" in caplog.text
 
@@ -957,8 +982,7 @@ def test_default_decoration_pool_deduplicates_and_falls_back_to_none(tmp_path: P
     empty = load_application_config(
         write_config(tmp_path / "empty.yaml", decoration_configuration(default=["missing", None]))
     )
-    assert empty.default_decorations == ("none",)
-    assert "has no usable members; using ['none']" in caplog.text
+    assert empty.default_decorations == ()
 
 
 def test_bundled_decoration_identifier_cannot_be_overridden(tmp_path: Path, caplog) -> None:

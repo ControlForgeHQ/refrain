@@ -564,12 +564,7 @@ def _resolve_configured_pools(
         expand(root, (root,))
         resolved[root] = tuple(ordered)
 
-    default_values = resolved["default"]
-    if not default_values and default_fallback is not None:
-        report(f"{field}.default", f"has no usable members; using {list(default_fallback)!r}")
-        default_values = default_fallback
-        resolved["default"] = default_values
-    return MappingProxyType(resolved), default_values
+    return MappingProxyType(resolved), resolved["default"]
 
 
 def _valid_image_server_host(value: object) -> bool:

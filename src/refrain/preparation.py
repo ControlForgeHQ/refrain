@@ -8,6 +8,7 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
+from importlib.resources import files
 from types import MappingProxyType
 
 from PIL import Image, ImageFont, ImageOps
@@ -1032,21 +1033,32 @@ def _resolve_fonts(
     regular: ResolvedFont | None = None
     tried: set[str] = set()
     if overrides.font is not None:
-        identifier = _strict_pool_override(
-            overrides.font,
-            configuration.font_pools,
-            configuration.fonts,
-            "font",
-            chooser,
-        )
-        resource = configuration.fonts.get(identifier)
-        if resource is None:
-            raise DailyImagePreparationError(f"explicit font {identifier!r} is not registered")
-        try:
-            regular = _read_font(resource)
-        except Exception as error:
-            raise DailyImagePreparationError(f"explicit font {identifier!r} is unusable: {error}") from error
-        resolved_bundle = resource
+        if overrides.font.startswith("@"):
+            candidates = list(_preference_candidates(overrides.font, configuration.font_pools, "explicit font"))
+            candidates = [identifier for identifier in candidates if identifier in configuration.fonts]
+            while candidates:
+                identifier = chooser.choice(candidates)
+                candidates.remove(identifier)
+                resource = configuration.fonts[identifier]
+                try:
+                    regular = _read_font(resource)
+                    resolved_bundle = resource
+                    break
+                except Exception as error:
+                    _LOGGER.warning("Explicit font %r in pool %r is unusable: %s", identifier, overrides.font, error)
+            if resolved_bundle is None:
+                raise DailyImagePreparationError(
+                    f"explicit font pool reference {overrides.font!r} has no selectable candidates"
+                )
+        else:
+            resource = configuration.fonts.get(overrides.font)
+            if resource is None:
+                raise DailyImagePreparationError(f"explicit font {overrides.font!r} is not registered")
+            try:
+                regular = _read_font(resource)
+            except Exception as error:
+                raise DailyImagePreparationError(f"explicit font {overrides.font!r} is unusable: {error}") from error
+            resolved_bundle = resource
     if overrides.font is None:
         for source, preference in preferences:
             pool = list(_preference_candidates(preference, configuration.font_pools, source))
@@ -1095,10 +1107,16 @@ def _resolve_fonts(
                     )
             pool = tuple(candidate for candidate in pool if candidate != identifier)
     if resolved_bundle is None or regular is None:
-        raise DailyImagePreparationError(
-            "cannot resolve a usable font; add a usable content-entry or decoration font preference, "
-            "or configure a usable identifier in fonts.pools.default"
-        )
+        try:
+            path = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
+            resolved_bundle = FontResource("source-sans-3", path, bundled=True)
+            regular = _read_font(resolved_bundle)
+        except Exception as error:
+            raise DailyImagePreparationError(
+                "cannot resolve a usable font: packaged emergency font source-sans-3/regular is missing or "
+                f"unusable; repair or reinstall the Refrain package: {error}"
+            ) from error
+        _LOGGER.warning("No configured font is usable; using packaged emergency font source-sans-3/regular")
 
     preference_levels = (
         overrides.font_faces,
@@ -1129,7 +1147,8 @@ def _resolve_fonts(
                     resolved_bundle.identifier,
                     error,
                 )
-                loaded_faces[face] = regular
+                resolved[role] = regular
+                continue
         resolved[role] = loaded_faces[face]
     return resolved
 
@@ -1176,12 +1195,14 @@ def _resolve_decoration(
             _LOGGER.warning(
                 "Requested decoration %r from %s is unavailable; checking the next preference", preferred, source
             )
-    if not configuration.default_decorations:
-        raise DailyImagePreparationError(
-            "no usable decoration remains; add an available decoration preference or configure "
-            "decorations.pools.default"
-        )
-    identifier = chooser.choice(configuration.default_decorations)
+    candidates = tuple(
+        identifier
+        for identifier in configuration.default_decorations
+        if identifier == "none" or identifier in configuration.decorations
+    )
+    if not candidates:
+        return "none", None
+    identifier = chooser.choice(candidates)
     return identifier, configuration.decorations.get(identifier)
 
 
@@ -1225,12 +1246,12 @@ def _resolve_background(
             preferred,
             source,
         )
-    if not configuration.default_backgrounds:
-        raise DailyImagePreparationError(
-            "no usable background remains; add an available background preference or configure "
-            "backgrounds.pools.default"
-        )
-    return chooser.choice(configuration.default_backgrounds)
+    candidates = tuple(
+        identifier
+        for identifier in configuration.default_backgrounds
+        if identifier == "none" or identifier in configuration.backgrounds
+    )
+    return chooser.choice(candidates) if candidates else "none"
 
 
 def _prepare_daily_images_for_specification(
