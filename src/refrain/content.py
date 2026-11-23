@@ -39,6 +39,7 @@ _REVEAL_FIELDS = {"source", "attribution"}
 _FONT_ROLES = {"quotation", "source", "attribution"}
 _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_FONT_POOL_REFERENCE = re.compile(r"@[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _PRESENTATION_STYLES = {"centered", "left-aligned"}
 _ACTION_VISIBILITIES = {"public", "private"}
@@ -415,14 +416,31 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
                 quotations.append(Quotation(text=value, identity=normalize_quotation(value)))
 
     optional_strings: dict[str, Optional[str]] = {}
-    for field in ("source", "attribution", "font"):
+    for field in ("source", "attribution"):
         value = data.get(field)
         if field not in data:
             optional_strings[field] = None
-        elif not isinstance(value, str) or value == "":
-            _diagnose(diagnostics, file, field, "must be a nonempty string when supplied")
+        elif not isinstance(value, str) or not value.strip():
+            _diagnose(diagnostics, file, field, "must be a nonblank string when supplied")
         else:
             optional_strings[field] = value
+
+    font = data.get("font")
+    if "font" not in data:
+        optional_strings["font"] = None
+    elif (
+        not isinstance(font, str)
+        or font == "none"
+        or not (_IDENTIFIER.fullmatch(font) or _FONT_POOL_REFERENCE.fullmatch(font))
+    ):
+        _diagnose(
+            diagnostics,
+            file,
+            "font",
+            "must be a font-bundle identifier or @font-pool reference; 'none' is not permitted",
+        )
+    else:
+        optional_strings["font"] = font
 
     background = data.get("background")
     if "background" in data and (not isinstance(background, str) or not background.strip()):
