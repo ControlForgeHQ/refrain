@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import date, time
 from pathlib import Path
@@ -405,9 +406,9 @@ def test_empty_named_default_pools_preserve_expanded_membership(tmp_path: Path) 
 @pytest.mark.parametrize("default", [None, [], "bad", ["missing"]])
 def test_invalid_optional_default_declarations_do_not_gain_fallback_members(tmp_path: Path, default: object) -> None:
     data = configuration_data(
-        backgrounds={"pools": {"default": default}},
-        decorations={"pools": {"default": default}, "colors": {"pools": {"default": default}}},
-        text={"colors": {"pools": {"default": default}}},
+        backgrounds={"pools": {"default": deepcopy(default)}},
+        decorations={"pools": {"default": deepcopy(default)}, "colors": {"pools": {"default": deepcopy(default)}}},
+        text={"colors": {"pools": {"default": deepcopy(default)}}},
     )
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
     for pools in (

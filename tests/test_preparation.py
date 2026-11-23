@@ -2029,6 +2029,28 @@ def test_emergency_font_after_exhausting_configured_candidates_without_pool_muta
     assert configuration.default_fonts == ("broken",)
 
 
+def test_emergency_font_preserves_registered_bundled_faces_without_pool_membership() -> None:
+    source_sans = FontResource(
+        "source-sans-3",
+        _REGULAR_FONT,
+        bundled=True,
+        faces={"regular": _REGULAR_FONT, "italic": _ITALIC_FONT},
+    )
+    configuration = _configuration({"source-sans-3": source_sans}, default_fonts=())
+    fonts = preparation._resolve_fonts(
+        make_snapshot("missing"),
+        configuration,
+        None,
+        Random(0),
+        PresentationOverrides(font_faces={"source": "italic"}),
+    )
+    assert fonts["quotation"].identifier == "source-sans-3"
+    assert fonts["quotation"].data != _REGULAR_FONT.read_bytes()
+    assert fonts["source"].identifier == "source-sans-3:italic"
+    assert fonts["source"].data == _ITALIC_FONT.read_bytes()
+    assert configuration.default_fonts == ()
+
+
 def test_explicit_face_is_strict_after_same_missing_nonexplicit_face() -> None:
     snapshot = make_snapshot("lora", metadata={"font_faces": {"quotation": "missing"}})
     with pytest.raises(DailyImagePreparationError, match="explicit source face 'missing'"):

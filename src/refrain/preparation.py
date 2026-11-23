@@ -1109,7 +1109,17 @@ def _resolve_fonts(
     if resolved_bundle is None or regular is None:
         try:
             path = files("refrain").joinpath("assets", "fonts", "source-sans-3", "SourceSans3-Regular.ttf")
-            resolved_bundle = FontResource("source-sans-3", path, bundled=True)
+            registered = configuration.fonts.get("source-sans-3")
+            if registered is not None and registered.bundled:
+                resolved_bundle = FontResource(
+                    "source-sans-3",
+                    path,
+                    bundled=True,
+                    faces={**registered.faces, "regular": path},
+                    font_faces=registered.font_faces,
+                )
+            else:
+                resolved_bundle = FontResource("source-sans-3", path, bundled=True)
             regular = _read_font(resolved_bundle)
         except Exception as error:
             raise DailyImagePreparationError(
