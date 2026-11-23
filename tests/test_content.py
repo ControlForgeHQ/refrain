@@ -463,10 +463,23 @@ def test_required_identifier_and_unknown_fields_are_validated(
     ("field", "value"),
     [
         ("source", ""),
+        ("source", " \t\n"),
         ("source", 12),
+        ("source", None),
         ("attribution", ""),
+        ("attribution", "\t "),
+        ("attribution", None),
+        ("attribution", 12),
         ("font", ""),
+        ("font", " \t\n"),
+        ("font", None),
         ("font", False),
+        ("font", []),
+        ("font", "bad font"),
+        ("font", "font/path"),
+        ("font", "@"),
+        ("font", "@bad pool"),
+        ("font", "none"),
         ("priority", True),
         ("priority", 1.5),
         ("quotations", "not a sequence"),
@@ -491,14 +504,52 @@ def test_signed_integer_priority_and_unregistered_font_are_preserved(tmp_path: P
     assert entry.font == "not-installed-here"
 
 
-def test_nonempty_optional_text_is_preserved_verbatim(tmp_path: Path) -> None:
-    write_entry(tmp_path / "entry.yaml", entry_data(source=" ", attribution="\t", font=" "))
+@pytest.mark.parametrize("font", ["test-font", "@literary", "@default", "@builtin"])
+def test_syntactically_valid_font_preferences_are_preserved(tmp_path: Path, font: str) -> None:
+    write_entry(tmp_path / "entry.yaml", entry_data(font=font))
 
     entry = load_content_library(tmp_path)[0]
 
-    assert entry.source == " "
-    assert entry.attribution == "\t"
-    assert entry.font == " "
+    assert entry.font == font
+
+
+def test_nonblank_optional_text_is_preserved_verbatim(tmp_path: Path) -> None:
+    source = "  A source \t with internal whitespace.  "
+    attribution = "\n  An author\t "
+    write_entry(tmp_path / "entry.yaml", entry_data(source=source, attribution=attribution, font="missing-font"))
+
+    entry = load_content_library(tmp_path)[0]
+
+    assert entry.source == source
+    assert entry.attribution == attribution
+    assert entry.font == "missing-font"
+
+
+def test_invalid_metadata_and_font_entries_are_excluded_independently(tmp_path: Path, caplog) -> None:
+    source = "  A valid source \t "
+    attribution = "\nA valid author "
+    write_entry(
+        tmp_path / "valid.yaml",
+        entry_data(id="valid", source=source, attribution=attribution, font="unavailable-font"),
+    )
+    write_entry(tmp_path / "blank-source.yaml", entry_data(id="blank-source", source=" \t "))
+    write_entry(tmp_path / "null-attribution.yaml", entry_data(id="null-attribution", attribution=None))
+    write_entry(tmp_path / "reserved-font.yaml", entry_data(id="reserved-font", font="none"))
+    write_entry(tmp_path / "malformed-font.yaml", entry_data(id="malformed-font", font="@invalid pool"))
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["valid"]
+    assert entries[0].source == source
+    assert entries[0].attribution == attribution
+    assert entries[0].font == "unavailable-font"
+    for filename, field in (
+        ("blank-source.yaml", "source"),
+        ("null-attribution.yaml", "attribution"),
+        ("reserved-font.yaml", "font"),
+        ("malformed-font.yaml", "font"),
+    ):
+        assert f"{filename}: {field}:" in caplog.text
 
 
 def test_valid_eligibility_forms_and_leap_dates_are_preserved(tmp_path: Path) -> None:

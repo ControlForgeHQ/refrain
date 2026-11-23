@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from PIL import Image
-from resource_helpers import write_font_bundle
+from resource_helpers import write_configuration, write_font_bundle
 
 from refrain import (
     CompositionVisibility,
@@ -116,6 +116,56 @@ def test_loaded_configuration_and_content_prepare_self_contained_snapshot(
     assert all(image.mode == "RGB" and image.size == (1920, 1080) for image in images)
     for image in images:
         image.close()
+
+
+def test_unavailable_authored_font_falls_back_during_preparation(tmp_path: Path, caplog) -> None:
+    config_path = write_configuration(
+        tmp_path / "config.yaml",
+        storage={"content": "content"},
+        fonts={"pools": {"default": ["test-font"]}},
+    )
+    content_directory = tmp_path / "content"
+    content_directory.mkdir()
+    (content_directory / "entry.yaml").write_text(
+        yaml.safe_dump(
+            {"id": "unavailable-font", "font": "missing-font", "quotations": ["A readable quotation."]},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_application_config(config_path)
+    entry = load_content_library(config.content_directory)[0]
+    snapshot = DailySnapshot(
+        entry_id=entry.id,
+        quotation_text=entry.quotations[0].text,
+        quotation_identity=entry.quotations[0].identity,
+        source=entry.source,
+        attribution=entry.attribution,
+        presentation_style=entry.presentation_style,
+        font=entry.font,
+        font_faces=entry.font_faces,
+        background=entry.background,
+        decoration=entry.decoration,
+        text_color=entry.text_color,
+        decoration_color=entry.decoration_color,
+        reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
+        scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
+    )
+
+    images = prepare_daily_images(
+        snapshot,
+        resolve_reveal_stages(snapshot),
+        config,
+        config.required_output_specifications,
+    )
+
+    assert snapshot.font == "missing-font"
+    assert "Requested font 'missing-font' from content entry is unavailable" in caplog.text
+    for image_set in images.values():
+        for image in image_set:
+            assert image.mode == "RGB"
+            image.close()
 
 
 def test_category_registered_resources_load_through_rendering_pipeline(tmp_path: Path) -> None:
