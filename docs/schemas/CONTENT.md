@@ -273,7 +273,7 @@ Alternatively:
 text_color: ["black", "@neutral"]
 ```
 
-A declaration must be a string or a nonempty sequence. An invalid outer structure, including null, an empty sequence, a mapping, or another unsupported type, invalidates the entry. Within a structurally valid sequence, invalid member types, malformed identifiers, direct RGB literals, and unavailable identifiers are diagnosed and excluded individually without invalidating the entry. Valid members remain usable. If no usable members remain, the preference falls through to the next level. Duplicate identifiers do not add weight. Palette availability is evaluated during preparation.
+A declaration must be a string or a nonempty sequence. An invalid outer structure, including null, an empty sequence, a mapping, or another unsupported type, invalidates the entry. A scalar string is treated as one candidate, even when empty or malformed. Invalid candidates, including non-string sequence members, empty or malformed identifiers and pool references, and direct RGB literals, are diagnosed and excluded individually without invalidating the entry. Syntactically valid identifiers and pool references remain eligible regardless of local availability; unavailable candidates are diagnosed and excluded during preparation. Valid candidates remain usable. If none remain usable, the preference falls through to the next level. Duplicate identifiers do not add weight.
 
 Color preference precedence, selection, and fallback are specified in [Canonical resolution and resource precedence](../specifications/50-PRESENTATION_AND_RENDERING.md#canonical-resolution-and-resource-precedence).
 
