@@ -454,7 +454,7 @@ For literary text and decoration colors, distinguish invalid preference structur
 
 An invalid outer content `text_color` or `decoration_color` declaration excludes the content entry.
 
-Within a structurally valid nonempty sequence, diagnose and exclude invalid member types, malformed identifiers, direct RGB literals, and unavailable candidates individually.
+Treat a scalar color preference as one candidate. For scalar preferences and structurally valid nonempty sequences alike, diagnose and exclude invalid individual candidates, including empty or malformed strings, invalid member types, direct RGB literals, and unavailable palette identifiers or pool references. Validate candidate syntax at content acceptance and resource availability during preparation.
 
 Keep valid candidates. When none remain usable, fall through to the next applicable preference level without invalidating the entry.
 
