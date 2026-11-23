@@ -316,7 +316,14 @@ class ApplicationConfiguration:
         return tuple(sorted(keys, key=sort_key))
 
 
-def _known_fields(value: dict[str, object], allowed: set[str], field: str, report: Callable[..., None]) -> None:
+def _known_fields(
+    value: dict[str, object],
+    allowed: set[str],
+    field: str,
+    report: Callable[..., None],
+    *,
+    strict: bool = False,
+) -> None:
     unknown_keys = value.keys() - allowed
     for key in sorted(unknown_keys, key=lambda item: (type(item).__name__, repr(item))):
         key_field = (
@@ -326,8 +333,12 @@ def _known_fields(value: dict[str, object], allowed: set[str], field: str, repor
         )
         report(
             key_field,
-            "is not a supported configuration field; it is ignored",
-            logging.WARNING,
+            (
+                "is not a supported configuration field"
+                if strict
+                else "is not a supported configuration field; it is ignored"
+            ),
+            logging.ERROR if strict else logging.WARNING,
         )
 
 
@@ -724,7 +735,7 @@ def _parse_presentation(
     return insets, duration, qr_enabled
 
 
-def _parse_destination_presentation(
+def _parse_destination_overrides(
     value: object,
     field: str,
     report: Callable[..., None],
@@ -738,49 +749,61 @@ def _parse_destination_presentation(
         {"background", "decoration", "font", "text_color", "decoration_color", "qr"},
         field,
         report,
+        strict=True,
     )
     resolved: dict[str, object] = {}
-    for name in ("background", "decoration", "font"):
+    for name in ("background", "decoration", "qr"):
         if name not in value:
             continue
-        preference = value[name]
-        if not isinstance(preference, str) or not preference.strip():
-            report(f"{field}.{name}", "must be a nonempty resource identifier or pool reference", logging.ERROR)
+        override = value[name]
+        if not isinstance(override, str) or override != "none":
+            report(f"{field}.{name}", "must be the literal string 'none'", logging.ERROR)
+        elif name == "qr":
+            resolved["qr_enabled"] = False
         else:
-            resolved[name] = preference
+            resolved[name] = override
 
+    if "font" in value:
+        font = value["font"]
+        if not valid_identifier(font):
+            report(f"{field}.font", "must be one registered font-bundle identifier", logging.ERROR)
+        else:
+            resolved["font"] = font
     for name in ("text_color", "decoration_color"):
         if name not in value:
             continue
-        preference = value[name]
-        if isinstance(preference, str) and preference.strip():
-            resolved[name] = (preference,)
-        elif (
-            isinstance(preference, list)
-            and preference
-            and all(isinstance(identifier, str) and identifier.strip() for identifier in preference)
-        ):
-            resolved[name] = tuple(preference)
+        color = value[name]
+        if valid_identifier(color):
+            resolved[name] = (color,)
         else:
-            report(
-                f"{field}.{name}",
-                "must be a palette identifier or a nonempty sequence of palette identifiers",
-                logging.ERROR,
-            )
-
-    if "qr" in value:
-        qr = value["qr"]
-        if not isinstance(qr, dict):
-            report(f"{field}.qr", "must be a mapping", logging.ERROR)
-        else:
-            _known_fields(qr, {"enabled"}, f"{field}.qr", report)
-            if "enabled" in qr:
-                if type(qr["enabled"]) is bool:
-                    resolved["qr_enabled"] = qr["enabled"]
-                else:
-                    report(f"{field}.qr.enabled", "must be a YAML boolean", logging.ERROR)
+            report(f"{field}.{name}", "must be one effective palette identifier", logging.ERROR)
 
     return DestinationPresentation(**resolved)
+
+
+def _validate_destination_override_resources(
+    data: dict[str, object],
+    fonts: Mapping[str, FontResource],
+    palette: Mapping[str, str],
+    report: Callable[..., None],
+) -> None:
+    destinations = data.get("destinations")
+    if not isinstance(destinations, list):
+        return
+    for index, destination in enumerate(destinations):
+        if not isinstance(destination, dict):
+            continue
+        overrides = destination.get("overrides")
+        if not isinstance(overrides, dict):
+            continue
+        field = f"destinations[{index}].overrides"
+        font = overrides.get("font")
+        if valid_identifier(font) and font not in fonts:
+            report(f"{field}.font", f"font bundle {font!r} is not registered", logging.ERROR)
+        for name in ("text_color", "decoration_color"):
+            color = overrides.get(name)
+            if valid_identifier(color) and color not in palette:
+                report(f"{field}.{name}", f"palette identifier {color!r} is not available", logging.ERROR)
 
 
 def _parse_destinations(
@@ -829,16 +852,14 @@ def _parse_destinations(
             if not isinstance(value, dict):
                 report(field, "must be a destination mapping", logging.ERROR)
                 continue
-            _known_fields(
-                value, {"id", "type", "aspect_ratio", "resolution", "presentation", "audience"}, field, report
-            )
+            _known_fields(value, {"id", "type", "aspect_ratio", "resolution", "overrides", "audience"}, field, report)
             audience = value.get("audience")
             if not isinstance(audience, str) or audience not in {"public", "private"}:
                 report(f"{field}.audience", "is required and must be 'public' or 'private'", logging.ERROR)
                 continue
             presentation = (
-                _parse_destination_presentation(value["presentation"], f"{field}.presentation", report)
-                if "presentation" in value
+                _parse_destination_overrides(value["overrides"], f"{field}.overrides", report)
+                if "overrides" in value
                 else DestinationPresentation()
             )
             identifier = value.get("id")
@@ -1215,6 +1236,8 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     text_color_pools, default_text_colors, min_font_size, max_font_size = _load_text_settings(
         text_data, palette, report, use_default
     )
+
+    _validate_destination_override_resources(data, font_registry, palette, report)
 
     finish_diagnostics()
     if fatal_diagnostics:

@@ -216,7 +216,6 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
 
 
 def test_resident_publication_is_hash_verified_and_reconstructs_without_content(workspace: Workspace) -> None:
-    workspace.background("paper", (245, 240, 230))
     workspace.entry(
         "publication",
         """\
@@ -256,7 +255,7 @@ quotations:
             "audience": "private",
             "aspect_ratio": "16:10",
             "resolution": [640, 400],
-            "presentation": {"background": "paper"},
+            "overrides": {"font": "test-font-alt"},
         },
     ]
     data["storage"] = {"publish": str(publication_root)}

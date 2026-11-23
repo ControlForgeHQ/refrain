@@ -506,7 +506,7 @@ def test_presentation_choices_are_shared_across_output_specifications(
                 image.close()
 
 
-def test_destination_presentation_precedence_and_group_coherence(tmp_path: Path) -> None:
+def test_destination_overrides_precedence_and_group_coherence(tmp_path: Path) -> None:
     asset_paths = {}
     for identifier, color in (
         ("entry-paper", (220, 220, 220)),
@@ -543,10 +543,6 @@ def test_destination_presentation_precedence_and_group_coherence(tmp_path: Path)
         qr_enabled=True,
         insets=PresentationInsets(0, 0, 0, 0),
     )
-    configuration = replace(
-        configuration,
-        background_pools={"destination-paper-pool": ("destination-paper",)},
-    )
     snapshot = replace(
         make_snapshot("entry-font"),
         font="entry-font",
@@ -556,7 +552,7 @@ def test_destination_presentation_precedence_and_group_coherence(tmp_path: Path)
         decoration_color=("black",),
     )
     requirements = DestinationPresentation(
-        background="@destination-paper-pool",
+        background="destination-paper",
         decoration="destination-frame",
         font="destination-font",
         text_color=("burnt-orange",),
