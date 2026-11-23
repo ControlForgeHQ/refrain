@@ -50,7 +50,7 @@ Local presentation inspection and export use one viewer-owned output specificati
 
 The default aspect ratio is `16:10`, with requested dimensions equal to that aspect's full design canvas.
 
-Ordinary local presentation rendering uses the `private` audience unless `--audience` selects `public`. The selected audience determines the effective QR payload.
+Ordinary local presentation rendering uses the `internal` audience unless `--audience` selects `external`. The selected audience determines the effective QR payload.
 
 `--render-as` uses the named destination's configured audience and cannot be combined with an explicit `--audience`.
 
@@ -160,7 +160,7 @@ Tests must cover:
 - maximum output dimensions and preallocation rejection;
 - `--render-as` configured destination lookup, exact geometry, and visual conversion;
 - local PNG export, default window behavior, and private desktop fitting;
-- `--debug-layout` without mutation of output or persistent runtime state;
+- `--debug-layout` overlays appearing in viewer-generated diagnostic images, with ordinary rendering output and persistent runtime state unaffected;
 - finished RGB PNG validation, safe decoding, and unchanged source pixels;
 - strict explicit overrides and ordinary precedence for unspecified values;
 - absence of backend construction, resident ownership, operational-state access, and persistence changes.
@@ -177,7 +177,7 @@ An explicit `--font` override may select a registered font bundle or supported n
 
 Explicit background and decoration `"none"` values suppress those resources.
 
-`--qr-public` and `--qr-private` independently override the corresponding audience's QR payload. The literal `none` suppresses that audience's payload. Explicit invalid payloads are errors.
+`--qr-external` and `--qr-internal` independently override the corresponding audience's QR payload. The literal `none` suppresses that audience's payload. Explicit invalid payloads are errors.
 
 `--no-qr` suppresses QR unconditionally and cannot be combined with either payload override. The viewer applies the shared [QR payload resolution](20-CONTENT_AND_CONFIGURATION.md#qr-payload-resolution) and [rendering rules](50-PRESENTATION_AND_RENDERING.md#qr-placement-and-conditional-artwork).
 
@@ -251,7 +251,7 @@ Resolve layout, wrapping, font fitting, graphical transformations, QR placement,
 
 Published insets and quotation font-size bounds remain design-canvas measurements unless explicitly overridden by supported viewer controls.
 
-`--no-qr` may suppress the published QR payload. `--audience`, `--qr-public`, and `--qr-private` are invalid in publication-reconstruction mode.
+`--no-qr` may suppress the published QR payload. `--audience`, `--qr-external`, and `--qr-internal` are invalid in publication-reconstruction mode.
 
 `--publication` may be combined with supported local aspect, resolution, output, window, debug, and artistic override controls.
 

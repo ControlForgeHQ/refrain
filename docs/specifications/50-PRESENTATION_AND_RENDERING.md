@@ -578,6 +578,7 @@ Tests must cover:
 - decoded source-image pixel limits and rejection before full decoding;
 - conditional QR/no-QR layers;
 - decoration-wide and per-layer tintability, including untinted accents;
+- recovery from an unavailable persisted decoration color, including the warning, effective black tint in completed metadata, unchanged canonical checkpoint, tint suppression, and strict reconstruction;
 - all-or-nothing decoration fallback after any eligible layer fails;
 - global-inset restoration without changing font-size bounds;
 - recomputation of QR viability after decoration failure;
@@ -596,6 +597,10 @@ Resolve one literary text color using the precedence in [Canonical resolution an
 The resulting text color applies consistently to quotation, source, attribution, and associated punctuation across all reveal stages in a preparation group.
 
 If a selected text color becomes unusable during ordinary preparation, use the built-in `black` fallback for readability, with an actionable warning. Preserve the persisted canonical choice.
+
+If the persisted canonical decoration color becomes unavailable during ordinary preparation, use built-in `black` for effectively tintable layers of an otherwise usable decoration and emit an actionable warning. Do not reselect a decoration color, discard the decoration solely because its tint is unavailable, or modify the shared canonical presentation checkpoint. Record `black` as the effective decoration color in completed publication metadata.
+
+This fallback does not apply when no effective decoration layer is tintable or the decoration itself has been discarded; the existing tint-suppression rules apply. Explicit publication reconstruction remains strict and must not substitute a different color for an unavailable published color.
 
 Decoration-wide and per-layer `tintable` values default to `true`.
 

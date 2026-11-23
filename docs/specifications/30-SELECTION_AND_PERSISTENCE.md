@@ -336,6 +336,10 @@ On startup, Refrain must recover and validate authoritative operational state be
 
 A missing `state.json` represents an uninitialized installation. An incomplete, incompatible, corrupt, or integrity-check-failing operational-state document must not be accepted, modified, or silently replaced with another selection. The publication checkpoint, global history, and prepared images must not be used to reconstruct authoritative operational state.
 
+Before committing an initial revision 1 when `state.json` is missing, remove any surviving `publication.json` checkpoint and invalidate the installation's existing prepared-image sets. Complete this invalidation before committing the new operational state. If invalidation fails, report an actionable diagnostic and do not commit the new selection.
+
+Completed filesystem publication datasets are unaffected. Once the new selection is committed, checkpoint construction and prepared-image generation follow their normal rules.
+
 An interrupted operational-state commitment must recover to the last valid committed state. If the proposed selection was not committed, normal selection may proceed when required. If commitment succeeded, recovery must retain that selection without repeating its commitment, altering repetition history, or creating another selection event.
 
 A valid committed daily selection remains authoritative independently of the original content library. Removing, renaming, modifying, or invalidating the original YAML entry must not change the selected quotation, captured preferences, actions, or effective reveal schedule.
@@ -369,6 +373,8 @@ Automated tests must cover:
 
 - recovery of a valid committed selection independently of the original content library;
 - interrupted operational-state commits and ambiguous replacement outcomes;
+- missing-state initialization with an orphan checkpoint whose selection fields match revision 1 but whose QR payloads differ, including restart immediately after commitment without reusing the orphan checkpoint or old prepared images;
+- failure to invalidate the orphan checkpoint or prepared images preventing initial commitment;
 - recovery from valid content-only and complete presentation checkpoints;
 - preservation of resolved QR payloads across restart and content-entry or configuration changes;
 - recovery of missing or invalid checkpoints with empty QR declarations, actionable warnings, and rejection of incompatible cached images;

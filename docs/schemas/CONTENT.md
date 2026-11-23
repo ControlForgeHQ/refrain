@@ -94,9 +94,9 @@ Actions are optional, ordered, opaque declarations. Refrain validates their gene
 ```yaml
 actions:
   - type: "play"
-    visibility: ["private"]
+    visibility: ["internal"]
   - type: "custom_action"
-    visibility: ["public", "private"]
+    visibility: ["external", "internal"]
     payload: |
       { "opaque": "consumer-defined text" }
 ```
@@ -110,7 +110,7 @@ Each action mapping supports exactly these fields:
 | `payload` | String | No | `""`. |
 
 - `type` uses the same case-sensitive ASCII identifier syntax as an entry ID. Any syntactically valid type is accepted.
-- `visibility` explicitly lists `public`, `private`, or both, without repetition. Each audience grants permission only for that named audience; there is no default or implied relationship.
+- `visibility` explicitly lists `external`, `internal`, or both, without repetition. Each declaration is eligible only for the named audiences; there is no default or implied relationship.
 - `payload` is an opaque parsed string, preserved exactly including whitespace and newlines. Its UTF-8 encoded length must not exceed 10,240 bytes. Refrain does not parse embedded formats, validate consumer-specific fields, interpret URLs or encodings, normalize payload whitespace, or execute commands.
 - Declaration order and duplicates are preserved. Duplicate types and identical actions are valid. No action IDs, merging, sorting, deduplication, dependencies, or per-quotation actions are defined.
 - At most 100 valid actions are accepted per entry. Malformed actions do not consume the limit. After 100 valid actions, later actions are ignored with a warning.
@@ -123,13 +123,13 @@ Capture in the committed selection and snapshot recovery are owned by [Selection
 
 ## QR payloads
 
-An entry may declare QR payload overrides for the `public` and `private` audiences. These declarations apply to every quotation in the entry.
+An entry may declare QR payload overrides for the `external` and `internal` audiences. These declarations apply to every quotation in the entry.
 
 ```yaml
 qr:
-  - visibility: ["public"]
+  - visibility: ["external"]
     payload: "https://example.org"
-  - visibility: ["private"]
+  - visibility: ["internal"]
     payload: null
 ```
 
@@ -137,7 +137,7 @@ Each declaration contains exactly:
 
 | Field | Type | Required | Constraint |
 |---|---|---|---|
-| `visibility` | Sequence of one string | Yes | Exactly `["public"]` or `["private"]`. |
+| `visibility` | Sequence of one string | Yes | Exactly `["external"]` or `["internal"]`. |
 | `payload` | String or null | Yes | Nonempty UTF-8 string of at most 62 bytes, or null. |
 
 String payloads are opaque and preserved exactly after YAML parsing. No payload-specific interpretation or normalization is performed.
@@ -381,9 +381,9 @@ decoration_color: ["black", "@muted"]
 presentation_style: "left-aligned"
 actions:
   - type: "play"
-    visibility: ["private"]
+    visibility: ["internal"]
   - type: "custom_action"
-    visibility: ["public", "private"]
+    visibility: ["external", "internal"]
     payload: |-
       This text belongs to an external consumer.
       Refrain preserves it without interpreting it.

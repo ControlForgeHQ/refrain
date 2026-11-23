@@ -101,7 +101,7 @@ refrain-viewer --image candidate.png --push TARGET
 
 The PNG must exactly match the requested output dimensions of every selected destination. `--push @all` includes every participating destination except intentionally withdrawn destinations, including failed or unavailable destinations, and is rejected as a whole if any selected destination has different dimensions or does not support transient publication. A bare `all` selects only a destination literally named `all`. The declared presentation aspect is not inferred from the image. The viewer never converts color modes, resizes, crops, pads, stretches, decorates, or otherwise transforms a finished image for publication.
 
-With `--image`, presentation-generation controls (`--config`, `--entry`, font and face options, font-size bounds, background, decoration, text color, tint, style, `--audience`, `--qr-public`, `--qr-private`, `--no-qr`, and `--debug-layout`), local geometry and destination controls (`--aspect`, `--resolution`, and `--render-as`), and `--output` are invalid. `--output` does not copy the supplied file. `--window` may be used for local inspection, but cannot be combined with `--push`. The standalone `--list-destinations` operation cannot be combined with `--image`.
+With `--image`, presentation-generation controls (`--config`, `--entry`, font and face options, font-size bounds, background, decoration, text color, tint, style, `--audience`, `--qr-external`, `--qr-internal`, `--no-qr`, and `--debug-layout`), local geometry and destination controls (`--aspect`, `--resolution`, and `--render-as`), and `--output` are invalid. `--output` does not copy the supplied file. `--window` may be used for local inspection, but cannot be combined with `--push`. The standalone `--list-destinations` operation cannot be combined with `--image`.
 
 ### Configuration selection
 
@@ -119,7 +119,7 @@ Use the standalone control-client operation below to discover configured destina
 refrain-viewer --list-destinations
 ```
 
-This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its exact configured ID, audience (`public` or `private`), declared presentation aspect ratio, requested output resolution, transient-publication capability, participation/withdrawal status, external delivery availability, and whether the current scheduled publication was accepted. Destination IDs are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
+This operation requires a running normal Refrain instance and queries its resident runtime-control interface. It displays one entry per configured destination, including its exact configured ID, audience (`external` or `internal`), declared presentation aspect ratio, requested output resolution, transient-publication capability, participation/withdrawal status, external delivery availability, and whether the current scheduled publication was accepted. Destination IDs are runtime-supplied and opaque; the viewer does not infer or expose backend-specific routing behavior.
 
 `--list-destinations` is a standalone mode. `--config` is invalid with this operation; it does not load viewer content, presentation assets, or configuration to discover topology. The operation does not render a presentation, initialize configured backends, or read runtime persistence independently. It does not accept `--push`, `--render-as`, local output geometry, presentation selection, or presentation overrides. The command’s table or whitespace layout is intended for human inspection and is not a machine-readable interface. If no normal resident instance is available, the command exits nonzero with an actionable diagnostic.
 
@@ -158,14 +158,14 @@ The following options explicitly override a presentation choice:
 | `--text-color COLOR_ID\|@POOL` | Shared-palette identifier or named text-color pool reference. |
 | `--tint COLOR_ID\|@POOL` | Shared-palette identifier or named decoration-color pool reference. |
 | `--style centered\|left-aligned` | One of the two supported literary presentation styles. |
-| `--qr-public CONTENT\|none` | Override the public QR payload; `none` suppresses it. |
-| `--qr-private CONTENT\|none` | Override the private QR payload; `none` suppresses it. |
+| `--qr-external CONTENT\|none` | Override the external QR payload; `none` suppresses it. |
+| `--qr-internal CONTENT\|none` | Override the internal QR payload; `none` suppresses it. |
 | `--no-qr` | Suppress literary QR regardless of audience or payload. |
 | `--min-font-size PIXELS` | Positive integer design-canvas pixels; lower bound for quotation fitting. |
 | `--max-font-size PIXELS` | Positive integer design-canvas pixels; upper bound for quotation fitting. |
 | `--debug-layout` | Enable presentation layout diagnostics. |
 
-`--no-qr` cannot be combined with `--qr-public` or `--qr-private`. QR payload overrides accept nonempty UTF-8 strings of at most 62 bytes, or the literal `none` for suppression. Invalid payloads are errors. Payloads are used exactly as supplied.
+`--no-qr` cannot be combined with `--qr-external` or `--qr-internal`. QR payload overrides accept nonempty UTF-8 strings of at most 62 bytes, or the literal `none` for suppression. Invalid payloads are errors. Payloads are used exactly as supplied.
 
 Each supplied font-size bound replaces only that bound; the other remains inherited from configuration, or from publication metadata during reconstruction. The effective minimum may not exceed the effective maximum, even when only one bound is supplied.
 
@@ -211,7 +211,7 @@ choices.
 
 Supported artistic presentation overrides remain available and replace only their corresponding published choices. Unspecified choices remain those recorded by the publication.
 
-The publication's `content.qr` supplies its recorded QR payload, if any. QR rendering viability is reevaluated for the requested output and decoration. An empty QR array remains empty. `--no-qr` may suppress QR; `--audience`, `--qr-public`, and `--qr-private` are invalid with `--publication`.
+The publication's `content.qr` supplies its recorded QR payload, if any. QR rendering viability is reevaluated for the requested output and decoration. An empty QR array remains empty. `--no-qr` may suppress QR; `--audience`, `--qr-external`, and `--qr-internal` are invalid with `--publication`.
 
 Publication reconstruction accepts `--aspect`, `--resolution`, `--output`,
 `--window`, and `--debug-layout`. When omitted, aspect defaults to `16:10` and
@@ -234,7 +234,7 @@ Local inspection and export accept these controls:
 | Option | Behavior |
 |---|---|
 | `--aspect ASPECT` | Select a supported presentation aspect: `4:3`, `5:3`, `16:9`, or `16:10`. |
-| `--audience public\|private` | Select the QR audience for local presentation rendering; default `private`. |
+| `--audience external\|internal` | Select the QR audience for local presentation rendering; default `internal`. |
 | `--resolution WIDTH HEIGHT` | Set requested output width (1–3840) and height (1–2400) in integer pixels. Square and portrait outputs are valid. |
 | `--render-as DESTINATION_ID` | Use a destination's configured output specification and apply its visual post-processing. |
 | `--output PATH` | Write the completed output PNG to `PATH`. |
@@ -279,7 +279,7 @@ If target selection yields no participating destinations, the command fails with
 
 Push requires a running normal Refrain instance. An unknown or no-longer-configured target is rejected, and an explicitly selected intentionally withdrawn destination is rejected. A directly selected destination that does not support transient publication is rejected before rendering. `--push @all` is likewise rejected before rendering if any participating destination does not support it; it does not omit unsupported or failed destinations, and excludes only those intentionally withdrawn. The viewer renders complete image variants using its selected configuration, content, assets, and presentation overrides, then submits those images to the runtime. `--config` controls the viewer-owned rendering inputs; push obtains all destination topology and output geometry exclusively from the resident runtime.
 
-Generated presentation pushes use each target destination's resident-configured audience for QR selection. `--qr-public` and `--qr-private` may independently override the corresponding payloads. `--audience` is invalid with `--push`.
+Generated presentation pushes use each target destination's resident-configured audience for QR selection. `--qr-external` and `--qr-internal` may independently override the corresponding payloads. `--audience` is invalid with `--push`.
 
 Destinations with compatible output specifications and effective rendering requirements may share an image variant; destinations requiring different QR content receive separate variants.
 
@@ -287,6 +287,6 @@ A transient request supports at most 64 selected destinations and 64 complete im
 
 The resident must accept metadata preflight before image transfer. Invalid destinations, unsupported capabilities, mismatched geometry, exceeded limits, and unavailable immediate admission are rejected before backend publication begins.
 
-`--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, `--render-as`, `--audience`, and `--list-destinations`. Presentation selection and applicable presentation overrides, including `--config`, `--entry`, `--qr-public`, `--qr-private`, and `--no-qr`, remain valid with generated presentation pushes.
+`--push` is mutually exclusive with `--window`, `--output`, `--aspect`, `--resolution`, `--render-as`, `--audience`, and `--list-destinations`. Presentation selection and applicable presentation overrides, including `--config`, `--entry`, `--qr-external`, `--qr-internal`, and `--no-qr`, remain valid with generated presentation pushes.
 
 Preparation progress may be reported while images are rendered. After runtime admission, the viewer reports that publication has begun before waiting on potentially slow backend work. It remains attached for the terminal result. Exit status zero means every selected destination succeeded. Busy, rejected, failed, unavailable-runtime, and unconfirmed outcomes return `1`; invalid arguments or conflicting modes return `2`. An unconfirmed outcome means publication may have occurred; do not retry automatically.

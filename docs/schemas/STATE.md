@@ -146,7 +146,7 @@ Every member of `actions` is an object containing exactly:
 | Field | Type | Constraint |
 |---|---|---|
 | `type` | String | Valid action-type identifier. |
-| `visibility` | Array of strings | One or both of `"public"` and `"private"`, without repetition. |
+| `visibility` | Array of strings | One or both of `"external"` and `"internal"`, without repetition. |
 | `payload` | String | Complete opaque payload, at most 10,240 UTF-8 bytes. |
 
 Preserve declaration order, duplicates, visibility declarations, and payload bytes as represented by the committed Unicode strings.
@@ -222,7 +222,7 @@ The example is formatted for readability. The `sha256` value is the actual SHA-2
         {
           "type": "play",
           "visibility": [
-            "private"
+            "internal"
           ],
           "payload": ""
         }
@@ -233,7 +233,7 @@ The example is formatted for readability. The `sha256` value is the actual SHA-2
     ],
     "highest_reveal_stage": 1
   },
-  "sha256": "67ca1661aa2f3d97a2f9ec5dd403c7df85931131016b6a17dfe473f67d7afe8d"
+  "sha256": "cc7ff983739762d52dd5a96a9ee6f1037ff327baba3a7547f5fad9d96551866c"
 }
 ```
 

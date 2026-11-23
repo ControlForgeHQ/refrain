@@ -85,7 +85,7 @@ Prepared-image artifacts are derived data under the effective `storage.artifacts
 
 Filesystem publication datasets are stored under the effective `storage.publish` directory. Each destination owns a direct child named from its validated destination ID.
 
-The effective publication root must satisfy the protected-path and filesystem-containment requirements in [Publication paths and containment](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-paths-and-containment).
+The effective publication root must satisfy the protected-path and filesystem-containment requirements in [Publication paths and containment](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-paths-and-containment) and the single-writer requirement in [Publication destinations and ownership](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-destinations-and-ownership).
 
 Standard installation-management commands use only standard paths, regardless of runtime configuration overrides.
 
@@ -197,9 +197,9 @@ Create only missing expected sample files, using exclusive file creation.
 
 Remove the marker after the complete sample set has been successfully installed.
 
-An absent or invalid marker, conflicting file content, or uncertain ownership in a nonempty directory must not be interpreted as a resumable installation.
+A nonempty content directory without an installation marker is ordinary existing content. Preserve it without inspection or modification, and skip sample installation without error.
 
-Report the condition and require manual inspection rather than overwriting user content.
+A present but invalid marker, conflicting sample-file content, or uncertain ownership of a marked sample installation must not be treated as resumable. Report the condition and require manual inspection rather than overwriting user content.
 
 Initialization must tolerate an interrupted prior attempt without treating arbitrary files as owned installation artifacts.
 
@@ -300,7 +300,7 @@ Automated tests must cover:
 - Exclusive ownership and busy-lock rejection.
 - Repeatable initialization and preservation of existing user data.
 - Exclusive file creation and race-time destination changes.
-- Marker-verified interrupted sample installation.
+- Repeat initialization after successful sample installation, with existing user content, and after marker-verified interrupted-installation recovery.
 - Preservation of nonempty content and user-assets trees.
 - Creation without placeholder state or history files.
 - Reset removal of all three fixed persistent files and rotated history.
@@ -396,9 +396,7 @@ Consumers require read access only to their configured publication datasets and 
 
 They must not require write access to Refrain-owned publication directories or authoritative operational state.
 
-A public consumer's access to publication files must be restricted appropriately for its configured audience and trust boundary.
-
-Do not rely on destination action filtering as a substitute for filesystem permissions or service authorization.
+Destination audience labels and action filtering do not establish or enforce filesystem permissions, service authorization, or network access restrictions.
 
 ## Persistent data locations
 

@@ -61,6 +61,14 @@ Do not introduce capabilities solely to demonstrate extensibility.
 
 Material architectural changes require approval before implementation establishes new behavior.
 
+### Operational priorities
+
+Refrain prioritizes continuity of the committed daily selection and its reveal progression over immediate application of configuration changes. Configuration changes do not retroactively modify committed content or completed publications. Their effects follow the owning subsystem's established resolution, preparation, and lifecycle rules.
+
+Destination audiences are content-selection labels, not security classifications or access-control boundaries. The supported audiences are `internal` and `external`, with no implied hierarchy or network topology. Audience-specific QR payloads and action declarations are selected for new publications. Audience changes do not invalidate previously completed publications.
+
+Preserving readable literary content takes precedence over reproducing previous presentation appearance. Missing or unusable artistic resources may be replaced or omitted according to the documented fallback rules without changing the committed selection or reveal progression. Regenerated images need not be pixel-identical, and cosmetic differences do not require reselection or additional persistence mechanisms.
+
 ## Supported platform and portability
 
 The primary deployment target is Raspberry Pi OS Lite, 64-bit, on Raspberry Pi hardware using Python 3.13 or newer.

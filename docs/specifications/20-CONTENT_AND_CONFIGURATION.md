@@ -107,7 +107,7 @@ Discover content files recursively beneath the effective `storage.content` direc
 
 Recognize files with `.yaml` or `.yml` extensions, case-insensitively, independently of directory depth or filesystem case sensitivity. Other filename extensions are not content sources.
 
-Do not follow symbolic-link directories or content-file symlinks during discovery.
+During recursive discovery of authored content and user resources, do not traverse directory symlinks, Windows junctions, or other redirecting filesystem objects. Do not load discovered files through such redirection.
 
 Directory structure and filesystem enumeration order must not determine entry identity, eligibility, repetition behavior, priority, or candidate selection.
 
@@ -182,7 +182,7 @@ Content changes are considered at subsequent selection opportunities. Automatic 
 Automated tests must cover:
 
 - Recursive discovery of nested YAML files.
-- Non-following behavior for directory and file symlinks.
+- Exclusion of directory and file symlinks, Windows junctions, and other redirecting filesystem objects during content and user-resource discovery.
 - Complete enumeration with independently rejected invalid files.
 - Deterministic exclusion of conflicting entry identifiers.
 - Missing, inaccessible, or incompletely enumerated sources.
@@ -302,7 +302,7 @@ Do not monitor, modify, or generate files in user-owned resource directories dur
 
 Recognize resource-package boundaries and do not register internal package images as independent standalone backgrounds.
 
-Do not follow symlink directories, manifest symlinks, or standalone image symlinks during discovery.
+Apply the [discovery redirection requirements](#discovery) to user-resource directories, manifests, and standalone images.
 
 Validate manifest structure, stable identifiers, file references, readability, and applicable resource integrity before registration.
 
@@ -469,7 +469,7 @@ When regeneration is needed, preserve canonical artistic choices from the valid 
 Automated tests must cover:
 
 - Bundled and recursive custom discovery.
-- Package boundaries, unsafe references, and symlink exclusion.
+- Package boundaries, unsafe references, and discovery redirection for manifests and standalone images.
 - Resource registration independent of pool membership.
 - Bundled claims and deterministic custom collisions.
 - Required regular and optional font-face validation.
@@ -487,7 +487,7 @@ Automated tests must cover:
 
 ## QR payload resolution
 
-Resolve QR payloads independently for `public` and `private` audiences, using viewer override, content-entry declaration, configuration default, then null, in descending precedence.
+Resolve QR payloads independently for `external` and `internal` audiences, using viewer override, content-entry declaration, configuration default, then null, in descending precedence.
 
 An explicit null declaration suppresses inherited content. An omitted or discarded declaration does not. Authored values and validation are defined in [Content Entries](../schemas/CONTENT.md#qr-payloads) and [Application Configuration](../schemas/CONFIGURATION.md#literary-qr).
 
@@ -517,9 +517,9 @@ The committed snapshot retains the complete accepted ordered action list.
 
 The shared publication checkpoint also retains that complete list. Destination preparation must not filter or modify it.
 
-At completed scheduled publication finalization, filter an independent copy of the actions to the target destination's explicitly configured `public` or `private` audience.
+At completed scheduled publication finalization, filter an independent copy of the actions to the target destination's explicitly configured `external` or `internal` audience.
 
-Do not infer audience from destination naming or treat public and private visibility as hierarchical.
+Do not infer audience from destination naming or treat external and internal visibility as hierarchical.
 
 Preserve included actions' original declaration order, duplicates, payloads, and visibility arrays.
 

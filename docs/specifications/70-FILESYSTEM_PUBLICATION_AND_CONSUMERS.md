@@ -25,6 +25,10 @@ Publication directories are exclusively Refrain-owned. Consumers may read their 
 
 Multiple independent consumers may read one destination directory.
 
+Each physical publication destination directory must have at most one active writer throughout publication, verification, and cleanup. Independently operated Refrain installations must not write to the same destination directory concurrently, even when their resident ownership locks are distinct.
+
+Multiple installations may share a publication root when their destination directories are physically distinct. The `.refrain-owned` marker establishes Refrain ownership, not exclusive writer identity. No cross-installation writer coordination is provided.
+
 Destination configuration does not supply arbitrary filesystem paths. Every destination directory is a direct child of the effective `storage.publish` root, named only from the validated destination ID.
 
 Filesystem publication uses the existing resident destination coordinator, per-backend serialization, failure isolation, and retry policy defined in [Destinations and Runtime Control](60-DESTINATIONS_AND_RUNTIME_CONTROL.md).
@@ -124,7 +128,7 @@ Automated tests must cover all four document forms, rejection of incomplete or w
 
 ## Destination metadata and audience filtering
 
-Every configured destination declares exactly one publication audience: `public` or `private`.
+Every configured destination declares exactly one publication audience: `external` or `internal`.
 
 The audience is validated as destination configuration before resident startup and is supplied independently to scheduled publication finalization.
 
@@ -138,8 +142,8 @@ Before serializing or exposing completed scheduled publication metadata, copy an
 
 Visibility is nonhierarchical:
 
-- A `public` destination includes an action only when its visibility explicitly includes `public`.
-- A `private` destination includes an action only when its visibility explicitly includes `private`.
+- A `external` destination includes an action only when its visibility explicitly includes `external`.
+- A `internal` destination includes an action only when its visibility explicitly includes `internal`.
 - An action declaring both audiences is included for either destination.
 
 Preserve the original order of included actions, including duplicate declarations, original payloads, and each included action's complete visibility declaration.
@@ -150,7 +154,7 @@ The completed scheduled publication contains only its filtered `content.actions`
 
 Completed `content.qr` contains only the declaration rendered for the destination's audience, or an empty array. The finalizer must reject a rendered declaration whose visibility does not match that audience.
 
-A public destination must not expose private-only actions in its completed metadata, including through redundant or nested fields.
+Completed scheduled metadata must not contain actions whose visibility excludes the destination's configured audience.
 
 The shared checkpoint remains unchanged, so another destination can independently filter the same original actions for its audience.
 
@@ -183,10 +187,10 @@ Actions are opaque metadata. Neither finalization nor the filesystem publisher e
 Automated tests must cover:
 
 - required destination audiences and invalid configuration values;
-- independently filtered public and private publications;
+- independently filtered external and internal publications;
 - declarations visible to both audiences;
 - preservation of ordering, duplicates, visibility arrays, and payload text;
-- absence of private-only data from public metadata;
+- exclusion of internal-only actions from external publications and external-only actions from internal publications;
 - shared checkpoint immutability;
 - filtering before completed-publication size checks;
 - action-count, per-action byte, and total metadata byte limits;
@@ -484,6 +488,7 @@ Hardware-independent automated tests must cover:
 - Initial publication and complete replacement.
 - Independent destination directories.
 - Scheduled and transient completed metadata.
+- Rejection of scheduled reveal times earlier than the quotation time, and acceptance of equal times and either relative ordering of valid source and attribution times.
 - Exact manifest fields, publication identity, and filenames.
 - SHA-256 verification of image and metadata bytes.
 - Destination and output-specification associations.

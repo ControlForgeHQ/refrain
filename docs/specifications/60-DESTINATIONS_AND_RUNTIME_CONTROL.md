@@ -341,6 +341,8 @@ Associate each outstanding scheduled publication with the exact identity it was 
 
 A successful completion acknowledges only that destination and that requested identity.
 
+A successful forced scheduled refresh acknowledges the exact scheduled presentation identity delivered to each destination, following the same acknowledgement rules as ordinary scheduled publication. Failed or unconfirmed destination publications must not establish new acknowledgements. A successful refresh of an older identity must not acknowledge a newer required identity.
+
 Success for another destination does not satisfy its acknowledgement, even when the destinations share a backend instance or prepared image.
 
 Completion of an older publication must not incorrectly acknowledge a newer required identity.
@@ -532,6 +534,8 @@ Holds require no new persistent document, publication metadata shape, public des
 
 `refrain --refresh` is a one-shot request for the resident's currently required scheduled presentation.
 
+When no scheduled presentation is available for the current logical display date because a required new selection has not succeeded, reject refresh before publication as `stale-presentation`. Do not republish a retained selection from another logical display date.
+
 It applies to every configured destination still participating in scheduled publication, excluding intentionally withdrawn destinations.
 
 Refresh is not historical restoration. It uses the currently required reveal stage and presentation, including changes occurring after a transient preview.
@@ -605,8 +609,11 @@ Tests using controlled concurrent requests and fake backends must cover:
 - refresh including destinations without transient capability;
 - refresh use of the latest required reveal stage;
 - stale scheduled identity rejected atomically at refresh admission;
+- refresh rejected as `stale-presentation` before publication when a required new daily selection has not succeeded;
 - scheduled work following admitted one-shot operations;
-- absence of mutation to committed state, checkpoints, history, or scheduled acknowledgements.
+- transient pushes preserving scheduled acknowledgements;
+- successful refresh acknowledging each destination's exact delivered scheduled identity, including after failed ordinary delivery, partial refresh failure, and a newer identity becoming required;
+- failed or resident-unconfirmed refresh publications not establishing new acknowledgements.
 - all-day hold establishment, renewal, expiration, and resident-restart clearing;
 - scheduled reveal progression and image preparation while per-destination delivery is held;
 - suppression of pending and newly required scheduled publications during admission and active holds;
@@ -615,7 +622,7 @@ Tests using controlled concurrent requests and fake backends must cover:
 - admitted refresh clearing all holds, including when subsequent delivery fails, and rejected refresh preserving them;
 - logical-date changes during an admitted push and safe resumption of current scheduled publication;
 - independent holds for destinations sharing one backend instance;
-- no mutation of authoritative state, histories, checkpoints, scheduled acknowledgements, or publication metadata forms.
+- no mutation of authoritative state, histories, checkpoints, or publication metadata forms.
 
 ## Transient transfer and staging
 

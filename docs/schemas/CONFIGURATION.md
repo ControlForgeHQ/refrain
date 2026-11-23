@@ -25,13 +25,13 @@ This example demonstrates all compatible application settings, including every s
 destinations:
   - id: "desktop"
     type: "window"
-    audience: "private"
+    audience: "internal"
     aspect_ratio: "16:9"
     resolution: [1920, 1080]
 
   - id: "epaper"
     type: "waveshare-13in3-e"
-    audience: "private"
+    audience: "internal"
     overrides:
       background: "none"
       decoration: "none"
@@ -40,22 +40,22 @@ destinations:
       decoration_color: "sage"
       qr: "none"
 
-  - id: "web-public"
+  - id: "web-a"
     type: "publish"
-    audience: "public"
+    audience: "external"
     aspect_ratio: "5:3"
     resolution: [1920, 1152]
     overrides:
       background: "none"
 
-  - id: "web-private"
+  - id: "web-b"
     type: "publish"
-    audience: "private"
+    audience: "internal"
     aspect_ratio: "16:10"
     resolution: [3840, 2400]
 
 image-server:
-  destinations: ["web-public"]
+  destinations: ["web-a"]
   host: "127.0.0.1"
   port: 8080
 
@@ -80,8 +80,8 @@ presentation:
   information_view:
     duration: 60
   qr:
-    public: "https://github.com/ControlForgeHQ/refrain"
-    private: "https://github.com/ControlForgeHQ/refrain"
+    external: "https://github.com/ControlForgeHQ/refrain"
+    internal: "https://github.com/ControlForgeHQ/refrain"
 
 palette:
   black: "#000000"
@@ -134,7 +134,7 @@ The installed distribution supplies `config.default.yaml` as an editable startin
 |---|---|---|---|
 | `id` | String | Yes | Globally unique; matches `[A-Za-z0-9][A-Za-z0-9_-]*`; at most 256 characters. |
 | `type` | String | Yes | Exactly `window`, `waveshare-13in3-e`, or `publish`. |
-| `audience` | String | Yes | Exactly `public` or `private`; no default or fallback. |
+| `audience` | String | Yes | Exactly `external` or `internal`; no default or fallback. |
 | `aspect_ratio` | String | Paired with `resolution` where supported | Exactly `4:3`, `5:3`, `16:9`, or `16:10`. |
 | `resolution` | Sequence of two integers | Paired with `aspect_ratio` where supported | Positive pixel dimensions in width, height order. |
 | `overrides` | Mapping | No | Only the restricted fields below. |
@@ -158,7 +158,7 @@ The following are alternative declarations, not fields to combine in one destina
 destinations:
   - id: "desktop"
     type: "window"
-    audience: "private"
+    audience: "internal"
 
 fonts:
   pools:
@@ -170,7 +170,7 @@ fonts:
 destinations:
   - id: "desktop"
     type: "window"
-    audience: "private"
+    audience: "internal"
     aspect_ratio: "4:3"
     resolution: [1600, 1190]
 
@@ -224,7 +224,7 @@ A present section must be a mapping containing the required nonempty `destinatio
 
 ```yaml
 image-server:
-  destinations: ["web-public"]
+  destinations: ["web-a"]
 ```
 
 This is a section fragment to use in an otherwise complete configuration. Omit the section when no image-server consumer is configured. Invalid optional host or port values produce warnings and use their defaults.
@@ -347,8 +347,8 @@ The optional `presentation.qr` mapping defines default QR payloads by audience:
 
 | Field | Type | Default | Constraint |
 |---|---|---|---|
-| `public` | String or null | `null` | Nonempty UTF-8 string of at most 62 bytes, or null. |
-| `private` | String or null | `null` | Nonempty UTF-8 string of at most 62 bytes, or null. |
+| `external` | String or null | `null` | Nonempty UTF-8 string of at most 62 bytes, or null. |
+| `internal` | String or null | `null` | Nonempty UTF-8 string of at most 62 bytes, or null. |
 
 Each audience is independent. An omitted or null value supplies no default payload for that audience.
 

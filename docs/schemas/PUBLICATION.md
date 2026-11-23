@@ -33,7 +33,7 @@ A completed scheduled document has `publication.type: "scheduled"`; a completed 
 |---|---|---|---|
 | `display_date` | String | Yes | Valid Gregorian calendar date in `YYYY-MM-DD` form. |
 | `selection_revision` | Integer | Yes | Positive committed selection revision. |
-| `reveal_schedule` | Object | Yes | Exactly `quotation`, `source`, `attribution`, each a local 24-hour `HH:MM` string (`00:00`–`23:59`). |
+| `reveal_schedule` | Object | Yes | Exactly `quotation`, `source`, `attribution`, each a local 24-hour `HH:MM` string (`00:00`–`23:59`); `source` and `attribution` must each be no earlier than `quotation`. |
 | `reveal_stage` | Object | Yes | Exactly `quotation`, `source`, `attribution`, each Boolean. |
 | `quotation` | String | Yes | One complete selected quotation containing at least one non-whitespace character. |
 | `source` | String | No | Complete source text, nonblank when present; omit when absent. |
@@ -54,12 +54,12 @@ Each action contains exactly:
 | Field | Type | Constraint |
 |---|---|---|
 | `type` | String | Case-sensitive ASCII identifier matching `[A-Za-z0-9][A-Za-z0-9_-]*`. |
-| `visibility` | Nonempty array of strings | `"public"`, `"private"`, or both, without repetition. |
+| `visibility` | Nonempty array of strings | `"external"`, `"internal"`, or both, without repetition. |
 | `payload` | String | Required opaque text, at most 10,240 UTF-8 bytes. An absent authored payload is represented by `""`. |
 
 Array order, duplicate declarations, payload whitespace and newlines, and each included declaration's complete original visibility array are significant. Invalid declarations are invalid metadata; content-authoring recovery rules do not repair them. The authored declaration shape is defined in [Content Entries](CONTENT.md#actions).
 
-Checkpoint `content.actions` contains all captured actions. Completed scheduled `content.actions` contains only declarations whose visibility explicitly includes the destination's independently supplied `public` or `private` audience. Visibility is nonhierarchical: `public` does not imply `private`, or conversely. An action declaring both is eligible for either. An empty filtered sequence is valid.
+Checkpoint `content.actions` contains all captured actions. Completed scheduled `content.actions` contains only declarations whose visibility explicitly includes the destination's independently supplied `external` or `internal` audience. Visibility is nonhierarchical: `external` does not imply `internal`, or conversely. An action declaring both is eligible for either. An empty filtered sequence is valid.
 
 Completed scheduled validation with a supplied audience rejects every action that lacks that audience. Completed scheduled serialization requires that audience check. Context-independent validation without an audience establishes structural validity only, not suitability for a destination. Audience is never inferred from `destination_id` or serialized into the document.
 
@@ -74,7 +74,7 @@ Each declaration contains exactly:
 | Field | Type | Constraint |
 |---|---|---|
 | `payload` | String | Nonempty opaque UTF-8 string of at most 62 bytes. |
-| `visibility` | Array of one string | Exactly `["public"]` or `["private"]`. |
+| `visibility` | Array of one string | Exactly `["external"]` or `["internal"]`. |
 
 Payloads preserve their original Unicode content, whitespace, and newlines. Null payloads, duplicate audience declarations, and additional declaration fields are invalid.
 
@@ -198,15 +198,15 @@ All captured actions are present; presentation and publication are absent.
       {
         "type": "custom_action",
         "visibility": [
-          "public",
-          "private"
+          "external",
+          "internal"
         ],
         "payload": "Opaque consumer text."
       },
       {
         "type": "private_note",
         "visibility": [
-          "private"
+          "internal"
         ],
         "payload": "Private consumer text."
       }
@@ -215,13 +215,13 @@ All captured actions are present; presentation and publication are absent.
       {
         "payload": "https://github.com/ControlForgeHQ/refrain",
         "visibility": [
-          "public"
+          "external"
         ]
       },
       {
         "payload": "https://example.org/private",
         "visibility": [
-          "private"
+          "internal"
         ]
       }
     ]
@@ -256,15 +256,15 @@ The same content has a complete presentation section. Publication is absent.
       {
         "type": "custom_action",
         "visibility": [
-          "public",
-          "private"
+          "external",
+          "internal"
         ],
         "payload": "Opaque consumer text."
       },
       {
         "type": "private_note",
         "visibility": [
-          "private"
+          "internal"
         ],
         "payload": "Private consumer text."
       }
@@ -273,13 +273,13 @@ The same content has a complete presentation section. Publication is absent.
       {
         "payload": "https://github.com/ControlForgeHQ/refrain",
         "visibility": [
-          "public"
+          "external"
         ]
       },
       {
         "payload": "https://example.org/private",
         "visibility": [
-          "private"
+          "internal"
         ]
       }
     ]
@@ -316,7 +316,7 @@ The same content has a complete presentation section. Publication is absent.
 
 ### Completed scheduled publication
 
-This public destination record has source visibility enabled and includes only the action visible to its audience. The complete quotation, source, and attribution remain available as data.
+This external destination record has source visibility enabled and includes only the action visible to its audience. The complete quotation, source, and attribution remain available as data.
 
 ```json
 {
@@ -341,8 +341,8 @@ This public destination record has source visibility enabled and includes only t
       {
         "type": "custom_action",
         "visibility": [
-          "public",
-          "private"
+          "external",
+          "internal"
         ],
         "payload": "Opaque consumer text."
       }
@@ -351,7 +351,7 @@ This public destination record has source visibility enabled and includes only t
       {
         "payload": "https://github.com/ControlForgeHQ/refrain",
         "visibility": [
-          "public"
+          "external"
         ]
       }
     ]
@@ -387,7 +387,7 @@ This public destination record has source visibility enabled and includes only t
     "id": "publication-example",
     "type": "scheduled",
     "timestamp": "2026-11-18T17:00:00Z",
-    "destination_id": "web-public",
+    "destination_id": "web-a",
     "output_specification": {
       "aspect_ratio": "16:10",
       "requested_output_size": [
@@ -408,7 +408,7 @@ This public destination record has source visibility enabled and includes only t
     "id": "transient-example",
     "type": "transient",
     "timestamp": "2026-11-18T17:01:00Z",
-    "destination_id": "web-public",
+    "destination_id": "web-a",
     "output_specification": {
       "aspect_ratio": "16:10",
       "requested_output_size": [
@@ -432,7 +432,7 @@ This manifest describes the supplied complete transient example dataset. Its has
   "image_filename": "transient-example.png",
   "metadata_filename": "transient-example.json",
   "image_sha256": "9d8e0815185722c4cf8d7fa49fcf7fd71207f427aef740e589ae8b033a60511a",
-  "metadata_sha256": "6c44b32455de4c38f6c4762015cdbb467b3fc3d27db43fe97195431b668ff17a"
+  "metadata_sha256": "325ad4b4bea92e705e9cc8a1c694f2c3f6307338b1008856e8a9320bff043275"
 }
 ```
 

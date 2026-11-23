@@ -210,17 +210,15 @@ A valid committed selection does not require its original content entry or a cur
 
 If no committed selection exists and a usable effective content library cannot be constructed, startup cannot establish a daily presentation and must report an actionable error.
 
-If a new selection is required during continuous operation but content directories are missing or inaccessible, source enumeration is incomplete, or the effective content library contains no valid quotations, Refrain must not clear repetition history, commit an empty selection, or replace previously committed operational state. It must preserve existing prepared images where practical and report the failure.
+When a new selection is required, including during startup with a valid committed selection for another logical display date, an unavailable content library must not clear repetition history, commit an empty selection, or replace previously committed operational state. Preserve existing prepared images where practical, report the failure, and do not republish the outdated selection as the current daily presentation.
 
-When a new selection is required during continuous operation but no usable effective content library can be constructed, the application coordinator retries the selection attempt after a five-minute monotonic delay. While the same logical display date remains current, scheduling reevaluation or an external wake event must not bypass this retry delay.
+During continuous operation, or startup with an existing valid committed selection, the application coordinator attempts the required selection immediately when no retry delay applies. If no usable effective content library can be constructed, continue resident operation and retry after a five-minute monotonic delay. While the same logical display date remains current, scheduling reevaluation or an external wake event must not bypass this delay.
 
-A change to a different logical display date permits an immediate new selection attempt, regardless of the preceding retry delay. Successful content recovery resumes normal selection and scheduling.
+A change to a different logical display date permits an immediate new selection attempt. Successful content recovery resumes normal selection and scheduling.
 
 The retry deadline is process-local coordinator state. Do not persist it or incorporate retry policy into the pure scheduling evaluator. Restarting permits an immediate attempt.
 
 This retry behavior does not apply to a healthy effective library with no quotation eligible for the current logical display date. That condition continues to use the no-eligible-content fallback without repeated same-date selection attempts.
-
-Startup without an existing committed selection and without a usable content library retains its established actionable startup error.
 
 ### No-eligible-content fallback
 
@@ -268,6 +266,8 @@ The implementation may organize these operations differently provided their exte
 Automated tests must cover:
 
 - unavailable sources, incomplete discovery, and libraries with no valid quotations;
+- startup with no committed selection and an unavailable library reporting an actionable error;
+- startup with a retained selection for another logical display date attempting selection immediately, preserving state on failure, and remaining resident without publishing stale content;
 - five-minute monotonic retry timing, external wakes, logical-date changes, restart, successful content recovery, and isolation from healthy no-eligible-content fallback;
 - healthy effective libraries with no eligible quotation, including the exact information-view quotation, required attribution, full reveal, and normal literary rendering;
 - no synthetic selection, repetition-history mutation, publication checkpoint update, or global-history event for the fallback;
