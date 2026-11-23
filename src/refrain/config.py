@@ -411,11 +411,12 @@ def _parse_decoration_insets(
     field: str,
     report: Callable[..., None],
     severity: int,
+    aspect_ratios: tuple[str, ...],
 ) -> PresentationInsets | None:
     insets = _parse_presentation_insets(value, field, report, severity)
     if insets is None:
         return None
-    for aspect_ratio in SUPPORTED_PRESENTATION_ASPECTS:
+    for aspect_ratio in aspect_ratios:
         design_canvas_size, _ = design_canvas_for_aspect(aspect_ratio)
         try:
             validate_presentation_insets(insets, design_canvas_size)
@@ -683,6 +684,7 @@ def _parse_presentation(
     data: dict[str, object],
     report: Callable[..., None],
     use_default: Callable[[str, str], None],
+    aspect_ratios: tuple[str, ...],
 ) -> tuple[PresentationInsets, int, bool]:
     presentation = _mapping(data.get("presentation", {}), "presentation", report)
     _known_fields(presentation, {"insets", "information_view", "qr"}, "presentation", report)
@@ -694,7 +696,7 @@ def _parse_presentation(
         insets = _parse_presentation_insets(presentation["insets"], "presentation.insets", report)
     if insets is None:
         insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
-    for aspect_ratio in SUPPORTED_PRESENTATION_ASPECTS:
+    for aspect_ratio in aspect_ratios:
         design_canvas_size, _ = design_canvas_for_aspect(aspect_ratio)
         try:
             validate_presentation_insets(insets, design_canvas_size)
@@ -1027,6 +1029,7 @@ def _load_decoration_resources(
     fonts: Mapping[str, FontResource],
     backgrounds: Mapping[str, BackgroundResource],
     palette: Mapping[str, str],
+    aspect_ratios: tuple[str, ...],
     report: Callable[..., None],
     use_default: Callable[[str, str], None],
 ) -> tuple[
@@ -1046,7 +1049,7 @@ def _load_decoration_resources(
         set(backgrounds),
         report,
         lambda value, field, reporter, severity=logging.ERROR: _parse_decoration_insets(
-            value, field, reporter, severity
+            value, field, reporter, severity, aspect_ratios
         ),
     )
     if "default" not in pools:
@@ -1174,9 +1177,14 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     palette = _parse_palette(data, report)
 
     display_backends = _parse_destinations(data, report, use_default)
+    configured_aspects = tuple(
+        sorted({output.output_specification.aspect_ratio for backend in display_backends for output in backend.outputs})
+    )
     day_start, reveal = _parse_scheduling(data, report, use_default)
     content_directory, storage = _parse_storage(data, file, report)
-    presentation_insets, information_view_duration, qr_enabled = _parse_presentation(data, report, use_default)
+    presentation_insets, information_view_duration, qr_enabled = _parse_presentation(
+        data, report, use_default, configured_aspects
+    )
 
     package_root = files("refrain")
     fonts_data = _mapping(data.get("fonts", {}), "fonts", report)
@@ -1199,6 +1207,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         font_registry,
         background_registry,
         palette,
+        configured_aspects,
         report,
         use_default,
     )

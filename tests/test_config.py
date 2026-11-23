@@ -2076,6 +2076,118 @@ def test_presentation_insets_accept_zero_edges(tmp_path: Path) -> None:
     assert config.presentation_insets == PresentationInsets(0, 0, 0, 0)
 
 
+def test_global_insets_are_validated_against_configured_destination_aspects(tmp_path: Path) -> None:
+    insets = {"left": 1650, "right": 1650, "top": 324, "bottom": 324}
+    destinations = [
+        {
+            "id": "desktop",
+            "type": "window",
+            "audience": "private",
+            "aspect_ratio": "16:10",
+            "resolution": [320, 200],
+        }
+    ]
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(destinations=destinations, presentation={"insets": insets}),
+    )
+
+    assert load_application_config(config_path).presentation_insets == PresentationInsets(1650, 1650, 324, 324)
+
+    destinations.append(
+        {
+            "id": "web",
+            "type": "publish",
+            "audience": "private",
+            "aspect_ratio": "5:3",
+            "resolution": [320, 192],
+        }
+    )
+    config_path.write_text(
+        yaml.safe_dump(configuration_data(destinations=destinations, presentation={"insets": insets}), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    assert load_application_config(config_path).presentation_insets == PresentationInsets(1650, 1650, 324, 324)
+
+    destinations.append(
+        {
+            "id": "web-4-3",
+            "type": "publish",
+            "audience": "private",
+            "aspect_ratio": "4:3",
+            "resolution": [320, 240],
+        }
+    )
+    config_path.write_text(
+        yaml.safe_dump(configuration_data(destinations=destinations, presentation={"insets": insets}), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    assert "presentation.insets" in diagnostic_fields(config_path)
+
+
+def test_decoration_insets_follow_configured_aspects_and_revalidate(tmp_path: Path, caplog) -> None:
+    decoration_root = tmp_path / "assets" / "decorations"
+    for identifier, insets in (
+        ("valid", None),
+        ("aspect-specific", {"left": 1650, "right": 1650, "top": 324, "bottom": 324}),
+    ):
+        package = decoration_root / identifier
+        package.mkdir(parents=True)
+        Image.new("RGBA", (16, 16)).save(package / "overlay.png")
+        manifest: dict[str, object] = {
+            "format": 1,
+            "id": identifier,
+            "layers": [{"image": "overlay.png", "method": "contain"}],
+        }
+        if insets is not None:
+            manifest["presentation_insets"] = insets
+        write_asset_manifest(package, "decoration.yaml", manifest)
+
+    destinations = [
+        {
+            "id": "desktop",
+            "type": "window",
+            "audience": "private",
+            "aspect_ratio": "16:10",
+            "resolution": [320, 200],
+        }
+    ]
+    data = configuration_data(
+        destinations=destinations,
+        decorations={"pools": {"default": ["valid", "aspect-specific"]}},
+    )
+    config_path = write_config(tmp_path / "config.yaml", data)
+
+    configuration = load_application_config(config_path)
+
+    assert {"valid", "aspect-specific"} <= set(configuration.decorations)
+
+    destinations.append(
+        {
+            "id": "web-4-3",
+            "type": "publish",
+            "audience": "private",
+            "aspect_ratio": "4:3",
+            "resolution": [320, 240],
+        }
+    )
+    data = configuration_data(
+        destinations=destinations,
+        decorations={"pools": {"default": ["valid", "aspect-specific"]}},
+    )
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    configuration = load_application_config(config_path)
+
+    assert "valid" in configuration.decorations
+    assert "aspect-specific" not in configuration.decorations
+    assert "aspect-specific/decoration.yaml.presentation_insets" in caplog.text.replace("\\", "/")
+    assert "4:3 design canvas" in caplog.text
+    assert "this decoration is excluded" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("data", "expected_field"),
     [

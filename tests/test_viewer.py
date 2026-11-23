@@ -263,6 +263,32 @@ def test_viewer_resolution_preserves_declared_aspect_and_output_size() -> None:
     assert specification.requested_output_size == (1600, 1190)
 
 
+def test_viewer_validates_insets_for_its_selected_aspect(tmp_path: Path) -> None:
+    config_path, _ = _workspace(tmp_path, with_entry=False)
+    config_path.write_text(
+        _CONFIG.replace(
+            "presentation:\n  information_view:",
+            "presentation:\n"
+            "  insets:\n"
+            "    left: 1650\n"
+            "    right: 1650\n"
+            "    top: 324\n"
+            "    bottom: 324\n"
+            "  information_view:",
+        ),
+        encoding="utf-8",
+    )
+    configuration = load_application_config(config_path)
+    specification = ResolvedOutputSpecification("5:3", (320, 192))
+
+    image = viewer.render_preview(configuration, ("@preview", 1), specification)
+
+    try:
+        assert image.size == (320, 192)
+    finally:
+        image.close()
+
+
 def test_default_entry_selects_medium_preview_and_explicit_selector_matches(tmp_path: Path) -> None:
     config_path, _ = _workspace(tmp_path, with_entry=False)
     configuration = load_application_config(config_path)
