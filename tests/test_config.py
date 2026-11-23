@@ -130,7 +130,7 @@ def test_publish_destinations_share_backend_and_use_explicit_geometry(tmp_path: 
                 "audience": "private",
                 "aspect_ratio": "16:9",
                 "resolution": [320, 180],
-                "presentation": {"background": "none"},
+                "overrides": {"background": "none"},
             },
         ]
     )
@@ -1165,166 +1165,224 @@ def test_missing_destination_audience_is_a_configuration_error(tmp_path: Path) -
     assert "destinations[0].audience" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
-def test_destination_presentation_parses_all_supported_overrides(tmp_path: Path) -> None:
+def test_destination_overrides_accept_registered_font_and_builtin_and_custom_colors(tmp_path: Path) -> None:
+    write_font_bundle(tmp_path / "assets" / "fonts" / "registered-outside-pool", "registered-outside-pool")
     data = configuration_data(
         destinations=[
             {
                 "id": "desktop",
                 "type": "window",
-                "presentation": {
+                "overrides": {
                     "background": "none",
-                    "decoration": "@default",
-                    "font": "test-font",
-                    "text_color": ["@text-pool", "black"],
-                    "decoration_color": "burnt-orange",
-                    "qr": {"enabled": False},
+                    "decoration": "none",
+                    "font": "registered-outside-pool",
+                    "text_color": "custom-ink",
+                    "decoration_color": "black",
+                    "qr": "none",
                 },
-            },
-            {
-                "id": "server",
-                "type": "image-server",
-                "presentation": {"background": "@paper-pool", "qr": {"enabled": True}},
-            },
-            {"id": "epaper", "type": "waveshare-13in3-e", "presentation": {"decoration": "none"}},
-        ]
+            }
+        ],
+        palette={"custom-ink": "#123456"},
     )
 
     configuration = load_application_config(write_config(tmp_path / "config.yaml", data))
-    outputs = {output.identifier: output for backend in configuration.display_backends for output in backend.outputs}
-
-    assert outputs["desktop"].presentation.background == "none"
-    assert outputs["desktop"].presentation.decoration == "@default"
-    assert outputs["desktop"].presentation.font == "test-font"
-    assert outputs["desktop"].presentation.text_color == ("@text-pool", "black")
-    assert outputs["desktop"].presentation.decoration_color == ("burnt-orange",)
-    assert outputs["desktop"].presentation.qr_enabled is False
-    assert outputs["server"].presentation.background == "@paper-pool"
-    assert outputs["server"].presentation.qr_enabled is True
-    assert outputs["epaper"].presentation.decoration == "none"
-
-
-def test_omitted_destination_presentation_preserves_ungrouped_variants(tmp_path: Path) -> None:
-    configuration = load_application_config(write_config(tmp_path / "config.yaml", configuration_data()))
-
     output = configuration.display_backends[0].outputs[0]
-    assert output.presentation.is_empty
-    assert output.prepared_image_key == output.output_specification
-    assert configuration.required_prepared_image_keys == configuration.required_output_specifications
+
+    assert "registered-outside-pool" in configuration.fonts
+    assert "registered-outside-pool" not in configuration.default_fonts
+    assert output.presentation.background == "none"
+    assert output.presentation.decoration == "none"
+    assert output.presentation.font == "registered-outside-pool"
+    assert output.presentation.text_color == ("custom-ink",)
+    assert output.presentation.decoration_color == ("black",)
+    assert output.presentation.qr_enabled is False
 
 
-def test_equivalent_destination_presentation_groups_ignore_destination_ids(tmp_path: Path) -> None:
-    configuration = load_application_config(
-        write_config(
-            tmp_path / "config.yaml",
-            configuration_data(
-                destinations=[
-                    {
-                        "id": "first",
-                        "type": "image-server",
-                        "aspect_ratio": "4:3",
-                        "resolution": [1600, 1200],
-                        "presentation": {"background": "none", "text_color": "black"},
-                    },
-                    {
-                        "id": "second",
-                        "type": "image-server",
-                        "aspect_ratio": "4:3",
-                        "resolution": [1600, 1200],
-                        "presentation": {"background": "none", "text_color": "black"},
-                    },
-                    {
-                        "id": "third",
-                        "type": "image-server",
-                        "aspect_ratio": "4:3",
-                        "resolution": [1600, 1200],
-                        "presentation": {"background": "none"},
-                    },
-                ]
-            ),
-        )
-    )
-
-    assert len(configuration.required_prepared_image_keys) == 2
-    assert configuration.display_backends[0].outputs[0].prepared_image_key == (
-        configuration.display_backends[0].outputs[1].prepared_image_key
-    )
-    assert configuration.display_backends[0].outputs[0].prepared_image_key != (
-        configuration.display_backends[0].outputs[2].prepared_image_key
-    )
-
-
-def test_destination_audience_does_not_change_prepared_image_group(tmp_path: Path) -> None:
-    configuration = load_application_config(
-        write_config(
-            tmp_path / "config.yaml",
-            configuration_data(
-                destinations=[
-                    {
-                        "id": "public",
-                        "type": "image-server",
-                        "audience": "public",
-                        "aspect_ratio": "4:3",
-                        "resolution": [1600, 1200],
-                        "presentation": {"background": "none"},
-                    },
-                    {
-                        "id": "private",
-                        "type": "image-server",
-                        "audience": "private",
-                        "aspect_ratio": "4:3",
-                        "resolution": [1600, 1200],
-                        "presentation": {"background": "none"},
-                    },
-                ]
-            ),
-        )
-    )
-
-    public, private = configuration.display_backends[0].outputs
-    assert public.audience == "public"
-    assert private.audience == "private"
-    assert public.presentation == private.presentation
-    assert public.prepared_image_key == private.prepared_image_key
-    assert len(configuration.required_prepared_image_keys) == 1
+@pytest.mark.parametrize("overrides", [None, []])
+def test_destination_overrides_must_be_a_mapping(tmp_path: Path, overrides: object) -> None:
+    data = configuration_data(destinations=[{"id": "desktop", "type": "window", "overrides": overrides}])
+    assert "destinations[0].overrides" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
 
 @pytest.mark.parametrize(
-    ("presentation", "field"),
+    ("name", "value"),
     [
-        (None, "presentation"),
-        ({"background": None}, "presentation.background"),
-        ({"decoration": []}, "presentation.decoration"),
-        ({"font": True}, "presentation.font"),
-        ({"text_color": []}, "presentation.text_color"),
-        ({"text_color": ["black", None]}, "presentation.text_color"),
-        ({"decoration_color": 3}, "presentation.decoration_color"),
-        ({"qr": None}, "presentation.qr"),
-        ({"qr": {"enabled": 1}}, "presentation.qr.enabled"),
+        ("background", None),
+        ("background", True),
+        ("background", "@paper"),
+        ("background", "paper"),
+        ("decoration", []),
+        ("decoration", "@frame"),
+        ("decoration", "frame"),
+        ("font", None),
+        ("font", True),
+        ("font", "@default"),
+        ("font", ["test-font"]),
+        ("text_color", None),
+        ("text_color", ["black"]),
+        ("text_color", "@colors"),
+        ("text_color", "#123456"),
+        ("decoration_color", 1),
+        ("decoration_color", ["black", "white"]),
+        ("decoration_color", "@colors"),
+        ("decoration_color", "#123456"),
+        ("qr", None),
+        ("qr", True),
+        ("qr", {"enabled": False}),
     ],
 )
-def test_invalid_destination_presentation_fields_are_configuration_errors(
-    tmp_path: Path, presentation: object, field: str
+def test_destination_overrides_reject_unsupported_types_and_forms(tmp_path: Path, name: str, value: object) -> None:
+    data = configuration_data(destinations=[{"id": "desktop", "type": "window", "overrides": {name: value}}])
+    assert f"destinations[0].overrides.{name}" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+
+
+def test_destination_overrides_reject_unknown_fields(tmp_path: Path) -> None:
+    data = configuration_data(destinations=[{"id": "desktop", "type": "window", "overrides": {"contrast": "high"}}])
+    assert "destinations[0].overrides.contrast" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("font", "unavailable-font"), ("text_color", "unavailable-color"), ("decoration_color", "unavailable-color")],
+)
+def test_destination_overrides_require_registered_fonts_and_effective_palette_ids(
+    tmp_path: Path, name: str, value: str
 ) -> None:
-    data = configuration_data(destinations=[{"id": "desktop", "type": "window", "presentation": presentation}])
+    data = configuration_data(destinations=[{"id": "desktop", "type": "window", "overrides": {name: value}}])
+    assert f"destinations[0].overrides.{name}" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
-    assert f"destinations[0].{field}" in diagnostic_fields(write_config(tmp_path / "config.yaml", data))
 
-
-def test_unknown_destination_presentation_fields_are_ignored_with_diagnostic(tmp_path: Path, caplog) -> None:
+def test_omitted_and_empty_destination_overrides_preserve_ungrouped_variants(tmp_path: Path) -> None:
     configuration = load_application_config(
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
                 destinations=[
-                    {"id": "desktop", "type": "window", "presentation": {"contrast": "high", "qr": {"size": 20}}}
+                    {"id": "without-overrides", "type": "publish"},
+                    {"id": "empty-overrides", "type": "publish", "overrides": {}},
                 ]
+            ),
+        )
+    )
+
+    omitted, empty = configuration.display_backends[0].outputs
+    assert omitted.presentation.is_empty
+    assert empty.presentation.is_empty
+    assert omitted.prepared_image_key == empty.prepared_image_key
+    assert configuration.required_prepared_image_keys == configuration.required_output_specifications
+
+
+def test_identical_and_different_destination_overrides_form_compatible_groups(tmp_path: Path) -> None:
+    data = configuration_data(
+        destinations=[
+            {
+                "id": "first",
+                "type": "publish",
+                "overrides": {"background": "none", "text_color": "black"},
+            },
+            {
+                "id": "second",
+                "type": "publish",
+                "overrides": {"background": "none", "text_color": "black"},
+            },
+            {
+                "id": "third",
+                "type": "publish",
+                "overrides": {"background": "none", "decoration": "none"},
+            },
+        ]
+    )
+    configuration = load_application_config(write_config(tmp_path / "config.yaml", data))
+    first, second, third = configuration.display_backends[0].outputs
+
+    assert first.prepared_image_key == second.prepared_image_key
+    assert first.prepared_image_key != third.prepared_image_key
+    assert len(configuration.required_prepared_image_keys) == 2
+
+
+def test_valid_destination_overrides_reach_image_preparation(tmp_path: Path) -> None:
+    write_font_bundle(tmp_path / "assets" / "fonts" / "registered-outside-pool", "registered-outside-pool")
+    data = configuration_data(
+        destinations=[
+            {
+                "id": "desktop",
+                "type": "window",
+                "overrides": {
+                    "background": "none",
+                    "decoration": "none",
+                    "font": "registered-outside-pool",
+                    "text_color": "custom-ink",
+                    "decoration_color": "black",
+                    "qr": "none",
+                },
+            }
+        ],
+        palette={"custom-ink": "#123456"},
+    )
+    configuration = load_application_config(write_config(tmp_path / "config.yaml", data))
+    snapshot = DailySnapshot(
+        entry_id="test-entry",
+        quotation_text="A quiet moment.",
+        quotation_identity="A quiet moment.",
+        source=None,
+        attribution=None,
+        presentation_style="centered",
+        font=None,
+        font_faces={},
+        background="unavailable-background",
+        decoration="unavailable-decoration",
+        text_color=None,
+        decoration_color=None,
+        reveal_schedule={
+            "quotation": configuration.day_start.strftime("%H:%M"),
+            "source": configuration.reveal.source.strftime("%H:%M"),
+            "attribution": configuration.reveal.attribution.strftime("%H:%M"),
+        },
+        scheduling=SchedulingContext(date(2026, 10, 26), configuration.day_start.strftime("%H:%M")),
+    )
+    metadata = {}
+    variants = prepare_daily_images(
+        snapshot,
+        resolve_reveal_stages(snapshot),
+        configuration,
+        configuration.required_prepared_image_keys,
+        chooser=Random(0),
+        selection_revision=1,
+        on_metadata=metadata.__setitem__,
+    )
+
+    try:
+        key = configuration.display_backends[0].outputs[0].prepared_image_key
+        reconstruction = metadata[key][0]["reconstruction"]
+        assert reconstruction["background"] == "none"
+        assert reconstruction["decoration"] == "none"
+        assert reconstruction["fonts"]["bundle"] == "registered-outside-pool"
+        assert reconstruction["colors"]["text"] == "custom-ink"
+        assert reconstruction["qr"]["enabled"] is False
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
+
+
+def test_legacy_destination_presentation_is_ignored_not_interpreted(tmp_path: Path, caplog) -> None:
+    configuration = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                destinations=[
+                    {
+                        "id": "desktop",
+                        "type": "window",
+                        "presentation": {"background": "none", "qr": {"enabled": False}},
+                    }
+                ],
             ),
         )
     )
 
     assert configuration.display_backends[0].outputs[0].presentation.is_empty
-    assert "destinations[0].presentation.contrast" in caplog.text
-    assert "destinations[0].presentation.qr.size" in caplog.text
+    assert "destinations[0].presentation" in caplog.text
 
 
 @pytest.mark.parametrize("size", [(1, 1), (600, 800), (800, 800), (3840, 2400), (3840, 1), (1, 2400)])
