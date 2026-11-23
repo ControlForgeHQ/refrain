@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, time
 from pathlib import Path
@@ -36,7 +37,7 @@ def diagnostics_for(directory: Path) -> tuple[str, ...]:
     return tuple(str(diagnostic) for diagnostic in error.value.diagnostics)
 
 
-def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
+def test_loads_multiple_files_and_nested_directories(tmp_path: Path, caplog) -> None:
     write_entry(
         tmp_path / "z-entry.yaml",
         entry_data(
@@ -49,7 +50,8 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     )
     write_entry(tmp_path / "nested" / "a-entry.yml", entry_data(id="a-entry"))
 
-    entries = load_content_library(tmp_path)
+    with caplog.at_level(logging.INFO):
+        entries = load_content_library(tmp_path)
 
     assert [entry.id for entry in entries] == ["a-entry", "z-entry"]
     assert entries[0].source is None
@@ -61,9 +63,14 @@ def test_loads_multiple_files_and_nested_directories(tmp_path: Path) -> None:
     assert entries[0].presentation_style == "centered"
     assert entries[0].eligibility == (EligibilityRule(ordinary=True),)
     assert entries[0].reveal == RevealOverrides()
+    assert entries[0].font_faces == {}
+    assert entries[0].text_color is None
+    assert entries[0].decoration_color is None
+    assert entries[0].actions == ()
     assert entries[1].priority == -3
     assert [quotation.text for quotation in entries[1].quotations] == ["First candidate.", "Second candidate."]
     assert all(entry.file is not None for entry in entries)
+    assert not [record for record in caplog.records if record.levelno >= logging.INFO]
 
 
 def test_actions_default_to_empty_and_preserve_order_duplicates_and_opaque_payloads(tmp_path: Path, caplog) -> None:
@@ -746,6 +753,13 @@ def test_invalid_entries_are_excluded_while_valid_entries_are_retained(tmp_path:
     assert f"{nested_invalid_file}: id:" in caplog.text
     assert f"{other_invalid_file}: quotations[0]:" in caplog.text
     assert "this entry is excluded" in caplog.text
+    assert any(
+        record.levelno == logging.WARNING
+        and str(other_invalid_file) in record.getMessage()
+        and "quotations[0]" in record.getMessage()
+        and "excluded" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_malformed_yaml_file_does_not_prevent_valid_content(tmp_path: Path, caplog) -> None:
@@ -808,8 +822,14 @@ def test_duplicate_identifier_exclusion_is_independent_of_enumeration_order(
     assert first != second
 
 
-def test_invalid_content_directory_is_reported(tmp_path: Path) -> None:
+def test_invalid_content_directory_is_reported(tmp_path: Path, caplog) -> None:
     diagnostics = diagnostics_for(tmp_path / "missing")
 
     assert len(diagnostics) == 1
     assert diagnostics[0].endswith("$: content directory does not exist or is not a directory")
+    assert any(
+        record.levelno == logging.ERROR
+        and str(tmp_path / "missing") in record.getMessage()
+        and "content directory" in record.getMessage()
+        for record in caplog.records
+    )

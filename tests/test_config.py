@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date, time
@@ -799,6 +800,13 @@ def test_unreadable_background_excluded_with_warning(tmp_path: Path, monkeypatch
     assert config.default_backgrounds == ()
     assert "assets.background.paper" in caplog.text
     assert "background read denied" in caplog.text
+    assert any(resource.bundled for resource in config.backgrounds.values())
+    assert any(
+        record.levelno == logging.WARNING
+        and "assets.background.paper" in record.getMessage()
+        and "excluded" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_bundled_decoration_registry_and_plain_default(tmp_path: Path, caplog) -> None:
@@ -2298,7 +2306,33 @@ def test_invalid_required_fields_are_fatal(tmp_path: Path, data: dict[str, objec
     assert expected_field in fields
 
 
-def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_path: Path, caplog) -> None:
+def test_omitted_optional_defaults_are_silent(tmp_path: Path, caplog) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        {
+            "destinations": [{"id": "desktop", "type": "window", "audience": "private"}],
+            "fonts": {"pools": {"default": ["test-font"]}},
+        },
+    )
+
+    with caplog.at_level(logging.INFO):
+        config = load_application_config(config_path)
+
+    assert config.day_start == time(5)
+    assert config.reveal.source == time(12)
+    assert config.reveal.attribution == time(18)
+    assert config.content_directory == tmp_path / "content"
+    assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
+    assert config.information_view_duration == 60
+    assert (config.min_font_size, config.max_font_size) == (56, 200)
+    assert config.default_backgrounds == ("none",)
+    assert config.default_decorations == ("none",)
+    assert config.default_text_colors == ("black",)
+    assert config.default_decoration_colors == ("black",)
+    assert not [record for record in caplog.records if record.levelno >= logging.INFO]
+
+
+def test_invalid_optional_values_are_reported_without_default_announcements(tmp_path: Path, caplog) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
         configuration_data(
@@ -2317,7 +2351,10 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
 
     assert config.day_start == time(5)
     assert config.reveal.source == time(12)
-    assert "using documented defaults" in caplog.text
+    assert not [record for record in caplog.records if record.levelno == logging.INFO]
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("scheduling.day_start" in message and "default '05:00'" in message for message in warnings)
+    assert any("scheduling.reveal.source" in message and "default '12:00'" in message for message in warnings)
     assert "scheduling.day_start" in caplog.text
     assert "scheduling.timezone" in caplog.text
     assert "scheduling.reveal.quotation" in caplog.text
@@ -2325,6 +2362,22 @@ def test_missing_optional_defaults_and_invalid_optional_values_are_reported(tmp_
     assert "scheduling.reveal.source" in caplog.text
     assert "unexpected" in caplog.text
     assert "using" in caplog.text and "ignored" in caplog.text
+
+
+def test_fatal_configuration_error_is_logged(tmp_path: Path, caplog) -> None:
+    config_path = write_config(tmp_path / "config.yaml", {"fonts": {"pools": {"default": ["test-font"]}}})
+
+    with caplog.at_level(logging.INFO), pytest.raises(ApplicationConfigurationError):
+        load_application_config(config_path)
+
+    assert any(
+        record.levelno == logging.ERROR
+        and str(config_path) in record.getMessage()
+        and "destinations" in record.getMessage()
+        and "required" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not [record for record in caplog.records if record.levelno == logging.INFO]
 
 
 @pytest.mark.parametrize(

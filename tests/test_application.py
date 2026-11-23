@@ -1757,6 +1757,14 @@ def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
     assert caplog.text.count("Information view publication acknowledged") == 1
+    assert any(
+        record.levelno == logging.INFO and record.getMessage() == "Information view publication acknowledged"
+        for record in caplog.records
+    )
+    assert not any(
+        record.levelno == logging.INFO and "using documented defaults for optional fields" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_bounded_information_attempt_transitions_to_current_day_and_reveal(workspace: Workspace, monkeypatch) -> None:
