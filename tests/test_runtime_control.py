@@ -554,56 +554,9 @@ def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, ide
 
 
 @pytest.mark.parametrize("size", [(3841, 1), (3840, 2401)])
-def test_oversized_destination_discovery_and_refresh(tmp_path, size):
-    seen = []
-    oversized = ResolvedOutputSpecification("16:9", size)
-
-    class Backend:
-        def publish(self, destination, image):
-            seen.append(image.size)
-
-        def close(self):
-            pass
-
-    config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("large", oversized, audience="private"),)
-    )
-    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
-    coordinator.publish((1, 0), {oversized: Image.new("RGB", size)})
-    assert coordinator.wait_for_publication((1, 0), 5)
-    seen.clear()
-    path = tmp_path / "runtime.json"
-    server = RuntimeControlServer(coordinator, path, lambda admit: admit((1, 0), {oversized: Image.new("RGB", size)}))
-    server.start()
-    try:
-        client = RuntimeControlClient(path)
-        record = client.discover()[0]
-        assert record["output_specification"] == oversized
-        assert record["supports_transient"] is False
-        with Image.new("RGB", size) as image:
-            result = client.publish_transient("large", {"large": oversized}, {oversized: image})
-        assert result.status is PublicationStatus.UNSUPPORTED
-        assert not seen
-        specification = {"aspect_ratio": "16:9", "size": list(size)}
-        with _raw(path) as connection:
-            connection.send_bytes(
-                json.dumps(
-                    {
-                        "version": 2,
-                        "operation": "publish",
-                        "target": "@all",
-                        "specifications": {"large": specification},
-                        "images": [{"specification": specification, "encoding": "png", "length": 1}],
-                    }
-                ).encode()
-            )
-            assert json.loads(connection.recv_bytes())["status"] == "unsupported"
-        assert not seen
-        assert client.refresh().status is PublicationStatus.SUCCEEDED
-        assert seen == [size]
-    finally:
-        server.close()
-        coordinator.close()
+def test_oversized_destination_specification_is_rejected_from_wire(size):
+    with pytest.raises(RuntimeProtocolError, match="invalid output specification"):
+        control_module._spec_from_wire({"aspect_ratio": "16:9", "size": list(size)})
 
 
 @pytest.mark.parametrize("target", ["@all", "large"])
@@ -617,7 +570,7 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
         def close(self):
             pass
 
-    large = ResolvedOutputSpecification("16:9", (3841, 1))
+    large = ResolvedOutputSpecification("16:9", (3840, 1))
     stale = ResolvedOutputSpecification("16:9", (512, 256))
     config = DisplayBackendConfiguration(
         "image-server", outputs=(DisplayOutputConfiguration("large", large, audience="private"),)
@@ -635,6 +588,7 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
         return send_bytes(connection, data, *args, **kwargs)
 
     monkeypatch.setattr(Connection, "send_bytes", observe_send)
+    monkeypatch.setattr(control_module, "_supports_transient_spec", lambda specification: specification != large)
     try:
         with Image.frombytes("RGB", stale.requested_output_size, os.urandom(512 * 256 * 3)) as image:
             result = RuntimeControlClient(path).publish_transient(target, {"large": stale}, {stale: image})
@@ -649,8 +603,8 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
 def test_transient_raster_envelope():
     supports = control_module._supports_transient_spec
     assert supports(ResolvedOutputSpecification("16:10", (3840, 2400)))
-    assert not supports(ResolvedOutputSpecification("16:10", (3841, 2400)))
-    assert not supports(ResolvedOutputSpecification("16:10", (3840, 2401)))
+    assert supports(ResolvedOutputSpecification("16:10", (1, 2400)))
+    assert supports(ResolvedOutputSpecification("16:10", (1, 1)))
 
 
 def test_transient_destination_count_remains_bounded(runtime):

@@ -1327,6 +1327,30 @@ def test_unknown_destination_presentation_fields_are_ignored_with_diagnostic(tmp
     assert "destinations[0].presentation.qr.size" in caplog.text
 
 
+@pytest.mark.parametrize("size", [(1, 1), (600, 800), (800, 800), (3840, 2400), (3840, 1), (1, 2400)])
+def test_config_accepts_independent_output_dimensions(tmp_path: Path, size: tuple[int, int]) -> None:
+    config = load_application_config(
+        write_config(
+            tmp_path / "config.yaml",
+            configuration_data(
+                destinations=[{"id": "desktop", "type": "window", "aspect_ratio": "4:3", "resolution": list(size)}]
+            ),
+        )
+    )
+    assert config.display_backends[0].outputs[0].output_specification.requested_output_size == size
+
+
+@pytest.mark.parametrize("size", [[3841, 1], [1, 2401], [0, 1], [1, True]])
+def test_config_rejects_invalid_output_dimensions(tmp_path: Path, size: list[object]) -> None:
+    path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(
+            destinations=[{"id": "desktop", "type": "window", "aspect_ratio": "4:3", "resolution": size}]
+        ),
+    )
+    assert "destinations[0].resolution" in diagnostic_fields(path)
+
+
 def test_window_destination_accepts_explicit_output_specification(tmp_path: Path) -> None:
     config = load_application_config(
         write_config(

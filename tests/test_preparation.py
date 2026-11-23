@@ -680,6 +680,8 @@ def test_unavailable_destination_resources_fall_through_existing_preferences() -
         (ResolvedOutputSpecification("16:9", (1920, 1080)), (3840, 2160)),
         (ResolvedOutputSpecification("16:10", (3840, 2400)), (3840, 2400)),
         (ResolvedOutputSpecification("4:3", (1600, 1190)), (3200, 2400)),
+        (ResolvedOutputSpecification("4:3", (600, 800)), (3200, 2400)),
+        (ResolvedOutputSpecification("16:10", (800, 800)), (3840, 2400)),
     ],
 )
 def test_graphical_composition_uses_design_presentation_and_output_canvases(
