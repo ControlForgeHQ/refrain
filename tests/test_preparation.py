@@ -1986,11 +1986,171 @@ def test_reveal_stages_must_remain_cumulative(embedded_font: str) -> None:
         )
 
 
-def test_missing_font_fails_when_default_pool_is_empty() -> None:
+def test_missing_font_uses_packaged_emergency_font_when_default_pool_is_empty() -> None:
     snapshot = make_snapshot("missing-font")
 
-    with pytest.raises(DailyImagePreparationError, match="configure a usable identifier in fonts.pools.default"):
-        prepare_daily_images(snapshot, (CompositionVisibility(),), {}, default_fonts=())
+    images = prepare_daily_images(snapshot, (CompositionVisibility(),), {}, default_fonts=())
+    try:
+        assert images[0].size == _IMAGE_SIZE
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize("contents", [None, b"not a font"])
+def test_unusable_emergency_font_reports_packaging_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contents: bytes | None
+) -> None:
+    emergency = tmp_path / "assets" / "fonts" / "source-sans-3" / "SourceSans3-Regular.ttf"
+    if contents is not None:
+        emergency.parent.mkdir(parents=True)
+        emergency.write_bytes(contents)
+    monkeypatch.setattr(preparation, "files", lambda _package: tmp_path)
+    configuration = _configuration({}, default_fonts=())
+
+    with pytest.raises(DailyImagePreparationError, match="source-sans-3/regular.*repair or reinstall"):
+        preparation._resolve_fonts(make_snapshot("missing"), configuration, None, Random(0), PresentationOverrides())
+
+
+def test_emergency_font_after_exhausting_configured_candidates_without_pool_mutation(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.ttf"
+    broken.write_bytes(b"not a font")
+    configuration = replace(
+        _configuration({"broken": FontResource("broken", broken, bundled=False)}, default_fonts=("broken",)),
+        font_pools={"default": ("broken",), "builtin": ()},
+    )
+
+    fonts = preparation._resolve_fonts(
+        make_snapshot("missing"), configuration, None, Random(0), PresentationOverrides()
+    )
+
+    assert {font.identifier for font in fonts.values()} == {"source-sans-3"}
+    assert configuration.font_pools == {"default": ("broken",), "builtin": ()}
+    assert configuration.default_fonts == ("broken",)
+
+
+def test_emergency_font_preserves_registered_bundled_faces_without_pool_membership() -> None:
+    source_sans = FontResource(
+        "source-sans-3",
+        _REGULAR_FONT,
+        bundled=True,
+        faces={"regular": _REGULAR_FONT, "italic": _ITALIC_FONT},
+    )
+    configuration = _configuration({"source-sans-3": source_sans}, default_fonts=())
+    fonts = preparation._resolve_fonts(
+        make_snapshot("missing"),
+        configuration,
+        None,
+        Random(0),
+        PresentationOverrides(font_faces={"source": "italic"}),
+    )
+    assert fonts["quotation"].identifier == "source-sans-3"
+    assert fonts["quotation"].data != _REGULAR_FONT.read_bytes()
+    assert fonts["source"].identifier == "source-sans-3:italic"
+    assert fonts["source"].data == _ITALIC_FONT.read_bytes()
+    assert configuration.default_fonts == ()
+
+
+def test_explicit_face_is_strict_after_same_missing_nonexplicit_face() -> None:
+    snapshot = make_snapshot("lora", metadata={"font_faces": {"quotation": "missing"}})
+    with pytest.raises(DailyImagePreparationError, match="explicit source face 'missing'"):
+        preparation._resolve_fonts(
+            snapshot,
+            _configuration(_FONT_REGISTRY),
+            None,
+            Random(0),
+            PresentationOverrides(font_faces={"source": "missing"}),
+        )
+
+
+def test_explicit_font_pool_exhausts_unusable_candidates_without_emergency_fallback(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.ttf"
+    broken.write_bytes(b"not a font")
+    configuration = replace(
+        _configuration(
+            {
+                "broken": FontResource("broken", broken, bundled=False),
+                "usable": FontResource("usable", _REGULAR_FONT, bundled=False),
+            }
+        ),
+        font_pools={"mixed": ("broken", "usable"), "broken": ("broken",)},
+    )
+
+    class FirstChoice:
+        def choice(self, candidates):
+            return candidates[0]
+
+    fonts = preparation._resolve_fonts(
+        make_snapshot("missing"), configuration, None, FirstChoice(), PresentationOverrides(font="@mixed")
+    )
+    assert fonts["quotation"].identifier == "usable"
+    with pytest.raises(DailyImagePreparationError, match="explicit font pool reference '@broken'"):
+        preparation._resolve_fonts(
+            make_snapshot("missing"), configuration, None, FirstChoice(), PresentationOverrides(font="@broken")
+        )
+
+
+def test_empty_defaults_use_runtime_fallbacks_and_preserve_explicit_preferences() -> None:
+    frame = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused.png"), "contain", tintable=True),),
+        False,
+        font="lora",
+        background="paper",
+        tintable=True,
+    )
+    configuration = replace(
+        _configuration(
+            _FONT_REGISTRY,
+            backgrounds={"paper": BackgroundResource("paper", Path("/unused.png"), False)},
+            decorations={"frame": frame},
+            default_fonts=(),
+            default_backgrounds=(),
+            default_decorations=(),
+        ),
+        default_text_colors=(),
+        default_decoration_colors=(),
+        font_pools={"default": ()},
+        background_pools={"default": ()},
+        decoration_pools={"default": ()},
+        text_color_pools={"default": ()},
+        decoration_color_pools={"default": ()},
+    )
+    snapshot = replace(make_snapshot("missing"), decoration="frame")
+    choices = preparation._resolve_presentation_choices(
+        snapshot,
+        configuration,
+        Random(0),
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=PresentationOverrides(),
+    )
+    assert choices.decoration_identifier == "frame"
+    assert choices.background_identifier == "paper"
+    assert choices.fonts["quotation"].identifier == "lora"
+    assert choices.text_color_identifier == choices.decoration_color_identifier == "black"
+
+    plain = preparation._resolve_presentation_choices(
+        replace(snapshot, decoration=None),
+        configuration,
+        Random(0),
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=PresentationOverrides(),
+    )
+    assert plain.decoration_identifier == plain.background_identifier == "none"
+    assert plain.text_color_identifier == "black"
+    assert plain.fonts["quotation"].identifier == "source-sans-3"
+    assert all(
+        pools["default"] == ()
+        for pools in (
+            configuration.font_pools,
+            configuration.background_pools,
+            configuration.decoration_pools,
+            configuration.text_color_pools,
+            configuration.decoration_color_pools,
+        )
+    )
 
 
 def test_unusable_explicit_font_uses_configured_default_pool(tmp_path, caplog, monkeypatch) -> None:

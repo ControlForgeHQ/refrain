@@ -74,6 +74,31 @@ quotations:
 """
 
 
+@pytest.mark.parametrize("option", ["--font", "--background", "--decoration", "--text-color", "--tint"])
+@pytest.mark.parametrize("pool", ["@default", "@nested"])
+def test_viewer_rejects_empty_configured_default_and_nested_pools(
+    tmp_path: Path, capsys, option: str, pool: str
+) -> None:
+    config, _ = _workspace(tmp_path)
+    text = _CONFIG.replace(
+        'default: ["test-font"]',
+        'default: ["@empty"]\n    empty: []\n    nested: ["@default"]',
+    ).replace(
+        "text:\n",
+        'text:\n  colors:\n    pools:\n      default: ["@empty"]\n      empty: []\n      nested: ["@default"]\n',
+    )
+    text += (
+        '\nbackgrounds:\n  pools:\n    default: ["@empty"]\n    empty: []\n    nested: ["@default"]\n'
+        'decorations:\n  pools:\n    default: ["@empty"]\n    empty: []\n    nested: ["@default"]\n'
+        '  colors:\n    pools:\n      default: ["@empty"]\n      empty: []\n      nested: ["@default"]\n'
+    )
+    config.write_text(text, encoding="utf-8")
+
+    assert viewer.main(["--config", str(config), "--output", str(tmp_path / "out.png"), option, pool]) == 1
+    assert f"pool reference '{pool}' has no selectable candidates" in capsys.readouterr().err
+    assert not (tmp_path / "out.png").exists()
+
+
 def _workspace(root: Path, *, with_entry: bool = True) -> tuple[Path, Path]:
     config = root / "config.yaml"
     config.write_text(_CONFIG, encoding="utf-8")

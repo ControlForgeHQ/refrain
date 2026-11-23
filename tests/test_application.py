@@ -1103,7 +1103,7 @@ def test_entry_font_preference_is_preserved(workspace: Workspace) -> None:
     assert workspace.load().snapshot.font == "test-font-alt"
 
 
-def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspace) -> None:
+def test_empty_effective_font_pool_uses_emergency_font(workspace: Workspace) -> None:
     config = workspace.config.read_text(encoding="utf-8").replace(
         'default: ["test-font"]',
         'default: ["missing-font"]',
@@ -1111,8 +1111,7 @@ def test_empty_effective_font_pool_blocks_only_new_selection(workspace: Workspac
     workspace.config.write_text(config, encoding="utf-8")
     ordinary(workspace)
 
-    with pytest.raises(ApplicationError, match="cannot resolve a usable font"):
-        workspace.run(at(10, 8))
+    workspace.run(at(10, 8))
     assert workspace.load().revision == 1
 
 
