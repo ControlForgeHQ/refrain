@@ -639,12 +639,9 @@ def _parse_storage(
 def _parse_scheduling(
     data: dict[str, object],
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
 ) -> tuple[time, RevealSchedule]:
     scheduling = _mapping(data.get("scheduling", {}), "scheduling", report)
     _known_fields(scheduling, {"day_start", "reveal"}, "scheduling", report)
-    if "day_start" not in scheduling:
-        use_default("scheduling.day_start", "'05:00'")
     day_start = _parse_time(
         scheduling.get("day_start", "05:00"),
         "scheduling.day_start",
@@ -659,8 +656,6 @@ def _parse_scheduling(
     reveal_times: dict[str, time] = {}
     for name, default in (("source", "12:00"), ("attribution", "18:00")):
         config_field = f"scheduling.reveal.{name}"
-        if name not in reveal_data:
-            use_default(config_field, repr(default))
         parsed = _parse_time(
             reveal_data.get(name, default),
             config_field,
@@ -689,14 +684,12 @@ def _parse_scheduling(
 def _parse_presentation(
     data: dict[str, object],
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
     aspect_ratios: tuple[str, ...],
 ) -> tuple[PresentationInsets, int, bool]:
     presentation = _mapping(data.get("presentation", {}), "presentation", report)
     _known_fields(presentation, {"insets", "information_view", "qr"}, "presentation", report)
 
     if "insets" not in presentation:
-        use_default("presentation.insets", "{left: 384, right: 384, top: 324, bottom: 324}")
         insets = PresentationInsets(*DEFAULT_PRESENTATION_INSETS)
     else:
         insets = _parse_presentation_insets(presentation["insets"], "presentation.insets", report)
@@ -712,9 +705,7 @@ def _parse_presentation(
     information_view = _mapping(presentation.get("information_view", {}), "presentation.information_view", report)
     _known_fields(information_view, {"duration"}, "presentation.information_view", report)
     duration = information_view.get("duration", 60)
-    if "duration" not in information_view:
-        use_default("presentation.information_view.duration", "60")
-    elif isinstance(duration, bool) or not isinstance(duration, int) or not 0 <= duration <= 300:
+    if isinstance(duration, bool) or not isinstance(duration, int) or not 0 <= duration <= 300:
         report(
             "presentation.information_view.duration",
             "must be an integer between 0 and 300; using the documented default 60",
@@ -804,7 +795,6 @@ def _validate_destination_override_resources(
 def _parse_destinations(
     data: dict[str, object],
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
 ) -> tuple[DisplayBackendConfiguration, ...]:
     from .display.capabilities import DESTINATION_CAPACITIES
 
@@ -817,17 +807,13 @@ def _parse_destinations(
     image_server_host = "127.0.0.1"
     image_server_port = 8080
     if image_server_enabled:
-        if "host" not in image_server:
-            use_default("image-server.host", repr(image_server_host))
-        elif _valid_image_server_host(image_server["host"]):
+        if "host" in image_server and _valid_image_server_host(image_server["host"]):
             image_server_host = image_server["host"]
-        else:
+        elif "host" in image_server:
             report(
                 "image-server.host",
                 "must be a nonempty local bind address or hostname; using the documented default '127.0.0.1'",
             )
-        if "port" not in image_server:
-            use_default("image-server.port", str(image_server_port))
         port_value = image_server.get("port", image_server_port)
         if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
             report("image-server.port", "must be an integer between 1 and 65535; using the documented default 8080")
@@ -959,10 +945,7 @@ def _parse_color_pools(
     field: str,
     palette: Mapping[str, str],
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
 ) -> tuple[Mapping[str, tuple[str, ...]], tuple[str, ...]]:
-    if "colors" not in section:
-        use_default(f"{field}.colors.pools.default", "['black']")
     colors = _mapping(section.get("colors", {}), f"{field}.colors", report)
     pools = _configured_pools(colors, f"{field}.colors", set(), report)
     return _resolve_configured_pools(
@@ -1012,7 +995,6 @@ def _load_background_resources(
     file: Path,
     package_root: Traversable,
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
 ) -> tuple[dict[str, BackgroundResource], Mapping[str, tuple[str, ...]], tuple[str, ...]]:
     from .assets import discover_backgrounds
 
@@ -1022,8 +1004,6 @@ def _load_background_resources(
         file.parent / "assets" / "backgrounds",
         report,
     )
-    if "default" not in pools:
-        use_default("backgrounds.pools.default", "['none']")
     resolved_pools, default = _resolve_configured_pools(
         pools,
         "backgrounds.pools",
@@ -1047,7 +1027,6 @@ def _load_decoration_resources(
     palette: Mapping[str, str],
     aspect_ratios: tuple[str, ...],
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
 ) -> tuple[
     dict[str, DecorationResource],
     Mapping[str, tuple[str, ...]],
@@ -1068,8 +1047,6 @@ def _load_decoration_resources(
             value, field, reporter, severity, aspect_ratios
         ),
     )
-    if "default" not in pools:
-        use_default("decorations.pools.default", "['none']")
     resolved_pools, default = _resolve_configured_pools(
         pools,
         "decorations.pools",
@@ -1081,7 +1058,7 @@ def _load_decoration_resources(
         identifier_label="decoration",
         allow_none=True,
     )
-    color_pools, default_colors = _parse_color_pools(section, "decorations", palette, report, use_default)
+    color_pools, default_colors = _parse_color_pools(section, "decorations", palette, report)
     return registry, resolved_pools, default, color_pools, default_colors
 
 
@@ -1089,14 +1066,11 @@ def _load_text_settings(
     section: dict[str, object],
     palette: Mapping[str, str],
     report: Callable[..., None],
-    use_default: Callable[[str, str], None],
 ) -> tuple[Mapping[str, tuple[str, ...]], tuple[str, ...], int, int]:
     _known_fields(section, {"colors", "min_font_size", "max_font_size"}, "text", report)
-    color_pools, default_colors = _parse_color_pools(section, "text", palette, report, use_default)
+    color_pools, default_colors = _parse_color_pools(section, "text", palette, report)
     bounds: dict[str, int] = {}
     for name, default in (("min_font_size", 56), ("max_font_size", 200)):
-        if name not in section:
-            use_default(f"text.{name}", str(default))
         value = section.get(name, default)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             report(f"text.{name}", "must be a positive integer", logging.ERROR)
@@ -1152,7 +1126,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     file = Path(config_file).absolute()
     diagnostics: list[ConfigurationDiagnostic] = []
     fatal_diagnostics: list[ConfigurationDiagnostic] = []
-    defaults_used: list[str] = []
 
     def report(field: str, message: str, severity: int = logging.WARNING) -> None:
         diagnostic = ConfigurationDiagnostic(file=file, field=field, message=message, severity=severity)
@@ -1160,15 +1133,10 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         if severity >= logging.ERROR:
             fatal_diagnostics.append(diagnostic)
 
-    def use_default(field: str, value: str) -> None:
-        defaults_used.append(f"{field}={value}")
-
     def finish_diagnostics() -> None:
         for diagnostic in diagnostics:
             if diagnostic.severity >= logging.WARNING:
                 _LOGGER.log(diagnostic.severity, "%s", diagnostic)
-        if defaults_used:
-            _LOGGER.info("%s: using documented defaults for optional fields: %s", file, ", ".join(defaults_used))
 
     try:
         contents = file.read_text(encoding="utf-8")
@@ -1192,22 +1160,20 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
 
     palette = _parse_palette(data, report)
 
-    display_backends = _parse_destinations(data, report, use_default)
+    display_backends = _parse_destinations(data, report)
     configured_aspects = tuple(
         sorted({output.output_specification.aspect_ratio for backend in display_backends for output in backend.outputs})
     )
-    day_start, reveal = _parse_scheduling(data, report, use_default)
+    day_start, reveal = _parse_scheduling(data, report)
     content_directory, storage = _parse_storage(data, file, report)
-    presentation_insets, information_view_duration, qr_enabled = _parse_presentation(
-        data, report, use_default, configured_aspects
-    )
+    presentation_insets, information_view_duration, qr_enabled = _parse_presentation(data, report, configured_aspects)
 
     package_root = files("refrain")
     fonts_data = _mapping(data.get("fonts", {}), "fonts", report)
     font_registry, font_pools, default_fonts, font_faces = _load_font_resources(fonts_data, file, package_root, report)
     backgrounds_data = _mapping(data.get("backgrounds", {}), "backgrounds", report)
     background_registry, background_pools, default_backgrounds = _load_background_resources(
-        backgrounds_data, file, package_root, report, use_default
+        backgrounds_data, file, package_root, report
     )
     decorations_data = _mapping(data.get("decorations", {}), "decorations", report)
     (
@@ -1225,11 +1191,10 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         palette,
         configured_aspects,
         report,
-        use_default,
     )
     text_data = _mapping(data.get("text", {}), "text", report)
     text_color_pools, default_text_colors, min_font_size, max_font_size = _load_text_settings(
-        text_data, palette, report, use_default
+        text_data, palette, report
     )
 
     _validate_destination_override_resources(data, font_registry, palette, report)
