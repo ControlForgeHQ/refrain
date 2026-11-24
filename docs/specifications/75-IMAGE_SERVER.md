@@ -44,7 +44,7 @@ Do not retain publication data between requests. Do not introduce background pol
 
 Incomplete, inconsistent, or unverified datasets must not be exposed as current publications. Do not substitute a previously verified image when the current publication is unavailable or invalid.
 
-Publication unavailability for one destination must not prevent retrieval from other configured destinations.
+Publication validation failures must be isolated to the affected destination. An uninterruptible filesystem operation may temporarily prevent verification of other destinations because publication verification uses a shared execution slot.
 
 The service must not modify publication datasets, authoritative operational state, or publication checkpoints. It does not acquire the resident ownership lock.
 
