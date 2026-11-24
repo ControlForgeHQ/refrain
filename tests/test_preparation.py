@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from random import Random
 
@@ -38,6 +38,7 @@ from refrain import (
     prepare_daily_images as _prepare_daily_image_variants,
 )
 from refrain.config import BackgroundLayerResource, BackgroundResource, DecorationLayerResource, DecorationResource
+from refrain.publication_metadata import finalize_publication_metadata
 
 _DEFAULT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
 _IMAGE_SIZE = _DEFAULT_SPECIFICATION.requested_output_size
@@ -1448,12 +1449,15 @@ def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("reason", ["policy", "decoration"])
-def test_intentional_qr_disabling_skips_placement_without_warning(monkeypatch, caplog, reason: str) -> None:
+def test_intentional_qr_disabling_skips_placement_without_warning(tmp_path, monkeypatch, caplog, reason: str) -> None:
     snapshot = replace(
         make_snapshot("lora"),
         decoration="frame" if reason == "decoration" else None,
     )
-    decoration = _decoration_resource("frame", Path("/unused.png"), qr_ready=reason != "decoration")
+    layer_path = tmp_path / "frame.png"
+    with Image.new("RGBA", (4, 4), (0, 0, 0, 0)) as layer:
+        layer.save(layer_path)
+    decoration = _decoration_resource("frame", layer_path, qr_ready=reason != "decoration")
     configuration = _configuration(
         _FONT_REGISTRY,
         decorations={"frame": decoration},
@@ -1473,11 +1477,14 @@ def test_intentional_qr_disabling_skips_placement_without_warning(monkeypatch, c
             image.close()
 
 
-def test_invalid_qr_placement_warns_before_artwork_and_preserves_decoration(monkeypatch, caplog) -> None:
+def test_invalid_qr_placement_warns_before_artwork_and_preserves_decoration(tmp_path, monkeypatch, caplog) -> None:
     snapshot = replace(make_snapshot("lora"), decoration="frame")
+    layer_path = tmp_path / "frame.png"
+    with Image.new("RGBA", (4, 4), (0, 0, 0, 0)) as layer:
+        layer.save(layer_path)
     decoration = _decoration_resource(
         "frame",
-        Path("/unused.png"),
+        layer_path,
         qr_positioning={"qr_from_left": -1},
     )
     configuration = _configuration(_FONT_REGISTRY, decorations={"frame": decoration})
@@ -1532,6 +1539,292 @@ def test_insufficient_output_pixels_warn_and_keep_literary_preparation(caplog) -
     finally:
         for image in images:
             image.close()
+
+
+@pytest.mark.parametrize("failed_index", [0, 1, 2])
+@pytest.mark.parametrize("qr_restriction", ["not-ready", "invalid-placement"])
+def test_failed_decoration_discards_all_artwork_and_recovers_effective_presentation(
+    tmp_path: Path, caplog, failed_index: int, qr_restriction: str
+) -> None:
+    background_path = tmp_path / "paper.png"
+    with Image.new("RGB", (4, 4), (30, 90, 150)) as image:
+        image.save(background_path)
+    paths = [tmp_path / f"layer-{index}.png" for index in range(3)]
+    for path in paths:
+        with Image.new("RGBA", (4, 4), (220, 40, 30, 255)) as image:
+            image.save(path)
+    paths[failed_index].write_bytes(b"not an image")
+    decoration = DecorationResource(
+        "frame",
+        tuple(DecorationLayerResource(path, "cover") for path in paths),
+        False,
+        presentation_insets=PresentationInsets(600, 500, 300, 400),
+        qr_ready=qr_restriction != "not-ready",
+        qr_positioning={"qr_from_left": -1} if qr_restriction == "invalid-placement" else {},
+    )
+    specification = ResolvedOutputSpecification("16:10", (640, 400))
+    global_insets = PresentationInsets(200, 240, 160, 180)
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        backgrounds={"paper": BackgroundResource("paper", background_path, False)},
+        decorations={"frame": decoration},
+        output_specification=specification,
+        insets=global_insets,
+        min_font_size=24,
+        max_font_size=72,
+    )
+    snapshot = replace(make_snapshot("lora"), background="paper", decoration="frame")
+    stages = resolve_reveal_stages(snapshot)
+    metadata, diagnostics, bounds = {}, {}, {}
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        stages,
+        configuration,
+        (specification,),
+        selection_revision=7,
+        on_metadata=metadata.__setitem__,
+        on_diagnostics=diagnostics.__setitem__,
+        on_resolved_bounds=bounds.__setitem__,
+    )
+    reference = _prepare_daily_image_variants(
+        replace(snapshot, decoration="none"), stages, configuration, (specification,)
+    )
+    try:
+        assert len(variants[specification]) == len(stages) == 3
+        assert all(
+            actual.tobytes() == expected.tobytes()
+            for actual, expected in zip(variants[specification], reference[specification], strict=True)
+        )
+        assert snapshot.background == "paper" and snapshot.decoration == "frame"
+        result = diagnostics[specification]
+        assert result.qr_placement is not None
+        assert result.qr_unavailable_reason is None
+        assert result.active_layers == () and result.nine_slice_guides == ()
+        assert bounds[specification] == result.geometry.presentation_literary_bounds
+        for index, document in enumerate(metadata[specification]):
+            effective = document["reconstruction"]
+            assert effective["background"] == "paper"
+            assert effective["decoration"] == "none"
+            assert effective["colors"]["decoration"] is None
+            assert effective["insets"] == {"left": 200, "right": 240, "top": 160, "bottom": 180}
+            assert effective["font_size_range"] == {"minimum": 24, "maximum": 72}
+            assert effective["qr"] == {"enabled": True, "available": True}
+            completed = finalize_publication_metadata(
+                document,
+                publication_type="scheduled",
+                publication_id=f"publication-{index}",
+                published_at=datetime(2026, 10, 26, tzinfo=timezone.utc),
+                destination_id="window",
+                output_specification=specification,
+                audience="private",
+                reveal_stage_index=index,
+            )
+            assert completed["reconstruction"] == effective
+        assert "discarding the decoration" in caplog.text
+    finally:
+        for images in (variants[specification], reference[specification]):
+            for image in images:
+                image.close()
+
+
+@pytest.mark.parametrize("qr_enabled,missing_condition", [(True, "no-qr"), (False, "qr")])
+def test_unavailable_ineligible_decoration_layer_does_not_trigger_fallback(
+    tmp_path: Path, qr_enabled: bool, missing_condition: str
+) -> None:
+    path = tmp_path / "valid.png"
+    with Image.new("RGB", (4, 4), "red") as image:
+        image.save(path)
+    decoration = DecorationResource(
+        "frame",
+        (
+            DecorationLayerResource(path, "cover", tintable=False),
+            DecorationLayerResource(tmp_path / "missing.png", "cover", condition=missing_condition),
+        ),
+        False,
+        tintable=False,
+    )
+    specification = ResolvedOutputSpecification("16:10", (640, 400))
+    configuration = _configuration(
+        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification, qr_enabled=qr_enabled
+    )
+    snapshot = replace(make_snapshot("lora"), decoration="frame")
+    metadata, diagnostics = {}, {}
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        (CompositionVisibility(),),
+        configuration,
+        (specification,),
+        selection_revision=1,
+        on_metadata=metadata.__setitem__,
+        on_diagnostics=diagnostics.__setitem__,
+    )
+    try:
+        assert metadata[specification][0]["reconstruction"]["decoration"] == "frame"
+        assert len(diagnostics[specification].active_layers) == 1
+        assert variants[specification][0].getpixel((0, 0)) == (255, 0, 0)
+    finally:
+        for image in variants[specification]:
+            image.close()
+
+
+def test_decoration_failure_keeps_qr_unavailable_when_output_is_too_small(tmp_path: Path) -> None:
+    decoration = _decoration_resource("frame", tmp_path / "missing.png", qr_ready=False)
+    specification = ResolvedOutputSpecification("4:3", (80, 60))
+    configuration = _configuration(
+        _FONT_REGISTRY,
+        decorations={"frame": decoration},
+        output_specification=specification,
+        insets=PresentationInsets(0, 0, 0, 0),
+        min_font_size=1,
+        max_font_size=1,
+    )
+    snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration="frame")
+    diagnostics, metadata = {}, {}
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        (CompositionVisibility(),),
+        configuration,
+        (specification,),
+        selection_revision=1,
+        on_metadata=metadata.__setitem__,
+        on_diagnostics=diagnostics.__setitem__,
+    )
+    try:
+        assert diagnostics[specification].qr_placement is None
+        assert "41-module" in diagnostics[specification].qr_unavailable_reason
+        assert metadata[specification][0]["reconstruction"]["qr"]["available"] is False
+    finally:
+        for image in variants[specification]:
+            image.close()
+
+
+@pytest.mark.parametrize("request_kind", ["viewer", "reconstruction"])
+def test_explicit_decoration_failure_remains_strict(tmp_path: Path, request_kind: str) -> None:
+    decoration = _decoration_resource("frame", tmp_path / "missing.png")
+    configuration = _configuration(_FONT_REGISTRY, decorations={"frame": decoration})
+    snapshot = replace(make_snapshot("lora"), decoration="frame")
+    kwargs = {"overrides": PresentationOverrides(decoration="frame")}
+    if request_kind == "reconstruction":
+        kwargs = {
+            "resolved_presentation": preparation.ResolvedPresentation(
+                background="none",
+                decoration="frame",
+                font_bundle="lora",
+                font_faces={"quotation": "regular", "source": "regular", "attribution": "regular"},
+                text_color="black",
+                decoration_color=None,
+                presentation_style="centered",
+                qr_enabled=True,
+                min_font_size=12,
+                max_font_size=32,
+                insets=configuration.presentation_insets,
+            )
+        }
+    with pytest.raises(DailyImagePreparationError, match="decoration 'frame' layer"):
+        _prepare_daily_image_variants(
+            snapshot, (CompositionVisibility(),), configuration, (_DEFAULT_SPECIFICATION,), **kwargs
+        )
+
+
+@pytest.mark.parametrize("qr_enabled,condition", [(True, "qr"), (False, "no-qr")])
+def test_eligible_conditional_layer_failure_discards_decoration(
+    tmp_path: Path, qr_enabled: bool, condition: str
+) -> None:
+    path = tmp_path / "valid.png"
+    with Image.new("RGB", (4, 4), "red") as image:
+        image.save(path)
+    decoration = DecorationResource(
+        "frame",
+        (
+            DecorationLayerResource(path, "cover", tintable=False),
+            DecorationLayerResource(tmp_path / "missing.png", "cover", condition=condition),
+        ),
+        False,
+        tintable=False,
+    )
+    specification = ResolvedOutputSpecification("16:10", (640, 400))
+    configuration = _configuration(
+        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification, qr_enabled=qr_enabled
+    )
+    snapshot = replace(make_snapshot("lora"), decoration="frame")
+    metadata = {}
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        (CompositionVisibility(),),
+        configuration,
+        (specification,),
+        selection_revision=1,
+        on_metadata=metadata.__setitem__,
+    )
+    try:
+        assert metadata[specification][0]["reconstruction"]["decoration"] == "none"
+        assert variants[specification][0].getpixel((0, 0)) == (255, 255, 255)
+    finally:
+        for image in variants[specification]:
+            image.close()
+
+
+def test_composition_failure_after_drawing_does_not_leave_partial_pixels(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "valid.png"
+    with Image.new("RGB", (4, 4), "red") as image:
+        image.save(path)
+    decoration = _decoration_resource("frame", path)
+    specification = ResolvedOutputSpecification("16:10", (640, 400))
+    configuration = _configuration(
+        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification
+    )
+    snapshot = replace(make_snapshot("lora"), decoration="frame")
+
+    def fail_after_drawing(background, _image, _layer):
+        background.paste("red", (0, 0, 100, 100))
+        raise ValueError("composition failed after drawing")
+
+    monkeypatch.setattr(preparation, "_compose_layer", fail_after_drawing)
+    variants = _prepare_daily_image_variants(snapshot, (CompositionVisibility(),), configuration, (specification,))
+    try:
+        assert variants[specification][0].getpixel((0, 0)) == (255, 255, 255)
+    finally:
+        for image in variants[specification]:
+            image.close()
+
+
+def test_decoration_failure_is_isolated_to_the_affected_output(tmp_path: Path) -> None:
+    path = tmp_path / "valid.png"
+    with Image.new("RGB", (4, 4), "red") as image:
+        image.save(path)
+    decoration = DecorationResource(
+        "frame",
+        (
+            DecorationLayerResource(path, "cover", tintable=False),
+            DecorationLayerResource(tmp_path / "missing.png", "cover", condition="qr"),
+        ),
+        False,
+        tintable=False,
+    )
+    small = ResolvedOutputSpecification("16:10", (320, 200))
+    large = ResolvedOutputSpecification("16:10", (640, 400))
+    configuration = _configuration(
+        _FONT_REGISTRY, decorations={"frame": decoration}, min_font_size=12, max_font_size=32
+    )
+    snapshot = replace(make_snapshot("lora", source=None, attribution=None), decoration="frame")
+    metadata = {}
+    variants = _prepare_daily_image_variants(
+        snapshot,
+        (CompositionVisibility(),),
+        configuration,
+        (small, large),
+        selection_revision=1,
+        on_metadata=metadata.__setitem__,
+    )
+    try:
+        assert metadata[small][0]["reconstruction"]["decoration"] == "frame"
+        assert variants[small][0].getpixel((0, 0)) == (255, 0, 0)
+        assert metadata[large][0]["reconstruction"]["decoration"] == "none"
+        assert variants[large][0].getpixel((0, 0)) == (255, 255, 255)
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
 
 
 def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_path: Path) -> None:
