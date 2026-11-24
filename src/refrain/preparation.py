@@ -532,7 +532,7 @@ def _resolve_text_color(
         configuration,
         (
             ("destination presentation", destination_preference, configuration.text_color_pools),
-            ("content entry", snapshot.text_color, configuration.text_color_pools),
+            ("content entry text_color", snapshot.text_color, configuration.text_color_pools),
             (
                 "selected background",
                 None if background is None else background.text_color,
@@ -574,7 +574,7 @@ def _resolve_decoration_tint(
         configuration,
         (
             ("destination presentation", destination_preference, configuration.decoration_color_pools),
-            ("content entry", snapshot.decoration_color, configuration.decoration_color_pools),
+            ("content entry decoration_color", snapshot.decoration_color, configuration.decoration_color_pools),
             (
                 "selected background",
                 None if background is None else background.decoration_color,
