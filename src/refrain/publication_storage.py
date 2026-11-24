@@ -736,10 +736,27 @@ class PublicationStore:
                 raise PublicationStorageError(f"refusing to clean an unsafe publication object: {child}")
 
     def _cleanup_windows_directory(self, directory: Path, keep: set[str]) -> None:
-        raise PublicationStorageError(
-            f"cannot safely clean publication destination {directory}: "
-            "handle-relative, non-following cleanup is unavailable on Windows"
-        )
+        for child in directory.iterdir():
+            if child.name in keep:
+                continue
+            status = child.lstat()
+            if _is_redirect(child, status):
+                tag = getattr(status, "st_reparse_tag", 0)
+                if tag and tag not in (0xA0000003, 0xA000000C):
+                    raise PublicationStorageError(f"refusing to clean an unknown reparse point: {child}")
+                if getattr(status, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_DIRECTORY", 0x10):
+                    child.rmdir()
+                else:
+                    child.unlink()
+            elif stat.S_ISDIR(status.st_mode):
+                if os.path.ismount(child):
+                    raise PublicationStorageError(f"refusing to traverse a mounted publication object: {child}")
+                self._cleanup_windows_directory(child, set())
+                child.rmdir()
+            elif stat.S_ISREG(status.st_mode):
+                child.unlink()
+            else:
+                raise PublicationStorageError(f"refusing to clean an unsafe publication object: {child}")
 
     def publish(
         self,

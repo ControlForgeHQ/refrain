@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -384,7 +385,7 @@ def test_cleanup_rejects_directory_replaced_by_symlink(tmp_path, monkeypatch, sy
     assert store.read_current("screen").manifest == manifest
 
 
-def test_windows_cleanup_fails_closed_before_traversal_or_deletion(tmp_path, monkeypatch) -> None:
+def test_windows_cleanup_removes_nested_contents_without_following_links(tmp_path, symlink_or_skip) -> None:
     store = PublicationStore(tmp_path / "publish")
     destination = store.root / "screen"
     outside = tmp_path / "outside"
@@ -397,25 +398,56 @@ def test_windows_cleanup_fails_closed_before_traversal_or_deletion(tmp_path, mon
     unknown.mkdir()
     (unknown / "data").write_bytes(b"preserve")
 
-    def deny_enumeration(_path):
-        raise AssertionError("Windows cleanup must not enumerate any path")
-
-    monkeypatch.setattr(type(destination), "iterdir", deny_enumeration)
-    with pytest.raises(PublicationStorageError, match="non-following cleanup is unavailable"):
-        store._cleanup_windows_directory(destination, {".refrain-owned"})
-    assert (unknown / "data").read_bytes() == b"preserve"
+    symlink_or_skip(unknown / "link", sentinel)
+    symlink_or_skip(unknown / "directory-link", outside, directory=True)
+    store._cleanup_windows_directory(destination, {".refrain-owned"})
+    assert not unknown.exists()
+    assert (destination / ".refrain-owned").is_file()
     assert sentinel.read_bytes() == b"preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junctions are unavailable")
+def test_owned_cleanup_unlinks_windows_junction_without_following_target(tmp_path) -> None:
+    store = PublicationStore(tmp_path / "publish")
+    with Image.new("RGB", OUTPUT.requested_output_size) as image:
+        store.publish("screen", image, transient("old"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"preserve")
+    junction = store.root / "screen" / "junction"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        check=True,
+        capture_output=True,
+    )
+    assert junction.is_junction()
+    with Image.new("RGB", OUTPUT.requested_output_size) as image:
+        manifest = store.publish("screen", image, transient("new"))
+    assert not junction.exists()
+    assert sentinel.read_bytes() == b"preserve"
+    assert store.read_current("screen").manifest == manifest
+    assert {path.name for path in junction.parent.iterdir()} == {
+        ".refrain-owned",
+        "manifest.json",
+        "new.json",
+        "new.png",
+    }
 
 
 def test_windows_cleanup_failure_preserves_verified_commit(tmp_path, monkeypatch, caplog) -> None:
     store = PublicationStore(tmp_path / "publish")
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         store.publish("screen", image, transient("old"))
-    monkeypatch.setattr(store, "_cleanup_contents", store._cleanup_windows_directory)
+
+    def fail_cleanup(*_args):
+        raise PublicationStorageError("injected cleanup failure")
+
+    monkeypatch.setattr(store, "_cleanup_contents", fail_cleanup)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         manifest = store.publish("screen", image, transient("new"))
     assert "cleanup failed" in caplog.text
-    assert "non-following cleanup is unavailable" in caplog.text
+    assert "injected cleanup failure" in caplog.text
     assert manifest.publication_id == "new"
     assert store.read_current("screen").manifest == manifest
     assert (store.root / "screen" / "old.png").is_file()

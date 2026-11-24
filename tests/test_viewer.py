@@ -613,11 +613,7 @@ def test_publication_input_rejects_oversized_documents(tmp_path: Path, monkeypat
 def test_publication_input_converts_deep_json_recursion_to_cli_error(tmp_path: Path) -> None:
     path = tmp_path / "publication.json"
     nested = b"[" * 10000 + b"0" + b"]" * 10000
-    path.write_bytes(
-        b'{"schema_version":1,"publication":'
-        + nested
-        + b"}"
-    )
+    path.write_bytes(b'{"schema_version":1,"publication":' + nested + b"}")
 
     with pytest.raises(viewer.ViewerError, match="invalid publication metadata JSON"):
         viewer._read_publication_metadata(path)

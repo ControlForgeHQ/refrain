@@ -105,9 +105,7 @@ def _request(specifications, payloads, *, preflight=True):
             {"specification": control_module._spec_to_wire(spec), "encoding": "png", "length": len(payload)}
             for spec, payload in payloads.items()
         ],
-        "associations": {
-            key: {"audience": "internal", "image": indices[spec]} for key, spec in specifications.items()
-        },
+        "associations": {key: {"audience": "internal", "image": indices[spec]} for key, spec in specifications.items()},
     }
 
 
@@ -835,9 +833,7 @@ def test_server_rejects_resource_limits_before_image_transfer(runtime, limit, mo
         "operation": "publish",
         "target": identifiers,
         "specifications": {identifier: specification for identifier in identifiers},
-        "images": [
-            {"specification": specification, "encoding": "png", "length": length} for length in lengths
-        ],
+        "images": [{"specification": specification, "encoding": "png", "length": length} for length in lengths],
         "associations": {
             identifier: {"audience": "internal", "image": index} for index, identifier in enumerate(identifiers)
         },

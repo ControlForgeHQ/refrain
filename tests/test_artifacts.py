@@ -267,9 +267,12 @@ def test_cache_associates_rendered_qr_and_shares_identical_payloads(store, snaps
         1, snapshot, (key,), snapshot=_committed(snapshot), checkpoint=checkpoint, qr_declaration=internal
     )
     assert recovered.variant_for(key).load_association(0)["rendered_qr"] == internal
-    assert store.load(
-        1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot), checkpoint=checkpoint, qr_declaration=None
-    ) is None
+    assert (
+        store.load(
+            1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot), checkpoint=checkpoint, qr_declaration=None
+        )
+        is None
+    )
 
 
 def test_equivalent_specifications_are_deduplicated_and_expected_set_is_exact(store, snapshot, images) -> None:
@@ -571,15 +574,10 @@ def test_failed_publication_never_exposes_partial_set(store, snapshot, images, m
 
     if existing:
         assert (_group_directory(previous) / "manifest.json").read_bytes() == previous_manifest
-        assert (
-            ArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
-            == previous
-        )
+        assert ArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot)) == previous
     else:
         try:
-            result = ArtifactStore(store.root).load(
-                1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot)
-            )
+            result = ArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
         except ArtifactValidationError:
             result = None
         assert result is None
@@ -863,10 +861,7 @@ def test_cleanup_failure_is_reported_without_invalidating_current(
             patch.setattr(artifacts, "_sync_directory", fail)
         with pytest.raises(ArtifactCleanupError, match="cleanup denied"):
             store.cleanup(2)
-    assert (
-        ArtifactStore(store.root).load(2, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
-        == current
-    )
+    assert ArtifactStore(store.root).load(2, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot)) == current
 
 
 @pytest.mark.parametrize("revision", [0, -1, True, "1"])
