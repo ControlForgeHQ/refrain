@@ -898,8 +898,18 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     assert len(workspace.history_records()) == 1
     assert display.sizes == [(1600, 1200)] and display.closed == 1
     assert display.images[0].getpixel((1467, 1067)) == (255, 255, 255)
-    assert display.images[0].getpixel((1479, 1079)) == (0, 0, 0)
+    assert display.images[0].getpixel((1479, 1079)) == (255, 255, 255)
+    checkpoint = json.loads(workspace.state.with_name("publication.json").read_text(encoding="utf-8"))
+    assert checkpoint["content"]["qr"] == []
     assert len(png_files(workspace.artifacts)) == 3
+
+
+def test_startup_renders_explicit_internal_qr(workspace: Workspace) -> None:
+    ordinary(workspace, extra='qr:\n  - visibility: [internal]\n    payload: "example"\n')
+    _, display = workspace.run(at(10, 7))
+    checkpoint = json.loads(workspace.state.with_name("publication.json").read_text(encoding="utf-8"))
+    assert checkpoint["content"]["qr"] == [{"visibility": ["internal"], "payload": "example"}]
+    assert display.images[0].getpixel((1479, 1079)) == (0, 0, 0)
 
 
 def test_daily_snapshot_does_not_persist_qr_rendering_parameters(workspace: Workspace) -> None:
@@ -1586,11 +1596,16 @@ def test_loaded_images_are_closed(workspace: Workspace, monkeypatch) -> None:
 
 def test_artifact_failure_preserves_selection(workspace: Workspace) -> None:
     ordinary(workspace)
-    workspace.artifacts.parent.mkdir(exist_ok=True)
+    workspace.run(at(10, 8))
+    state_bytes = workspace.state.read_bytes()
+    history_bytes = workspace.history.read_bytes()
+    shutil.rmtree(workspace.artifacts)
     workspace.artifacts.write_text("a file, not a directory", encoding="utf-8")
     with pytest.raises(ApplicationError, match="artifact"):
         workspace.run(at(10, 8))
     assert workspace.load().revision == 1
+    assert workspace.state.read_bytes() == state_bytes
+    assert workspace.history.read_bytes() == history_bytes
 
 
 def test_uncertain_commit_publication_is_resolved_by_reloading(workspace: Workspace, monkeypatch) -> None:

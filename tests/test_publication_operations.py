@@ -214,6 +214,69 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         coordinator.close()
 
 
+@pytest.mark.parametrize("outcome", ["replacement-error", "cleanup-error", "unconfirmed"])
+def test_publish_backend_acknowledges_only_verified_commits(tmp_path, monkeypatch, caplog, outcome: str) -> None:
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+
+    configuration = _configuration("publish", (("screen", _WIDE),))
+    store = PublicationStore(tmp_path / "publications")
+    coordinator = DisplayPublicationCoordinator(
+        (configuration,), lambda _configuration: FilesystemPublicationDisplayBackend(store), retry=False
+    )
+    prepared = _prepared_metadata()
+    try:
+        coordinator.publish_with_metadata((4, 0), _images(_WIDE, value=1), {_WIDE: prepared})
+        assert coordinator.wait_for_publication((4, 0), timeout=2)
+        old = store.read_current("screen")
+        replace = store._replace_manifest
+        read_current = store.read_current
+        replaced = False
+
+        def replace_then_raise(source, target):
+            nonlocal replaced
+            replace(source, target)
+            replaced = True
+            raise OSError("replacement interrupted")
+
+        def read_with_unavailable_verification(destination):
+            if replaced:
+                raise PublicationStorageError("injected verification failure")
+            return read_current(destination)
+
+        if outcome != "cleanup-error":
+            monkeypatch.setattr(store, "_replace_manifest", replace_then_raise)
+        if outcome == "cleanup-error":
+
+            def fail_cleanup(*_args):
+                raise PublicationStorageError("injected cleanup failure")
+
+            monkeypatch.setattr(store, "_cleanup_contents", fail_cleanup)
+        if outcome == "unconfirmed":
+            monkeypatch.setattr(store, "read_current", read_with_unavailable_verification)
+
+        coordinator.publish_with_metadata((4, 1), _images(_WIDE, value=2), {_WIDE: prepared})
+        if outcome == "unconfirmed":
+            assert not coordinator.wait_for_publication((4, 1), timeout=2)
+            assert coordinator.acknowledgements == {"screen": (4, 0)}
+            success, message = coordinator.publication_results((4, 1))["screen"]
+            assert not success
+            assert "uncertain" in message
+            assert (store.root / "screen" / old.manifest.image_filename).is_file()
+        else:
+            assert coordinator.wait_for_publication((4, 1), timeout=2)
+            assert coordinator.acknowledgements == {"screen": (4, 1)}
+            expected_warning = (
+                "cleanup failed" if outcome == "cleanup-error" else "committed despite a replacement error"
+            )
+            assert expected_warning in caplog.text
+        current = read_current("screen")
+        assert current.manifest != old.manifest
+        with Image.open(BytesIO(current.image)) as published:
+            assert published.getpixel((0, 0)) == (2, 0, 0)
+    finally:
+        coordinator.close()
+
+
 def test_scheduled_publish_without_prepared_metadata_fails_without_acknowledgement(tmp_path) -> None:
     from refrain.display.publication import FilesystemPublicationDisplayBackend
 

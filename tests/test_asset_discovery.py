@@ -939,11 +939,11 @@ def test_qr_placement_metadata_does_not_exclude_decoration_and_policy_is_loaded(
         },
     )
     config_data = _config_data()
-    config_data["presentation"] = {"qr": {"enabled": False}}
+    config_data["presentation"] = {"qr": {"external": "external payload", "internal": None}}
 
     config = load_application_config(_write_config(tmp_path / "config.yaml", config_data))
 
-    assert config.qr_enabled is False
+    assert dict(config.qr_defaults) == {"external": "external payload", "internal": None}
     decoration = config.decorations["frame"]
     assert decoration.qr_ready is False
     assert decoration.qr_positioning == {

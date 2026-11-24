@@ -155,6 +155,7 @@ def test_initial_publish_replacement_hash_verification_and_destination_isolation
     assert current.manifest == second_manifest
     assert current.metadata["publication"]["id"] == "publication-2"
     assert sorted(path.name for path in (store.root / "screen").iterdir()) == [
+        ".refrain-owned",
         "manifest.json",
         "publication-2.json",
         "publication-2.png",
@@ -246,7 +247,7 @@ def test_precommit_failures_preserve_the_previous_dataset(
 
 
 def test_replacement_failure_after_os_replace_reports_committed_dataset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
@@ -258,14 +259,16 @@ def test_replacement_failure_after_os_replace_reports_committed_dataset(
         raise OSError("post-replacement interruption")
 
     monkeypatch.setattr(store, "_replace_manifest", replace_then_fail)
-    with _image(2) as image, pytest.raises(PublicationStorageError, match="post-commit") as error:
-        store.publish("screen", image, _metadata("new"), audience="internal")
-    assert error.value.published is True
-    assert store.read_current("screen").manifest.publication_id == "new"
+    with _image(2) as image:
+        manifest = store.publish("screen", image, _metadata("new"), audience="internal")
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "new"
+    assert "committed despite a replacement error" in caplog.text
+    assert "post-replacement interruption" in caplog.text
 
 
 def test_postcommit_cleanup_failure_keeps_the_new_dataset_valid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
@@ -275,16 +278,20 @@ def test_postcommit_cleanup_failure_keeps_the_new_dataset_valid(
         "_cleanup_contents",
         lambda *_args: (_ for _ in ()).throw(PublicationStorageError("cleanup interrupted")),
     )
-    with _image(2) as image, pytest.raises(PublicationStorageError, match="cleanup failed") as error:
-        store.publish("screen", image, _metadata("new"), audience="internal")
-    assert error.value.published is True
-    assert store.read_current("screen").manifest.publication_id == "new"
+    with _image(2) as image:
+        manifest = store.publish("screen", image, _metadata("new"), audience="internal")
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "new"
+    assert "cleanup failed" in caplog.text
+    assert "cleanup interrupted" in caplog.text
+    assert (store.root / "screen" / "old.png").is_file()
 
 
-def test_stale_temporary_contents_are_reconciled_without_touching_unknown_files(tmp_path: Path) -> None:
+def test_stale_and_unknown_contents_in_owned_directory_are_reconciled(tmp_path: Path) -> None:
     root = tmp_path / "publish"
     destination = root / "screen"
     destination.mkdir(parents=True)
+    (destination / ".refrain-owned").touch()
     (destination / "orphan.png").write_bytes(b"interrupted image")
     stale = destination / (".refrain-" + "0" * 32 + ".manifest.tmp")
     stale.write_bytes(b"interrupted manifest")
@@ -295,14 +302,15 @@ def test_stale_temporary_contents_are_reconciled_without_touching_unknown_files(
     assert not stale.exists()
 
     unknown = destination / "user-file.txt"
-    unknown.write_text("preserve")
-    with _image(1) as image, pytest.raises(PublicationStorageError, match="unrecognized"):
+    unknown.write_text("obsolete")
+    with _image(1) as image:
         store.publish("screen", image, _metadata("next"), audience="internal")
-    assert unknown.read_text() == "preserve"
+    assert not unknown.exists()
+    assert store.read_current("screen").manifest.publication_id == "next"
 
 
 @pytest.mark.parametrize("corruption", ["malformed", "missing-image", "bad-hash"])
-def test_invalid_existing_publication_is_reported_without_replacement(tmp_path: Path, corruption: str) -> None:
+def test_owned_invalid_publication_can_be_replaced(tmp_path: Path, corruption: str) -> None:
     store = _store(tmp_path / "publish")
     with _image() as image:
         store.publish("screen", image, _metadata("old"), audience="internal")
@@ -318,12 +326,15 @@ def test_invalid_existing_publication_is_reported_without_replacement(tmp_path: 
         document["image_sha256"] = "0" * 64
         manifest_path.write_bytes(json.dumps(document).encode())
     damaged_manifest = manifest_path.read_bytes()
-
-    with _image(1) as image, pytest.raises(PublicationStorageError):
-        store.publish("screen", image, _metadata("next"), audience="internal")
-    assert manifest_path.read_bytes() == damaged_manifest
     if corruption == "malformed":
         assert original_manifest != damaged_manifest
+    with pytest.raises(PublicationStorageError):
+        store.read_current("screen")
+    with _image(1) as image:
+        manifest = store.publish("screen", image, _metadata("next"), audience="internal")
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "next"
+    assert (store.root / "screen" / ".refrain-owned").read_bytes() == b""
 
 
 def test_manifest_swap_exposes_only_complete_old_or_new_datasets(
@@ -405,18 +416,10 @@ def test_unverifiable_manifest_replacement_retains_old_and_new_files(
     store = _store(tmp_path / "publish")
     with _image(1) as image:
         store.publish("screen", image, _metadata("old"), audience="internal")
-    read_file = publication_storage_module._read_regular_file
-    manifest_reads = 0
-
-    def fail_commit_verification(path: Path, *, limit: int | None = None) -> bytes:
-        nonlocal manifest_reads
-        if path.name == "manifest.json":
-            manifest_reads += 1
-            if manifest_reads == 2:
-                raise PublicationStorageError("injected manifest read failure")
-        return read_file(path, limit=limit)
-
-    monkeypatch.setattr(publication_storage_module, "_read_regular_file", fail_commit_verification)
+    read_current = store.read_current
+    monkeypatch.setattr(
+        store, "read_current", lambda *_args: (_ for _ in ()).throw(PublicationStorageError("verification unavailable"))
+    )
     replace = store._replace_manifest
 
     def replace_then_fail(temporary: Path, manifest: Path) -> None:
@@ -430,7 +433,7 @@ def test_unverifiable_manifest_replacement_retains_old_and_new_files(
     assert error.value.published is True
     assert (store.root / "screen" / "old.png").is_file()
     assert (store.root / "screen" / "new.png").is_file()
-    monkeypatch.setattr(publication_storage_module, "_read_regular_file", read_file)
+    monkeypatch.setattr(store, "read_current", read_current)
     assert store.read_current("screen").manifest.publication_id == "new"
 
 
@@ -531,28 +534,19 @@ def test_custom_root_cannot_be_nested_under_standard_publication_storage(tmp_pat
     assert not paths.publish_directory.exists()
 
 
-def test_cleanup_validates_all_candidates_before_deleting_any(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_rejects_invalid_marker_before_deleting_any(tmp_path: Path) -> None:
     root = tmp_path / "publish"
     destination = root / "screen"
     destination.mkdir(parents=True)
     obsolete = destination / "obsolete.png"
-    obsolete.write_bytes(b"keep until all candidates validate")
-    unexpected = destination / "notes.txt"
-    unexpected.write_text("unowned", encoding="utf-8")
+    obsolete.write_bytes(b"keep")
+    marker = destination / ".refrain-owned"
+    marker.write_bytes(b"invalid")
     store = _store(root)
-    original_iterdir = Path.iterdir
-
-    def ordered_iterdir(path: Path):
-        if path == destination:
-            return iter((obsolete, unexpected))
-        return original_iterdir(path)
-
-    monkeypatch.setattr(Path, "iterdir", ordered_iterdir)
-
-    with pytest.raises(PublicationStorageError, match="unrecognized"):
+    with pytest.raises(PublicationStorageError, match="ownership marker"):
         store._cleanup_contents(destination, {"manifest.json"})
-
-    assert obsolete.read_bytes() == b"keep until all candidates validate"
+    assert obsolete.read_bytes() == b"keep"
+    assert marker.read_bytes() == b"invalid"
 
 
 def test_cleanup_rejects_a_destination_outside_its_publication_root(tmp_path: Path) -> None:

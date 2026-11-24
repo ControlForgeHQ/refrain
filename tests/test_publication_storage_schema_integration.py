@@ -230,8 +230,25 @@ def test_unmarked_invalid_dataset_is_not_adopted_or_changed(tmp_path) -> None:
     assert not (destination / ".refrain-owned").exists()
 
 
+def test_unmarked_unknown_directory_is_not_adopted_or_cleaned(tmp_path) -> None:
+    store = PublicationStore(tmp_path / "publish")
+    destination = store.root / "screen"
+    unknown = destination / "unknown"
+    unknown.mkdir(parents=True)
+    sentinel = unknown / "data.bin"
+    sentinel.write_bytes(b"preserve")
+    with Image.new("RGB", OUTPUT.requested_output_size) as image:
+        with pytest.raises(PublicationStorageError, match="cannot adopt"):
+            store.publish("screen", image, transient("new"))
+    assert sentinel.read_bytes() == b"preserve"
+    assert not (destination / ".refrain-owned").exists()
+    assert not (destination / "manifest.json").exists()
+
+
 @pytest.mark.parametrize(
-    "invalid_manifest", [b'{"schema_version":1,"publication_id":"old"}', b"x" * (64 * 1024 + 1), b"\xff"]
+    "invalid_manifest",
+    [b'{"schema_version":1,"publication_id":"old"}', b"x" * (64 * 1024 + 1), b"\xff"],
+    ids=["legacy", "oversized", "invalid-utf8"],
 )
 def test_owned_invalid_dataset_survives_precommit_failure(tmp_path, monkeypatch, invalid_manifest) -> None:
     store = PublicationStore(tmp_path / "publish")
@@ -250,7 +267,7 @@ def test_owned_invalid_dataset_survives_precommit_failure(tmp_path, monkeypatch,
     assert (destination / ".refrain-owned").is_file()
 
 
-def test_oversized_manifest_ambiguous_replacement_is_verified(tmp_path, monkeypatch) -> None:
+def test_oversized_manifest_ambiguous_replacement_is_verified(tmp_path, monkeypatch, caplog) -> None:
     store = PublicationStore(tmp_path / "publish")
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         store.publish("screen", image, transient("old"))
@@ -263,10 +280,10 @@ def test_oversized_manifest_ambiguous_replacement_is_verified(tmp_path, monkeypa
 
     monkeypatch.setattr(store, "_replace_manifest", replace_then_raise)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
-        with pytest.raises(PublicationStorageError, match="post-commit") as error:
-            store.publish("screen", image, transient("new"))
-    assert error.value.published
-    assert store.read_current("screen").manifest.publication_id == "new"
+        manifest = store.publish("screen", image, transient("new"))
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "new"
+    assert "committed despite a replacement error" in caplog.text
 
 
 def test_complete_unmarked_dataset_can_be_adopted(tmp_path) -> None:
@@ -333,7 +350,7 @@ def test_owned_cleanup_unlinks_contained_links_without_following_targets(tmp_pat
 
 
 @pytest.mark.skipif(os.name == "nt" or not hasattr(os, "O_NOFOLLOW"), reason="POSIX descriptor-based cleanup")
-def test_cleanup_rejects_directory_replaced_by_symlink(tmp_path, monkeypatch, symlink_or_skip) -> None:
+def test_cleanup_rejects_directory_replaced_by_symlink(tmp_path, monkeypatch, symlink_or_skip, caplog) -> None:
     store = PublicationStore(tmp_path / "publish")
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         store.publish("screen", image, transient("old"))
@@ -360,11 +377,11 @@ def test_cleanup_rejects_directory_replaced_by_symlink(tmp_path, monkeypatch, sy
 
     monkeypatch.setattr(os, "open", replace_before_open)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
-        with pytest.raises(PublicationStorageError, match="cleanup failed") as error:
-            store.publish("screen", image, transient("new"))
-    assert changed and error.value.published
+        manifest = store.publish("screen", image, transient("new"))
+    assert changed
+    assert "cleanup failed" in caplog.text
     assert sentinel.read_bytes() == b"preserve"
-    assert store.read_current("screen").manifest.publication_id == "new"
+    assert store.read_current("screen").manifest == manifest
 
 
 def test_windows_cleanup_fails_closed_before_traversal_or_deletion(tmp_path, monkeypatch) -> None:
@@ -390,29 +407,29 @@ def test_windows_cleanup_fails_closed_before_traversal_or_deletion(tmp_path, mon
     assert sentinel.read_bytes() == b"preserve"
 
 
-def test_windows_cleanup_failure_preserves_verified_commit(tmp_path, monkeypatch) -> None:
+def test_windows_cleanup_failure_preserves_verified_commit(tmp_path, monkeypatch, caplog) -> None:
     store = PublicationStore(tmp_path / "publish")
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         store.publish("screen", image, transient("old"))
     monkeypatch.setattr(store, "_cleanup_contents", store._cleanup_windows_directory)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
-        with pytest.raises(PublicationStorageError, match="cleanup failed") as error:
-            store.publish("screen", image, transient("new"))
-    assert error.value.published
-    assert store.read_current("screen").manifest.publication_id == "new"
+        manifest = store.publish("screen", image, transient("new"))
+    assert "cleanup failed" in caplog.text
+    assert "non-following cleanup is unavailable" in caplog.text
+    assert manifest.publication_id == "new"
+    assert store.read_current("screen").manifest == manifest
     assert (store.root / "screen" / "old.png").is_file()
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes are unavailable")
-def test_cleanup_rejects_special_files_without_invalidating_committed_dataset(tmp_path) -> None:
+def test_cleanup_rejects_special_files_without_invalidating_committed_dataset(tmp_path, caplog) -> None:
     store = PublicationStore(tmp_path / "publish")
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         store.publish("screen", image, transient("old"))
     fifo = store.root / "screen" / "pipe"
     os.mkfifo(fifo)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
-        with pytest.raises(PublicationStorageError, match="cleanup failed") as error:
-            store.publish("screen", image, transient("new"))
-    assert error.value.published
+        manifest = store.publish("screen", image, transient("new"))
+    assert "cleanup failed" in caplog.text
     assert fifo.exists()
-    assert store.read_current("screen").manifest.publication_id == "new"
+    assert store.read_current("screen").manifest == manifest

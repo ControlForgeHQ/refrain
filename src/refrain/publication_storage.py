@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import stat
@@ -38,6 +39,7 @@ _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _TEMPORARY = re.compile(r"\.refrain-[0-9a-f]{32}\.manifest\.tmp\Z")
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_METADATA_BYTES = 16 * 1024 * 1024
+_LOGGER = logging.getLogger(__name__)
 
 
 def _generated_publication_name(name: str) -> bool:
@@ -856,10 +858,7 @@ class PublicationStore:
                         f"temporary cleanup also failed: {cleanup_error}"
                     ) from error
                 raise PublicationStorageError(f"publication failed before manifest commit: {error}") from error
-            raise PublicationStorageError(
-                f"publication manifest was replaced but a post-commit operation failed: {error}",
-                published=True,
-            ) from error
+            _LOGGER.warning("Publication %s was committed despite a replacement error: %s", publication_id, error)
 
         try:
             verified = self.read_current(destination_id)
@@ -876,8 +875,9 @@ class PublicationStore:
             self._cleanup_contents(destination, {".refrain-owned", "manifest.json", image_filename, metadata_filename})
             _sync_directory(destination)
         except PublicationStorageError as error:
-            raise PublicationStorageError(
-                f"publication committed successfully but obsolete-file cleanup failed: {error}",
-                published=True,
-            ) from error
+            _LOGGER.warning(
+                "Publication %s committed successfully but obsolete-file cleanup failed; retry cleanup: %s",
+                publication_id,
+                error,
+            )
         return manifest

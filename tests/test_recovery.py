@@ -43,9 +43,8 @@ from refrain import (
 from refrain import (
     recover_prepared_daily_images as _recover_daily_images,
 )
-from refrain.config import BackgroundResource
 from refrain.checkpoint import build_content_checkpoint
-from refrain.persistence import PersistentState
+from refrain.config import BackgroundResource
 from refrain.preparation import resolve_canonical_presentation
 
 _STAGES = (
