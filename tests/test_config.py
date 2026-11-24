@@ -194,7 +194,7 @@ def test_publish_destination_directory_ids_are_case_insensitively_unique(tmp_pat
                     "resolution": [320, 200],
                 },
                 {
-                    "id": "WEB-PUBLIC",
+                    "id": "WEB-EXTERNAL",
                     "type": "publish",
                     "audience": "internal",
                     "aspect_ratio": "16:10",
@@ -1183,7 +1183,7 @@ def test_each_destination_type_preserves_explicit_audience(tmp_path: Path, backe
     assert config.display_backends[0].outputs[0].audience == audience
 
 
-@pytest.mark.parametrize("audience", [None, "", "internal", 1, True, [], {}])
+@pytest.mark.parametrize("audience", [None, "", "public", "private", 1, True, [], {}])
 def test_invalid_destination_audience_is_a_configuration_error(tmp_path: Path, audience: object) -> None:
     data = configuration_data(destinations=[{"id": "desktop", "type": "window", "audience": audience}])
 

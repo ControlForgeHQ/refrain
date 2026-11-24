@@ -2906,8 +2906,7 @@ def test_command_line_defaults_to_continuous_and_restores_signal_handlers(worksp
     import refrain.__main__ as command_line
 
     workspace.config.write_text(
-        _CONFIG
-        + "\nstorage:\n  state: state/state.json\n  history: state/global-history.jsonl\n  artifacts: artifacts\n",
+        _CONFIG + "\nstorage:\n  state: state\n  artifacts: artifacts\n",
         encoding="utf-8",
     )
     calls = []

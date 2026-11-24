@@ -242,7 +242,8 @@ def publication_protected_paths(
         )
         if configuration.storage.state is not None:
             protected.update(
-                configuration.storage.state / name for name in ("state.json", "global-history.jsonl", "publication.json")
+                configuration.storage.state / name
+                for name in ("state.json", "global-history.jsonl", "publication.json")
             )
         protected.add(config_directory / "assets")
         protected.update(config_directory / "assets" / category for category in ("fonts", "backgrounds", "decorations"))

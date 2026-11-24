@@ -784,7 +784,7 @@ def test_metadata_cannot_redirect_client_to_arbitrary_endpoint(runtime, monkeypa
 def test_client_refuses_insecure_or_symlink_metadata(runtime):
     path, _, _, _, _, _ = runtime
     path.chmod(0o644)
-    with pytest.raises(RuntimeProtocolError, match="not internal"):
+    with pytest.raises(RuntimeProtocolError, match="not private"):
         RuntimeControlClient(path).discover()
     path.chmod(0o600)
     link = path.parent / "link"

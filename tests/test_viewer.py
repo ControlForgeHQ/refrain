@@ -325,7 +325,7 @@ def test_default_entry_selects_medium_preview_and_explicit_selector_matches(tmp_
     explicit_entry, explicit_quote = viewer._select_entry(configuration, ("@preview", 2))
 
     assert default_arguments.entry is None
-    assert default_entry.id == explicit_entry.id == "@preview"
+    assert default_entry.id == explicit_entry.id == "preview"
     assert default_quote == explicit_quote
     assert default_quote.text != viewer._PREVIEW_ENTRY.quotations[0].text
     assert len(viewer._PREVIEW_ENTRY.quotations) >= 3
