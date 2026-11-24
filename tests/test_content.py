@@ -334,6 +334,30 @@ def test_color_sequence_recovers_individual_candidates(
     assert "entry is excluded" not in caplog.text
 
 
+def test_mixed_color_library_reports_candidate_and_entry_exclusions(tmp_path: Path, caplog) -> None:
+    invalid = write_entry(tmp_path / "invalid.yaml", entry_data(id="invalid", text_color=[]))
+    recoverable = write_entry(
+        tmp_path / "recoverable.yaml",
+        entry_data(id="recoverable", text_color=["bad color", "black"], decoration_color=["@bad/pool", "@missing"]),
+    )
+    untouched = write_entry(tmp_path / "untouched.yaml", entry_data(id="untouched"))
+    original = {path: path.read_bytes() for path in (invalid, recoverable, untouched)}
+
+    entries = load_content_library(tmp_path)
+
+    assert [entry.id for entry in entries] == ["recoverable", "untouched"]
+    assert entries[0].text_color == ("black",)
+    assert entries[0].decoration_color == ("@missing",)
+    assert entries[1].text_color is None and entries[1].decoration_color is None
+    assert f"{invalid}: text_color:" in caplog.text and "this entry is excluded" in caplog.text
+    assert f"{recoverable}: text_color[0]:" in caplog.text
+    assert f"{recoverable}: decoration_color[0]:" in caplog.text
+    assert all(
+        "entry is excluded" not in record.message for record in caplog.records if str(recoverable) in record.message
+    )
+    assert all(path.read_bytes() == contents for path, contents in original.items())
+
+
 @pytest.mark.parametrize(
     "preferences",
     [

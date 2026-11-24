@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import date, time
 from pathlib import Path
 from random import Random
 
 import pytest
+import yaml
 from PIL import Image, ImageFont
 
 import refrain.preparation as preparation
@@ -19,13 +21,18 @@ from refrain import (
     DisplayBackendConfiguration,
     DisplayOutputConfiguration,
     FontResource,
+    PersistentStateStore,
     PreparedImageVariantKey,
     PresentationInsets,
     PresentationOverrides,
     ResolvedOutputSpecification,
     RevealSchedule,
     SchedulingContext,
+    build_eligible_quotation_pool,
+    build_presentation_snapshot,
+    load_content_library,
     resolve_reveal_stages,
+    select_quotation,
 )
 from refrain import (
     prepare_daily_images as _prepare_daily_image_variants,
@@ -1230,6 +1237,173 @@ def test_unusable_background_color_preferences_fall_through_to_decoration_or_glo
     assert text_color == (0, 0, 255)
     assert decoration_color == (0, 0, 255)
     assert "selected background" in caplog.text
+
+
+@pytest.mark.parametrize("field", ["text_color", "decoration_color"])
+@pytest.mark.parametrize(
+    ("preference", "accepted", "persisted"),
+    [
+        (["", None, "#123456"], (), None),
+        (
+            ["missing", "@missing", "blue", "blue", False],
+            ("missing", "@missing", "blue", "blue"),
+            [
+                "missing",
+                "@missing",
+                "blue",
+                "blue",
+            ],
+        ),
+    ],
+)
+def test_loaded_color_preferences_normalize_only_empty_candidates_in_snapshots(
+    tmp_path: Path, field: str, preference: list[object], accepted: tuple[str, ...], persisted: list[str] | None
+) -> None:
+    content = tmp_path / "content"
+    content.mkdir()
+    (content / "entry.yaml").write_text(
+        yaml.safe_dump({"id": "entry", "quotations": ["A quotation."], field: preference}), encoding="utf-8"
+    )
+    entry = load_content_library(content)[0]
+    assert getattr(entry, field) == accepted
+    snapshot = build_presentation_snapshot(
+        _configuration(_FONT_REGISTRY), entry, entry.quotations[0], date(2026, 10, 26)
+    )
+    assert getattr(snapshot, field) == (None if persisted is None else tuple(persisted))
+
+    pool = build_eligible_quotation_pool((entry,), date(2026, 10, 26))
+    proposal = select_quotation(pool, frozenset(), Random(0))
+    store = PersistentStateStore(tmp_path / "state.json")
+    store.commit(proposal, snapshot)
+    document = json.loads(store.path.read_text(encoding="utf-8"))
+    assert document["format_version"] == 1
+    assert document["state"]["snapshot"][field] == persisted
+    recovered = PersistentStateStore(store.path).load()
+    assert recovered is not None
+    assert getattr(recovered.snapshot, field) == getattr(snapshot, field)
+
+
+def test_loaded_color_preferences_resolve_separate_pools_and_deduplicate(tmp_path: Path, caplog) -> None:
+    (tmp_path / "entry.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "entry",
+                "quotations": ["A quotation."],
+                "text_color": ["bad color", "missing", "@missing", "@shared", "blue", "blue"],
+                "decoration_color": [None, "missing", "@missing", "@shared", "burnt-orange", "burnt-orange"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = load_content_library(tmp_path)[0]
+    assert entry.text_color == ("missing", "@missing", "@shared", "blue", "blue")
+    assert entry.decoration_color == ("missing", "@missing", "@shared", "burnt-orange", "burnt-orange")
+    configuration = replace(
+        _configuration(_FONT_REGISTRY),
+        text_color_pools={"shared": ("blue", "black")},
+        decoration_color_pools={"shared": ("burnt-orange",)},
+    )
+    snapshot = build_presentation_snapshot(configuration, entry, entry.quotations[0], date(2026, 10, 26))
+    background = BackgroundResource("paper", None, False, text_color=("burnt-orange",), decoration_color=("blue",))
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        tintable=True,
+    )
+
+    class FirstChoice:
+        def __init__(self) -> None:
+            self.pools = []
+
+        def choice(self, values):
+            self.pools.append(tuple(values))
+            return values[0]
+
+    chooser = FirstChoice()
+    caplog.clear()
+    assert preparation._resolve_text_color(configuration, snapshot, decoration, background, chooser) == (0, 0, 255)
+    assert preparation._resolve_decoration_tint(
+        configuration, snapshot, decoration, chooser, decoration.layers, background=background
+    ) == (198, 90, 32)
+    assert chooser.pools == [("blue", "black"), ("burnt-orange",)]
+    for field in ("text_color", "decoration_color"):
+        assert f"Pool reference '@missing' from content entry {field} is unknown" in caplog.text
+        assert f"Palette identifier 'missing' from content entry {field} is unavailable" in caplog.text
+
+
+@pytest.mark.parametrize("preference", [["", None], ["missing", "@missing"]])
+def test_loaded_color_preferences_fall_through_after_candidate_recovery(tmp_path: Path, caplog, preference) -> None:
+    (tmp_path / "entry.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "entry",
+                "quotations": ["A quotation."],
+                "text_color": preference,
+                "decoration_color": list(preference),
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = load_content_library(tmp_path)[0]
+    configuration = _configuration(_FONT_REGISTRY)
+    snapshot = build_presentation_snapshot(configuration, entry, entry.quotations[0], date(2026, 10, 26))
+    background = BackgroundResource("paper", None, False, text_color=("blue",), decoration_color=("burnt-orange",))
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        tintable=True,
+    )
+    caplog.clear()
+    assert preparation._resolve_text_color(configuration, snapshot, decoration, background, Random(0)) == (0, 0, 255)
+    assert preparation._resolve_decoration_tint(
+        configuration, snapshot, decoration, Random(0), decoration.layers, background=background
+    ) == (198, 90, 32)
+    if preference[0] == "missing":
+        for field in ("text_color", "decoration_color"):
+            assert f"Pool reference '@missing' from content entry {field} is unknown" in caplog.text
+            assert f"Palette identifier 'missing' from content entry {field} is unavailable" in caplog.text
+    else:
+        assert not caplog.records
+
+
+def test_loaded_color_pool_references_do_not_cross_namespaces(tmp_path: Path, caplog) -> None:
+    (tmp_path / "entry.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "entry",
+                "quotations": ["A quotation."],
+                "text_color": "@decoration-only",
+                "decoration_color": "@text-only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = load_content_library(tmp_path)[0]
+    configuration = replace(
+        _configuration(_FONT_REGISTRY),
+        text_color_pools={"text-only": ("blue",)},
+        decoration_color_pools={"decoration-only": ("burnt-orange",)},
+    )
+    snapshot = build_presentation_snapshot(configuration, entry, entry.quotations[0], date(2026, 10, 26))
+    decoration = DecorationResource(
+        "frame",
+        (DecorationLayerResource(Path("/unused-layer.png"), "contain", tintable=True),),
+        False,
+        text_color=("blue",),
+        decoration_color=("burnt-orange",),
+        tintable=True,
+    )
+
+    assert preparation._resolve_text_color(configuration, snapshot, decoration, None, Random(0)) == (0, 0, 255)
+    assert preparation._resolve_decoration_tint(configuration, snapshot, decoration, Random(0), decoration.layers) == (
+        198,
+        90,
+        32,
+    )
+    assert "Pool reference '@decoration-only' from content entry text_color is unknown" in caplog.text
+    assert "Pool reference '@text-only' from content entry decoration_color is unknown" in caplog.text
 
 
 def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
