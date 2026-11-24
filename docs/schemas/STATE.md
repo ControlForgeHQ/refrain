@@ -106,7 +106,7 @@ Each stage contains exactly:
 
 | Field | Type | Constraint |
 |---|---|---|
-| `instant` | String | Absolute UTC RFC-3339 timestamp ending in `Z`. |
+| `instant` | String | Absolute UTC RFC-3339 timestamp at whole-second precision, formatted `YYYY-MM-DDTHH:MM:SSZ`; fractional seconds are not permitted. |
 | `visibility` | Object | Complete cumulative visibility for the stage. |
 
 The `visibility` object contains exactly three Boolean fields:
