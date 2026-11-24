@@ -213,6 +213,46 @@ def test_reload_does_not_reresolve_after_timezone_change(tmp_path: Path, set_loc
     assert recovered.snapshot.resolved_reveal_stages == frozen
 
 
+@pytest.mark.parametrize(
+    "instant",
+    [
+        "2026-10-26T10:00:00.0Z",
+        "2026-10-26T10:00:00.123456Z",
+        "2026-10-26T10:00:00.123456789Z",
+        "2026-10-26T10:00:00+00:00",
+        "2026-10-26t10:00:00z",
+        "2026-10-26 10:00:00Z",
+        "2026-10-26T10:00Z",
+        "2026-10-26T10:00:60Z",
+    ],
+)
+def test_frozen_stage_rejects_noncanonical_timestamp(tmp_path: Path, instant: str) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Frozen.")
+    document = json.loads(store.path.read_bytes())
+    document["state"]["snapshot"]["resolved_reveal_stages"][0]["instant"] = instant
+    _write_document(store.path, document)
+    with pytest.raises(StateRecoveryError):
+        store.load()
+
+
+def test_frozen_stage_serializes_whole_seconds_and_rejects_microseconds(tmp_path: Path) -> None:
+    snapshot = make_snapshot("Frozen.")
+    stages = snapshot.resolved_reveal_stages
+    fractional = replace(stages[0], instant=stages[0].instant.replace(microsecond=1))
+    with pytest.raises(ValueError, match="whole-second"):
+        replace(snapshot, resolved_reveal_stages=(fractional,))
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Frozen.")
+    document = json.loads(store.path.read_bytes())
+    serialized = document["state"]["snapshot"]["resolved_reveal_stages"]
+    assert all(
+        stage["instant"] == value.instant.isoformat(timespec="seconds").replace("+00:00", "Z")
+        for stage, value in zip(serialized, committed.snapshot.resolved_reveal_stages, strict=True)
+    )
+    assert store.load() == committed
+
+
 @pytest.mark.parametrize("field", ["actions", "resolved_reveal_stages"])
 def test_null_required_snapshot_fields_are_rejected_without_resolution(tmp_path: Path, monkeypatch, field: str) -> None:
     store = PersistentStateStore(tmp_path / "state.json")

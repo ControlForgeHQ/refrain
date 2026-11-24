@@ -279,6 +279,8 @@ class DailySnapshot:
                 raise ValueError("resolved_reveal_stages must contain valid resolved stages")
             if stage.instant.tzinfo is None or stage.instant.utcoffset() != timezone.utc.utcoffset(None):
                 raise ValueError("resolved reveal instant must be UTC")
+            if stage.instant.microsecond:
+                raise ValueError("resolved reveal instant must have whole-second precision")
             visibility = stage.visibility
             if not isinstance(visibility, CompositionVisibility) or any(
                 type(getattr(visibility, field)) is not bool for field in ("quotation", "source", "attribution")
@@ -706,10 +708,10 @@ def _decode_reveal_stages(value: object) -> tuple[ResolvedRevealStage, ...]:
     for item in value:
         data = _require_mapping(item, "resolved reveal stage", {"instant", "visibility"})
         instant = data["instant"]
-        if not isinstance(instant, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", instant):
-            raise ValueError("resolved reveal instant must be a UTC RFC-3339 timestamp")
-        if len(instant.removesuffix("Z").partition(".")[2]) > 6:
-            raise ValueError("resolved reveal instant precision exceeds supported microseconds")
+        if not isinstance(instant, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", instant
+        ):
+            raise ValueError("resolved reveal instant must be a whole-second UTC timestamp")
         visibility = _require_mapping(
             data["visibility"], "resolved reveal visibility", {"quotation", "source", "attribution"}
         )
@@ -787,7 +789,9 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
             "reveal_schedule": _thaw_json(snapshot.reveal_schedule),
             "resolved_reveal_stages": [
                 {
-                    "instant": stage.instant.isoformat().replace("+00:00", "Z"),
+                    "instant": (
+                        stage.instant.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                    ),
                     "visibility": {
                         "quotation": stage.visibility.quotation,
                         "source": stage.visibility.source,
