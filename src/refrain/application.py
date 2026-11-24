@@ -24,7 +24,7 @@ from .config import (
     PreparedImageVariantKey,
     load_application_config,
 )
-from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library
+from .content import ContentEntry, ContentLibraryError, Quotation, _load_effective_content_library
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .display.coordinator import (
     DisplayPublicationCoordinator,
@@ -147,7 +147,14 @@ def _select_snapshot(
     state: PersistentState | None = None,
 ) -> tuple[SelectionProposal, DailySnapshot]:
     try:
-        entries = load_content_library(configuration.content_directory)
+        entries = _load_effective_content_library(
+            configuration.content_directory,
+            day_start=configuration.day_start,
+            reveal_schedule={
+                "source": configuration.reveal.source,
+                "attribution": configuration.reveal.attribution,
+            },
+        )
     except ContentLibraryError as error:
         raise _RetryableApplicationError(f"content library is invalid: {error}") from error
 
