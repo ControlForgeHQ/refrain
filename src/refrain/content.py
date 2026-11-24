@@ -39,7 +39,7 @@ _REVEAL_FIELDS = {"source", "attribution"}
 _FONT_ROLES = {"quotation", "source", "attribution"}
 _ELIGIBILITY_FIELDS = {"ordinary", "year", "month", "day"}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-_FONT_POOL_REFERENCE = re.compile(r"@[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_POOL_REFERENCE = re.compile(r"@[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _PRESENTATION_STYLES = {"centered", "left-aligned"}
 _ACTION_VISIBILITIES = {"public", "private"}
@@ -383,6 +383,35 @@ def _validate_font_faces(
     return MappingProxyType({role: face for role, face in value.items()})
 
 
+def _validate_color_preference(
+    value: object, field: str, file: Path, diagnostics: list[ContentDiagnostic]
+) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        members = (value,)
+    elif isinstance(value, list) and value:
+        members = value
+    else:
+        _diagnose(diagnostics, file, field, "must be a string or a nonempty sequence of color candidates")
+        return None
+
+    candidates = []
+    for index, member in enumerate(members):
+        if isinstance(member, str) and (_IDENTIFIER.fullmatch(member) or _POOL_REFERENCE.fullmatch(member)):
+            candidates.append(member)
+        else:
+            candidate_field = field if isinstance(value, str) else f"{field}[{index}]"
+            _log_diagnostic(
+                ContentDiagnostic(
+                    file,
+                    candidate_field,
+                    f"invalid color candidate {member!r}; this candidate is excluded",
+                ),
+                logging.WARNING,
+                entry_excluded=False,
+            )
+    return tuple(candidates)
+
+
 def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnostic]) -> Optional[ContentEntry]:
     initial_diagnostic_count = len(diagnostics)
     if not isinstance(data, dict):
@@ -431,7 +460,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
     elif (
         not isinstance(font, str)
         or font == "none"
-        or not (_IDENTIFIER.fullmatch(font) or _FONT_POOL_REFERENCE.fullmatch(font))
+        or not (_IDENTIFIER.fullmatch(font) or _POOL_REFERENCE.fullmatch(font))
     ):
         _diagnose(
             diagnostics,
@@ -450,41 +479,16 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
     if "decoration" in data and (not isinstance(decoration, str) or not decoration.strip()):
         _diagnose(diagnostics, file, "decoration", "must be a nonempty, nonblank string when supplied")
 
-    text_color: tuple[str, ...] | None = None
-    if "text_color" in data:
-        value = data["text_color"]
-        if isinstance(value, str):
-            text_color = (value,)
-        elif isinstance(value, list) and value:
-            if all(isinstance(identifier, str) for identifier in value):
-                text_color = tuple(value)
-            else:
-                _diagnose(diagnostics, file, "text_color", "must contain only palette-identifier strings")
-        else:
-            _diagnose(
-                diagnostics,
-                file,
-                "text_color",
-                "must be a palette identifier or a nonempty sequence of palette identifiers",
-            )
-
-    decoration_color: tuple[str, ...] | None = None
-    if "decoration_color" in data:
-        value = data["decoration_color"]
-        if isinstance(value, str):
-            decoration_color = (value,)
-        elif isinstance(value, list) and value:
-            if all(isinstance(identifier, str) for identifier in value):
-                decoration_color = tuple(value)
-            else:
-                _diagnose(diagnostics, file, "decoration_color", "must contain only palette-identifier strings")
-        else:
-            _diagnose(
-                diagnostics,
-                file,
-                "decoration_color",
-                "must be a palette identifier or a nonempty sequence of palette identifiers",
-            )
+    text_color = (
+        _validate_color_preference(data["text_color"], "text_color", file, diagnostics)
+        if "text_color" in data
+        else None
+    )
+    decoration_color = (
+        _validate_color_preference(data["decoration_color"], "decoration_color", file, diagnostics)
+        if "decoration_color" in data
+        else None
+    )
 
     priority = data.get("priority", 0)
     if isinstance(priority, bool) or not isinstance(priority, int):

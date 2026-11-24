@@ -275,26 +275,63 @@ def test_decoration_color_preferences_are_preserved_without_palette_lookup(
     assert entry.decoration_color == expected
 
 
-@pytest.mark.parametrize("preference", [None, [], 1, [None], ["black", 1]])
-def test_malformed_decoration_color_preferences_reject_only_the_affected_entry(
-    tmp_path: Path, preference: object
+@pytest.mark.parametrize("field", ["text_color", "decoration_color"])
+@pytest.mark.parametrize("preference", [None, [], 1, True, 1.5, {}, {"color": "black"}])
+def test_invalid_color_declarations_reject_only_the_affected_entry(
+    tmp_path: Path, caplog, field: str, preference: object
 ) -> None:
-    write_entry(tmp_path / "invalid.yaml", entry_data(id="invalid", decoration_color=preference))
+    write_entry(tmp_path / "invalid.yaml", entry_data(id="invalid", **{field: preference}))
     write_entry(tmp_path / "valid.yaml", entry_data(id="valid"))
 
     entries = load_content_library(tmp_path)
 
     assert [entry.id for entry in entries] == ["valid"]
+    assert f"{field}: must be a string or a nonempty sequence" in caplog.text
+    assert "this entry is excluded" in caplog.text
 
 
-@pytest.mark.parametrize("preference", [None, [], 1, [None], ["black", 1]])
-def test_malformed_text_color_preferences_reject_only_the_affected_entry(tmp_path: Path, preference: object) -> None:
-    write_entry(tmp_path / "invalid.yaml", entry_data(id="invalid", text_color=preference))
-    write_entry(tmp_path / "valid.yaml", entry_data(id="valid"))
+@pytest.mark.parametrize("field", ["text_color", "decoration_color"])
+@pytest.mark.parametrize("preference", ["", " ", "_black", "bad color", "@", "@bad/pool", "@@pool", "#123456"])
+def test_invalid_scalar_color_candidate_is_excluded_without_rejecting_entry(
+    tmp_path: Path, caplog, field: str, preference: str
+) -> None:
+    path = write_entry(tmp_path / "entry.yaml", entry_data(**{field: preference}))
 
-    entries = load_content_library(tmp_path)
+    entry = load_content_library(tmp_path)[0]
 
-    assert [entry.id for entry in entries] == ["valid"]
+    assert getattr(entry, field) == ()
+    assert f"{path}: {field}: invalid color candidate {preference!r}; this candidate is excluded" in caplog.text
+    assert "entry is excluded" not in caplog.text
+
+
+@pytest.mark.parametrize("field", ["text_color", "decoration_color"])
+@pytest.mark.parametrize(
+    ("preference", "expected", "invalid_indices"),
+    [
+        ([None, "black", "@missing", "#abcdef", "black", 42], ("black", "@missing", "black"), (0, 3, 5)),
+        (["valid", False, "@valid", {}, ""], ("valid", "@valid"), (1, 3, 4)),
+        ([None, "#000000", "@", []], (), (0, 1, 2, 3)),
+    ],
+)
+def test_color_sequence_recovers_individual_candidates(
+    tmp_path: Path,
+    caplog,
+    field: str,
+    preference: list[object],
+    expected: tuple[str, ...],
+    invalid_indices: tuple[int, ...],
+) -> None:
+    path = write_entry(tmp_path / "entry.yaml", entry_data(**{field: preference}))
+    write_entry(tmp_path / "other.yaml", entry_data(id="other"))
+
+    entry, other = load_content_library(tmp_path)
+
+    assert getattr(entry, field) == expected
+    assert getattr(other, field) is None
+    assert len(caplog.records) == len(invalid_indices)
+    for index in invalid_indices:
+        assert f"{path}: {field}[{index}]: invalid color candidate {preference[index]!r}" in caplog.text
+    assert "entry is excluded" not in caplog.text
 
 
 @pytest.mark.parametrize(
