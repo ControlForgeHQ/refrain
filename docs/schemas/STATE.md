@@ -65,8 +65,8 @@ The `snapshot` object contains exactly:
 | `font_faces` | Object | Captured literary-role face preferences. |
 | `background` | String or null | Captured authored background preference; null when absent. |
 | `decoration` | String or null | Captured authored decoration preference; null when absent. |
-| `text_color` | Nonempty array of strings or null | Captured authored text-color preferences; null when absent. |
-| `decoration_color` | Nonempty array of strings or null | Captured authored decoration-color preferences; null when absent. |
+| `text_color` | Nonempty array of strings or null | Accepted text-color candidates; null when omitted or when no candidates survive content validation. |
+| `decoration_color` | Nonempty array of strings or null | Accepted decoration-color candidates; null when omitted or when no candidates survive content validation. |
 | `reveal_schedule` | Object | Complete committed effective reveal schedule. |
 | `resolved_reveal_stages` | Array of objects | Complete frozen reveal-stage sequence. |
 | `scheduling` | Object | Committed scheduling context. |
@@ -80,7 +80,7 @@ A non-null `source` or `attribution` must contain non-whitespace text. Preserve 
 
 `font_faces` maps zero or more of `quotation`, `source`, and `attribution` to valid face identifiers. No other keys are permitted.
 
-Color-preference arrays preserve their authored member order and duplicates. Their elements are valid palette identifiers or applicable named-pool references.
+Color-preference arrays preserve the original order and duplicates of retained candidates. Their elements are syntactically valid palette identifiers or applicable named-pool references; resource availability is evaluated during preparation.
 
 The snapshot contains semantic preferences, not resolved artistic resources, raster geometry, destination overrides, or publication events.
 
