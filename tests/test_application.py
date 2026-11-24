@@ -33,6 +33,7 @@ from refrain import (
     ResolvedOutputSpecification,
     StateCommitError,
     StateRecoveryError,
+    normalize_quotation,
     run_application,
     run_startup,
 )
@@ -58,7 +59,7 @@ _CONFIG = """\
 destinations:
   - id: epaper
     type: "waveshare-13in3-e"
-    audience: "private"
+    audience: "internal"
 scheduling:
   day_start: "06:00"
   reveal:
@@ -222,12 +223,12 @@ def test_resident_publication_is_hash_verified_and_reconstructs_without_content(
 source: "A Book"
 attribution: "An Author"
 actions:
-  - type: public-action
-    visibility: [public]
-    payload: public
-  - type: private-action
-    visibility: [private]
-    payload: private
+  - type: external-action
+    visibility: [external]
+    payload: external
+  - type: internal-action
+    visibility: [internal]
+    payload: internal
 quotations:
   - "A complete published quotation."
 """,
@@ -236,23 +237,23 @@ quotations:
     data = yaml.safe_load(workspace.config.read_text(encoding="utf-8"))
     data["destinations"] = [
         {
-            "id": "web-public",
+            "id": "web-external",
             "type": "publish",
-            "audience": "public",
+            "audience": "external",
             "aspect_ratio": "16:10",
             "resolution": [640, 400],
         },
         {
-            "id": "web-private",
+            "id": "web-internal",
             "type": "publish",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "16:10",
             "resolution": [640, 400],
         },
         {
             "id": "web-custom",
             "type": "publish",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "16:10",
             "resolution": [640, 400],
             "overrides": {"font": "test-font-alt"},
@@ -273,14 +274,14 @@ quotations:
     configuration = application.load_application_config(workspace.config)
     store = PublicationStore.from_configuration(configuration)
     published = {
-        identifier: store.read_current(identifier) for identifier in ("web-public", "web-private", "web-custom")
+        identifier: store.read_current(identifier) for identifier in ("web-external", "web-internal", "web-custom")
     }
     assert result.presented_stage == 1
     assert len({dataset.manifest.publication_id for dataset in published.values()}) == 3
-    assert published["web-public"].metadata["presentation"]["reveal_stage_index"] == 1
-    assert [action["type"] for action in published["web-public"].metadata["actions"]] == ["public-action"]
-    assert [action["type"] for action in published["web-private"].metadata["actions"]] == ["private-action"]
-    assert published["web-private"].metadata["reconstruction"] != published["web-custom"].metadata["reconstruction"]
+    assert published["web-external"].metadata["presentation"]["reveal_stage_index"] == 1
+    assert [action["type"] for action in published["web-external"].metadata["actions"]] == ["external-action"]
+    assert [action["type"] for action in published["web-internal"].metadata["actions"]] == ["internal-action"]
+    assert published["web-internal"].metadata["reconstruction"] != published["web-custom"].metadata["reconstruction"]
     assert published["web-custom"].metadata["destination_id"] == "web-custom"
 
     class RejectingChooser:
@@ -296,7 +297,7 @@ quotations:
         random_source=RejectingChooser(),
     )
     republished = {
-        identifier: store.read_current(identifier) for identifier in ("web-public", "web-private", "web-custom")
+        identifier: store.read_current(identifier) for identifier in ("web-external", "web-internal", "web-custom")
     }
     assert restarted.state == result.state
     assert all(
@@ -306,7 +307,7 @@ quotations:
     assert all(
         republished[identifier].metadata["presentation"]["reveal_stage_index"] == 1 for identifier in republished
     )
-    metadata_path = publication_root / "web-public" / f"{republished['web-public'].manifest.publication_id}.json"
+    metadata_path = publication_root / "web-external" / f"{republished['web-external'].manifest.publication_id}.json"
 
     shutil.rmtree(workspace.content)
     from refrain.viewer import main as viewer_main
@@ -963,9 +964,9 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
-            '  - id: desktop\n    type: "window"\n    audience: private\n'
-            '  - id: default\n    type: "image-server"\n    audience: private',
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
+            '  - id: desktop\n    type: "window"\n    audience: internal\n'
+            '  - id: default\n    type: "image-server"\n    audience: internal',
         ),
         encoding="utf-8",
     )
@@ -1417,10 +1418,10 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
     ordinary(workspace)
     workspace.config.write_text(
         _CONFIG.replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
             "  - id: default\n"
             "    type: image-server\n"
-            "    audience: private\n"
+            "    audience: internal\n"
             '    aspect_ratio: "16:10"\n'
             "    resolution: [800, 500]",
         ),
@@ -1461,12 +1462,12 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
 
     workspace.config.write_text(
         _CONFIG.replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
-            "  - id: default\n    type: image-server\n    audience: private\n"
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
+            "  - id: default\n    type: image-server\n    audience: internal\n"
             '    aspect_ratio: "16:9"\n    resolution: [800, 450]\n'
-            "  - id: kitchen\n    type: image-server\n    audience: public\n"
+            "  - id: kitchen\n    type: image-server\n    audience: external\n"
             '    aspect_ratio: "4:3"\n    resolution: [640, 480]\n'
-            "  - id: hallway\n    type: image-server\n    audience: private\n"
+            "  - id: hallway\n    type: image-server\n    audience: internal\n"
             '    aspect_ratio: "16:10"\n    resolution: [800, 500]',
         ),
         encoding="utf-8",
@@ -1496,6 +1497,7 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         state.revision,
         application.resolve_reveal_stages(state.snapshot),
         configuration.required_output_specifications,
+        snapshot=state.snapshot,
     )
     assert artifacts is not None
     assert set(artifacts.output_specifications) == set(expected_specifications.values())
@@ -1892,9 +1894,9 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
         workspace.config.read_text(encoding="utf-8")
         .replace("duration: 0", "duration: 2")
         .replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
-            '  - id: desktop\n    type: "window"\n    audience: private\n'
-            '  - id: default\n    type: "image-server"\n    audience: private',
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
+            '  - id: desktop\n    type: "window"\n    audience: internal\n'
+            '  - id: default\n    type: "image-server"\n    audience: internal',
         ),
         encoding="utf-8",
     )
@@ -2174,9 +2176,9 @@ def test_continuous_http_publication_progresses_while_another_backend_is_busy(wo
         port = listener.getsockname()[1]
     workspace.config.write_text(
         workspace.config.read_text(encoding="utf-8").replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
-            '  - id: desktop\n    type: "window"\n    audience: private\n'
-            '  - id: default\n    type: "image-server"\n    audience: private\n'
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
+            '  - id: desktop\n    type: "window"\n    audience: internal\n'
+            '  - id: default\n    type: "image-server"\n    audience: internal\n'
             f'image-server:\n  host: "127.0.0.1"\n  port: {port}',
         ),
         encoding="utf-8",
@@ -2356,8 +2358,8 @@ def test_continuous_daily_transitions_preserve_histories(workspace, monkeypatch)
     assert stages == [(1, 0), (2, 0), (3, 0), (4, 0)]
     assert state.revision == len(history) == 4
     assert [record["display_date"] for record in history] == [f"2026-03-{day:02}" for day in range(10, 14)]
-    assert len({record["quotation_identity"] for record in history[:3]}) == 3
-    assert state.repetition_history == {history[-1]["quotation_identity"]}
+    assert len({normalize_quotation(record["quotation"]) for record in history[:3]}) == 3
+    assert state.repetition_history == {normalize_quotation(history[-1]["quotation"])}
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1
     assert len(png_files(workspace.artifacts)) == 1
 
@@ -2905,8 +2907,7 @@ def test_command_line_defaults_to_continuous_and_restores_signal_handlers(worksp
     import refrain.__main__ as command_line
 
     workspace.config.write_text(
-        _CONFIG
-        + "\nstorage:\n  state: state/state.json\n  history: state/global-history.jsonl\n  artifacts: artifacts\n",
+        _CONFIG + "\nstorage:\n  state: state\n  artifacts: artifacts\n",
         encoding="utf-8",
     )
     calls = []

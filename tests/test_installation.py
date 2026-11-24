@@ -649,6 +649,7 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
     for path in (
         paths.state_file,
         paths.history_file,
+        paths.state_directory / "publication.json",
         paths.state_directory / "global-history.1.jsonl",
         paths.artifacts_directory / "revision-1" / "stage.png",
         paths.cache_directory / "generated.tmp",
@@ -664,6 +665,7 @@ def test_reset_removes_runtime_data_and_preserves_user_resources(tmp_path: Path)
     assert {path: path.read_bytes() for path in asset_files} == asset_files
     assert not paths.state_file.exists()
     assert not paths.history_file.exists()
+    assert not (paths.state_directory / "publication.json").exists()
     assert not (paths.state_directory / "global-history.1.jsonl").exists()
     assert list(paths.artifacts_directory.iterdir()) == []
     assert not (paths.cache_directory / "generated.tmp").exists()
@@ -893,7 +895,7 @@ def test_alternate_config_does_not_relocate_omitted_storage_paths(
     assert str(paths.history_file) in caplog.text
 
 
-def test_custom_state_path_does_not_relocate_omitted_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custom_state_directory_relocates_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paths = _paths(tmp_path)
     _install_cli_paths(monkeypatch, paths)
     calls = []
@@ -903,13 +905,12 @@ def test_custom_state_path_does_not_relocate_omitted_history(tmp_path: Path, mon
 
     monkeypatch.setattr(cli, "run_application", run)
     config_path = tmp_path / "custom.yaml"
-    write_configuration(config_path, storage={"state": "./custom-state.json"})
+    write_configuration(config_path, storage={"state": "./custom-state"})
 
     assert cli.main(["--config", str(config_path)]) == 0
 
-    assert calls[0][0][1] == config_path.parent / "custom-state.json"
-    assert calls[0][1]["history_path"] == paths.history_file
-    assert calls[0][1]["history_path"] != calls[0][0][1].with_name("global-history.jsonl")
+    assert calls[0][0][1] == config_path.parent / "custom-state" / "state.json"
+    assert calls[0][1]["history_path"] == config_path.parent / "custom-state" / "global-history.jsonl"
 
 
 def test_storage_configuration_overrides_each_runtime_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -926,16 +927,15 @@ def test_storage_configuration_overrides_each_runtime_path(tmp_path: Path, monke
     write_configuration(
         config_path,
         storage={
-            "state": "./runtime/state.json",
-            "history": "./runtime/history.jsonl",
+            "state": "./runtime/state",
             "artifacts": "./runtime/artifacts",
         },
     )
     assert cli.main(["--config", str(config_path)]) == 0
     configuration, state_path, artifacts_path, kwargs = calls[0]
     assert configuration.file == config_path
-    assert state_path == config_path.parent / "runtime/state.json"
-    assert kwargs["history_path"] == config_path.parent / "runtime/history.jsonl"
+    assert state_path == config_path.parent / "runtime/state/state.json"
+    assert kwargs["history_path"] == config_path.parent / "runtime/state/global-history.jsonl"
     assert artifacts_path == config_path.parent / "runtime/artifacts"
 
 

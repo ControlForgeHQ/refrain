@@ -148,9 +148,9 @@ def test_timezone_change_does_not_authorize_reselection(set_local_timezone) -> N
 
     decision = evaluate_scheduling(current_time, make_configuration(), state)
 
-    assert decision.action is SchedulingAction.ADVANCE_REVEAL
+    assert decision.action is SchedulingAction.NO_ACTION
     assert decision.action is not SchedulingAction.NEW_SELECTION
-    assert decision.required_reveal_stage == 2
+    assert decision.required_reveal_stage == 1
 
 
 @pytest.mark.parametrize(
@@ -370,3 +370,28 @@ def test_persisted_reveal_stage_cannot_exceed_final_snapshot_stage() -> None:
             make_configuration(),
             state,
         )
+
+
+@pytest.mark.parametrize(
+    ("day_start", "source", "attribution", "expected"),
+    [
+        ("01:00", "02:10", "02:55", (CompositionVisibility(), CompositionVisibility(source=True, attribution=True))),
+        ("02:10", "02:40", "03:00", (CompositionVisibility(source=True, attribution=True),)),
+    ],
+)
+def test_gap_instants_coalesce_even_for_different_wall_times(day_start, source, attribution, expected) -> None:
+    state = make_state(
+        display_date=date(2026, 3, 8),
+        day_start=day_start,
+        reveal_schedule={"quotation": day_start, "source": source, "attribution": attribution},
+    )
+    assert resolve_reveal_stages(state.snapshot) == expected
+
+
+def test_fold_uses_first_occurrence_for_frozen_reveal() -> None:
+    state = make_state(
+        display_date=date(2026, 11, 1),
+        day_start="00:30",
+        reveal_schedule={"quotation": "00:30", "source": "01:30", "attribution": "02:00"},
+    )
+    assert state.snapshot.resolved_reveal_stages[1].instant == datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)

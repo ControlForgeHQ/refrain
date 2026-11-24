@@ -55,7 +55,7 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _MAX_PUBLICATION_METADATA_BYTES = 16 * 1024 * 1024
 
 _PREVIEW_ENTRY = ContentEntry(
-    id="@preview",
+    id="preview",
     quotations=tuple(
         Quotation(text, normalize_quotation(text))
         for text in (

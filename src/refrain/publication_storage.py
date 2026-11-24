@@ -218,6 +218,7 @@ def publication_protected_paths(
         *(Path(path) for path in paths.asset_directories),
         Path(paths.state_file),
         Path(paths.history_file),
+        Path(paths.state_directory) / "publication.json",
         Path(paths.cache_directory),
         Path(paths.artifacts_directory),
         Path(paths.ownership_file),
@@ -235,12 +236,15 @@ def publication_protected_paths(
             path
             for path in (
                 configuration.content_directory,
-                configuration.storage.state,
-                configuration.storage.history,
                 configuration.storage.artifacts,
             )
             if path is not None
         )
+        if configuration.storage.state is not None:
+            protected.update(
+                configuration.storage.state / name
+                for name in ("state.json", "global-history.jsonl", "publication.json")
+            )
         protected.add(config_directory / "assets")
         protected.update(config_directory / "assets" / category for category in ("fonts", "backgrounds", "decorations"))
     return tuple(sorted(protected, key=os.fspath))
@@ -267,6 +271,19 @@ def validate_publication_root(
     protected = set(publication_protected_paths(paths, configuration))
     protected.update(Path(path) for path in protected_paths)
     _check_path_components(root_path)
+    history_paths = [Path(paths.history_file)]
+    if configuration is not None and configuration.storage.state is not None:
+        history_paths.append(configuration.storage.state / "global-history.jsonl")
+    for history_path in history_paths:
+        history_path = _absolute(history_path)
+        if root_path.is_relative_to(history_path.parent) and root_path != history_path.parent:
+            component = root_path.relative_to(history_path.parent).parts[0]
+            pattern = rf"{re.escape(history_path.stem)}\.\d+{re.escape(history_path.suffix)}"
+            if re.fullmatch(pattern, component, re.IGNORECASE if os.name == "nt" else 0):
+                raise PublicationStorageError(
+                    f"publication root {root_path} overlaps protected Refrain storage "
+                    f"{history_path.parent / component}; choose a separate directory"
+                )
     for path in protected:
         normalized = _absolute(path)
         _check_path_components(normalized)

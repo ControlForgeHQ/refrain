@@ -29,6 +29,7 @@ from refrain import (
     SchedulingContext,
     SelectionProposal,
 )
+from refrain.publication_metadata import content_entry
 
 _STAGES = (
     CompositionVisibility(),
@@ -40,7 +41,7 @@ _SPECIFICATION = ResolvedOutputSpecification("4:3", (32, 24))
 
 def _store_one(store, revision, stages, images):
     variants = {_SPECIFICATION: images}
-    return store.store(revision, stages, variants, _metadata(revision, stages, variants))
+    return store.store(revision, stages, variants, _metadata(revision, stages, variants), snapshot=_committed(stages))
 
 
 def _metadata(revision, stages, variants):
@@ -74,12 +75,7 @@ def _metadata(revision, stages, variants):
                     },
                 },
                 "reconstruction": {
-                    "content_entry": {
-                        "id": "test-entry",
-                        "quotations": ["A thought worth keeping."],
-                        "presentation_style": "centered",
-                        "reveal": {"source": "12:00", "attribution": "18:00"},
-                    },
+                    "content_entry": content_entry(_committed(stages)),
                     "presentation_style": "centered",
                     "background": "none",
                     "decoration": "none",
@@ -100,7 +96,7 @@ def _metadata(revision, stages, variants):
 
 
 def _load_one(store, revision, stages):
-    return store.load(revision, stages, (_SPECIFICATION,))
+    return store.load(revision, stages, (_SPECIFICATION,), snapshot=_committed(stages))
 
 
 def _variant(artifact_set):
@@ -112,14 +108,14 @@ def snapshot():
     return _STAGES
 
 
-@pytest.fixture
-def selected_snapshot() -> DailySnapshot:
+def _committed(stages=_STAGES) -> DailySnapshot:
+    last = stages[-1] if stages else _STAGES[-1]
     return DailySnapshot(
         entry_id="test-entry",
         quotation_text="A thought worth keeping.",
         quotation_identity="A thought worth keeping.",
-        source="Collection",
-        attribution="Author",
+        source="Collection" if last.source else None,
+        attribution="Author" if last.attribution else None,
         presentation_style="centered",
         font="test",
         font_faces={},
@@ -130,6 +126,11 @@ def selected_snapshot() -> DailySnapshot:
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         scheduling=SchedulingContext(date(2026, 10, 26), "06:00"),
     )
+
+
+@pytest.fixture
+def selected_snapshot() -> DailySnapshot:
+    return _committed()
 
 
 @pytest.fixture
@@ -177,7 +178,9 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
             assert image.size == original.size
             assert image.mode == original.mode
             assert image.tobytes() == original.tobytes()
-    reloaded = PreparedImageArtifactStore(store.root).load(1, snapshot[:count], (_SPECIFICATION,))
+    reloaded = PreparedImageArtifactStore(store.root).load(
+        1, snapshot[:count], (_SPECIFICATION,), snapshot=_committed(snapshot[:count])
+    )
     assert reloaded == result
     with reloaded.load_stage(_SPECIFICATION, count - 1) as image:
         assert image.tobytes() == images[count - 1].tobytes()
@@ -199,6 +202,7 @@ def test_multiple_variants_keep_aspect_identity_and_validate_each_raster(store, 
             snapshot,
             {_SPECIFICATION: images, wide_specification: grayscale_images},
             _metadata(1, snapshot, {_SPECIFICATION: images, wide_specification: grayscale_images}),
+            snapshot=_committed(snapshot),
         )
     finally:
         for image in grayscale_images:
@@ -209,7 +213,7 @@ def test_multiple_variants_keep_aspect_identity_and_validate_each_raster(store, 
     assert result.variant_for(_SPECIFICATION).mode == "RGB"
     assert result.variant_for(wide_specification).mode == "L"
     assert result.variant_for(_SPECIFICATION).stage_paths != result.variant_for(wide_specification).stage_paths
-    reloaded = store.load(1, snapshot, (wide_specification, _SPECIFICATION))
+    reloaded = store.load(1, snapshot, (wide_specification, _SPECIFICATION), snapshot=_committed(snapshot))
     assert reloaded == result
     with reloaded.load_stage(_SPECIFICATION, 1) as image:
         assert image.mode == "RGB" and image.tobytes() == images[1].tobytes()
@@ -224,9 +228,11 @@ def test_equivalent_specifications_are_deduplicated_and_expected_set_is_exact(st
     result = _store_one(store, 1, snapshot, images)
 
     with pytest.raises(ValueError, match="equivalent duplicates"):
-        store.load(1, snapshot, (_SPECIFICATION, equivalent))
+        store.load(1, snapshot, (_SPECIFICATION, equivalent), snapshot=_committed(snapshot))
     with pytest.raises(ArtifactValidationError, match="exactly 2 output variants"):
-        store.load(1, snapshot, (_SPECIFICATION, ResolvedOutputSpecification("16:9", (32, 24))))
+        store.load(
+            1, snapshot, (_SPECIFICATION, ResolvedOutputSpecification("16:9", (32, 24))), snapshot=_committed(snapshot)
+        )
     assert result.output_specifications == (_SPECIFICATION,)
 
 
@@ -236,7 +242,7 @@ def test_variant_stage_loading_does_not_open_other_stages_or_variants(store, sna
         other_images = tuple(other_image.copy() for _ in snapshot)
     try:
         variants = {_SPECIFICATION: images, other_specification: other_images}
-        result = store.store(1, snapshot, variants, _metadata(1, snapshot, variants))
+        result = store.store(1, snapshot, variants, _metadata(1, snapshot, variants), snapshot=_committed(snapshot))
     finally:
         for image in other_images:
             image.close()
@@ -260,35 +266,35 @@ def test_missing_unexpected_or_corrupt_variant_invalidates_the_complete_set(stor
         other_images = tuple(other_image.copy() for _ in snapshot)
     try:
         variants = {_SPECIFICATION: images, other_specification: other_images}
-        result = store.store(1, snapshot, variants, _metadata(1, snapshot, variants))
+        result = store.store(1, snapshot, variants, _metadata(1, snapshot, variants), snapshot=_committed(snapshot))
     finally:
         for image in other_images:
             image.close()
 
     with pytest.raises(ArtifactValidationError, match="exactly 1 output variants"):
-        store.load(1, snapshot, (_SPECIFICATION,))
+        store.load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
     changed_aspect = ResolvedOutputSpecification("5:3", (32, 24))
     with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, (_SPECIFICATION, changed_aspect))
+        store.load(1, snapshot, (_SPECIFICATION, changed_aspect), snapshot=_committed(snapshot))
 
     missing_stage = result.variant_for(other_specification).stage_paths[0]
     missing_stage_bytes = missing_stage.read_bytes()
     missing_stage.unlink()
     with pytest.raises(ArtifactValidationError, match="expected stages"):
-        store.load(1, snapshot, (other_specification, _SPECIFICATION))
+        store.load(1, snapshot, (other_specification, _SPECIFICATION), snapshot=_committed(snapshot))
     missing_stage.write_bytes(missing_stage_bytes)
 
     missing_metadata = result.variant_for(other_specification).metadata_paths[0]
     missing_metadata_bytes = missing_metadata.read_bytes()
     missing_metadata.unlink()
     with pytest.raises(ArtifactValidationError, match="expected stages"):
-        store.load(1, snapshot, (other_specification, _SPECIFICATION))
+        store.load(1, snapshot, (other_specification, _SPECIFICATION), snapshot=_committed(snapshot))
     missing_metadata.write_bytes(missing_metadata_bytes)
 
     corrupted = result.variant_for(other_specification).stage_paths[1]
     corrupted.write_bytes(b"damaged")
     with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, (other_specification, _SPECIFICATION))
+        store.load(1, snapshot, (other_specification, _SPECIFICATION), snapshot=_committed(snapshot))
 
 
 def test_unexpected_variant_directory_invalidates_the_complete_set(store, snapshot, images) -> None:
@@ -304,11 +310,11 @@ def test_requested_dimensions_are_validated_per_variant(store, snapshot, images)
     larger_specification = ResolvedOutputSpecification("16:9", (64, 36))
     with pytest.raises(ValueError, match="size \\(64, 36\\)"):
         variants = {larger_specification: images}
-        store.store(1, snapshot, variants, _metadata(1, snapshot, variants))
+        store.store(1, snapshot, variants, _metadata(1, snapshot, variants), snapshot=_committed(snapshot))
     larger_images = tuple(Image.new("RGB", (64, 36), "white") for _ in snapshot)
     try:
         variants = {_SPECIFICATION: images, larger_specification: larger_images}
-        result = store.store(1, snapshot, variants, _metadata(1, snapshot, variants))
+        result = store.store(1, snapshot, variants, _metadata(1, snapshot, variants), snapshot=_committed(snapshot))
     finally:
         for image in larger_images:
             image.close()
@@ -322,7 +328,7 @@ def test_requested_dimensions_are_validated_per_variant(store, snapshot, images)
         ),
     )
     with pytest.raises(ArtifactValidationError, match="expected PNG size"):
-        store.load(1, snapshot, (larger_specification, _SPECIFICATION))
+        store.load(1, snapshot, (larger_specification, _SPECIFICATION), snapshot=_committed(snapshot))
 
 
 def test_old_single_raster_manifest_format_is_not_reused(store, snapshot, images) -> None:
@@ -504,10 +510,15 @@ def test_failed_publication_never_exposes_partial_set(store, snapshot, images, m
 
     if existing:
         assert (previous.directory / "manifest.json").read_bytes() == previous_manifest
-        assert PreparedImageArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,)) == previous
+        assert (
+            PreparedImageArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
+            == previous
+        )
     else:
         try:
-            result = PreparedImageArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,))
+            result = PreparedImageArtifactStore(store.root).load(
+                1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot)
+            )
         except ArtifactValidationError:
             result = None
         assert result is None
@@ -519,7 +530,7 @@ def test_multi_variant_publication_failure_keeps_previous_complete_set(store, sn
         other_images = tuple(other_image.copy() for _ in snapshot)
     try:
         variants = {_SPECIFICATION: images, other_specification: other_images}
-        previous = store.store(1, snapshot, variants, _metadata(1, snapshot, variants))
+        previous = store.store(1, snapshot, variants, _metadata(1, snapshot, variants), snapshot=_committed(snapshot))
         original_replace = artifacts.os.replace
 
         def fail_manifest(source, target):
@@ -530,12 +541,12 @@ def test_multi_variant_publication_failure_keeps_previous_complete_set(store, sn
         monkeypatch.setattr(artifacts.os, "replace", fail_manifest)
         with pytest.raises(ArtifactWriteError) as failure:
             updated = {_SPECIFICATION: tuple(reversed(images)), other_specification: other_images}
-            store.store(1, snapshot, updated, _metadata(1, snapshot, updated))
+            store.store(1, snapshot, updated, _metadata(1, snapshot, updated), snapshot=_committed(snapshot))
         assert not failure.value.published
     finally:
         for image in other_images:
             image.close()
-    assert store.load(1, snapshot, (other_specification, _SPECIFICATION)) == previous
+    assert store.load(1, snapshot, (other_specification, _SPECIFICATION), snapshot=_committed(snapshot)) == previous
 
 
 def test_post_publication_sync_failure_reports_complete_new_set(store, snapshot, images, monkeypatch) -> None:
@@ -790,16 +801,21 @@ def test_cleanup_failure_is_reported_without_invalidating_current(
             patch.setattr(artifacts, "_sync_directory", fail)
         with pytest.raises(ArtifactCleanupError, match="cleanup denied"):
             store.cleanup(2)
-    assert PreparedImageArtifactStore(store.root).load(2, snapshot, (_SPECIFICATION,)) == current
+    assert (
+        PreparedImageArtifactStore(store.root).load(2, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
+        == current
+    )
 
 
 @pytest.mark.parametrize("revision", [0, -1, True, "1"])
 def test_invalid_revisions_fail_before_io(store, snapshot, images, revision) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         variants = {_SPECIFICATION: images}
-        store.store(revision, snapshot, variants, _metadata(revision, snapshot, variants))
+        store.store(
+            revision, snapshot, variants, _metadata(revision, snapshot, variants), snapshot=_committed(snapshot)
+        )
     with pytest.raises(ValueError, match="positive integer"):
-        store.load(revision, snapshot, (_SPECIFICATION,))
+        store.load(revision, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
     with pytest.raises(ValueError, match="positive integer"):
         store.cleanup(revision)
     assert not store.root.exists()
@@ -810,7 +826,9 @@ def test_invalid_images_fail_before_io(store, snapshot, mode, size) -> None:
     with Image.new(mode, size) as image:
         with pytest.raises(ValueError, match="stage 0"):
             variants = {_SPECIFICATION: (image,)}
-            store.store(1, snapshot[:1], variants, _metadata(1, snapshot[:1], variants))
+            store.store(
+                1, snapshot[:1], variants, _metadata(1, snapshot[:1], variants), snapshot=_committed(snapshot[:1])
+            )
     assert not store.root.exists()
 
 
@@ -818,17 +836,19 @@ def test_invalid_api_inputs(store, snapshot, images) -> None:
     with pytest.raises(ValueError, match="absolute"):
         PreparedImageArtifactStore(Path("relative"))
     with pytest.raises(ValueError, match="nonempty"):
-        store.store(1, snapshot, {}, {})
+        store.store(1, snapshot, {}, {}, snapshot=_committed(snapshot))
     with pytest.raises(ValueError, match="CompositionVisibility"):
-        store.store(1, None, {_SPECIFICATION: images}, {})
+        store.store(1, None, {_SPECIFICATION: images}, {}, snapshot=_committed())
     with pytest.raises(ValueError, match="nonempty"):
-        store.store(1, (), {_SPECIFICATION: images}, {})
+        store.store(1, (), {_SPECIFICATION: images}, {}, snapshot=_committed())
     with Image.new("L", (32, 24)) as image:
         with pytest.raises(ValueError, match="same image mode"):
             variants = {_SPECIFICATION: (images[0], image)}
-            store.store(1, snapshot[:2], variants, _metadata(1, snapshot[:2], variants))
+            store.store(
+                1, snapshot[:2], variants, _metadata(1, snapshot[:2], variants), snapshot=_committed(snapshot[:2])
+            )
     with pytest.raises(ValueError, match="nonempty"):
-        store.load(1, (), (_SPECIFICATION,))
+        store.load(1, (), (_SPECIFICATION,), snapshot=_committed())
     result = _store_one(store, 1, snapshot, images)
     for stage in (-1, 3, True, "0"):
         with pytest.raises(ValueError, match="stage"):

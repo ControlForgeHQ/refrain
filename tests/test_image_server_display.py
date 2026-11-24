@@ -124,7 +124,7 @@ def test_named_outputs_keep_independent_images_and_entity_tags() -> None:
     hallway = Image.new("RGB", (3, 3), "blue")
     try:
         backend.publish(
-            DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)), audience="private"),
+            DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)), audience="internal"),
             kitchen,
         )
         backend.update_output("hallway", hallway)
@@ -160,7 +160,7 @@ def test_publication_is_retained_when_http_service_is_disabled() -> None:
     image = Image.new("RGB", (4, 3), "red")
     try:
         backend.publish(
-            DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)), audience="private"),
+            DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)), audience="internal"),
             image,
         )
         assert not backend.delivery_available
@@ -191,7 +191,7 @@ def test_listener_bind_failure_does_not_reject_publication_and_recovers_latest_i
     backend = ImageServerDisplayBackend(port=port, output_ids=("kitchen",))
     first = Image.new("RGB", (4, 3), "red")
     latest = Image.new("RGB", (4, 3), "blue")
-    destination = DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)), audience="private")
+    destination = DisplayOutputConfiguration("kitchen", ResolvedOutputSpecification("4:3", (4, 3)), audience="internal")
     try:
         backend.publish(destination, first)
         assert not backend.delivery_available

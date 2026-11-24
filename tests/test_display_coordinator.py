@@ -22,7 +22,7 @@ from refrain.display import image_server as image_server_module
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 
 _SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
-_OUTPUT = DisplayOutputConfiguration("default", _SPECIFICATION, audience="private")
+_OUTPUT = DisplayOutputConfiguration("default", _SPECIFICATION, audience="internal")
 
 
 def configuration(backend_type: str) -> DisplayBackendConfiguration:
@@ -114,10 +114,10 @@ def test_withdrawal_wakes_publication_waiters(wait_method: str) -> None:
 def test_scheduled_group_routing_is_destination_specific_but_transients_remain_specification_only() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     first = DisplayOutputConfiguration(
-        "first", specification, DestinationPresentation(background="none"), audience="private"
+        "first", specification, DestinationPresentation(background="none"), audience="internal"
     )
     second = DisplayOutputConfiguration(
-        "second", specification, DestinationPresentation(qr_enabled=False), audience="private"
+        "second", specification, DestinationPresentation(qr_enabled=False), audience="internal"
     )
     configuration_with_groups = DisplayBackendConfiguration("image-server", outputs=(first, second))
     updates = {"image-server": []}
@@ -155,10 +155,10 @@ def test_withdrawal_signals_when_remaining_destinations_are_terminal() -> None:
         return SimulatedBackend(config.type, {"window": []})
 
     window = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="private"),)
+        "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
     )
     image_server = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("image-server", _SPECIFICATION, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration("image-server", _SPECIFICATION, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((window, image_server), factory, all_unavailable_event=all_unavailable)
     try:
@@ -176,8 +176,8 @@ def test_backend_withdraws_all_its_destinations_atomically() -> None:
     all_unavailable = Event()
     callbacks = []
     outputs = (
-        DisplayOutputConfiguration("one", _SPECIFICATION, audience="private"),
-        DisplayOutputConfiguration("two", _SPECIFICATION, audience="private"),
+        DisplayOutputConfiguration("one", _SPECIFICATION, audience="internal"),
+        DisplayOutputConfiguration("two", _SPECIFICATION, audience="internal"),
     )
     config = DisplayBackendConfiguration("image-server", outputs=outputs)
 
@@ -203,8 +203,8 @@ def test_backend_withdraws_all_its_destinations_atomically() -> None:
 def test_withdrawal_logs_each_transition_once(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="refrain.display.coordinator")
     outputs = (
-        DisplayOutputConfiguration("one", _SPECIFICATION, audience="private"),
-        DisplayOutputConfiguration("two", _SPECIFICATION, audience="private"),
+        DisplayOutputConfiguration("one", _SPECIFICATION, audience="internal"),
+        DisplayOutputConfiguration("two", _SPECIFICATION, audience="internal"),
     )
     config = DisplayBackendConfiguration("image-server", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,))
@@ -226,7 +226,7 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
         configuration("window"),
         DisplayBackendConfiguration(
             "image-server",
-            outputs=(DisplayOutputConfiguration("server", _SPECIFICATION, audience="private"),),
+            outputs=(DisplayOutputConfiguration("server", _SPECIFICATION, audience="internal"),),
         ),
     )
     updates = {"window": [], "image-server": []}
@@ -295,7 +295,7 @@ def test_unavailable_image_server_retries_without_blocking_local_backend(monkeyp
         return DisplayPublicationCoordinator._default_factory(config)
 
     window = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="private"),)
+        "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((window, network), factory)
     try:
@@ -340,10 +340,10 @@ def test_destinations_receive_images_matching_their_output_specification() -> No
     portrait = ResolvedOutputSpecification("4:3", (1600, 1200))
     configurations = (
         DisplayBackendConfiguration(
-            "window", outputs=(DisplayOutputConfiguration("window", wide, audience="private"),)
+            "window", outputs=(DisplayOutputConfiguration("window", wide, audience="internal"),)
         ),
         DisplayBackendConfiguration(
-            "image-server", outputs=(DisplayOutputConfiguration("default", portrait, audience="private"),)
+            "image-server", outputs=(DisplayOutputConfiguration("default", portrait, audience="internal"),)
         ),
     )
     updates = {"window": [], "image-server": []}
@@ -368,7 +368,7 @@ def test_destinations_receive_images_matching_their_output_specification() -> No
 def test_terminal_backend_failure_does_not_stop_an_operational_destination(failure: str) -> None:
     configurations = (
         DisplayBackendConfiguration(
-            "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="private"),)
+            "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
         ),
         configuration("image-server"),
     )
@@ -600,7 +600,7 @@ def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, capl
 
 def test_drain_finishes_admitted_destinations_and_rejects_new_work() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
-    outputs = tuple(DisplayOutputConfiguration(name, specification, audience="private") for name in ("one", "two"))
+    outputs = tuple(DisplayOutputConfiguration(name, specification, audience="internal") for name in ("one", "two"))
     entered, release, closed = Event(), Event(), Event()
     published = []
 
@@ -647,8 +647,8 @@ def test_drain_finishes_admitted_destinations_and_rejects_new_work() -> None:
 def test_literal_all_destination_is_distinct_from_all_selector() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     outputs = (
-        DisplayOutputConfiguration("all", specification, audience="private"),
-        DisplayOutputConfiguration("other", specification, audience="private"),
+        DisplayOutputConfiguration("all", specification, audience="internal"),
+        DisplayOutputConfiguration("other", specification, audience="internal"),
     )
     published = []
 
@@ -683,7 +683,7 @@ def test_literal_all_destination_is_distinct_from_all_selector() -> None:
 
 def test_drain_finishes_other_destinations_after_active_recoverable_failure() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
-    outputs = tuple(DisplayOutputConfiguration(name, specification, audience="private") for name in ("one", "two"))
+    outputs = tuple(DisplayOutputConfiguration(name, specification, audience="internal") for name in ("one", "two"))
     entered, release = Event(), Event()
     attempts = []
 
@@ -724,7 +724,7 @@ def test_drain_finishes_other_destinations_after_active_recoverable_failure() ->
 def test_drain_stops_recoverable_one_shot_retries(failure_point) -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     attempts = []
 
@@ -764,7 +764,7 @@ def test_drain_stops_recoverable_one_shot_retries(failure_point) -> None:
 def test_drain_stops_retries_when_factory_fails_after_shutdown() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     entered, release = Event(), Event()
     attempts = []
@@ -794,7 +794,7 @@ def test_drain_stops_retries_when_factory_fails_after_shutdown() -> None:
 def test_drain_completes_withdrawn_one_shot_after_factory_failure() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     entered, release = Event(), Event()
     attempts = []
@@ -824,7 +824,7 @@ def test_drain_completes_withdrawn_one_shot_after_factory_failure() -> None:
 def test_drain_bypasses_earlier_scheduled_factory_backoff(monkeypatch) -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     attempts = []
     initial_time = time.monotonic()
@@ -956,17 +956,17 @@ def test_configured_destination_identifiers_are_unique_and_keep_output_mapping()
     portrait = ResolvedOutputSpecification("4:3", (1600, 1200))
     configurations = (
         DisplayBackendConfiguration(
-            "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="private"),)
+            "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
         ),
         DisplayBackendConfiguration(
             "waveshare-13in3-e",
-            outputs=(DisplayOutputConfiguration("epaper", portrait, audience="private"),),
+            outputs=(DisplayOutputConfiguration("epaper", portrait, audience="internal"),),
         ),
         DisplayBackendConfiguration(
             "image-server",
             outputs=(
-                DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="private"),
-                DisplayOutputConfiguration("hallway", portrait, audience="private"),
+                DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
+                DisplayOutputConfiguration("hallway", portrait, audience="internal"),
             ),
         ),
     )
@@ -993,8 +993,8 @@ def test_destinations_on_one_backend_are_serialized_while_other_backend_progress
     image_server_configuration = DisplayBackendConfiguration(
         "image-server",
         outputs=(
-            DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="private"),
-            DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="private"),
+            DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
+            DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="internal"),
         ),
     )
     configurations = (image_server_configuration, configuration("window"))
@@ -1058,8 +1058,8 @@ def test_same_spec_destinations_have_independent_acknowledgements_and_route() ->
     server_configuration = DisplayBackendConfiguration(
         "image-server",
         outputs=(
-            DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="private"),
-            DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="private"),
+            DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
+            DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="internal"),
         ),
     )
     updates = {"image-server": []}
@@ -1088,8 +1088,8 @@ def test_failure_of_one_named_destination_does_not_fail_its_sibling() -> None:
     server_configuration = DisplayBackendConfiguration(
         "image-server",
         outputs=(
-            DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="private"),
-            DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="private"),
+            DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
+            DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="internal"),
         ),
     )
     close_called = Event()
@@ -1130,11 +1130,11 @@ def test_images_are_closed_once_when_all_destinations_are_terminal(monkeypatch) 
     portrait = ResolvedOutputSpecification("4:3", (1600, 1200))
     configurations = (
         DisplayBackendConfiguration(
-            "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="private"),)
+            "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
         ),
         DisplayBackendConfiguration(
             "waveshare-13in3-e",
-            outputs=(DisplayOutputConfiguration("waveshare-13in3-e", portrait, audience="private"),),
+            outputs=(DisplayOutputConfiguration("waveshare-13in3-e", portrait, audience="internal"),),
         ),
     )
 

@@ -30,7 +30,7 @@ def configuration(tmp_path: Path) -> ApplicationConfiguration:
                 "window",
                 outputs=(
                     DisplayOutputConfiguration(
-                        "window", ResolvedOutputSpecification("16:9", (1920, 1080)), audience="private"
+                        "window", ResolvedOutputSpecification("16:9", (1920, 1080)), audience="internal"
                     ),
                 ),
             ),
@@ -277,7 +277,7 @@ def test_preview_example_writes_complete_png_without_application_state(tmp_path:
     repository = Path(__file__).parent.parent
     config = tmp_path / "config.yaml"
     config.write_text(
-        'destinations:\n  - id: default\n    type: "window"\n    audience: "private"\n'
+        'destinations:\n  - id: default\n    type: "window"\n    audience: "internal"\n'
         'fonts:\n  pools:\n    default: ["@builtin"]\n'
         'text:\n  colors:\n    pools:\n      default: ["@builtin"]\n',
         encoding="utf-8",

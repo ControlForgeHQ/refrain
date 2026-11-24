@@ -4,7 +4,7 @@ import hashlib
 import json
 import random
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -168,9 +168,9 @@ def test_semantic_snapshot_roundtrips_without_rendering_values(tmp_path: Path) -
 def test_ordered_actions_and_opaque_payloads_survive_recovery_and_reveal_updates(tmp_path: Path) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     actions = (
-        ContentAction("future-action", ("private",), "  opaque\n\npayload \n"),
-        ContentAction("same", ("public", "private"), '{"unparsed": true}'),
-        ContentAction("same", ("public", "private"), '{"unparsed": true}'),
+        ContentAction("future-action", ("internal",), "  opaque\n\npayload \n"),
+        ContentAction("same", ("external", "internal"), '{"unparsed": true}'),
+        ContentAction("same", ("external", "internal"), '{"unparsed": true}'),
     )
     snapshot = replace(make_snapshot("Committed actions."), actions=actions)
     proposal = make_proposal("Committed actions.")
@@ -191,17 +191,78 @@ def test_ordered_actions_and_opaque_payloads_survive_recovery_and_reveal_updates
     assert PersistentStateStore(store.path).load() == advanced
 
 
-def test_pre_action_version_one_snapshot_recovers_with_empty_actions(tmp_path: Path) -> None:
+@pytest.mark.parametrize("missing", ["actions", "resolved_reveal_stages"])
+def test_incomplete_version_one_snapshot_is_rejected(tmp_path: Path, missing: str) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     commit(store, "Pre-action selection.")
     document = json.loads(store.path.read_text(encoding="utf-8"))
-    document["state"]["snapshot"].pop("actions")
+    document["state"]["snapshot"].pop(missing)
     _write_document(store.path, document)
 
-    recovered = PersistentStateStore(store.path).load()
+    with pytest.raises(StateRecoveryError, match=missing):
+        PersistentStateStore(store.path).load()
 
-    assert recovered.snapshot.actions == ()
-    assert recovered.revision == 1
+
+def test_reload_does_not_reresolve_after_timezone_change(tmp_path: Path, set_local_timezone, monkeypatch) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Frozen.")
+    frozen = committed.snapshot.resolved_reveal_stages
+    set_local_timezone(timezone(timedelta(hours=5, minutes=45)))
+    monkeypatch.setattr(persistence.local_time, "resolve_local_time", lambda *_: pytest.fail("must not resolve"))
+    recovered = PersistentStateStore(store.path).load()
+    assert recovered.snapshot.resolved_reveal_stages == frozen
+
+
+@pytest.mark.parametrize(
+    "instant",
+    [
+        "2026-10-26T10:00:00.0Z",
+        "2026-10-26T10:00:00.123456Z",
+        "2026-10-26T10:00:00.123456789Z",
+        "2026-10-26T10:00:00+00:00",
+        "2026-10-26t10:00:00z",
+        "2026-10-26 10:00:00Z",
+        "2026-10-26T10:00Z",
+        "2026-10-26T10:00:60Z",
+    ],
+)
+def test_frozen_stage_rejects_noncanonical_timestamp(tmp_path: Path, instant: str) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Frozen.")
+    document = json.loads(store.path.read_bytes())
+    document["state"]["snapshot"]["resolved_reveal_stages"][0]["instant"] = instant
+    _write_document(store.path, document)
+    with pytest.raises(StateRecoveryError):
+        store.load()
+
+
+def test_frozen_stage_serializes_whole_seconds_and_rejects_microseconds(tmp_path: Path) -> None:
+    snapshot = make_snapshot("Frozen.")
+    stages = snapshot.resolved_reveal_stages
+    fractional = replace(stages[0], instant=stages[0].instant.replace(microsecond=1))
+    with pytest.raises(ValueError, match="whole-second"):
+        replace(snapshot, resolved_reveal_stages=(fractional,))
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Frozen.")
+    document = json.loads(store.path.read_bytes())
+    serialized = document["state"]["snapshot"]["resolved_reveal_stages"]
+    assert all(
+        stage["instant"] == value.instant.isoformat(timespec="seconds").replace("+00:00", "Z")
+        for stage, value in zip(serialized, committed.snapshot.resolved_reveal_stages, strict=True)
+    )
+    assert store.load() == committed
+
+
+@pytest.mark.parametrize("field", ["actions", "resolved_reveal_stages"])
+def test_null_required_snapshot_fields_are_rejected_without_resolution(tmp_path: Path, monkeypatch, field: str) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Frozen.")
+    document = json.loads(store.path.read_bytes())
+    document["state"]["snapshot"][field] = None
+    _write_document(store.path, document)
+    monkeypatch.setattr(persistence.local_time, "resolve_local_time", lambda *_: pytest.fail("must not resolve"))
+    with pytest.raises(StateRecoveryError):
+        store.load()
 
 
 @pytest.mark.parametrize(
@@ -209,10 +270,10 @@ def test_pre_action_version_one_snapshot_recovers_with_empty_actions(tmp_path: P
     [
         None,
         ["not an action object"],
-        [{"type": "play", "visibility": ["private"]}],
-        [{"type": "play", "visibility": ["private", "private"], "payload": ""}],
-        [{"type": "play", "visibility": ["private"], "payload": None}],
-        [{"type": "play", "visibility": ["private"], "payload": "", "extra": 1}],
+        [{"type": "play", "visibility": ["internal"]}],
+        [{"type": "play", "visibility": ["internal", "internal"], "payload": ""}],
+        [{"type": "play", "visibility": ["internal"], "payload": None}],
+        [{"type": "play", "visibility": ["internal"], "payload": "", "extra": 1}],
     ],
 )
 def test_invalid_persisted_actions_follow_state_recovery_error_policy(tmp_path: Path, actions: object) -> None:
@@ -233,7 +294,7 @@ def test_committed_actions_are_independent_of_later_content_edits(tmp_path: Path
     original = {
         "id": "action-entry",
         "quotations": ["Committed quotation."],
-        "actions": [{"type": "original", "visibility": ["private"], "payload": "original payload"}],
+        "actions": [{"type": "original", "visibility": ["internal"], "payload": "original payload"}],
     }
     content_file.write_text(yaml.safe_dump(original, sort_keys=False), encoding="utf-8")
     entry = load_content_library(content_directory)[0]
@@ -243,7 +304,7 @@ def test_committed_actions_are_independent_of_later_content_edits(tmp_path: Path
 
     updated = {
         **original,
-        "actions": [{"type": "replacement", "visibility": ["public"], "payload": "changed"}],
+        "actions": [{"type": "replacement", "visibility": ["external"], "payload": "changed"}],
     }
     content_file.write_text(yaml.safe_dump(updated, sort_keys=False), encoding="utf-8")
 
@@ -591,7 +652,7 @@ def test_store_requires_an_absolute_configured_path() -> None:
         PersistentStateStore("relative/state.json")
 
 
-@pytest.mark.parametrize("stages", [(1,), (2,), (1, 2, 3)])
+@pytest.mark.parametrize("stages", [(1,), (2,), (1, 2)])
 def test_reveal_progress_advances_without_changing_selection(tmp_path: Path, stages: tuple[int, ...]) -> None:
     store = PersistentStateStore(tmp_path / "state.json")
     original = commit(store, "Committed.")
@@ -710,8 +771,53 @@ def test_global_history_records_committed_selection_as_unicode_jsonl(tmp_path: P
     assert record.selection_timestamp == timestamp
     assert history.path.read_text(encoding="utf-8") == (
         '{"revision":1,"display_date":"2026-10-26","selection_timestamp":"2026-10-29T13:30:00Z",'
-        '"quotation_text":"Étoile, 雪.","quotation_identity":"Étoile, 雪."}\n'
+        '"quotation":"Étoile, 雪.","source":"Resolved source","attribution":"Resolved author"}\n'
     )
+
+
+def test_global_history_preserves_original_content_and_absent_fields(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    text = "  雪\n  café  "
+    snapshot = replace(make_snapshot(text), source=None, attribution=None, resolved_reveal_stages=None)
+    state = store.commit(make_proposal(text), snapshot)
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    history.record(state, timestamp=datetime(2026, 10, 29, tzinfo=timezone.utc))
+    data = json.loads(history.path.read_text(encoding="utf-8"))
+    assert set(data) == {"revision", "display_date", "selection_timestamp", "quotation", "source", "attribution"}
+    assert (data["quotation"], data["source"], data["attribution"]) == (text, None, None)
+
+
+@pytest.mark.parametrize("stage", [True, -1, 3, 10**100])
+def test_invalid_reveal_ordinals_never_write(tmp_path: Path, stage: object) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    state = commit(store, "Committed.")
+    before = store.path.read_bytes()
+    with pytest.raises(ValueError):
+        store.advance_reveal_progress(state.revision, stage)
+    assert store.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda stages: stages.clear(),
+        lambda stages: stages[0].update(instant="2026-10-26T10:00:00+00:00"),
+        lambda stages: stages[0]["visibility"].update(quotation=1),
+        lambda stages: stages[1].update(instant=stages[0]["instant"]),
+        lambda stages: stages[1].update(visibility=stages[0]["visibility"].copy()),
+        lambda stages: stages[-1]["visibility"].update(source=False),
+    ],
+)
+def test_invalid_frozen_stages_are_rejected_without_writes(tmp_path: Path, mutate) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Committed.")
+    document = json.loads(store.path.read_bytes())
+    mutate(document["state"]["snapshot"]["resolved_reveal_stages"])
+    _write_document(store.path, document)
+    before = store.path.read_bytes()
+    with pytest.raises(StateRecoveryError):
+        store.load()
+    assert store.path.read_bytes() == before
 
 
 def test_global_history_uses_fixed_limits_and_rotates_between_records(tmp_path: Path) -> None:
@@ -721,7 +827,7 @@ def test_global_history_uses_fixed_limits_and_rotates_between_records(tmp_path: 
     assert history.max_segment_size == 1_048_576
     assert history.max_segments == 20
 
-    first = commit(state_store, "x" * ((history.max_segment_size - 180) // 2))
+    first = commit(state_store, "x" * (history.max_segment_size - 180))
     first_record = history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
     first_bytes = history_path.read_bytes()
     assert 0 < len(first_bytes) <= history.max_segment_size
@@ -756,7 +862,7 @@ def test_global_history_retains_at_most_twenty_segments(tmp_path: Path) -> None:
 
 def test_history_rejects_oversized_records_without_touching_state(tmp_path: Path) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
-    state = commit(state_store, "x" * 600_000)
+    state = commit(state_store, "x" * 1_048_576)
     history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
 
     with pytest.raises(GlobalHistoryWriteError, match="larger than the 1048576-byte segment limit"):
@@ -778,6 +884,97 @@ def test_incomplete_history_tail_is_discarded_and_history_is_not_needed_for_reco
     history.path.unlink()
     assert PersistentStateStore(state_store.path).load() == second
     assert first.revision == 1
+
+
+def test_complete_history_record_without_newline_is_preserved(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    first = commit(store, "First.")
+    history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    original = history.path.read_bytes().rstrip(b"\n")
+    history.path.write_bytes(original)
+    second = commit(store, "Second.", date(2026, 10, 27))
+
+    history.record(second, timestamp=datetime(2026, 10, 27, tzinfo=timezone.utc))
+
+    lines = history.path.read_bytes().splitlines()
+    assert lines[0] == original
+    assert [json.loads(line)["revision"] for line in lines] == [1, 2]
+
+
+def test_incomplete_history_tail_preserves_preceding_record(tmp_path: Path, caplog) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    history.record(commit(store, "First."))
+    original = history.path.read_bytes()
+    history.path.write_bytes(original + b'{"revision":')
+
+    history.record(commit(store, "Second.", date(2026, 10, 27)))
+
+    assert history.path.read_bytes().startswith(original)
+    assert len(history.path.read_bytes().splitlines()) == 2
+    assert "incomplete" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        b"{}",
+        b'{"revision":"invalid","quotation":null,"unexpected":[1,2]}',
+        b'{"duplicate":1,"duplicate":2}',
+        '{"text":"Café"}'.encode("utf-8"),
+        b'{"number":' + b"9" * 5000 + b"}",
+    ],
+)
+def test_complete_history_objects_are_preserved_without_schema_validation(tmp_path: Path, tail: bytes) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    preceding = b'not valid JSON\n{"earlier":true}\n'
+    history.path.write_bytes(preceding + tail)
+
+    history.record(commit(store, "New."))
+
+    contents = history.path.read_bytes()
+    assert contents.startswith(preceding + tail + b"\n")
+    record = json.loads(contents[len(preceding + tail) + 1 :])
+    assert set(record) == {"revision", "display_date", "selection_timestamp", "quotation", "source", "attribution"}
+    assert record["quotation"] == "New."
+
+
+@pytest.mark.parametrize("tail", [b'{"unfinished":', b'{"bad":}', b'{"bad":"\xff"}', b'{"bad":NaN}', b"[]"])
+def test_invalid_history_tail_is_removed_without_inspecting_preceding_lines(tmp_path: Path, tail: bytes) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    preceding = b'not valid JSON\n{"earlier":true}\n'
+    history.path.write_bytes(preceding + tail)
+
+    history.record(commit(store, "New."))
+
+    contents = history.path.read_bytes()
+    assert contents.startswith(preceding)
+    assert json.loads(contents[len(preceding) :])["quotation"] == "New."
+
+
+def test_large_complete_history_object_is_not_discarded(tmp_path: Path) -> None:
+    path = tmp_path / "global-history.jsonl"
+    contents = b'{"value":"' + b"x" * 1_048_576 + b'"}'
+    path.write_bytes(contents)
+
+    persistence._truncate_incomplete_history_tail(path)
+
+    assert path.read_bytes() == contents + b"\n"
+
+
+def test_uninspectable_history_tail_is_not_discarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "global-history.jsonl"
+    contents = b'{"value":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}"
+    path.write_bytes(contents)
+    monkeypatch.setattr(persistence.json, "loads", lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()))
+
+    with pytest.raises(OSError, match="deeply nested"):
+        persistence._truncate_incomplete_history_tail(path)
+
+    assert path.read_bytes() == contents
 
 
 def test_history_fsync_failure_does_not_change_committed_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

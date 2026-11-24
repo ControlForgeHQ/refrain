@@ -84,11 +84,12 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
             configuration = load_application_config(config_absolute)
         except ApplicationConfigurationError as error:
             raise ApplicationError(f"application configuration is invalid: {error}") from error
-        state_path = Path(configuration.storage.state or paths.state_file).absolute()
+        state_directory = Path(configuration.storage.state or paths.state_directory).absolute()
+        state_path = state_directory / "state.json"
         artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
-        history_path = Path(configuration.storage.history or paths.history_file).absolute()
+        history_path = state_directory / "global-history.jsonl"
         publish_path = Path(resolve_publication_root(configuration.storage.publish, paths)).absolute()
-        ownership.ensure_outside((state_path, artifacts_path, history_path, publish_path))
+        ownership.ensure_outside((state_directory, artifacts_path, publish_path))
         _LOGGER.info("Effective configuration path: %s", configuration.file)
         _LOGGER.info("Effective state path: %s", state_path)
         _LOGGER.info("Effective artifacts path: %s", artifacts_path)

@@ -5,19 +5,22 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from . import local_time
 from .content import ContentAction, normalize_quotation
 from .paths import ApplicationPathError, resolve_application_paths
+from .renderer import CompositionVisibility
 from .selection import SelectionProposal
 
 _FORMAT_VERSION = 1
@@ -26,6 +29,7 @@ _HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_LOGGER = logging.getLogger(__name__)
 
 
 class PersistentStateError(Exception):
@@ -80,6 +84,10 @@ def _thaw_json(value: object) -> object:
 def _nonempty_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a nonempty string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{field} must contain valid Unicode") from error
     return value
 
 
@@ -136,6 +144,41 @@ class SchedulingContext:
 
 
 @dataclass(frozen=True)
+class ResolvedRevealStage:
+    """A committed absolute reveal instant and its cumulative visibility."""
+
+    instant: datetime
+    visibility: CompositionVisibility
+
+
+def resolve_schedule(
+    scheduling: SchedulingContext, schedule: Mapping[str, str], source: str | None, attribution: str | None
+) -> tuple[ResolvedRevealStage, ...]:
+    """Resolve local wall times once, coalescing equal absolute instants."""
+    events: dict[datetime, set[str]] = {}
+    for field in ("quotation", "source", "attribution"):
+        if field == "source" and source is None or field == "attribution" and attribution is None:
+            continue
+        instant = local_time.resolve_local_time(scheduling.display_date, time.fromisoformat(schedule[field]))
+        events.setdefault(instant.astimezone(timezone.utc), set()).add(field)
+    visible: set[str] = set()
+    result = []
+    for instant, fields in sorted(events.items()):
+        visible.update(fields)
+        result.append(
+            ResolvedRevealStage(
+                instant,
+                CompositionVisibility(
+                    quotation="quotation" in visible,
+                    source="source" in visible,
+                    attribution="attribution" in visible,
+                ),
+            )
+        )
+    return tuple(result)
+
+
+@dataclass(frozen=True)
 class DailySnapshot:
     """Self-contained semantic content and presentation preferences for one selection."""
 
@@ -154,9 +197,12 @@ class DailySnapshot:
     reveal_schedule: Mapping[str, Any]
     scheduling: SchedulingContext
     actions: tuple[ContentAction, ...] = ()
+    resolved_reveal_stages: tuple[ResolvedRevealStage, ...] | None = None
 
     def __post_init__(self) -> None:
         _nonempty_string(self.entry_id, "entry_id")
+        if not _IDENTIFIER.fullmatch(self.entry_id):
+            raise ValueError("entry_id must be a valid identifier")
         _nonempty_string(self.quotation_text, "quotation_text")
         _valid_identity(self.quotation_identity, "quotation_identity")
         if normalize_quotation(self.quotation_text) != self.quotation_identity:
@@ -171,6 +217,8 @@ class DailySnapshot:
             value = getattr(self, field)
             if value is not None:
                 _nonempty_string(value, field)
+                if not _IDENTIFIER.fullmatch(value[1:] if value.startswith("@") else value):
+                    raise ValueError(f"{field} must be a valid identifier or pool reference")
                 if field == "font" and value == "none":
                     raise ValueError("font cannot be 'none'")
         if not isinstance(self.font_faces, Mapping):
@@ -204,6 +252,8 @@ class DailySnapshot:
             not isinstance(action, ContentAction) for action in self.actions
         ):
             raise TypeError("actions must be a sequence of ContentAction values")
+        if len(self.actions) > 100:
+            raise ValueError("actions must contain at most 100 declarations")
         object.__setattr__(self, "actions", tuple(self.actions))
         if not isinstance(self.reveal_schedule, Mapping):
             raise TypeError("reveal_schedule must be a mapping")
@@ -214,7 +264,47 @@ class DailySnapshot:
             raise ValueError("reveal_schedule must contain valid quotation, source, and attribution HH:MM times")
         if schedule["quotation"] != self.scheduling.day_start:
             raise ValueError("reveal_schedule.quotation must match scheduling.day_start")
+        if schedule["source"] < schedule["quotation"] or schedule["attribution"] < schedule["quotation"]:
+            raise ValueError("reveal_schedule optional fields must not precede quotation")
         object.__setattr__(self, "reveal_schedule", _freeze_json(schedule, "reveal_schedule"))
+        stages = self.resolved_reveal_stages
+        if stages is None:
+            stages = resolve_schedule(self.scheduling, schedule, self.source, self.attribution)
+        if not isinstance(stages, (tuple, list)) or not 1 <= len(stages) <= 3:
+            raise ValueError("resolved_reveal_stages must contain one to three stages")
+        previous_instant = None
+        previous = CompositionVisibility(quotation=False)
+        for stage in stages:
+            if not isinstance(stage, ResolvedRevealStage) or not isinstance(stage.instant, datetime):
+                raise ValueError("resolved_reveal_stages must contain valid resolved stages")
+            if stage.instant.tzinfo is None or stage.instant.utcoffset() != timezone.utc.utcoffset(None):
+                raise ValueError("resolved reveal instant must be UTC")
+            if stage.instant.microsecond:
+                raise ValueError("resolved reveal instant must have whole-second precision")
+            visibility = stage.visibility
+            if not isinstance(visibility, CompositionVisibility) or any(
+                type(getattr(visibility, field)) is not bool for field in ("quotation", "source", "attribution")
+            ):
+                raise ValueError("resolved reveal visibility must contain booleans")
+            if (
+                not visibility.quotation
+                or (self.source is None and visibility.source)
+                or (self.attribution is None and visibility.attribution)
+            ):
+                raise ValueError("resolved reveal visibility is inconsistent with literary content")
+            if previous_instant is not None:
+                if stage.instant <= previous_instant:
+                    raise ValueError("resolved reveal instants must be strictly increasing")
+                if (previous.source and not visibility.source) or (previous.attribution and not visibility.attribution):
+                    raise ValueError("resolved reveal visibility must be cumulative")
+                if visibility == previous:
+                    raise ValueError("each resolved reveal stage must introduce a field")
+            previous_instant, previous = stage.instant, visibility
+        if (self.source is not None and not previous.source) or (
+            self.attribution is not None and not previous.attribution
+        ):
+            raise ValueError("final resolved reveal stage must reveal all present fields")
+        object.__setattr__(self, "resolved_reveal_stages", tuple(stages))
 
     @property
     def display_date(self) -> date:
@@ -229,8 +319,9 @@ class GlobalHistoryRecord:
     revision: int
     display_date: date
     selection_timestamp: datetime
-    quotation_text: str
-    quotation_identity: str
+    quotation: str
+    source: str | None
+    attribution: str | None
 
 
 @dataclass(frozen=True)
@@ -265,8 +356,9 @@ class GlobalHistoryStore:
             revision=state.revision,
             display_date=state.snapshot.display_date,
             selection_timestamp=event_time,
-            quotation_text=state.snapshot.quotation_text,
-            quotation_identity=state.snapshot.quotation_identity,
+            quotation=state.snapshot.quotation_text,
+            source=state.snapshot.source,
+            attribution=state.snapshot.attribution,
         )
         contents = _encode_history_record(record)
         if len(contents) > self.max_segment_size:
@@ -348,7 +440,7 @@ class PersistentStateStore:
             ) from error
         except StateRecoveryError as error:
             raise StateRecoveryError(f"{error} State file: {self.path}. {_recovery_guidance(self.path)}") from error
-        except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
+        except (UnicodeError, json.JSONDecodeError, TypeError, ValueError, KeyError, RecursionError) as error:
             raise StateRecoveryError(
                 f"invalid persistent state at {self.path}: {error}. {_recovery_guidance(self.path)}"
             ) from error
@@ -392,6 +484,14 @@ class PersistentStateStore:
                 raise StateCommitError(str(error)) from error
         if snapshot.quotation_identity not in repetition_history:
             raise StateCommitError("proposed repetition history must contain the selected quotation identity")
+        proposed = PersistentState(
+            revision=proposal.base_revision + 1,
+            snapshot=snapshot,
+            repetition_history=repetition_history,
+            highest_reveal_stage=initial_reveal_stage,
+        )
+        _validate_state(proposed)
+        _canonical_json(_state_payload(proposed))
 
         previous = self.load()
         current_revision = 0 if previous is None else previous.revision
@@ -405,15 +505,8 @@ class PersistentStateStore:
                 f"but current state is revision {current_revision}"
             )
 
-        state = PersistentState(
-            revision=current_revision + 1,
-            snapshot=snapshot,
-            repetition_history=repetition_history,
-            highest_reveal_stage=initial_reveal_stage,
-        )
-        _validate_state(state)
-        self._publish(state)
-        return state
+        self._publish(proposed)
+        return proposed
 
     def advance_reveal_progress(self, expected_revision: int, stage: int) -> PersistentState:
         """Persist a higher stage for the specified current selection generation.
@@ -433,6 +526,8 @@ class PersistentStateStore:
                 f"stale reveal-progress update: expected revision {expected_revision}, "
                 f"but current state is revision {previous.revision}"
             )
+        if stage >= len(previous.snapshot.resolved_reveal_stages):
+            raise ValueError("highest_reveal_stage exceeds the final resolved reveal stage")
         if stage <= previous.highest_reveal_stage:
             self._confirm_durability()
             return previous
@@ -572,9 +667,10 @@ def _decode_snapshot(value: object) -> DailySnapshot:
             "text_color",
             "decoration_color",
             "reveal_schedule",
+            "resolved_reveal_stages",
             "scheduling",
+            "actions",
         },
-        optional_fields={"actions"},
     )
     scheduling_data = _require_mapping(
         data["scheduling"],
@@ -600,8 +696,27 @@ def _decode_snapshot(value: object) -> DailySnapshot:
         decoration_color=data["decoration_color"],
         reveal_schedule=data["reveal_schedule"],
         scheduling=scheduling,
-        actions=_decode_actions(data.get("actions", [])),
+        actions=_decode_actions(data["actions"]),
+        resolved_reveal_stages=_decode_reveal_stages(data["resolved_reveal_stages"]),
     )
+
+
+def _decode_reveal_stages(value: object) -> tuple[ResolvedRevealStage, ...]:
+    if not isinstance(value, list):
+        raise ValueError("snapshot.resolved_reveal_stages must be an array")
+    stages = []
+    for item in value:
+        data = _require_mapping(item, "resolved reveal stage", {"instant", "visibility"})
+        instant = data["instant"]
+        if not isinstance(instant, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", instant
+        ):
+            raise ValueError("resolved reveal instant must be a whole-second UTC timestamp")
+        visibility = _require_mapping(
+            data["visibility"], "resolved reveal visibility", {"quotation", "source", "attribution"}
+        )
+        stages.append(ResolvedRevealStage(datetime.fromisoformat(instant), CompositionVisibility(**visibility)))
+    return tuple(stages)
 
 
 def _decode_document(value: object) -> PersistentState:
@@ -647,6 +762,8 @@ def _validate_state(state: PersistentState) -> None:
     if type(state.revision) is not int or state.revision <= 0:
         raise ValueError("revision must be a positive integer")
     _validate_reveal_stage(state.highest_reveal_stage)
+    if state.highest_reveal_stage >= len(state.snapshot.resolved_reveal_stages):
+        raise ValueError("highest_reveal_stage exceeds the final resolved reveal stage")
     if state.snapshot.quotation_identity not in state.repetition_history:
         raise ValueError("repetition history must contain the current quotation identity")
 
@@ -670,6 +787,19 @@ def _state_payload(state: PersistentState) -> dict[str, object]:
             "text_color": _thaw_json(snapshot.text_color),
             "decoration_color": _thaw_json(snapshot.decoration_color),
             "reveal_schedule": _thaw_json(snapshot.reveal_schedule),
+            "resolved_reveal_stages": [
+                {
+                    "instant": (
+                        stage.instant.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                    ),
+                    "visibility": {
+                        "quotation": stage.visibility.quotation,
+                        "source": stage.visibility.source,
+                        "attribution": stage.visibility.attribution,
+                    },
+                }
+                for stage in snapshot.resolved_reveal_stages
+            ],
             "actions": [
                 {
                     "type": action.type,
@@ -692,8 +822,9 @@ def _encode_history_record(record: GlobalHistoryRecord) -> bytes:
         "revision": record.revision,
         "display_date": record.display_date.isoformat(),
         "selection_timestamp": record.selection_timestamp.isoformat().replace("+00:00", "Z"),
-        "quotation_text": record.quotation_text,
-        "quotation_identity": record.quotation_identity,
+        "quotation": record.quotation,
+        "source": record.source,
+        "attribution": record.attribution,
     }
     return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8") + b"\n"
 
@@ -709,6 +840,7 @@ def _truncate_incomplete_history_tail(path: Path) -> None:
         if history_file.read(1) == b"\n":
             return
         position = end
+        boundary = 0
         while position:
             size = min(8192, position)
             position -= size
@@ -716,12 +848,32 @@ def _truncate_incomplete_history_tail(path: Path) -> None:
             chunk = history_file.read(size)
             newline = chunk.rfind(b"\n")
             if newline >= 0:
-                history_file.truncate(position + newline + 1)
+                boundary = position + newline + 1
                 break
+        history_file.seek(boundary)
+        tail = history_file.read(end - boundary)
+        if _complete_history_object(tail):
+            history_file.seek(0, os.SEEK_END)
+            history_file.write(b"\n")
         else:
-            history_file.truncate(0)
+            history_file.truncate(boundary)
+            _LOGGER.warning("Discarded incomplete global-history tail at %s", path)
         history_file.flush()
         os.fsync(history_file.fileno())
+
+
+def _complete_history_object(contents: bytes) -> bool:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"invalid JSON number {value}")
+
+    try:
+        return isinstance(
+            json.loads(contents.decode("utf-8"), parse_constant=reject_constant, parse_int=str, parse_float=str), dict
+        )
+    except (UnicodeError, ValueError):
+        return False
+    except RecursionError as error:
+        raise OSError("cannot inspect deeply nested global-history tail") from error
 
 
 def _canonical_json(value: object) -> bytes:

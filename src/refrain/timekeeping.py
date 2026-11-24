@@ -11,7 +11,7 @@ from typing import Callable
 from . import local_time
 from .config import ApplicationConfiguration
 from .persistence import PersistentState
-from .scheduling import SchedulingEvaluationError, _local_display_date, _required_stage, _resolve_reveal_stages
+from .scheduling import SchedulingEvaluationError, _local_display_date, _required_stage
 
 _CLOCK_ADJUSTMENT_TOLERANCE = 1.0
 _DEFAULT_MAX_CLOCK_CHECK_INTERVAL = 300.0
@@ -86,16 +86,9 @@ def next_scheduling_deadline(
     required_stage = _required_stage(state, current_utc)
     if required_stage > state.highest_reveal_stage:
         return current_utc
-    event_times, _ = _resolve_reveal_stages(state.snapshot)
-    try:
-        for stage_index, event_time in enumerate(event_times):
-            if stage_index <= state.highest_reveal_stage:
-                continue
-            reveal_deadline = _local_datetime(state.snapshot.display_date, event_time)
-            if reveal_deadline > current_utc:
-                deadlines.append(reveal_deadline)
-    except (OverflowError, OSError, ValueError) as error:
-        raise SchedulingEvaluationError("cannot calculate the next reveal deadline") from error
+    for stage_index, stage in enumerate(state.snapshot.resolved_reveal_stages):
+        if stage_index > state.highest_reveal_stage and stage.instant > current_utc:
+            deadlines.append(stage.instant)
 
     return min(deadlines)
 

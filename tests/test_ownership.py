@@ -289,7 +289,7 @@ def test_failed_runtime_releases_ownership(
         pass
 
 
-@pytest.mark.parametrize("storage", ["state", "history", "artifacts"])
+@pytest.mark.parametrize("storage", ["state", "artifacts"])
 def test_runtime_rejects_storage_that_can_replace_ownership_lock(
     storage: str,
     user_environment: dict[str, str],

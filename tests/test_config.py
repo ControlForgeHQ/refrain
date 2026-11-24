@@ -33,7 +33,7 @@ from refrain.geometry import ResolvedOutputSpecification
 
 def configuration_data(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
-        "destinations": [{"id": "desktop", "type": "window", "audience": "private"}],
+        "destinations": [{"id": "desktop", "type": "window", "audience": "internal"}],
         "fonts": {"pools": {"default": ["test-font"]}},
         "text": {
             "colors": {"pools": {"default": ["black"]}},
@@ -50,7 +50,7 @@ def configuration_data(**overrides: object) -> dict[str, object]:
     if "destinations" in overrides and isinstance(overrides["destinations"], list):
         data["destinations"] = [
             (
-                {**destination, "audience": destination.get("audience", "private")}
+                {**destination, "audience": destination.get("audience", "internal")}
                 if isinstance(destination, dict)
                 else destination
             )
@@ -113,23 +113,23 @@ def test_publish_destinations_share_backend_and_use_explicit_geometry(tmp_path: 
     data = configuration_data(
         destinations=[
             {
-                "id": "web-public",
+                "id": "web-external",
                 "type": "publish",
-                "audience": "public",
+                "audience": "external",
                 "aspect_ratio": "16:10",
                 "resolution": [320, 200],
             },
             {
-                "id": "web-private",
+                "id": "web-internal",
                 "type": "publish",
-                "audience": "private",
+                "audience": "internal",
                 "aspect_ratio": "16:10",
                 "resolution": [320, 200],
             },
             {
                 "id": "web-custom",
                 "type": "publish",
-                "audience": "private",
+                "audience": "internal",
                 "aspect_ratio": "16:9",
                 "resolution": [320, 180],
                 "overrides": {"background": "none"},
@@ -143,8 +143,8 @@ def test_publish_destinations_share_backend_and_use_explicit_geometry(tmp_path: 
     backend = configuration.display_backends[0]
     assert backend.type == "publish"
     assert [destination.identifier for destination in backend.outputs] == [
-        "web-public",
-        "web-private",
+        "web-external",
+        "web-internal",
         "web-custom",
     ]
     assert [destination.output_specification for destination in backend.outputs] == [
@@ -159,7 +159,7 @@ def test_publish_destinations_share_backend_and_use_explicit_geometry(tmp_path: 
 def test_publish_destination_defaults_geometry_when_pair_is_omitted(tmp_path: Path) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(destinations=[{"id": "web-public", "type": "publish", "audience": "public"}]),
+        configuration_data(destinations=[{"id": "web-external", "type": "publish", "audience": "external"}]),
     )
 
     configuration = load_application_config(config_path)
@@ -172,8 +172,8 @@ def test_publish_destination_defaults_geometry_when_pair_is_omitted(tmp_path: Pa
 @pytest.mark.parametrize(
     "destination",
     [
-        {"id": "web", "type": "publish", "audience": "public", "resolution": [320, 200]},
-        {"id": "web", "type": "publish", "audience": "public", "aspect_ratio": "16:10"},
+        {"id": "web", "type": "publish", "audience": "external", "resolution": [320, 200]},
+        {"id": "web", "type": "publish", "audience": "external", "aspect_ratio": "16:10"},
     ],
 )
 def test_publish_destination_rejects_incomplete_geometry_pair(tmp_path: Path, destination: dict[str, object]) -> None:
@@ -187,16 +187,16 @@ def test_publish_destination_directory_ids_are_case_insensitively_unique(tmp_pat
         configuration_data(
             destinations=[
                 {
-                    "id": "web-public",
+                    "id": "web-external",
                     "type": "publish",
-                    "audience": "public",
+                    "audience": "external",
                     "aspect_ratio": "16:10",
                     "resolution": [320, 200],
                 },
                 {
-                    "id": "WEB-PUBLIC",
+                    "id": "WEB-EXTERNAL",
                     "type": "publish",
-                    "audience": "private",
+                    "audience": "internal",
                     "aspect_ratio": "16:10",
                     "resolution": [320, 200],
                 },
@@ -215,7 +215,7 @@ def test_publish_destination_rejects_windows_reserved_directory_ids(tmp_path: Pa
                 {
                     "id": identifier,
                     "type": "publish",
-                    "audience": "public",
+                    "audience": "external",
                     "aspect_ratio": "16:10",
                     "resolution": [320, 200],
                 }
@@ -1084,8 +1084,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
             "image-server": None,
             "storage": {
                 "content": "entries",
-                "state": "state/current.json",
-                "history": "state/history.json",
+                "state": "state",
                 "artifacts": "cache/artifacts",
             },
             "scheduling": {
@@ -1133,7 +1132,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
     assert config.font_faces == {"source": "italic"}
     assert config.palette["black"] == "#101010"
     assert config.content_directory == tmp_path / "entries"
-    assert config.storage.state == tmp_path / "state" / "current.json"
+    assert config.storage.state == tmp_path / "state"
     assert config.information_view_duration == 30
     assert config.qr_enabled is False
     assert config.display_backends[1].service_enabled is True
@@ -1159,18 +1158,18 @@ def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
     assert output.identifier == "desktop"
     assert output.output_specification.aspect_ratio == "16:9"
     assert output.output_specification.requested_output_size == (1920, 1080)
-    assert output.audience == "private"
+    assert output.audience == "internal"
 
 
 @pytest.mark.parametrize(
     ("backend_type", "audience"),
     [
-        ("window", "public"),
-        ("window", "private"),
-        ("waveshare-13in3-e", "public"),
-        ("waveshare-13in3-e", "private"),
-        ("image-server", "public"),
-        ("image-server", "private"),
+        ("window", "external"),
+        ("window", "internal"),
+        ("waveshare-13in3-e", "external"),
+        ("waveshare-13in3-e", "internal"),
+        ("image-server", "external"),
+        ("image-server", "internal"),
     ],
 )
 def test_each_destination_type_preserves_explicit_audience(tmp_path: Path, backend_type: str, audience: str) -> None:
@@ -1184,7 +1183,7 @@ def test_each_destination_type_preserves_explicit_audience(tmp_path: Path, backe
     assert config.display_backends[0].outputs[0].audience == audience
 
 
-@pytest.mark.parametrize("audience", [None, "", "internal", 1, True, [], {}])
+@pytest.mark.parametrize("audience", [None, "", "public", "private", 1, True, [], {}])
 def test_invalid_destination_audience_is_a_configuration_error(tmp_path: Path, audience: object) -> None:
     data = configuration_data(destinations=[{"id": "desktop", "type": "window", "audience": audience}])
 
@@ -1529,7 +1528,6 @@ def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.storage.state is None
-    assert config.storage.history is None
     assert config.storage.artifacts is None
     assert config.storage.publish is None
 
@@ -1537,8 +1535,7 @@ def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("state", "runtime/state.json"),
-        ("history", "runtime/global-history.jsonl"),
+        ("state", "runtime/state"),
         ("artifacts", "runtime/artifacts"),
         ("publish", "runtime/publish"),
     ],
@@ -1548,14 +1545,13 @@ def test_each_configured_storage_path_resolves_relative_to_config_file(tmp_path:
     config = load_application_config(write_config(config_path, configuration_data(storage={field: value})))
 
     assert getattr(config.storage, field) == config_path.parent / value
-    assert all(getattr(config.storage, other) is None for other in {"state", "history", "artifacts"} - {field})
+    assert all(getattr(config.storage, other) is None for other in {"state", "artifacts", "publish"} - {field})
 
 
 def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: Path) -> None:
     configured = {
         "content": tmp_path / "content",
-        "state": tmp_path / "state.json",
-        "history": tmp_path / "global-history.jsonl",
+        "state": tmp_path / "state",
         "artifacts": tmp_path / "artifacts",
         "publish": tmp_path / "publish",
     }
@@ -1569,11 +1565,10 @@ def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: 
 
     assert config.content_directory == configured["content"]
     assert config.storage.state == configured["state"]
-    assert config.storage.history == configured["history"]
     assert config.storage.artifacts == configured["artifacts"]
 
 
-@pytest.mark.parametrize("field", ["state", "history", "artifacts", "publish"])
+@pytest.mark.parametrize("field", ["state", "artifacts", "publish"])
 @pytest.mark.parametrize("value", [None, 1, True, "", []])
 def test_invalid_storage_path_values_are_errors(tmp_path: Path, field: str, value: object) -> None:
     data = configuration_data(storage={field: value})
@@ -1596,6 +1591,15 @@ def test_unknown_storage_fields_follow_configuration_warning_policy(tmp_path: Pa
     assert config.storage.state == tmp_path / "state.json"
     assert "storage.other" in caplog.text
     assert "is not a supported configuration field; it is ignored" in caplog.text
+
+
+def test_history_override_is_ignored_as_an_unknown_field(tmp_path: Path, caplog) -> None:
+    config = load_application_config(
+        write_config(tmp_path / "config.yaml", configuration_data(storage={"history": "elsewhere.jsonl"}))
+    )
+
+    assert not hasattr(config.storage, "history")
+    assert "storage.history" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -1623,7 +1627,7 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
     assert config.max_font_size == 200
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.qr_enabled is True
-    assert config.storage.state is config.storage.history is config.storage.artifacts is None
+    assert config.storage.state is config.storage.artifacts is None
     assert config.storage.publish is None
 
     snapshot = DailySnapshot(
@@ -2173,7 +2177,7 @@ def test_global_insets_are_validated_against_configured_destination_aspects(tmp_
         {
             "id": "desktop",
             "type": "window",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "16:10",
             "resolution": [320, 200],
         }
@@ -2189,7 +2193,7 @@ def test_global_insets_are_validated_against_configured_destination_aspects(tmp_
         {
             "id": "web",
             "type": "publish",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "5:3",
             "resolution": [320, 192],
         }
@@ -2205,7 +2209,7 @@ def test_global_insets_are_validated_against_configured_destination_aspects(tmp_
         {
             "id": "web-4-3",
             "type": "publish",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "4:3",
             "resolution": [320, 240],
         }
@@ -2240,7 +2244,7 @@ def test_decoration_insets_follow_configured_aspects_and_revalidate(tmp_path: Pa
         {
             "id": "desktop",
             "type": "window",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "16:10",
             "resolution": [320, 200],
         }
@@ -2259,7 +2263,7 @@ def test_decoration_insets_follow_configured_aspects_and_revalidate(tmp_path: Pa
         {
             "id": "web-4-3",
             "type": "publish",
-            "audience": "private",
+            "audience": "internal",
             "aspect_ratio": "4:3",
             "resolution": [320, 240],
         }
@@ -2310,7 +2314,7 @@ def test_omitted_optional_defaults_are_silent(tmp_path: Path, caplog) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
         {
-            "destinations": [{"id": "desktop", "type": "window", "audience": "private"}],
+            "destinations": [{"id": "desktop", "type": "window", "audience": "internal"}],
             "fonts": {"pools": {"default": ["test-font"]}},
         },
     )
