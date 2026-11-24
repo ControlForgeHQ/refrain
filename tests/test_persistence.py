@@ -710,7 +710,7 @@ def test_global_history_records_committed_selection_as_unicode_jsonl(tmp_path: P
     assert record.selection_timestamp == timestamp
     assert history.path.read_text(encoding="utf-8") == (
         '{"revision":1,"display_date":"2026-10-26","selection_timestamp":"2026-10-29T13:30:00Z",'
-        '"quotation_text":"Étoile, 雪.","quotation_identity":"Étoile, 雪."}\n'
+        '"quotation":"Étoile, 雪.","source":"Resolved source","attribution":"Resolved author"}\n'
     )
 
 
@@ -721,7 +721,7 @@ def test_global_history_uses_fixed_limits_and_rotates_between_records(tmp_path: 
     assert history.max_segment_size == 1_048_576
     assert history.max_segments == 20
 
-    first = commit(state_store, "x" * ((history.max_segment_size - 180) // 2))
+    first = commit(state_store, "x" * (history.max_segment_size - 180))
     first_record = history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
     first_bytes = history_path.read_bytes()
     assert 0 < len(first_bytes) <= history.max_segment_size
@@ -756,7 +756,7 @@ def test_global_history_retains_at_most_twenty_segments(tmp_path: Path) -> None:
 
 def test_history_rejects_oversized_records_without_touching_state(tmp_path: Path) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
-    state = commit(state_store, "x" * 600_000)
+    state = commit(state_store, "x" * 1_048_576)
     history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
 
     with pytest.raises(GlobalHistoryWriteError, match="larger than the 1048576-byte segment limit"):
@@ -778,6 +778,36 @@ def test_incomplete_history_tail_is_discarded_and_history_is_not_needed_for_reco
     history.path.unlink()
     assert PersistentStateStore(state_store.path).load() == second
     assert first.revision == 1
+
+
+def test_complete_history_record_without_newline_is_preserved(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    first = commit(store, "First.")
+    history.record(first, timestamp=datetime(2026, 10, 26, tzinfo=timezone.utc))
+    original = history.path.read_bytes().rstrip(b"\n")
+    history.path.write_bytes(original)
+    second = commit(store, "Second.", date(2026, 10, 27))
+
+    history.record(second, timestamp=datetime(2026, 10, 27, tzinfo=timezone.utc))
+
+    lines = history.path.read_bytes().splitlines()
+    assert lines[0] == original
+    assert [json.loads(line)["revision"] for line in lines] == [1, 2]
+
+
+def test_incomplete_history_tail_preserves_preceding_record(tmp_path: Path, caplog) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    history.record(commit(store, "First."))
+    original = history.path.read_bytes()
+    history.path.write_bytes(original + b'{"revision":')
+
+    history.record(commit(store, "Second.", date(2026, 10, 27)))
+
+    assert history.path.read_bytes().startswith(original)
+    assert len(history.path.read_bytes().splitlines()) == 2
+    assert "incomplete" in caplog.text
 
 
 def test_history_fsync_failure_does_not_change_committed_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

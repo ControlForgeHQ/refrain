@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -26,6 +27,7 @@ _HISTORY_MAX_SEGMENTS = 20
 _DAY_START = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_LOGGER = logging.getLogger(__name__)
 
 
 class PersistentStateError(Exception):
@@ -229,8 +231,9 @@ class GlobalHistoryRecord:
     revision: int
     display_date: date
     selection_timestamp: datetime
-    quotation_text: str
-    quotation_identity: str
+    quotation: str
+    source: str | None
+    attribution: str | None
 
 
 @dataclass(frozen=True)
@@ -265,8 +268,9 @@ class GlobalHistoryStore:
             revision=state.revision,
             display_date=state.snapshot.display_date,
             selection_timestamp=event_time,
-            quotation_text=state.snapshot.quotation_text,
-            quotation_identity=state.snapshot.quotation_identity,
+            quotation=state.snapshot.quotation_text,
+            source=state.snapshot.source,
+            attribution=state.snapshot.attribution,
         )
         contents = _encode_history_record(record)
         if len(contents) > self.max_segment_size:
@@ -692,8 +696,9 @@ def _encode_history_record(record: GlobalHistoryRecord) -> bytes:
         "revision": record.revision,
         "display_date": record.display_date.isoformat(),
         "selection_timestamp": record.selection_timestamp.isoformat().replace("+00:00", "Z"),
-        "quotation_text": record.quotation_text,
-        "quotation_identity": record.quotation_identity,
+        "quotation": record.quotation,
+        "source": record.source,
+        "attribution": record.attribution,
     }
     return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8") + b"\n"
 
@@ -709,6 +714,7 @@ def _truncate_incomplete_history_tail(path: Path) -> None:
         if history_file.read(1) == b"\n":
             return
         position = end
+        boundary = 0
         while position:
             size = min(8192, position)
             position -= size
@@ -716,12 +722,41 @@ def _truncate_incomplete_history_tail(path: Path) -> None:
             chunk = history_file.read(size)
             newline = chunk.rfind(b"\n")
             if newline >= 0:
-                history_file.truncate(position + newline + 1)
+                boundary = position + newline + 1
                 break
+        history_file.seek(boundary)
+        tail = history_file.read(end - boundary) if end - boundary <= _HISTORY_SEGMENT_SIZE else b""
+        if _valid_history_record(tail):
+            history_file.seek(0, os.SEEK_END)
+            history_file.write(b"\n")
         else:
-            history_file.truncate(0)
+            history_file.truncate(boundary)
+            _LOGGER.warning("Discarded incomplete global-history tail at %s", path)
         history_file.flush()
         os.fsync(history_file.fileno())
+
+
+def _valid_history_record(contents: bytes) -> bool:
+    try:
+        record = json.loads(contents.decode("utf-8"), object_pairs_hook=_unique_object)
+        data = _require_mapping(
+            record, "history", {"revision", "display_date", "selection_timestamp", "quotation", "source", "attribution"}
+        )
+        if type(data["revision"]) is not int or data["revision"] <= 0:
+            return False
+        _parse_date(data["display_date"], "display_date")
+        timestamp = data["selection_timestamp"]
+        if not isinstance(timestamp, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", timestamp
+        ):
+            return False
+        datetime.fromisoformat(timestamp)
+        for field in ("quotation", "source", "attribution"):
+            if field == "quotation" or data[field] is not None:
+                _nonempty_string(data[field], field).encode("utf-8")
+        return True
+    except (UnicodeError, ValueError, TypeError, RecursionError):
+        return False
 
 
 def _canonical_json(value: object) -> bytes:
