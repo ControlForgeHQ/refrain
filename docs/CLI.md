@@ -70,6 +70,16 @@ Startup requires a valid `image-server` section identifying at least one configu
 
 The service operates independently of the resident and can serve verified filesystem publications while the resident is stopped.
 
+The service uses the following process exit codes on all supported platforms:
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Successful service shutdown. |
+| `1` | Listener initialization failure or unrecoverable service failure. |
+| `78` | Missing configuration file or invalid required configuration, including an absent `image-server` section. |
+
+Publication unavailability and individual HTTP request failures do not terminate the service.
+
 See [Image Server](specifications/75-IMAGE_SERVER.md) for component requirements and [Application Configuration](schemas/CONFIGURATION.md#independent-image-server-settings) for configuration syntax.
 
 ## Presentation viewer

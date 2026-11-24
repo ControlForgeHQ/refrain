@@ -330,6 +330,38 @@ Consumer enablement in application configuration is separate from operating-syst
 
 Do not introduce application-level service supervision merely to replace systemd.
 
+### Image-server supervision
+
+Supply a separate `refrain-image-server.service` systemd unit for the independent image-server executable on supported Raspberry Pi OS deployments.
+
+The resident and image-server services must be independently enabled, started, stopped, and restarted. Do not establish ordering, readiness, or lifecycle dependencies between the two services.
+
+The presence of an `image-server` configuration section does not enable or start the image-server service.
+
+Use the image-server process exit codes defined in [CLI](../CLI.md#independent-image-server) to distinguish configuration failures from other unsuccessful service termination.
+
+Configure the image-server unit with the following supervision settings:
+
+```ini
+[Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+RestartPreventExitStatus=78
+TimeoutStopSec=10s
+```
+
+Configuration failure must leave the service in a failed state without automatic restart. Unexpected unsuccessful termination must be eligible for automatic restart subject to the configured start-rate limit.
+
+The supervisor's stop timeout must accommodate the image server's graceful shutdown allowance defined in [Image Server](75-IMAGE_SERVER.md#shutdown).
+
+Use ordinary systemd and journal facilities for service management and diagnostics.
+
+The image-server executable must also support foreground operation without systemd on supported Windows and Linux platforms. Native Windows service integration is not required.
+
 ### Clock readiness
 
 Refrain uses the host operating system's local timezone and timekeeping facilities.
