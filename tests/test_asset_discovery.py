@@ -262,7 +262,7 @@ def test_invalid_bundled_identity_blocks_custom_substitution(tmp_path: Path) -> 
     assert any("is invalid; background excluded" in message for message in diagnostics)
 
 
-def test_duplicate_bundled_backgrounds_choose_sorted_location(tmp_path: Path) -> None:
+def test_duplicate_bundled_backgrounds_are_all_excluded(tmp_path: Path) -> None:
     bundled_root = tmp_path / "package" / "assets" / "backgrounds"
     _write_png(bundled_root / "a" / "shared-paper.png")
     _write_png(bundled_root / "b" / "shared-paper.png")
@@ -275,8 +275,146 @@ def test_duplicate_bundled_backgrounds_choose_sorted_location(tmp_path: Path) ->
 
     registry = discover_backgrounds(bundled_root, tmp_path / "user-assets" / "backgrounds", report)
 
-    assert registry["shared-paper"].path == bundled_root / "a" / "shared-paper.png"
-    assert any("duplicate bundled identifier" in message for message in diagnostics)
+    assert "shared-paper" not in registry
+    assert diagnostics == [
+        f"bundled assets at {bundled_root / 'a' / 'shared-paper.png'}, "
+        f"{bundled_root / 'b' / 'shared-paper.png'} share identifier 'shared-paper'; all are excluded"
+    ]
+
+
+def _write_resource(root: Path, category: str, location: str, identifier: str, *, valid: bool = True) -> Path:
+    package = root / location
+    if category == "fonts":
+        write_font_bundle(package, identifier)
+        manifest = {"format": 1, "id": identifier, "faces": {"regular": "Regular.ttf" if valid else "missing.ttf"}}
+        name = "font.yaml"
+    else:
+        _write_png(package / "image.png")
+        manifest = {"format": 1, "id": identifier, "layers": [{"image": "image.png" if valid else "missing.png"}]}
+        name = "background.yaml" if category == "backgrounds" else "decoration.yaml"
+    return _write_manifest(package, name, manifest)
+
+
+def _discover_resources(category: str, bundled: Path, custom: Path, diagnostics: list[tuple[str, str]]) -> dict:
+    from refrain.assets import discover_backgrounds, discover_decorations, discover_fonts
+
+    def report(field: str, message: str, _severity: int) -> None:
+        diagnostics.append((field, message))
+
+    if category == "fonts":
+        return discover_fonts(bundled, custom, report)
+    if category == "backgrounds":
+        return discover_backgrounds(bundled, custom, report)
+    return discover_decorations(bundled, custom, set(), set(), report, lambda *_args: None)
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+@pytest.mark.parametrize("second_valid", [True, False])
+def test_bundled_claim_collisions_exclude_all_and_block_custom(
+    tmp_path: Path, monkeypatch, category: str, second_valid: bool
+) -> None:
+    import refrain.assets as assets
+
+    bundled = tmp_path / "bundled" / category
+    custom = tmp_path / "custom" / category
+    first = _write_resource(bundled, category, "z-first", "shared")
+    second = _write_resource(bundled, category, "a-second", "shared", valid=second_valid)
+    _write_resource(bundled, category, "unique", "unique")
+    _write_resource(custom, category, "replacement", "shared")
+    diagnostics: list[tuple[str, str]] = []
+
+    registry = _discover_resources(category, bundled, custom, diagnostics)
+
+    assert "shared" not in registry
+    assert registry["unique"].bundled
+    collisions = [message for _, message in diagnostics if "bundled assets at" in message]
+    assert collisions == [f"bundled assets at {second}, {first} share identifier 'shared'; all are excluded"]
+    assert any("conflicts with bundled identifier 'shared'" in message for _, message in diagnostics)
+
+    original_children = assets._children
+    monkeypatch.setattr(assets, "_children", lambda *args: list(reversed(original_children(*args))))
+    reversed_diagnostics: list[tuple[str, str]] = []
+    reversed_registry = _discover_resources(category, bundled, custom, reversed_diagnostics)
+    assert set(registry) == set(reversed_registry)
+    assert [message for _, message in reversed_diagnostics if "bundled assets at" in message] == collisions
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+def test_custom_collisions_only_include_valid_candidates(tmp_path: Path, category: str) -> None:
+    bundled = tmp_path / "bundled" / category
+    custom = tmp_path / "custom" / category
+    _write_resource(bundled, category, "broken", "reserved", valid=False)
+    _write_resource(custom, category, "blocked", "reserved")
+    _write_resource(custom, category, "bad", "usable", valid=False)
+    _write_resource(custom, category, "good", "usable")
+    first = _write_resource(custom, category, "first", "duplicate")
+    second = _write_resource(custom, category, "second", "duplicate")
+    _write_resource(custom, category, "invalid", "duplicate", valid=False)
+    diagnostics: list[tuple[str, str]] = []
+
+    registry = _discover_resources(category, bundled, custom, diagnostics)
+
+    assert "reserved" not in registry
+    assert "duplicate" not in registry
+    assert not registry["usable"].bundled
+    collisions = [message for _, message in diagnostics if "custom assets at" in message]
+    assert collisions == [f"custom assets at {first}, {second} share identifier 'duplicate'; all are excluded"]
+
+
+def test_bundled_packaged_and_standalone_background_claims_collide(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    package = _write_resource(bundled, "backgrounds", "package", "shared")
+    standalone = _write_png(bundled / "shared.png")
+    diagnostics: list[tuple[str, str]] = []
+
+    registry = _discover_resources("backgrounds", bundled, tmp_path / "custom", diagnostics)
+
+    assert "shared" not in registry
+    assert [message for _, message in diagnostics if "bundled assets at" in message] == [
+        f"bundled assets at {package}, {standalone} share identifier 'shared'; all are excluded"
+    ]
+
+
+def test_resource_identifiers_are_category_scoped(tmp_path: Path) -> None:
+    for category in ("fonts", "backgrounds", "decorations"):
+        bundled = tmp_path / "bundled" / category
+        _write_resource(bundled, category, "one", "shared")
+        if category == "fonts":
+            _write_resource(bundled, category, "two", "shared")
+        registry = _discover_resources(category, bundled, tmp_path / "custom" / category, [])
+        assert ("shared" in registry) is (category != "fonts")
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+def test_unreadable_or_invalid_manifest_identity_does_not_claim_identifier(tmp_path: Path, category: str) -> None:
+    bundled = tmp_path / "bundled" / category
+    custom = tmp_path / "custom" / category
+    malformed = _write_resource(bundled, category, "malformed", "shared")
+    malformed.write_text("id: [", encoding="utf-8")
+    _write_resource(bundled, category, "invalid-id", "invalid id")
+    _write_resource(custom, category, "valid", "shared")
+    diagnostics: list[tuple[str, str]] = []
+
+    registry = _discover_resources(category, bundled, custom, diagnostics)
+
+    assert not registry["shared"].bundled
+    assert not any("bundled assets at" in message for _, message in diagnostics)
+
+
+def test_invalid_bundled_standalone_background_still_claims_identifier(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    standalone = bundled / "shared.png"
+    standalone.parent.mkdir()
+    standalone.write_bytes(b"not a PNG")
+    package = _write_resource(bundled, "backgrounds", "package", "shared")
+    diagnostics: list[tuple[str, str]] = []
+
+    registry = _discover_resources("backgrounds", bundled, tmp_path / "custom", diagnostics)
+
+    assert "shared" not in registry
+    assert [message for _, message in diagnostics if "bundled assets at" in message] == [
+        f"bundled assets at {package}, {standalone} share identifier 'shared'; all are excluded"
+    ]
 
 
 def test_none_remains_reserved_for_visual_resource_registries(tmp_path: Path, caplog) -> None:

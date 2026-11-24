@@ -231,28 +231,29 @@ def _validate_candidate(
 
 def _register_candidates(
     candidates: list[tuple[str, _T, bool, str]],
-    bundled_identifiers: set[str],
+    bundled_claims: Mapping[str, list[str]],
     category: str,
     report: Report,
 ) -> dict[str, _T]:
     bundled: dict[str, _T] = {}
     custom: dict[str, list[tuple[_T, str]]] = defaultdict(list)
+    for identifier, locations in sorted(bundled_claims.items()):
+        if len(locations) > 1:
+            report(
+                f"assets.{category}.{identifier}",
+                f"bundled assets at {', '.join(sorted(locations))} share identifier {identifier!r}; all are excluded",
+                logging.WARNING,
+            )
     for identifier, resource, is_bundled, location in candidates:
         if is_bundled:
-            if identifier in bundled:
-                report(
-                    f"assets.{category}.{identifier}",
-                    f"duplicate bundled identifier at {location}; excluded",
-                    logging.WARNING,
-                )
-            else:
+            if len(bundled_claims[identifier]) == 1:
                 bundled[identifier] = resource
         else:
             custom[identifier].append((resource, location))
     result = dict(bundled)
     for identifier in sorted(custom):
         entries = custom[identifier]
-        if identifier in bundled_identifiers or identifier in bundled:
+        if identifier in bundled_claims:
             for _, location in entries:
                 report(
                     f"assets.{category}.{identifier}",
@@ -279,7 +280,7 @@ def discover_backgrounds(
     from .config import BackgroundLayerResource, BackgroundResource
 
     candidates: list[tuple[str, BackgroundResource, bool, str]] = []
-    bundled_identifiers: set[str] = set()
+    bundled_claims: dict[str, list[str]] = defaultdict(list)
 
     def scan(root: AssetPath, is_bundled: bool) -> None:
         def visit(directory: AssetPath) -> None:
@@ -295,7 +296,7 @@ def discover_backgrounds(
                     return
                 identifier = data.get("id")
                 if is_bundled and valid_identifier(identifier) and identifier != "none":
-                    bundled_identifiers.add(identifier)
+                    bundled_claims[identifier].append(field)
                 _unknown_fields(data, {"format", "id", "layers", "text_color", "decoration_color"}, field, report)
                 invalid = False
                 if "image" in data:
@@ -405,7 +406,7 @@ def discover_backgrounds(
                 elif child.name.lower().endswith(".png"):
                     identifier = Path(child.name).stem
                     if is_bundled and valid_identifier(identifier) and identifier != "none":
-                        bundled_identifiers.add(identifier)
+                        bundled_claims[identifier].append(str(child))
                     resource = BackgroundResource(identifier, child, is_bundled)
                     _validate_image_candidate(
                         resource,
@@ -422,7 +423,7 @@ def discover_backgrounds(
 
     scan(bundled_root, True)
     scan(custom_root, False)
-    return _register_candidates(candidates, bundled_identifiers, "backgrounds", report)
+    return _register_candidates(candidates, bundled_claims, "backgrounds", report)
 
 
 def _parse_nine_slice(
@@ -590,7 +591,7 @@ def discover_decorations(
     from .config import DecorationLayerResource, DecorationResource
 
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
-    bundled_identifiers: set[str] = set()
+    bundled_claims: dict[str, list[str]] = defaultdict(list)
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
         for package, manifest in _walk_packages(root, "decoration.yaml", report, "decorations"):
             field = str(manifest)
@@ -601,7 +602,7 @@ def discover_decorations(
                 continue
             identifier = data.get("id")
             if is_bundled and valid_identifier(identifier) and identifier != "none":
-                bundled_identifiers.add(identifier)
+                bundled_claims[identifier].append(field)
             _unknown_fields(
                 data,
                 {
@@ -809,7 +810,7 @@ def discover_decorations(
                 )
                 continue
             _validate_candidate(resource, identifier, is_bundled, candidates, field)
-    return _register_candidates(candidates, bundled_identifiers, "decorations", report)
+    return _register_candidates(candidates, bundled_claims, "decorations", report)
 
 
 def discover_fonts(
@@ -820,7 +821,7 @@ def discover_fonts(
     from .config import FontResource
 
     candidates: list[tuple[str, FontResource, bool, str]] = []
-    bundled_identifiers: set[str] = set()
+    bundled_claims: dict[str, list[str]] = defaultdict(list)
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
         for package, manifest in _walk_packages(root, "font.yaml", report, "fonts"):
             field = str(manifest)
@@ -831,7 +832,7 @@ def discover_fonts(
                 continue
             identifier = data.get("id")
             if is_bundled and valid_identifier(identifier) and identifier != "none":
-                bundled_identifiers.add(identifier)
+                bundled_claims[identifier].append(field)
             _unknown_fields(data, {"format", "id", "faces", "font_faces"}, field, report)
             if type(data.get("format")) is not int or data.get("format") != 1:
                 report(
@@ -905,7 +906,7 @@ def discover_fonts(
                 )
                 continue
             _validate_candidate(resource, identifier, is_bundled, candidates, field)
-    return _register_candidates(candidates, bundled_identifiers, "fonts", report)
+    return _register_candidates(candidates, bundled_claims, "fonts", report)
 
 
 __all__ = ["discover_backgrounds", "discover_decorations", "discover_fonts", "parse_font_faces", "valid_identifier"]
