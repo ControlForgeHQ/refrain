@@ -159,6 +159,9 @@ class DisplayPublicationCoordinator:
         all_withdrawn_event: Event | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
         transient_capabilities: Mapping[str, bool] | None = None,
+        publication_finalizer: (
+            Callable[[DisplayOutputConfiguration, dict[str, object] | None], dict[str, object]] | None
+        ) = None,
     ) -> None:
         self._condition = Condition()
         self._factory = backend_factory or self._default_factory
@@ -166,6 +169,7 @@ class DisplayPublicationCoordinator:
         self._all_unavailable_event = all_unavailable_event
         self._all_withdrawn_event = all_withdrawn_event
         self._monotonic_clock = monotonic_clock
+        self._publication_finalizer = publication_finalizer
         self._stopping = False
         self._draining = False
         self._states = {
@@ -1085,6 +1089,7 @@ class DisplayPublicationCoordinator:
                                 ready.destination,
                                 image,
                                 transient=True,
+                                publication_finalizer=self._publication_finalizer,
                             )
                     elif one_shot is not None:
                         image = (
@@ -1108,6 +1113,7 @@ class DisplayPublicationCoordinator:
                             image,
                             prepared_metadata=prepared_metadata,
                             transient=not one_shot.forced,
+                            publication_finalizer=self._publication_finalizer,
                         )
                     else:
                         assert presentation is not None
@@ -1130,6 +1136,7 @@ class DisplayPublicationCoordinator:
                             image,
                             prepared_metadata=prepared_metadata,
                             transient=presentation.transient,
+                            publication_finalizer=self._publication_finalizer,
                         )
                 except Exception as error:
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
@@ -1237,16 +1244,26 @@ class DisplayPublicationCoordinator:
         *,
         prepared_metadata: dict[str, object] | None = None,
         transient: bool = False,
+        publication_finalizer: (
+            Callable[[DisplayOutputConfiguration, dict[str, object] | None], dict[str, object]] | None
+        ) = None,
     ) -> None:
         if isinstance(backend, PublicationDisplayBackend):
+            if publication_finalizer is None:
+                raise DisplayBackendUpdateError(
+                    "application publication metadata finalizer is unavailable for a metadata destination",
+                    recoverable=False,
+                )
             if transient:
-                backend.publish_transient(destination, image)
+                completed_metadata = publication_finalizer(destination, None)
+                backend.publish_transient(destination, image, completed_metadata)
                 return
             if prepared_metadata is None:
                 raise DisplayBackendUpdateError(
                     f"scheduled publication for destination {destination.identifier!r} " "is missing prepared metadata"
                 )
-            backend.publish_scheduled(destination, image, prepared_metadata)
+            completed_metadata = publication_finalizer(destination, prepared_metadata)
+            backend.publish_scheduled(destination, image, completed_metadata)
             return
         backend.publish(destination, image)
 

@@ -7,6 +7,7 @@ import math
 import random
 import re
 import time
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -23,11 +24,12 @@ from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
     DisplayBackendConfiguration,
+    DisplayOutputConfiguration,
     PreparedImageVariantKey,
     load_application_config,
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, _load_effective_content_library, resolve_qr_payloads
-from .display import DisplayBackend, DisplayBackendError, create_display_backend
+from .display import DisplayBackend, DisplayBackendError, DisplayBackendUpdateError, create_display_backend
 from .display.coordinator import (
     DisplayPublicationCoordinator,
     PublicationOperation,
@@ -49,6 +51,7 @@ from .persistence import (
 )
 from .preparation import DailyImagePreparationError, resolve_canonical_presentation
 from .presentation import build_presentation_snapshot
+from .publication_metadata import finalize_publication_metadata
 from .publication_storage import PublicationStore
 from .recovery import recover_prepared_daily_images
 from .runtime_control import RuntimeControlServer, TransientAdmissionGuard
@@ -347,6 +350,58 @@ def _publish_scheduled(
         publish_with_metadata(identity, images, metadata, destination_keys=destination_keys)
     else:
         coordinator.publish(identity, images)
+
+
+def _finalize_publication_event(
+    destination: DisplayOutputConfiguration,
+    prepared_metadata: dict[str, object] | None,
+) -> dict[str, object]:
+    """Finalize one completed metadata document for a destination publication event."""
+    publication_id = uuid.uuid4().hex
+    published_at = datetime.now(timezone.utc)
+    try:
+        if prepared_metadata is None:
+            return finalize_publication_metadata(
+                publication_type="transient",
+                publication_id=publication_id,
+                published_at=published_at,
+                destination_id=destination.identifier,
+                output_specification=destination.output_specification,
+            )
+
+        checkpoint = prepared_metadata["checkpoint"]
+        rendered_qr = prepared_metadata["rendered_qr"]
+        if rendered_qr is not None:
+            declarations = checkpoint["content"]["qr"]
+            if rendered_qr not in declarations:
+                raise ValueError("rendered QR declaration does not match the checkpoint")
+            rendered_qr = next(
+                (
+                    declaration
+                    for declaration in declarations
+                    if declaration["payload"] == rendered_qr["payload"]
+                    and declaration["visibility"] == [destination.audience]
+                ),
+                None,
+            )
+            if rendered_qr is None:
+                raise ValueError("rendered QR payload does not match the destination audience")
+        return finalize_publication_metadata(
+            checkpoint,
+            publication_type="scheduled",
+            publication_id=publication_id,
+            published_at=published_at,
+            destination_id=destination.identifier,
+            output_specification=destination.output_specification,
+            audience=destination.audience,
+            selection_revision=prepared_metadata["selection_revision"],
+            visibility=prepared_metadata["visibility"],
+            effective_presentation=prepared_metadata["effective_presentation"],
+            rendered_qr=rendered_qr,
+            prepared_output_specification=prepared_metadata["output_specification"],
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise DisplayBackendUpdateError(f"cannot finalize publication metadata: {error}", recoverable=False) from error
 
 
 def _publish_information_view(
@@ -650,6 +705,7 @@ def run_startup(
                     backend_factory,
                     retry=False,
                     monotonic_clock=monotonic_clock,
+                    publication_finalizer=_finalize_publication_event,
                 )
                 _publish_information_view(
                     coordinator,
@@ -730,6 +786,7 @@ def run_startup(
                     backend_factory,
                     retry=False,
                     monotonic_clock=monotonic_clock,
+                    publication_finalizer=_finalize_publication_event,
                 )
             _publish_scheduled(coordinator, identity, images, metadata, _destination_keys(configuration, checkpoint))
             coordinator.wait_for_publication(identity)
@@ -801,6 +858,7 @@ def run_application(
                 configuration.display_backends,
                 backend_factory,
                 monotonic_clock=monotonic_clock,
+                publication_finalizer=_finalize_publication_event,
             )
             try:
                 control = RuntimeControlServer(
@@ -922,6 +980,7 @@ def run_application(
                         configuration.display_backends,
                         backend_factory,
                         monotonic_clock=monotonic_clock,
+                        publication_finalizer=_finalize_publication_event,
                     )
                 if not information_view_done:
                     current_monotonic = monotonic_clock()
@@ -1139,6 +1198,7 @@ def run_demo(
             configuration.display_backends,
             backend_factory,
             monotonic_clock=monotonic_clock,
+            publication_finalizer=_finalize_publication_event,
         )
         state: PersistentState | None = None
         pending_selection: tuple[SelectionProposal, DailySnapshot] | None = None
