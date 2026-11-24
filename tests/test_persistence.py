@@ -916,6 +916,67 @@ def test_incomplete_history_tail_preserves_preceding_record(tmp_path: Path, capl
     assert "incomplete" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "tail",
+    [
+        b"{}",
+        b'{"revision":"invalid","quotation":null,"unexpected":[1,2]}',
+        b'{"duplicate":1,"duplicate":2}',
+        '{"text":"Café"}'.encode("utf-8"),
+        b'{"number":' + b"9" * 5000 + b"}",
+    ],
+)
+def test_complete_history_objects_are_preserved_without_schema_validation(tmp_path: Path, tail: bytes) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    preceding = b'not valid JSON\n{"earlier":true}\n'
+    history.path.write_bytes(preceding + tail)
+
+    history.record(commit(store, "New."))
+
+    contents = history.path.read_bytes()
+    assert contents.startswith(preceding + tail + b"\n")
+    record = json.loads(contents[len(preceding + tail) + 1 :])
+    assert set(record) == {"revision", "display_date", "selection_timestamp", "quotation", "source", "attribution"}
+    assert record["quotation"] == "New."
+
+
+@pytest.mark.parametrize("tail", [b'{"unfinished":', b'{"bad":}', b'{"bad":"\xff"}', b'{"bad":NaN}', b"[]"])
+def test_invalid_history_tail_is_removed_without_inspecting_preceding_lines(tmp_path: Path, tail: bytes) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    history = GlobalHistoryStore(tmp_path / "global-history.jsonl")
+    preceding = b'not valid JSON\n{"earlier":true}\n'
+    history.path.write_bytes(preceding + tail)
+
+    history.record(commit(store, "New."))
+
+    contents = history.path.read_bytes()
+    assert contents.startswith(preceding)
+    assert json.loads(contents[len(preceding) :])["quotation"] == "New."
+
+
+def test_large_complete_history_object_is_not_discarded(tmp_path: Path) -> None:
+    path = tmp_path / "global-history.jsonl"
+    contents = b'{"value":"' + b"x" * 1_048_576 + b'"}'
+    path.write_bytes(contents)
+
+    persistence._truncate_incomplete_history_tail(path)
+
+    assert path.read_bytes() == contents + b"\n"
+
+
+def test_uninspectable_history_tail_is_not_discarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "global-history.jsonl"
+    contents = b'{"value":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}"
+    path.write_bytes(contents)
+    monkeypatch.setattr(persistence.json, "loads", lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()))
+
+    with pytest.raises(OSError, match="deeply nested"):
+        persistence._truncate_incomplete_history_tail(path)
+
+    assert path.read_bytes() == contents
+
+
 def test_history_fsync_failure_does_not_change_committed_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state_store = PersistentStateStore(tmp_path / "state.json")
     state = commit(state_store, "Committed.")

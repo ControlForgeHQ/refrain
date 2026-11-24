@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -460,6 +461,57 @@ def test_publication_root_rejects_protected_overlap_before_creation(tmp_path: Pa
                 application_paths=_paths(tmp_path / "standard"),
             )
     assert not protected.exists()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "state.json",
+        "publication.json",
+        "global-history.jsonl",
+        "global-history.1.jsonl",
+        "global-history.19.jsonl",
+        "global-history.20.jsonl",
+    ],
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_custom_state_files_and_future_history_segments_are_protected(tmp_path: Path, name: str, nested: bool) -> None:
+    paths = _paths(tmp_path / "installation")
+    state = tmp_path / "custom-state"
+    configuration = SimpleNamespace(
+        file=tmp_path / "configuration" / "config.yaml",
+        content_directory=tmp_path / "configuration" / "content",
+        storage=SimpleNamespace(state=state, artifacts=None, publish=None),
+    )
+    root = state / name
+    if nested:
+        root /= "nested"
+
+    with pytest.raises(PublicationStorageError, match="overlaps protected"):
+        validate_publication_root(root, application_paths=paths, configuration=configuration)
+
+    assert not state.exists()
+
+
+@pytest.mark.parametrize("name", ["publish", "global-history.backup.jsonl", "global-history.1.jsonl-backup"])
+def test_custom_state_allows_separate_publication_directories(tmp_path: Path, name: str) -> None:
+    paths = _paths(tmp_path / "installation")
+    state = tmp_path / "custom-state"
+    configuration = SimpleNamespace(
+        file=tmp_path / "configuration" / "config.yaml",
+        content_directory=tmp_path / "configuration" / "content",
+        storage=SimpleNamespace(state=state, artifacts=None, publish=None),
+    )
+    root = state / name
+    assert validate_publication_root(root, application_paths=paths, configuration=configuration) == root
+
+
+def test_standard_state_future_history_segment_is_protected(tmp_path: Path) -> None:
+    paths = _paths(tmp_path / "installation")
+    root = paths.state_directory / "global-history.1.jsonl"
+    paths = replace(paths, publish_directory=root)
+    with pytest.raises(PublicationStorageError, match="overlaps protected"):
+        validate_publication_root(root, application_paths=paths)
 
 
 def test_custom_root_cannot_be_inside_a_standard_purge_tree(tmp_path: Path) -> None:

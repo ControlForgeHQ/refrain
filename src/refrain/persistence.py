@@ -851,8 +851,8 @@ def _truncate_incomplete_history_tail(path: Path) -> None:
                 boundary = position + newline + 1
                 break
         history_file.seek(boundary)
-        tail = history_file.read(end - boundary) if end - boundary <= _HISTORY_SEGMENT_SIZE else b""
-        if _valid_history_record(tail):
+        tail = history_file.read(end - boundary)
+        if _complete_history_object(tail):
             history_file.seek(0, os.SEEK_END)
             history_file.write(b"\n")
         else:
@@ -862,27 +862,18 @@ def _truncate_incomplete_history_tail(path: Path) -> None:
         os.fsync(history_file.fileno())
 
 
-def _valid_history_record(contents: bytes) -> bool:
+def _complete_history_object(contents: bytes) -> bool:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"invalid JSON number {value}")
+
     try:
-        record = json.loads(contents.decode("utf-8"), object_pairs_hook=_unique_object)
-        data = _require_mapping(
-            record, "history", {"revision", "display_date", "selection_timestamp", "quotation", "source", "attribution"}
+        return isinstance(
+            json.loads(contents.decode("utf-8"), parse_constant=reject_constant, parse_int=str, parse_float=str), dict
         )
-        if type(data["revision"]) is not int or data["revision"] <= 0:
-            return False
-        _parse_date(data["display_date"], "display_date")
-        timestamp = data["selection_timestamp"]
-        if not isinstance(timestamp, str) or not re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", timestamp
-        ):
-            return False
-        datetime.fromisoformat(timestamp)
-        for field in ("quotation", "source", "attribution"):
-            if field == "quotation" or data[field] is not None:
-                _nonempty_string(data[field], field).encode("utf-8")
-        return True
-    except (UnicodeError, ValueError, TypeError, RecursionError):
+    except (UnicodeError, ValueError):
         return False
+    except RecursionError as error:
+        raise OSError("cannot inspect deeply nested global-history tail") from error
 
 
 def _canonical_json(value: object) -> bytes:
