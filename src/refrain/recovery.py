@@ -63,7 +63,7 @@ def recover_prepared_daily_images(
         state.revision,
         ordered_stages,
         output_specifications,
-        state.snapshot,
+        snapshot=state.snapshot,
     )
     if not missing:
         return existing

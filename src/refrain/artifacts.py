@@ -378,14 +378,11 @@ class PreparedImageArtifactStore:
         variants: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Sequence[Image.Image]],
         metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Sequence[dict[str, object]]],
         *,
-        snapshot: DailySnapshot | None = None,
+        snapshot: DailySnapshot,
     ) -> PreparedImageArtifactSet:
         """Publish complete stage collections per compatible preparation group."""
         _inputs(revision, stages)
-        if snapshot is not None and tuple(stages) != tuple(
-            stage.visibility for stage in snapshot.resolved_reveal_stages
-        ):
-            raise ValueError("stages do not match the committed reveal sequence")
+        self._validate_committed_stages(stages, snapshot)
         if not isinstance(variants, Mapping) or not variants:
             raise ValueError("variants must be a nonempty mapping of prepared-image keys to image sequences")
         if not isinstance(metadata, Mapping) or set(metadata) != set(variants):
@@ -408,8 +405,9 @@ class PreparedImageArtifactStore:
                 presentation,
                 group_variants,
                 grouped_metadata[presentation],
+                snapshot,
             )
-        result, missing = self.load_groups(revision, stages, tuple(variants), snapshot)
+        result, missing = self.load_groups(revision, stages, tuple(variants), snapshot=snapshot)
         if missing:
             raise ArtifactValidationError("stored preparation groups are not complete")
         return result
@@ -421,6 +419,7 @@ class PreparedImageArtifactStore:
         presentation: DestinationPresentation,
         variants: Mapping[ResolvedOutputSpecification, Sequence[Image.Image]],
         metadata: Mapping[ResolvedOutputSpecification, Sequence[dict[str, object]]],
+        snapshot: DailySnapshot,
     ) -> PreparedImageArtifactSet:
         """Publish one complete compatible group; image inputs remain caller-owned."""
         expected_stages = _inputs(revision, stages)
@@ -455,6 +454,9 @@ class PreparedImageArtifactStore:
                         or presentation_context["selection_revision"] != revision
                         or presentation_context["reveal_stage_index"] != index
                         or not _visibility_matches(presentation_context["reveal_stage"], visibility)
+                        or presentation_context["display_date"] != snapshot.display_date.isoformat()
+                        or document["reconstruction"]["content_entry"] != content_entry(snapshot)
+                        or document["actions"] != action_declarations(snapshot)
                     ):
                         raise ValueError("metadata association does not match revision, output, or reveal stage")
                 except (PublicationMetadataError, KeyError, TypeError) as error:
@@ -582,9 +584,12 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
-        snapshot: DailySnapshot | None = None,
+        *,
+        snapshot: DailySnapshot,
     ) -> PreparedImageArtifactSet | None:
         """Validate every requested preparation group, retaining no decoded images."""
+        _inputs(revision, stages)
+        self._validate_committed_stages(stages, snapshot)
         groups = self._group_keys(output_specifications)
         loaded: dict[ResolvedOutputSpecification | PreparedImageVariantKey, PreparedImageArtifactVariant] = {}
         for presentation, specifications in groups.items():
@@ -603,12 +608,15 @@ class PreparedImageArtifactStore:
         revision: int,
         stages: Sequence[CompositionVisibility],
         variant_keys: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
-        snapshot: DailySnapshot | None = None,
+        *,
+        snapshot: DailySnapshot,
     ) -> tuple[
         PreparedImageArtifactSet,
         tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...],
     ]:
         """Reuse every valid complete group and return all keys in missing or invalid groups."""
+        _inputs(revision, stages)
+        self._validate_committed_stages(stages, snapshot)
         groups = self._group_keys(variant_keys)
         loaded: dict[ResolvedOutputSpecification | PreparedImageVariantKey, PreparedImageArtifactVariant] = {}
         missing: list[ResolvedOutputSpecification | PreparedImageVariantKey] = []
@@ -630,6 +638,13 @@ class PreparedImageArtifactStore:
             ),
             tuple(missing),
         )
+
+    @staticmethod
+    def _validate_committed_stages(stages: Sequence[CompositionVisibility], snapshot: DailySnapshot) -> None:
+        if not isinstance(snapshot, DailySnapshot):
+            raise TypeError("snapshot must be a committed DailySnapshot")
+        if tuple(stages) != tuple(stage.visibility for stage in snapshot.resolved_reveal_stages):
+            raise ValueError("stages do not match the committed reveal sequence")
 
     @staticmethod
     def _group_keys(
@@ -655,14 +670,10 @@ class PreparedImageArtifactStore:
         stages: Sequence[CompositionVisibility],
         presentation: DestinationPresentation,
         output_specifications: Sequence[ResolvedOutputSpecification],
-        snapshot: DailySnapshot | None = None,
+        snapshot: DailySnapshot,
     ) -> PreparedImageArtifactSet | None:
         """Validate one complete group, retaining no decoded images."""
         expected_stages = _inputs(revision, stages)
-        if snapshot is not None and tuple(stages) != tuple(
-            stage.visibility for stage in snapshot.resolved_reveal_stages
-        ):
-            raise ArtifactValidationError("requested stages do not match the committed reveal sequence")
         expected_specifications = _output_specifications(output_specifications)
         stage_count = len(expected_stages)
         directory = _group_directory(self.root, revision, presentation)
@@ -782,7 +793,7 @@ class PreparedImageArtifactStore:
                         or presentation_metadata["selection_revision"] != revision
                     ):
                         raise ValueError("metadata selection or reveal stage does not match manifest")
-                    if snapshot is not None and (
+                    if (
                         presentation_metadata["display_date"] != snapshot.display_date.isoformat()
                         or metadata_document["reconstruction"]["content_entry"] != content_entry(snapshot)
                         or metadata_document["actions"] != action_declarations(snapshot)

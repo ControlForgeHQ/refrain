@@ -168,6 +168,34 @@ def test_artifact_write_rejects_mismatched_frozen_stages(committed_state, artifa
     assert not artifact_store.root.exists()
 
 
+def test_artifact_operations_require_matching_committed_stages(committed_state, artifact_store) -> None:
+    state, _ = committed_state
+    wrong = (
+        CompositionVisibility(),
+        CompositionVisibility(attribution=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+    with pytest.raises(TypeError):
+        artifact_store.store(state.revision, _STAGES, {}, {})
+    with pytest.raises(TypeError):
+        artifact_store.load(state.revision, _STAGES, (_OUTPUT_SPECIFICATION,))
+    with pytest.raises(TypeError):
+        artifact_store.load_groups(state.revision, _STAGES, (_OUTPUT_SPECIFICATION,))
+    with pytest.raises(TypeError, match="DailySnapshot"):
+        artifact_store.load(state.revision, _STAGES, (_OUTPUT_SPECIFICATION,), snapshot=None)
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        artifact_store.load(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        artifact_store.load_groups(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+    assert not artifact_store.root.exists()
+
+    _store_images(artifact_store, state)
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        artifact_store.load(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        artifact_store.load_groups(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+
+
 def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
     metadata = {}
     variants = _prepare_variants(
@@ -178,7 +206,7 @@ def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
         on_metadata=lambda specification, documents: metadata.__setitem__(specification, documents),
     )
     try:
-        return store.store(state.revision, stages, variants, metadata)
+        return store.store(state.revision, stages, variants, metadata, snapshot=state.snapshot)
     finally:
         for images in variants.values():
             for image in images:
@@ -189,8 +217,8 @@ def _variant(artifact_set):
     return artifact_set.variant_for(_OUTPUT_SPECIFICATION)
 
 
-def _load(store, revision, stages):
-    return store.load(revision, stages, (_OUTPUT_SPECIFICATION,))
+def _load(store, state, stages):
+    return store.load(state.revision, stages, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
 
 
 def _metadata_for(state, stages, configuration=_CONFIGURATION):
@@ -303,6 +331,7 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
             _STAGES,
             {_OUTPUT_SPECIFICATION: images},
             _metadata_for(state, _STAGES, configured),
+            snapshot=state.snapshot,
         )
     finally:
         for image in images:
@@ -491,10 +520,11 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
     if damage == "interrupted":
         (artifact_store.root / f"revision-{state.revision}").mkdir(parents=True)
     else:
-        artifact_stages = _STAGES
         if damage == "wrong-stage-count":
-            artifact_stages = _STAGES[:2]
-        old_set = _store_images(artifact_store, state, artifact_stages)
+            old_snapshot = replace(state.snapshot, attribution=None, resolved_reveal_stages=None)
+            old_set = _store_images(artifact_store, replace(state, snapshot=old_snapshot), _STAGES[:2])
+        else:
+            old_set = _store_images(artifact_store, state)
         previous_payloads = tuple(old_set.directory.glob("images-*"))
 
         if damage == "missing-stage":
@@ -545,7 +575,7 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
             (old_set.directory / "manifest.json").write_text(json.dumps(document), encoding="utf-8")
 
     result = _recover(state, artifact_store, _STAGES)
-    reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state.revision, _STAGES)
+    reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state, _STAGES)
 
     assert result.revision == state.revision
     assert result.output_specifications == (_OUTPUT_SPECIFICATION,)
@@ -711,7 +741,7 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
     monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
 
     result = _recover(state, artifact_store, _STAGES)
-    reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state.revision, _STAGES)
+    reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state, _STAGES)
 
     assert reloaded == result
     _assert_images_closed(images)
