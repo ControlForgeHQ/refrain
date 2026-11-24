@@ -1309,15 +1309,7 @@ def _prepare_daily_images_for_specification(
         raise DailyImagePreparationError("output_specification must be a ResolvedOutputSpecification")
     decoration_identifier = choices.decoration_identifier
     decoration = choices.decoration
-    composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-        snapshot,
-        configuration,
-        decoration,
-        output_specification,
-        choices.presentation_style,
-        overrides,
-        resolved_presentation,
-    )
+    geometry = resolve_presentation_geometry(output_specification, PresentationInsets(0, 0, 0, 0))
     presentation_canvas_size = geometry.presentation_canvas_size
 
     def resolve_effective_qr(
@@ -1406,16 +1398,16 @@ def _prepare_daily_images_for_specification(
                 decoration_identifier, decoration = "none", None
                 decoration_layers = ()
                 nine_slice_guides.clear()
-                composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-                    snapshot,
-                    configuration,
-                    None,
-                    output_specification,
-                    choices.presentation_style,
-                    overrides,
-                    resolved_presentation,
-                )
                 qr_placement, qr_unavailable_reason = resolve_effective_qr(None)
+            composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
+                snapshot,
+                configuration,
+                decoration,
+                output_specification,
+                choices.presentation_style,
+                overrides,
+                resolved_presentation,
+            )
             if on_resolved_bounds is not None:
                 on_resolved_bounds(variant_key, geometry.presentation_literary_bounds)
             background = _scale_design_composition_to_presentation(background, presentation_canvas_size)

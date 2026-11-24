@@ -1827,6 +1827,29 @@ def test_decoration_failure_is_isolated_to_the_affected_output(tmp_path: Path) -
                 image.close()
 
 
+def test_decoration_failure_recovers_before_resolving_its_degenerate_literary_geometry(tmp_path: Path) -> None:
+    decoration = _decoration_resource(
+        "frame",
+        tmp_path / "missing.png",
+        presentation_insets=PresentationInsets(1919, 1919, 0, 0),
+    )
+    specification = ResolvedOutputSpecification("16:10", (640, 400))
+    configuration = _configuration(
+        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification
+    )
+    snapshot = replace(make_snapshot("lora"), decoration="frame")
+    diagnostics = {}
+    variants = _prepare_daily_image_variants(
+        snapshot, (CompositionVisibility(),), configuration, (specification,), on_diagnostics=diagnostics.__setitem__
+    )
+    try:
+        assert diagnostics[specification].geometry.design_literary_bounds[0] == configuration.presentation_insets.left
+        assert diagnostics[specification].active_layers == ()
+    finally:
+        for image in variants[specification]:
+            image.close()
+
+
 def test_decoration_overlays_background_with_rgba_transparency_before_text(tmp_path: Path) -> None:
     background_path = tmp_path / "paper.png"
     decoration_path = tmp_path / "overlay.png"
