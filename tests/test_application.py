@@ -1039,7 +1039,7 @@ def test_selection_prunes_only_identities_absent_from_effective_library(workspac
         "ineligible-b",
         'eligibility:\n  - month: 5\nquotations:\n  - "Temporarily ineligible."\n',
     )
-    workspace.entry("rejected", 'unknown: true\nquotations:\n  - "Rejected quotation."\n')
+    workspace.entry("rejected", 'reveal:\n  source: "05:00"\nquotations:\n  - "Rejected quotation."\n')
     state = replace(
         state,
         repetition_history=frozenset(
@@ -1179,11 +1179,92 @@ def test_attribution_can_reveal_before_source(workspace: Workspace) -> None:
     assert len(png_files(workspace.artifacts)) == 3
 
 
+@pytest.mark.parametrize(
+    ("metadata", "reveal", "invalid_fields"),
+    [
+        (
+            'source: "A Book"\nattribution: "An Author"\n',
+            '  source: "09:59"\n',
+            ("source",),
+        ),
+        (
+            'source: "A Book"\n',
+            '  attribution: "09:59"\n',
+            ("attribution",),
+        ),
+        (
+            "",
+            '  source: "09:59"\n  attribution: "09:59"\n',
+            ("source", "attribution"),
+        ),
+    ],
+)
+def test_effective_reveal_schedules_reject_before_selection_and_duplicate_reconciliation(
+    workspace: Workspace,
+    caplog,
+    metadata: str,
+    reveal: str,
+    invalid_fields: tuple[str, ...],
+) -> None:
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace('day_start: "06:00"', 'day_start: "10:00"'),
+        encoding="utf-8",
+    )
+    (workspace.content / "invalid.yaml").write_text(
+        f'id: "shared"\npriority: 100\neligibility:\n  - month: 3\n{metadata}reveal:\n{reveal}'
+        'quotations:\n  - "Rejected schedule."\n',
+        encoding="utf-8",
+    )
+    (workspace.content / "valid.yaml").write_text(
+        'id: "shared"\nquotations:\n  - "Accepted despite shared ID."\n',
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result, _ = workspace.run(at(10, 10))
+
+    assert result.state.snapshot.quotation_text == "Accepted despite shared ID."
+    for field in invalid_fields:
+        assert f"invalid.yaml: reveal.{field}: effective time 09:59 precedes configured day start 10:00" in caplog.text
+    assert "conflicting duplicate identifier 'shared'" not in caplog.text
+
+
+def test_overrides_equal_to_day_start_are_accepted(workspace: Workspace) -> None:
+    workspace.config.write_text(
+        workspace.config.read_text(encoding="utf-8").replace('day_start: "06:00"', 'day_start: "10:00"'),
+        encoding="utf-8",
+    )
+    ordinary(workspace, extra='reveal:\n  source: "10:00"\n  attribution: "10:00"\n')
+
+    result, _ = workspace.run(at(10, 10))
+
+    assert result.state.snapshot.reveal_schedule == {
+        "quotation": "10:00",
+        "source": "10:00",
+        "attribution": "10:00",
+    }
+    assert result.presented_stage == 0
+
+
 def test_invalid_override_before_day_start_commits_nothing(workspace: Workspace) -> None:
     ordinary(workspace, extra='reveal:\n  source: "05:00"\n')
-    with pytest.raises(ApplicationError, match="daily selection"):
+    with pytest.raises(ApplicationError, match="content library is invalid"):
         workspace.run(at(10, 8))
     assert workspace.load() is None
+
+
+def test_all_invalid_effective_schedules_preserve_committed_state_and_history(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 8))
+    state_before = workspace.state.read_bytes()
+    history_before = workspace.history.read_bytes()
+    ordinary(workspace, extra='reveal:\n  source: "05:00"\n')
+
+    with pytest.raises(ApplicationError, match="content library is invalid"):
+        workspace.run(at(11, 8))
+
+    assert workspace.state.read_bytes() == state_before
+    assert workspace.history.read_bytes() == history_before
 
 
 def test_startup_after_reveal_times_presents_latest_stage(workspace: Workspace) -> None:
@@ -2035,7 +2116,11 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
 
     def forbid_content_reload():
-        monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
+        monkeypatch.setattr(
+            application,
+            "_load_effective_content_library",
+            lambda *args, **kwargs: pytest.fail("content reloaded"),
+        )
         clock.move(at(10, 12))
 
     clock = RuntimeClock(at(10, 7), [forbid_content_reload, at(10, 18), at(10, 19)])
@@ -2284,7 +2369,11 @@ def test_continuous_restart_is_conservative_and_reuses_committed_snapshot(worksp
     artifacts = {path: path.stat().st_mtime_ns for path in png_files(workspace.artifacts)}
     for path in workspace.content.iterdir():
         path.unlink()
-    monkeypatch.setattr(application, "load_content_library", lambda *args: pytest.fail("content reloaded"))
+    monkeypatch.setattr(
+        application,
+        "_load_effective_content_library",
+        lambda *args, **kwargs: pytest.fail("content reloaded"),
+    )
     stages, initialized, display = run_continuously(
         workspace,
         RuntimeClock(at(10, 19)),

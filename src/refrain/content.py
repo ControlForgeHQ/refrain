@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import time
 from functools import lru_cache
@@ -535,8 +535,47 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
     """Load and validate every ``.yaml`` or ``.yml`` entry in a directory tree.
 
     Invalid files and entries are excluded independently. A ``ContentLibraryError``
-    is raised when discovery fails or no valid quotation remains.
+    is raised when discovery fails or no valid quotation remains. Reveal overrides
+    are checked for syntax only; effective timing is resolved separately.
     """
+    return _load_content_library(content_directory)
+
+
+def _load_effective_content_library(
+    content_directory: Union[str, Path],
+    *,
+    day_start: time,
+    reveal_schedule: Mapping[str, time],
+) -> tuple[ContentEntry, ...]:
+    """Load entries after validating their effective reveal schedule."""
+
+    def validate_effective_schedule(entry: ContentEntry) -> tuple[ContentDiagnostic, ...]:
+        assert entry.file is not None
+        diagnostics: list[ContentDiagnostic] = []
+        for field_name in ("source", "attribution"):
+            override = getattr(entry.reveal, field_name)
+            effective_time = override if override is not None else reveal_schedule[field_name]
+            if effective_time < day_start:
+                _diagnose(
+                    diagnostics,
+                    entry.file,
+                    f"reveal.{field_name}",
+                    f"effective time {effective_time:%H:%M} precedes configured day start "
+                    f"{day_start:%H:%M}; this entry is excluded",
+                )
+        return tuple(diagnostics)
+
+    return _load_content_library(
+        content_directory,
+        effective_schedule_validator=validate_effective_schedule,
+    )
+
+
+def _load_content_library(
+    content_directory: Union[str, Path],
+    *,
+    effective_schedule_validator: Callable[[ContentEntry], tuple[ContentDiagnostic, ...]] | None = None,
+) -> tuple[ContentEntry, ...]:
     directory = Path(content_directory)
     try:
         is_directory = directory.is_dir()
@@ -599,6 +638,11 @@ def load_content_library(content_directory: Union[str, Path]) -> tuple[ContentEn
         if entry is None:
             rejected_diagnostics.extend(file_diagnostics)
             continue
+        if effective_schedule_validator is not None:
+            file_diagnostics.extend(effective_schedule_validator(entry))
+            if file_diagnostics:
+                rejected_diagnostics.extend(file_diagnostics)
+                continue
         entries.append(entry)
 
     by_identifier: dict[str, list[ContentEntry]] = {}
