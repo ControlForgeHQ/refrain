@@ -35,12 +35,16 @@ from refrain import (
     select_quotation,
 )
 from refrain import (
-    prepare_daily_images as _prepare_daily_image_variants,
+    prepare_daily_images as _prepare_daily_image_variants_impl,
 )
+from refrain.checkpoint import build_content_checkpoint
 from refrain.config import BackgroundLayerResource, BackgroundResource, DecorationLayerResource, DecorationResource
+from refrain.persistence import PersistentState
 from refrain.publication_metadata import finalize_publication_metadata
 
 _DEFAULT_SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
+_QR_PAYLOAD = "https://example.test/quotation"
+_QR_DECLARATION = {"visibility": ["internal"], "payload": _QR_PAYLOAD}
 _IMAGE_SIZE = _DEFAULT_SPECIFICATION.requested_output_size
 # These licensed, test-owned copies are independent of the bundled font inventory.
 _FONT_DIRECTORY = Path(__file__).parent / "fixtures" / "fonts"
@@ -62,7 +66,7 @@ def embedded_font() -> str:
     return "lora"
 
 
-def test_preparation_metadata_records_resolved_font_faces_and_publication_nulls() -> None:
+def test_preparation_association_records_resolved_font_faces_and_visibility() -> None:
     snapshot = make_snapshot(
         "lora",
         metadata={"presentation_style": "left-aligned", "font_faces": {"source": "italic"}},
@@ -89,23 +93,24 @@ def test_preparation_metadata_records_resolved_font_faces_and_publication_nulls(
         documents = metadata[specification]
         assert len(documents) == 2
         prepared = documents[1]
-        assert prepared["schema_version"] == 1
-        assert prepared["publication_type"] == "scheduled"
-        assert prepared["publication_id"] is None
-        assert prepared["published_at"] is None
-        assert prepared["destination_id"] is None
-        assert prepared["reconstruction"]["presentation_style"] == "left-aligned"
-        assert prepared["reconstruction"]["fonts"] == {
+        assert set(prepared) == {
+            "selection_revision",
+            "visibility",
+            "effective_presentation",
+            "rendered_qr",
+            "output_specification",
+        }
+        assert prepared["selection_revision"] == 7
+        assert prepared["effective_presentation"]["style"] == "left-aligned"
+        assert prepared["effective_presentation"]["fonts"] == {
             "bundle": "lora",
             "faces": {"quotation": "regular", "source": "italic", "attribution": "regular"},
         }
-        assert prepared["presentation"]["reveal_stage_index"] == 1
-        assert prepared["presentation"]["reveal_stage"]["source"] is True
-        assert prepared["actions"] == [{"type": "play", "visibility": ["internal"], "payload": "opaque payload"}]
-        assert "actions" not in prepared["reconstruction"]["content_entry"]
-        assert prepared["reconstruction"]["background"] == "none"
-        assert prepared["reconstruction"]["decoration"] == "none"
-        assert prepared["reconstruction"]["colors"]["text"] == "black"
+        assert prepared["visibility"]["source"] is True
+        assert prepared["rendered_qr"] == _QR_DECLARATION
+        assert prepared["effective_presentation"]["background"] == "none"
+        assert prepared["effective_presentation"]["decoration"] == "none"
+        assert prepared["effective_presentation"]["colors"]["text"] == "black"
     finally:
         for images in variants.values():
             for image in images:
@@ -168,7 +173,7 @@ def _configuration(
     default_fonts: tuple[str, ...] | None = None,
     default_backgrounds: tuple[str, ...] = ("none",),
     default_decorations: tuple[str, ...] = ("none",),
-    qr_enabled: bool = True,
+    qr_payload: str | None = _QR_PAYLOAD,
 ) -> ApplicationConfiguration:
     return ApplicationConfiguration(
         file=Path("/config.yaml"),
@@ -186,7 +191,7 @@ def _configuration(
         default_fonts=tuple(fonts) if default_fonts is None else default_fonts,
         min_font_size=min_font_size,
         max_font_size=max_font_size,
-        qr_enabled=qr_enabled,
+        qr_defaults={"external": None, "internal": qr_payload},
         backgrounds={} if backgrounds is None else backgrounds,
         default_backgrounds=default_backgrounds,
         decorations={} if decorations is None else decorations,
@@ -205,6 +210,15 @@ def _decoration_resource(identifier: str, image_path: Path, bundled: bool = Fals
         bundled,
         **kwargs,
     )
+
+
+def _prepare_daily_image_variants(snapshot, stages, configuration, specifications, **kwargs):
+    if "qr_declaration" not in kwargs:
+        payload = configuration.qr_defaults["internal"]
+        if any(isinstance(key, PreparedImageVariantKey) and key.qr_payload is None for key in specifications):
+            payload = None
+        kwargs["qr_declaration"] = None if payload is None else {"visibility": ["internal"], "payload": payload}
+    return _prepare_daily_image_variants_impl(snapshot, stages, configuration, specifications, **kwargs)
 
 
 def test_metadata_capture_rejects_non_palette_forced_decoration_tints(tmp_path: Path) -> None:
@@ -491,15 +505,15 @@ def test_presentation_choices_are_shared_across_output_specifications(
         assert diagnostics[ResolvedOutputSpecification("16:10", (3840, 2400))].qr_placement is not None
         small_metadata = metadata[ResolvedOutputSpecification("4:3", (80, 60))][0]
         large_metadata = metadata[ResolvedOutputSpecification("16:10", (3840, 2400))][0]
-        assert small_metadata["reconstruction"]["qr"] == {"enabled": True, "available": False}
-        assert large_metadata["reconstruction"]["qr"] == {"enabled": True, "available": True}
-        assert small_metadata["reconstruction"]["background"] == resolved_backgrounds[0]
-        assert small_metadata["reconstruction"]["decoration"] == resolved_decorations[0]
-        assert small_metadata["reconstruction"]["fonts"]["bundle"] == resolved_fonts[0].split(":", 1)[0]
-        text_identifier = small_metadata["reconstruction"]["colors"]["text"]
+        assert small_metadata["rendered_qr"] is None
+        assert large_metadata["rendered_qr"] == _QR_DECLARATION
+        assert small_metadata["effective_presentation"]["background"] == resolved_backgrounds[0]
+        assert small_metadata["effective_presentation"]["decoration"] == resolved_decorations[0]
+        assert small_metadata["effective_presentation"]["fonts"]["bundle"] == resolved_fonts[0].split(":", 1)[0]
+        text_identifier = small_metadata["effective_presentation"]["colors"]["text"]
         text_hex = configuration.palette[text_identifier]
         assert resolved_text_colors[0] == tuple(int(text_hex[offset : offset + 2], 16) for offset in (1, 3, 5))
-        decoration_identifier = small_metadata["reconstruction"]["colors"]["decoration"]
+        decoration_identifier = small_metadata["effective_presentation"]["colors"]["decoration"]
         decoration_hex = configuration.palette[decoration_identifier]
         assert resolved_tints[0] == tuple(int(decoration_hex[offset : offset + 2], 16) for offset in (1, 3, 5))
         assert {
@@ -548,7 +562,6 @@ def test_destination_overrides_precedence_and_group_coherence(tmp_path: Path) ->
             "destination-paper": BackgroundResource("destination-paper", asset_paths["destination-paper"], False),
         },
         {"entry-frame": frame("entry-frame", qr_ready=False), "destination-frame": frame("destination-frame")},
-        qr_enabled=True,
         insets=PresentationInsets(0, 0, 0, 0),
     )
     snapshot = replace(
@@ -567,7 +580,7 @@ def test_destination_overrides_precedence_and_group_coherence(tmp_path: Path) ->
         decoration_color=("blue",),
         qr_enabled=False,
     )
-    alternate_requirements = DestinationPresentation(qr_enabled=True)
+    alternate_requirements = DestinationPresentation(background="entry-paper")
     no_artwork_requirements = DestinationPresentation(background="none", decoration="none", qr_enabled=False)
     small = ResolvedOutputSpecification("16:9", (640, 360))
     large = ResolvedOutputSpecification("4:3", (800, 600))
@@ -594,45 +607,62 @@ def test_destination_overrides_precedence_and_group_coherence(tmp_path: Path) ->
         preferred = metadata[PreparedImageVariantKey(small, requirements)]
         alternate = metadata[PreparedImageVariantKey(small, alternate_requirements)]
         no_artwork = metadata[PreparedImageVariantKey(small, no_artwork_requirements)]
-        prepared = preferred[0]["reconstruction"]
+        prepared = preferred[0]["effective_presentation"]
         assert prepared["background"] == "destination-paper"
         assert prepared["decoration"] == "destination-frame"
         assert prepared["fonts"]["bundle"] == "destination-font"
         assert prepared["colors"] == {"text": "burnt-orange", "decoration": "blue"}
-        assert prepared["qr"] == {"enabled": False, "available": False}
-        assert alternate[0]["reconstruction"]["background"] == "entry-paper"
-        assert alternate[0]["reconstruction"]["decoration"] == "entry-frame"
-        assert alternate[0]["reconstruction"]["fonts"]["bundle"] == "entry-font"
-        assert alternate[0]["reconstruction"]["colors"] == {"text": "blue", "decoration": "black"}
-        assert alternate[0]["reconstruction"]["qr"] == {"enabled": True, "available": False}
-        assert no_artwork[0]["reconstruction"]["background"] == "none"
-        assert no_artwork[0]["reconstruction"]["decoration"] == "none"
-        assert no_artwork[0]["reconstruction"]["qr"] == {"enabled": False, "available": False}
-        assert preferred[0]["reconstruction"] == preferred[1]["reconstruction"]
+        assert preferred[0]["rendered_qr"] is None
+        assert alternate[0]["effective_presentation"]["background"] == "entry-paper"
+        assert alternate[0]["effective_presentation"]["decoration"] == "entry-frame"
+        assert alternate[0]["effective_presentation"]["fonts"]["bundle"] == "entry-font"
+        assert alternate[0]["effective_presentation"]["colors"] == {"text": "blue", "decoration": "black"}
+        assert alternate[0]["rendered_qr"] is None
+        assert no_artwork[0]["effective_presentation"]["background"] == "none"
+        assert no_artwork[0]["effective_presentation"]["decoration"] == "none"
+        assert no_artwork[0]["rendered_qr"] is None
+        assert preferred[0]["effective_presentation"] == preferred[1]["effective_presentation"]
 
         large_metadata = metadata[PreparedImageVariantKey(large, requirements)]
-        for field in ("background", "decoration", "fonts", "colors", "presentation_style"):
-            assert large_metadata[0]["reconstruction"][field] == prepared[field]
+        for field in ("background", "decoration", "fonts", "colors", "style"):
+            assert large_metadata[0]["effective_presentation"][field] == prepared[field]
         assert variants[PreparedImageVariantKey(small, requirements)][0].size == small.requested_output_size
         assert variants[PreparedImageVariantKey(large, requirements)][0].size == large.requested_output_size
 
-        disabled_global_metadata = {}
-        disabled_global_variants = _prepare_daily_image_variants(
+        suppressed_metadata = {}
+        suppressed_variants = _prepare_daily_image_variants(
             snapshot,
             stages,
-            replace(configuration, qr_enabled=False),
-            (PreparedImageVariantKey(small, alternate_requirements),),
+            replace(configuration, qr_defaults={"external": None, "internal": None}),
+            (PreparedImageVariantKey(small, requirements),),
             chooser=Random(3),
             selection_revision=11,
-            on_metadata=disabled_global_metadata.__setitem__,
+            qr_declaration=_QR_DECLARATION,
+            on_metadata=suppressed_metadata.__setitem__,
         )
         try:
-            disabled_global_qr = disabled_global_metadata[PreparedImageVariantKey(small, alternate_requirements)][0][
-                "reconstruction"
-            ]["qr"]
-            assert disabled_global_qr == {"enabled": True, "available": False}
+            assert suppressed_metadata[PreparedImageVariantKey(small, requirements)][0]["rendered_qr"] is None
         finally:
-            for images in disabled_global_variants.values():
+            for images in suppressed_variants.values():
+                for image in images:
+                    image.close()
+        not_ready_metadata = {}
+        not_ready_key = PreparedImageVariantKey(small, alternate_requirements, _QR_PAYLOAD)
+        not_ready_variants = _prepare_daily_image_variants(
+            snapshot,
+            stages,
+            configuration,
+            (not_ready_key,),
+            chooser=Random(3),
+            selection_revision=11,
+            qr_declaration=_QR_DECLARATION,
+            on_metadata=not_ready_metadata.__setitem__,
+        )
+        try:
+            assert not_ready_metadata[not_ready_key][0]["effective_presentation"]["decoration"] == "entry-frame"
+            assert not_ready_metadata[not_ready_key][0]["rendered_qr"] is None
+        finally:
+            for images in not_ready_variants.values():
                 for image in images:
                     image.close()
     finally:
@@ -666,11 +696,11 @@ def test_unavailable_destination_resources_fall_through_existing_preferences() -
         on_metadata=metadata.__setitem__,
     )
     try:
-        reconstruction = metadata[key][0]["reconstruction"]
-        assert reconstruction["background"] == "none"
-        assert reconstruction["decoration"] == "none"
-        assert reconstruction["fonts"]["bundle"] == "regular"
-        assert reconstruction["qr"]["enabled"] is False
+        effective = metadata[key][0]["effective_presentation"]
+        assert effective["background"] == "none"
+        assert effective["decoration"] == "none"
+        assert effective["fonts"]["bundle"] == "regular"
+        assert metadata[key][0]["rendered_qr"] is None
     finally:
         for images in variants.values():
             for image in images:
@@ -702,7 +732,7 @@ def test_graphical_composition_uses_design_presentation_and_output_canvases(
         _FONT_REGISTRY,
         decorations={"overlay": _decoration_resource("overlay", decoration_path)},
         output_specification=specification,
-        qr_enabled=False,
+        qr_payload=None,
     )
     background_sizes: list[tuple[int, int]] = []
     decoration_sizes: list[tuple[int, int]] = []
@@ -811,7 +841,7 @@ def test_background_cover_scaling_crops_center_of_wide_source(tmp_path: Path) ->
         _FONT_REGISTRY,
         backgrounds={"wide": BackgroundResource("wide", path, False)},
         output_specification=ResolvedOutputSpecification("4:3", (1600, 1200)),
-        qr_enabled=False,
+        qr_payload=None,
     )
 
     images = _prepare_configured_images(
@@ -881,7 +911,7 @@ def test_explicit_presentation_overrides_precede_entry_and_decoration_preference
         {**_MULTI_FACE_REGISTRY, "lora-alt": FontResource("lora-alt", _REGULAR_FONT, bundled=True)},
         backgrounds={"paper": BackgroundResource("paper", Path("/unused-paper.png"), False)},
         decorations={"frame": decoration},
-        qr_enabled=False,
+        qr_payload=None,
     )
     snapshot = replace(
         make_snapshot("lora-alt", metadata={"font_faces": {"quotation": "regular"}}),
@@ -905,7 +935,6 @@ def test_explicit_presentation_overrides_precede_entry_and_decoration_preference
             text_color="burnt-orange",
             tint="blue",
             style="left-aligned",
-            qr_enabled=True,
         ),
     )
 
@@ -918,7 +947,6 @@ def test_explicit_presentation_overrides_precede_entry_and_decoration_preference
     assert choices.text_color == (198, 90, 32)
     assert choices.decoration_tint == (0, 0, 255)
     assert choices.presentation_style == "left-aligned"
-    assert choices.qr_enabled is True
     assert choices.strict_background is True
     assert choices.strict_decoration is True
     assert choices.fonts["quotation"].identifier == "lora"
@@ -1407,7 +1435,7 @@ def test_loaded_color_pool_references_do_not_cross_namespaces(tmp_path: Path, ca
     assert "Pool reference '@text-only' from content entry decoration_color is unknown" in caplog.text
 
 
-def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
+def test_selected_qr_payload_still_obeys_decoration_readiness(tmp_path: Path) -> None:
     layer_path = tmp_path / "frame.png"
     with Image.new("RGBA", (8, 8), (0, 0, 0, 0)) as layer:
         layer.save(layer_path)
@@ -1422,11 +1450,11 @@ def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
         _FONT_REGISTRY,
         decorations={"frame": decoration},
         output_specification=ResolvedOutputSpecification("16:10", (320, 200)),
-        qr_enabled=False,
+        qr_payload=None,
     )
     diagnostics = {}
 
-    variants = preparation.prepare_daily_images(
+    variants = _prepare_daily_image_variants(
         replace(
             make_snapshot("lora", source=None, attribution=None),
             quotation_text="A",
@@ -1435,7 +1463,8 @@ def test_forced_qr_still_obeys_decoration_readiness(tmp_path: Path) -> None:
         (CompositionVisibility(),),
         configuration,
         (ResolvedOutputSpecification("16:10", (320, 200)),),
-        overrides=PresentationOverrides(decoration="frame", qr_enabled=True),
+        overrides=PresentationOverrides(decoration="frame"),
+        qr_declaration=_QR_DECLARATION,
         on_diagnostics=diagnostics.__setitem__,
     )
     try:
@@ -1461,7 +1490,7 @@ def test_intentional_qr_disabling_skips_placement_without_warning(tmp_path, monk
     configuration = _configuration(
         _FONT_REGISTRY,
         decorations={"frame": decoration},
-        qr_enabled=reason != "policy",
+        qr_payload=None if reason == "policy" else _QR_PAYLOAD,
     )
     monkeypatch.setattr(
         preparation,
@@ -1573,7 +1602,15 @@ def test_failed_decoration_discards_all_artwork_and_recovers_effective_presentat
         min_font_size=24,
         max_font_size=72,
     )
-    snapshot = replace(make_snapshot("lora"), background="paper", decoration="frame")
+    snapshot = replace(
+        make_snapshot("lora"),
+        background="paper",
+        decoration="frame",
+        actions=(
+            ContentAction("play", ("internal",), "opaque payload"),
+            ContentAction("external-only", ("external",), "other payload"),
+        ),
+    )
     stages = resolve_reveal_stages(snapshot)
     metadata, diagnostics, bounds = {}, {}, {}
     variants = _prepare_daily_image_variants(
@@ -1602,24 +1639,36 @@ def test_failed_decoration_discards_all_artwork_and_recovers_effective_presentat
         assert result.active_layers == () and result.nine_slice_guides == ()
         assert bounds[specification] == result.geometry.presentation_literary_bounds
         for index, document in enumerate(metadata[specification]):
-            effective = document["reconstruction"]
+            effective = document["effective_presentation"]
             assert effective["background"] == "paper"
             assert effective["decoration"] == "none"
             assert effective["colors"]["decoration"] is None
             assert effective["insets"] == {"left": 200, "right": 240, "top": 160, "bottom": 180}
             assert effective["font_size_range"] == {"minimum": 24, "maximum": 72}
-            assert effective["qr"] == {"enabled": True, "available": True}
+            assert document["rendered_qr"] == _QR_DECLARATION
+            checkpoint = build_content_checkpoint(PersistentState(7, snapshot, frozenset(), 0), [_QR_DECLARATION])
+            checkpoint["presentation"] = preparation.resolve_canonical_presentation(snapshot, configuration)
             completed = finalize_publication_metadata(
-                document,
+                checkpoint,
                 publication_type="scheduled",
                 publication_id=f"publication-{index}",
                 published_at=datetime(2026, 10, 26, tzinfo=timezone.utc),
                 destination_id="window",
                 output_specification=specification,
                 audience="internal",
-                reveal_stage_index=index,
+                selection_revision=document["selection_revision"],
+                visibility=document["visibility"],
+                effective_presentation=effective,
+                rendered_qr=document["rendered_qr"],
+                prepared_output_specification=document["output_specification"],
             )
-            assert completed["reconstruction"] == effective
+            assert completed["presentation"] == effective
+            assert completed["content"]["qr"] == [_QR_DECLARATION]
+            assert completed["content"]["reveal_stage"] == document["visibility"]
+            assert completed["content"]["actions"] == [
+                {"type": "play", "visibility": ["internal"], "payload": "opaque payload"}
+            ]
+            assert len(checkpoint["content"]["actions"]) == 2
         assert "discarding the decoration" in caplog.text
     finally:
         for images in (variants[specification], reference[specification]):
@@ -1627,9 +1676,9 @@ def test_failed_decoration_discards_all_artwork_and_recovers_effective_presentat
                 image.close()
 
 
-@pytest.mark.parametrize("qr_enabled,missing_condition", [(True, "no-qr"), (False, "qr")])
+@pytest.mark.parametrize("qr_payload,missing_condition", [(_QR_PAYLOAD, "no-qr"), (None, "qr")])
 def test_unavailable_ineligible_decoration_layer_does_not_trigger_fallback(
-    tmp_path: Path, qr_enabled: bool, missing_condition: str
+    tmp_path: Path, qr_payload: str | None, missing_condition: str
 ) -> None:
     path = tmp_path / "valid.png"
     with Image.new("RGB", (4, 4), "red") as image:
@@ -1645,7 +1694,7 @@ def test_unavailable_ineligible_decoration_layer_does_not_trigger_fallback(
     )
     specification = ResolvedOutputSpecification("16:10", (640, 400))
     configuration = _configuration(
-        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification, qr_enabled=qr_enabled
+        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification, qr_payload=qr_payload
     )
     snapshot = replace(make_snapshot("lora"), decoration="frame")
     metadata, diagnostics = {}, {}
@@ -1659,7 +1708,7 @@ def test_unavailable_ineligible_decoration_layer_does_not_trigger_fallback(
         on_diagnostics=diagnostics.__setitem__,
     )
     try:
-        assert metadata[specification][0]["reconstruction"]["decoration"] == "frame"
+        assert metadata[specification][0]["effective_presentation"]["decoration"] == "frame"
         assert len(diagnostics[specification].active_layers) == 1
         assert variants[specification][0].getpixel((0, 0)) == (255, 0, 0)
     finally:
@@ -1692,7 +1741,7 @@ def test_decoration_failure_keeps_qr_unavailable_when_output_is_too_small(tmp_pa
     try:
         assert diagnostics[specification].qr_placement is None
         assert "41-module" in diagnostics[specification].qr_unavailable_reason
-        assert metadata[specification][0]["reconstruction"]["qr"]["available"] is False
+        assert metadata[specification][0]["rendered_qr"] is None
     finally:
         for image in variants[specification]:
             image.close()
@@ -1726,9 +1775,9 @@ def test_explicit_decoration_failure_remains_strict(tmp_path: Path, request_kind
         )
 
 
-@pytest.mark.parametrize("qr_enabled,condition", [(True, "qr"), (False, "no-qr")])
+@pytest.mark.parametrize("qr_payload,condition", [(_QR_PAYLOAD, "qr"), (None, "no-qr")])
 def test_eligible_conditional_layer_failure_discards_decoration(
-    tmp_path: Path, qr_enabled: bool, condition: str
+    tmp_path: Path, qr_payload: str | None, condition: str
 ) -> None:
     path = tmp_path / "valid.png"
     with Image.new("RGB", (4, 4), "red") as image:
@@ -1744,7 +1793,7 @@ def test_eligible_conditional_layer_failure_discards_decoration(
     )
     specification = ResolvedOutputSpecification("16:10", (640, 400))
     configuration = _configuration(
-        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification, qr_enabled=qr_enabled
+        _FONT_REGISTRY, decorations={"frame": decoration}, output_specification=specification, qr_payload=qr_payload
     )
     snapshot = replace(make_snapshot("lora"), decoration="frame")
     metadata = {}
@@ -1757,7 +1806,7 @@ def test_eligible_conditional_layer_failure_discards_decoration(
         on_metadata=metadata.__setitem__,
     )
     try:
-        assert metadata[specification][0]["reconstruction"]["decoration"] == "none"
+        assert metadata[specification][0]["effective_presentation"]["decoration"] == "none"
         assert variants[specification][0].getpixel((0, 0)) == (255, 255, 255)
     finally:
         for image in variants[specification]:
@@ -1817,9 +1866,9 @@ def test_decoration_failure_is_isolated_to_the_affected_output(tmp_path: Path) -
         on_metadata=metadata.__setitem__,
     )
     try:
-        assert metadata[small][0]["reconstruction"]["decoration"] == "frame"
+        assert metadata[small][0]["effective_presentation"]["decoration"] == "frame"
         assert variants[small][0].getpixel((0, 0)) == (255, 0, 0)
-        assert metadata[large][0]["reconstruction"]["decoration"] == "none"
+        assert metadata[large][0]["effective_presentation"]["decoration"] == "none"
         assert variants[large][0].getpixel((0, 0)) == (255, 255, 255)
     finally:
         for images in variants.values():

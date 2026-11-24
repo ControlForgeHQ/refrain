@@ -21,9 +21,11 @@ from contextlib import closing
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from threading import BoundedSemaphore, Event, Lock, Thread
+from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
 
+from .config import PreparedImageVariantKey
 from .display.coordinator import (
     DisplayPublicationCoordinator,
     PublicationOperation,
@@ -82,7 +84,25 @@ class _TransientUnsupported(RuntimeControlError):
     pass
 
 
-AdmissionGuard = Callable[[tuple[int, int], Mapping[ResolvedOutputSpecification, Image.Image]], PublicationOperation]
+class _TransientInvalid(RuntimeControlError):
+    pass
+
+
+class _TransientTargetRejected(RuntimeControlError):
+    def __init__(self, status: PublicationStatus) -> None:
+        self.status = status
+
+
+class AdmissionGuard(Protocol):
+    def __call__(
+        self,
+        identity: tuple[int, int],
+        images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+        metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None,
+        destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+    ) -> PublicationOperation: ...
+
+
 TransientAdmissionGuard = Callable[
     [
         Iterable[str] | str,
@@ -629,8 +649,11 @@ class RuntimeControlServer:
 
                 def admit_refresh(
                     identity: tuple[int, int],
-                    images: Mapping[ResolvedOutputSpecification, Image.Image],
-                    metadata: Mapping[ResolvedOutputSpecification, dict[str, object]] | None = None,
+                    images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+                    metadata: (
+                        Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None
+                    ) = None,
+                    destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
                 ) -> PublicationOperation:
                     with self._lock:
                         if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
@@ -647,8 +670,14 @@ class RuntimeControlServer:
                             None,
                         )
                         if metadata is not None and callable(publish_with_metadata):
-                            return publish_with_metadata(identity, images, metadata)
-                        return self._coordinator.force_scheduled_publication(identity, images)
+                            if destination_keys is None:
+                                return publish_with_metadata(identity, images, metadata)
+                            return publish_with_metadata(identity, images, metadata, destination_keys=destination_keys)
+                        if destination_keys is None:
+                            return self._coordinator.force_scheduled_publication(identity, images)
+                        return self._coordinator.force_scheduled_publication(
+                            identity, images, destination_keys=destination_keys
+                        )
 
                 publication = self._refresh(admit_refresh)
             elif operation == "publish":
@@ -719,6 +748,16 @@ class RuntimeControlServer:
         except _TransientUnsupported:
             try:
                 _send(connection, _result_wire(PublicationResult(PublicationStatus.UNSUPPORTED, {})))
+            except (OSError, EOFError, RuntimeProtocolError):
+                pass
+        except _TransientInvalid:
+            try:
+                _send(connection, _result_wire(PublicationResult(PublicationStatus.INVALID, {})))
+            except (OSError, EOFError, RuntimeProtocolError):
+                pass
+        except _TransientTargetRejected as error:
+            try:
+                _send(connection, _result_wire(PublicationResult(error.status, {})))
             except (OSError, EOFError, RuntimeProtocolError):
                 pass
         except RuntimeAdmissionRejected:
@@ -819,9 +858,11 @@ class RuntimeControlServer:
         guard: _RequestDeadline,
         images: StagedTransientImages,
     ):
-        fields = {"version", "operation", "target", "specifications", "images"}
+        fields = {"version", "operation", "target", "specifications", "images", "associations"}
         preflight = request.get("preflight", False)
-        if set(request) not in (fields, fields | {"preflight"}) or ("preflight" in request and preflight is not True):
+        if "associations" not in request:
+            raise _TransientInvalid()
+        if set(request) - {"preflight"} != fields or ("preflight" in request and preflight is not True):
             raise RuntimeProtocolError("invalid publication request")
         target = request["target"]
         if target != "@all" and (
@@ -839,12 +880,48 @@ class RuntimeControlServer:
         ):
             raise RuntimeProtocolError("invalid destination specifications")
         specifications = {key: _spec_from_wire(value) for key, value in specifications.items()}
+        associations = request["associations"]
+        if (
+            not isinstance(associations, dict)
+            or set(associations) != set(specifications)
+            or any(
+                not isinstance(value, dict)
+                or set(value) != {"audience", "image"}
+                or value["audience"] not in ("external", "internal")
+                or type(value["image"]) is not int
+                or value["image"] < 0
+                for value in associations.values()
+            )
+        ):
+            raise RuntimeProtocolError("invalid destination image associations")
         selected = None if target == "@all" else set(target)
+        current = {}
+        for record in self._coordinator.iter_destination_statuses():
+            identifier = record["identifier"]
+            if (selected is None and record["participating"]) or (selected is not None and identifier in selected):
+                current[identifier] = record
+                if len(current) > _MAX_DESTINATIONS:
+                    raise _TransientInvalid()
+        if selected is None:
+            selected = set(current)
+        if not selected:
+            raise _TransientInvalid()
+        if selected - current.keys():
+            raise _TransientTargetRejected(PublicationStatus.DESTINATION_NOT_FOUND)
+        if any(record["withdrawn"] for record in current.values()):
+            raise _TransientTargetRejected(PublicationStatus.WITHDRAWN)
         if any(
-            (selected is None and record["participating"] or selected is not None and record["identifier"] in selected)
-            and not _supports_transient_spec(record["output_specification"])
-            for record in self._coordinator.iter_destination_statuses()
-        ) or any(not _supports_transient_spec(spec) for spec in specifications.values()):
+            not record["supports_transient"] or not _supports_transient_spec(record["output_specification"])
+            for record in current.values()
+        ):
+            raise _TransientUnsupported()
+        if set(current) != set(specifications) or any(
+            record["audience"] != associations[identifier]["audience"]
+            or record["output_specification"] != specifications[identifier]
+            for identifier, record in current.items()
+        ):
+            raise _TransientInvalid()
+        if any(not _supports_transient_spec(spec) for spec in specifications.values()):
             raise _TransientUnsupported()
         descriptors = request["images"]
         if not isinstance(descriptors, list) or not 1 <= len(descriptors) <= _MAX_IMAGES:
@@ -860,18 +937,20 @@ class RuntimeControlServer:
             length = descriptor["length"]
             if descriptor["encoding"] != "png" or type(length) is not int or not 0 < length <= _MAX_IMAGE_BYTES:
                 raise RuntimeProtocolError("invalid image encoding or size")
-            if spec in [item[0] for item in parsed]:
-                raise RuntimeProtocolError("duplicate image specification")
             total_bytes += length
             parsed.append((spec, length))
         if total_bytes > _MAX_TOTAL_BYTES:
             raise RuntimeProtocolError("publication exceeds resource limits")
-        if set(specifications.values()) != {spec for spec, _ in parsed}:
-            raise RuntimeProtocolError("inconsistent image specifications")
+        if any(
+            association["image"] >= len(parsed) or parsed[association["image"]][0] != specifications[identifier]
+            for identifier, association in associations.items()
+        ) or {association["image"] for association in associations.values()} != set(range(len(parsed))):
+            raise RuntimeProtocolError("inconsistent image associations")
         if target != "@all" and set(target) != set(specifications):
             raise RuntimeProtocolError("inconsistent destinations")
         if preflight:
             _send(connection, {"version": _VERSION, "status": "ready"})
+        paths = []
         for index, (spec, length) in enumerate(parsed):
             if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
                 raise RuntimeAdmissionRejected("runtime is stopping or request expired")
@@ -901,8 +980,11 @@ class RuntimeControlServer:
             if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
                 raise RuntimeAdmissionRejected("runtime is stopping or request expired")
             images[spec] = path
+            paths.append(path)
         if _decode(_receive(connection, guard, deadline)) != {"commit": True}:
             raise RuntimeProtocolError("incomplete publication request")
+        images.destination_paths = {key: paths[value["image"]] for key, value in associations.items()}
+        images.audiences = {key: value["audience"] for key, value in associations.items()}
         return target, specifications
 
     def close(self) -> tuple[Thread, ...]:
@@ -1022,6 +1104,7 @@ class RuntimeControlClient:
                         or set(record)
                         != {
                             "identifier",
+                            "audience",
                             "output_specification",
                             "supports_transient",
                             "participating",
@@ -1031,13 +1114,14 @@ class RuntimeControlClient:
                         }
                         or not isinstance(record["identifier"], str)
                         or not 1 <= len(record["identifier"]) <= 256
+                        or record["audience"] not in ("external", "internal")
+                        or not (type(record["available"]) is bool or record["available"] == "unknown")
                         or any(
                             type(record[key]) is not bool
                             for key in (
                                 "supports_transient",
                                 "participating",
                                 "withdrawn",
-                                "available",
                                 "publication_accepted",
                             )
                         )
@@ -1055,8 +1139,10 @@ class RuntimeControlClient:
         self,
         destinations: str | list[str] | tuple[str, ...],
         specifications: Mapping[str, ResolvedOutputSpecification],
-        images: Mapping[ResolvedOutputSpecification, Image.Image],
+        images: Mapping[ResolvedOutputSpecification | str, Image.Image],
         on_accepted: Callable[[], object] | None = None,
+        *,
+        audiences: Mapping[str, str] | None = None,
     ) -> PublicationResult:
         target = (
             destinations
@@ -1065,12 +1151,31 @@ class RuntimeControlClient:
         )
         if any(not _supports_transient_spec(spec) for spec in specifications.values()):
             return PublicationResult(PublicationStatus.UNSUPPORTED, {})
+        if (
+            not isinstance(audiences, Mapping)
+            or set(audiences) != set(specifications)
+            or any(audience not in ("external", "internal") for audience in audiences.values())
+        ):
+            raise RuntimeProtocolError("destination audiences are required for transient publication")
+        by_destination = set(images) == set(specifications)
+        if not by_destination and set(images) != set(specifications.values()):
+            raise RuntimeProtocolError("invalid destination image associations")
+        associations = {}
+        variants = []
+        seen = {}
+        for identifier, specification in specifications.items():
+            image = images[identifier if by_destination else specification]
+            variant = (id(image), specification)
+            if variant not in seen:
+                seen[variant] = len(variants)
+                variants.append((specification, image))
+            associations[identifier] = {"audience": audiences[identifier], "image": seen[variant]}
         payloads = []
         descriptors = []
         total_bytes = 0
-        if len(images) > _MAX_IMAGES:
+        if len(variants) > _MAX_IMAGES:
             raise RuntimeProtocolError("too many images")
-        for spec, image in images.items():
+        for spec, image in variants:
             _spec_from_wire(_spec_to_wire(spec))
             if not isinstance(image, Image.Image) or image.mode != "RGB" or image.size != spec.requested_output_size:
                 raise RuntimeProtocolError("image must be RGB and match the specification")
@@ -1091,6 +1196,7 @@ class RuntimeControlClient:
             "target": target,
             "specifications": {key: _spec_to_wire(spec) for key, spec in specifications.items()},
             "images": descriptors,
+            "associations": associations,
         }
         return self._publish(request, payloads, on_accepted)
 

@@ -26,7 +26,7 @@ from .publication_metadata import (
 PUBLICATION_MANIFEST_VERSION = 1
 _MANIFEST_FIELDS = {
     "schema_version",
-    "publication_id",
+    "id",
     "image_filename",
     "metadata_filename",
     "image_sha256",
@@ -72,7 +72,7 @@ class PublicationManifest:
     def to_mapping(self) -> dict[str, object]:
         return {
             "schema_version": PUBLICATION_MANIFEST_VERSION,
-            "publication_id": self.publication_id,
+            "id": self.publication_id,
             "image_filename": self.image_filename,
             "metadata_filename": self.metadata_filename,
             "image_sha256": self.image_sha256,
@@ -94,13 +94,14 @@ def _validate_manifest(value: object) -> PublicationManifest:
         raise PublicationStorageError("manifest must contain exactly the supported fields")
     if type(value["schema_version"]) is not int or value["schema_version"] != PUBLICATION_MANIFEST_VERSION:
         raise PublicationStorageError("unsupported publication manifest schema version")
-    publication_id = value["publication_id"]
+    publication_id = value["id"]
     if (
         not isinstance(publication_id, str)
         or not _PUBLICATION_ID.fullmatch(publication_id)
+        or publication_id.casefold() == "manifest"
         or publication_id.upper() in _WINDOWS_RESERVED_DESTINATION_IDS
     ):
-        raise PublicationStorageError("manifest publication_id must be a valid identifier of at most 240 characters")
+        raise PublicationStorageError("manifest id must be a valid identifier of at most 240 characters")
     if value["image_filename"] != f"{publication_id}.png":
         raise PublicationStorageError("manifest image_filename must be the publication's PNG filename")
     if value["metadata_filename"] != f"{publication_id}.json":
@@ -390,6 +391,40 @@ def _read_regular_file(path: Path, *, limit: int | None = None) -> bytes:
             os.close(fd)
 
 
+def _manifest_snapshot(path: Path) -> tuple[int, str] | None:
+    """Identify a possibly damaged manifest without allocating its full contents."""
+    _check_path_components(path)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise PublicationStorageError(f"cannot read publication manifest {path}: {error}") from error
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise PublicationStorageError(f"publication manifest is not a regular file: {path}")
+        digest = hashlib.sha256()
+        with os.fdopen(fd, "rb") as source:
+            fd = -1
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+            after = os.fstat(source.fileno())
+        if (
+            not os.path.samestat(before, after)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+        ):
+            raise PublicationStorageError(f"publication manifest changed while being read: {path}")
+        return after.st_size, digest.hexdigest()
+    except OSError as error:
+        raise PublicationStorageError(f"cannot read publication manifest {path}: {error}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _open_exclusive(path: Path):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
@@ -421,9 +456,9 @@ def _matches_image(image: bytes, expected_size: tuple[int, int]) -> None:
         with Image.open(BytesIO(image)) as decoded:
             if decoded.format != "PNG" or getattr(decoded, "n_frames", 1) != 1:
                 raise PublicationStorageError("published image must be a single-frame PNG")
-            decoded.load()
             if decoded.size != expected_size:
                 raise PublicationStorageError("published image dimensions do not match completed metadata")
+            decoded.load()
     except PublicationStorageError:
         raise
     except Exception as error:
@@ -521,6 +556,36 @@ class PublicationStore:
     def _manifest_path(destination: Path) -> Path:
         return destination / "manifest.json"
 
+    def _ensure_destination_ownership(self, destination: Path) -> None:
+        marker = destination / ".refrain-owned"
+        try:
+            status = marker.lstat()
+        except FileNotFoundError:
+            try:
+                children = tuple(destination.iterdir())
+            except OSError as error:
+                raise PublicationStorageError(
+                    f"cannot inspect publication destination {destination}: {error}"
+                ) from error
+            if children:
+                try:
+                    current = self._load_current(destination)
+                except PublicationStorageError as error:
+                    raise PublicationStorageError(
+                        f"cannot adopt unmarked publication destination {destination}: {error}"
+                    ) from error
+                if current is None:
+                    raise PublicationStorageError(
+                        f"cannot adopt nonempty unmarked publication destination {destination}"
+                    )
+            self._write_bytes(marker, b"")
+            _sync_directory(destination)
+            return
+        except OSError as error:
+            raise PublicationStorageError(f"cannot inspect publication ownership marker {marker}: {error}") from error
+        if _is_redirect(marker, status) or not stat.S_ISREG(status.st_mode) or status.st_size != 0:
+            raise PublicationStorageError(f"invalid publication ownership marker: {marker}")
+
     def _load_current(self, destination: Path) -> PublicationDataset | None:
         manifest_path = self._manifest_path(destination)
         try:
@@ -535,14 +600,10 @@ class PublicationStore:
             raise PublicationStorageError(f"current publication manifest is not a regular file: {manifest_path}")
         manifest_bytes = _read_regular_file(manifest_path, limit=_MAX_MANIFEST_BYTES)
         manifest = parse_publication_manifest(manifest_bytes)
-        try:
-            return self._read_dataset(destination, manifest)
-        except PublicationStorageError:
-            latest_bytes = _read_regular_file(manifest_path, limit=_MAX_MANIFEST_BYTES)
-            if latest_bytes == manifest_bytes:
-                raise
-            latest = parse_publication_manifest(latest_bytes)
-            return self._read_dataset(destination, latest)
+        dataset = self._read_dataset(destination, manifest)
+        if _read_regular_file(manifest_path, limit=_MAX_MANIFEST_BYTES) != manifest_bytes:
+            raise PublicationStorageError("publication manifest changed during dataset verification")
+        return dataset
 
     def _read_dataset(self, destination: Path, manifest: PublicationManifest) -> PublicationDataset:
         image_path = destination / manifest.image_filename
@@ -558,7 +619,9 @@ class PublicationStore:
         except ValueError as error:
             raise PublicationStorageError(f"current publication metadata is invalid: {error}") from error
         self._validate_association(metadata, manifest.publication_id, destination.name)
-        output = metadata["output_specification"]
+        publication = metadata["publication"]
+        assert isinstance(publication, dict)
+        output = publication["output_specification"]
         assert isinstance(output, dict)
         expected_size = tuple(output["requested_output_size"])
         _matches_image(image, expected_size)
@@ -566,19 +629,29 @@ class PublicationStore:
 
     @staticmethod
     def _validate_association(metadata: Mapping[str, object], publication_id: str, destination_id: str) -> None:
-        if metadata.get("publication_id") != publication_id:
+        publication = metadata.get("publication")
+        if not isinstance(publication, Mapping):
+            raise PublicationStorageError("completed publication metadata has no publication object")
+        if publication.get("id") != publication_id:
             raise PublicationStorageError("publication metadata ID does not match the dataset identity")
-        if metadata.get("destination_id") != destination_id:
+        if publication.get("destination_id") != destination_id:
             raise PublicationStorageError("publication metadata destination does not match its owning directory")
 
     def read_current(self, destination_id: str) -> PublicationDataset:
         """Read and verify the current publication using only its manifest and files."""
         destination_id = self._destination_id(destination_id)
         destination = self._destination(destination_id, create=False)
+        last_error: PublicationStorageError | None = None
         for _attempt in range(2):
-            dataset = self._load_current(destination)
+            try:
+                dataset = self._load_current(destination)
+            except PublicationStorageError as error:
+                last_error = error
+                continue
             if dataset is not None:
                 return dataset
+        if last_error is not None:
+            raise last_error
         raise PublicationStorageError(f"publication manifest is missing: {self._manifest_path(destination)}")
 
     def _write_bytes(self, path: Path, contents: bytes) -> None:
@@ -608,44 +681,63 @@ class PublicationStore:
         _check_path_components(destination)
         try:
             destination_status = destination.lstat()
+            marker = destination / ".refrain-owned"
+            marker_status = marker.lstat()
         except OSError as error:
             raise PublicationStorageError(f"cannot inspect publication destination {destination}: {error}") from error
         if _is_redirect(destination, destination_status) or not stat.S_ISDIR(destination_status.st_mode):
             raise PublicationStorageError(f"refusing to clean an unsafe publication destination: {destination}")
+        if _is_redirect(marker, marker_status) or not stat.S_ISREG(marker_status.st_mode) or marker_status.st_size:
+            raise PublicationStorageError(f"invalid publication ownership marker: {marker}")
+        keep = keep | {".refrain-owned"}
         try:
-            children = tuple(destination.iterdir())
+            if os.name == "nt":
+                self._cleanup_windows_directory(destination, keep)
+            else:
+                flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(destination, flags)
+                try:
+                    if not os.path.samestat(destination_status, os.fstat(descriptor)):
+                        raise PublicationStorageError(f"publication destination changed during cleanup: {destination}")
+                    current_marker = os.stat(".refrain-owned", dir_fd=descriptor, follow_symlinks=False)
+                    if not os.path.samestat(marker_status, current_marker) or current_marker.st_size:
+                        raise PublicationStorageError(f"publication ownership marker changed during cleanup: {marker}")
+                    self._cleanup_directory_fd(descriptor, destination, destination_status.st_dev, keep)
+                finally:
+                    os.close(descriptor)
         except OSError as error:
-            raise PublicationStorageError(f"cannot inspect publication destination {destination}: {error}") from error
-        obsolete: list[Path] = []
-        for child in children:
-            if child.parent != destination:
-                raise PublicationStorageError(f"publication cleanup candidate escapes its destination: {child}")
-            if child.name in keep:
-                continue
-            _check_path_components(child)
-            try:
-                status = child.lstat()
-            except OSError as error:
-                raise PublicationStorageError(f"cannot inspect publication file {child}: {error}") from error
-            if _is_redirect(child, status):
-                raise PublicationStorageError(f"refusing to clean a linked publication object: {child}")
-            if not stat.S_ISREG(status.st_mode):
-                raise PublicationStorageError(f"refusing to clean an unexpected publication object: {child}")
-            if not (self._generated_name(child.name) or _TEMPORARY.fullmatch(child.name)):
-                raise PublicationStorageError(f"refusing to remove an unrecognized publication file: {child}")
-            obsolete.append(child)
-        for child in obsolete:
-            _check_path_components(child)
-            try:
-                status = child.lstat()
-            except OSError as error:
-                raise PublicationStorageError(f"cannot re-inspect publication file {child}: {error}") from error
-            if _is_redirect(child, status) or not stat.S_ISREG(status.st_mode):
-                raise PublicationStorageError(f"refusing to remove a changed publication object: {child}")
-            try:
-                child.unlink()
-            except OSError as error:
-                raise PublicationStorageError(f"cannot remove obsolete publication file {child}: {error}") from error
+            raise PublicationStorageError(f"cannot clean publication destination {destination}: {error}") from error
+
+    def _cleanup_directory_fd(self, descriptor: int, directory: Path, device: int, keep: set[str]) -> None:
+        with os.scandir(descriptor) as entries:
+            names = [entry.name for entry in entries if entry.name not in keep]
+        for name in names:
+            child = directory / name
+            status = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if stat.S_ISLNK(status.st_mode):
+                os.unlink(name, dir_fd=descriptor)
+            elif stat.S_ISDIR(status.st_mode):
+                if status.st_dev != device or os.path.ismount(child):
+                    raise PublicationStorageError(f"refusing to traverse a mounted publication object: {child}")
+                flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+                child_fd = os.open(name, flags, dir_fd=descriptor)
+                try:
+                    if not os.path.samestat(status, os.fstat(child_fd)):
+                        raise PublicationStorageError(f"publication directory changed during cleanup: {child}")
+                    self._cleanup_directory_fd(child_fd, child, device, set())
+                finally:
+                    os.close(child_fd)
+                os.rmdir(name, dir_fd=descriptor)
+            elif stat.S_ISREG(status.st_mode):
+                os.unlink(name, dir_fd=descriptor)
+            else:
+                raise PublicationStorageError(f"refusing to clean an unsafe publication object: {child}")
+
+    def _cleanup_windows_directory(self, directory: Path, keep: set[str]) -> None:
+        raise PublicationStorageError(
+            f"cannot safely clean publication destination {directory}: "
+            "handle-relative, non-following cleanup is unavailable on Windows"
+        )
 
     def publish(
         self,
@@ -669,37 +761,50 @@ class PublicationStore:
         except (ValueError, TypeError, RecursionError) as error:
             raise PublicationStorageError(f"completed publication metadata is invalid: {error}") from error
 
-        publication_id = metadata.get("publication_id")
+        publication = metadata["publication"]
+        assert isinstance(publication, dict)
+        publication_id = publication.get("id")
         if (
             not isinstance(publication_id, str)
             or not _PUBLICATION_ID.fullmatch(publication_id)
+            or publication_id.casefold() == "manifest"
             or publication_id.upper() in _WINDOWS_RESERVED_DESTINATION_IDS
         ):
             raise PublicationStorageError(
                 "publication_id must be a valid filename identifier of at most 240 characters"
             )
         self._validate_association(metadata, publication_id, destination_id)
-        output_specification = metadata["output_specification"]
+        output_specification = publication["output_specification"]
         assert isinstance(output_specification, dict)
         expected_size = tuple(output_specification["requested_output_size"])
         if image.size != expected_size:
             raise PublicationStorageError("publication image dimensions do not match completed metadata")
 
         destination = self._destination(destination_id, create=True)
-        current = self._load_current(destination)
-        previous_names = {"manifest.json"}
+        self._ensure_destination_ownership(destination)
+        try:
+            previous_names = {child.name for child in destination.iterdir()}
+        except OSError as error:
+            raise PublicationStorageError(f"cannot inspect publication destination {destination}: {error}") from error
+        manifest_path = self._manifest_path(destination)
+        previous_manifest = _manifest_snapshot(manifest_path)
+        try:
+            current = self._load_current(destination)
+        except PublicationStorageError:
+            # Ownership permits replacement of an invalid dataset; preserve it until commit.
+            current = None
+        if _manifest_snapshot(manifest_path) != previous_manifest:
+            raise PublicationStorageError("publication manifest changed while preparing the replacement")
         if current is not None:
-            if current.manifest.publication_id == publication_id:
+            if current.manifest.publication_id.casefold() == publication_id.casefold():
                 raise PublicationStorageError("publication_id must identify a new publication event")
-            previous_names.update((current.manifest.image_filename, current.manifest.metadata_filename))
-        else:
-            self._cleanup_contents(destination, set())
 
         image_filename = f"{publication_id}.png"
         metadata_filename = f"{publication_id}.json"
         image_path = destination / image_filename
         metadata_path = destination / metadata_filename
-        if image_path.exists() or metadata_path.exists():
+        existing_names = {child.name.casefold() for child in destination.iterdir()}
+        if image_filename.casefold() in existing_names or metadata_filename.casefold() in existing_names:
             raise PublicationStorageError("publication output filename already exists; choose a unique publication_id")
         temporary_manifest = destination / f".refrain-{uuid.uuid4().hex}.manifest.tmp"
         committed_manifest: bytes | None = None
@@ -725,10 +830,17 @@ class PublicationStore:
             committed = False
             if replacement_started and committed_manifest is not None:
                 try:
-                    committed = (
-                        _read_regular_file(self._manifest_path(destination), limit=_MAX_MANIFEST_BYTES)
-                        == committed_manifest
-                    )
+                    current_manifest = _manifest_snapshot(manifest_path)
+                    proposed_manifest = (len(committed_manifest), hashlib.sha256(committed_manifest).hexdigest())
+                    if current_manifest == proposed_manifest:
+                        verified = self.read_current(destination_id)
+                        committed = verified.manifest == manifest
+                        if not committed:
+                            raise PublicationStorageError("replacement dataset does not match the proposed publication")
+                    elif current_manifest != previous_manifest:
+                        raise PublicationStorageError(
+                            "current manifest is neither the previous nor proposed publication"
+                        )
                 except PublicationStorageError as verification_error:
                     raise PublicationStorageError(
                         f"publication commit outcome is uncertain; retaining all files for safe recovery: "
@@ -750,8 +862,18 @@ class PublicationStore:
             ) from error
 
         try:
+            verified = self.read_current(destination_id)
+            if verified.manifest != manifest:
+                raise PublicationStorageError("committed publication does not match the proposed dataset")
+        except PublicationStorageError as error:
+            raise PublicationStorageError(
+                f"publication commit outcome is uncertain; retaining all files for safe recovery: {error}",
+                published=True,
+            ) from error
+
+        try:
             _sync_directory(destination)
-            self._cleanup_contents(destination, {"manifest.json", image_filename, metadata_filename})
+            self._cleanup_contents(destination, {".refrain-owned", "manifest.json", image_filename, metadata_filename})
             _sync_directory(destination)
         except PublicationStorageError as error:
             raise PublicationStorageError(

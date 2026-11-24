@@ -11,6 +11,7 @@ from .artifacts import (
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
 )
+from .checkpoint import validate_checkpoint
 from .config import ApplicationConfiguration, PreparedImageVariantKey
 from .geometry import PixelBounds, ResolvedOutputSpecification
 from .persistence import PersistentState
@@ -25,6 +26,8 @@ def recover_prepared_daily_images(
     configuration: ApplicationConfiguration,
     output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
     *,
+    checkpoint: dict[str, object],
+    qr_declaration: dict[str, object] | None,
     chooser: random.Random | None = None,
 ) -> PreparedImageArtifactSet:
     """Reuse or regenerate the complete images for an existing committed selection.
@@ -45,6 +48,7 @@ def recover_prepared_daily_images(
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
     if not isinstance(configuration, ApplicationConfiguration):
         raise TypeError("configuration must be a validated ApplicationConfiguration")
+    validate_checkpoint(checkpoint, state, require_presentation=True)
 
     ordered_stages = tuple(stages)
     if ordered_stages != tuple(stage.visibility for stage in state.snapshot.resolved_reveal_stages):
@@ -64,6 +68,8 @@ def recover_prepared_daily_images(
         ordered_stages,
         output_specifications,
         snapshot=state.snapshot,
+        checkpoint=checkpoint,
+        qr_declaration=qr_declaration,
     )
     if not missing:
         return existing
@@ -89,6 +95,8 @@ def recover_prepared_daily_images(
         missing,
         chooser=chooser,
         selection_revision=state.revision,
+        canonical_presentation=checkpoint["presentation"],
+        qr_declaration=qr_declaration,
         on_metadata=remember_metadata,
         on_resolved_bounds=remember_bounds,
     )
@@ -99,6 +107,8 @@ def recover_prepared_daily_images(
             prepared_variants,
             prepared_metadata,
             snapshot=state.snapshot,
+            checkpoint=checkpoint,
+            qr_declaration=qr_declaration,
         )
         artifact_variants = dict(existing.variants)
         artifact_variants.update(new_artifacts.variants)

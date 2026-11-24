@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import time
-from datetime import date
 from io import BytesIO
 from threading import Event, Lock
-from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -12,61 +10,51 @@ from PIL import Image
 from refrain import DisplayBackendConfiguration, DisplayOutputConfiguration, ResolvedOutputSpecification
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
-from refrain.publication_metadata import build_prepared_metadata
 from refrain.publication_storage import PublicationStorageError, PublicationStore
-from refrain.renderer import CompositionVisibility
 
 _WIDE = ResolvedOutputSpecification("16:9", (16, 9))
 _PORTRAIT = ResolvedOutputSpecification("4:3", (16, 12))
 
 
 def _prepared_metadata() -> dict[str, object]:
-    snapshot = SimpleNamespace(
-        entry_id="entry",
-        quotation_text="A publication-ready quotation.",
-        quotation_identity="A publication-ready quotation.",
-        source=None,
-        attribution=None,
-        font=None,
-        background=None,
-        decoration=None,
-        font_faces={},
-        text_color=None,
-        decoration_color=None,
-        reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-        display_date=date(2026, 11, 16),
-        actions=(
-            SimpleNamespace(type="external-action", visibility=("external",), payload="external"),
-            SimpleNamespace(type="internal-action", visibility=("internal",), payload="internal"),
-        ),
-        presentation_style="centered",
-    )
-    return build_prepared_metadata(
-        selection_revision=1,
-        snapshot=snapshot,
-        output_specification=_WIDE,
-        stage_index=2,
-        visibility=CompositionVisibility(True, True, True),
-        reconstruction={
-            "content_entry": {
-                "id": "entry",
-                "quotations": [snapshot.quotation_text],
-                "presentation_style": "centered",
-                "reveal": {"source": "12:00", "attribution": "18:00"},
-            },
-            "presentation_style": "centered",
-            "background": "none",
-            "decoration": "none",
-            "fonts": {
-                "bundle": "lora",
-                "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
-            },
-            "colors": {"text": "black", "decoration": None},
-            "qr": {"enabled": True, "available": False},
-            "font_size_range": {"minimum": 12, "maximum": 32},
-            "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+    visibility = {"quotation": True, "source": True, "attribution": True}
+    presentation = {
+        "style": "centered",
+        "background": "none",
+        "decoration": "none",
+        "fonts": {
+            "bundle": "lora",
+            "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
         },
-    )
+        "colors": {"text": "black", "decoration": None},
+        "font_size_range": {"minimum": 12, "maximum": 32},
+        "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+    }
+    return {
+        "checkpoint": {
+            "schema_version": 1,
+            "content": {
+                "display_date": "2026-11-16",
+                "selection_revision": 4,
+                "reveal_schedule": {"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
+                "reveal_stage": visibility,
+                "quotation": "A publication-ready quotation.",
+                "source": "A source",
+                "attribution": "An author",
+                "actions": [
+                    {"type": "external-action", "visibility": ["external"], "payload": "external"},
+                    {"type": "internal-action", "visibility": ["internal"], "payload": "internal"},
+                ],
+                "qr": [],
+            },
+            "presentation": presentation,
+        },
+        "selection_revision": 4,
+        "visibility": visibility,
+        "effective_presentation": presentation,
+        "rendered_qr": None,
+        "output_specification": _WIDE,
+    }
 
 
 def _configuration(
@@ -189,13 +177,13 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         assert coordinator.wait_for_publication((4, 2), timeout=2)
         external = store.read_current("web-external")
         internal = store.read_current("web-internal")
-        assert external.metadata["publication_type"] == internal.metadata["publication_type"] == "scheduled"
+        assert external.metadata["publication"]["type"] == internal.metadata["publication"]["type"] == "scheduled"
         assert external.manifest.publication_id != internal.manifest.publication_id
-        assert external.metadata["destination_id"] == "web-external"
-        assert internal.metadata["destination_id"] == "web-internal"
-        assert [action["type"] for action in external.metadata["actions"]] == ["external-action"]
-        assert [action["type"] for action in internal.metadata["actions"]] == ["internal-action"]
-        assert prepared["publication_id"] is None
+        assert external.metadata["publication"]["destination_id"] == "web-external"
+        assert internal.metadata["publication"]["destination_id"] == "web-internal"
+        assert [action["type"] for action in external.metadata["content"]["actions"]] == ["external-action"]
+        assert [action["type"] for action in internal.metadata["content"]["actions"]] == ["internal-action"]
+        assert "publication" not in prepared["checkpoint"]
 
         transient_image = Image.new("RGB", _WIDE.requested_output_size, (200, 100, 50))
         operation = coordinator.publish_transient(
@@ -205,10 +193,8 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         )
         assert operation.wait(2).status is PublicationStatus.SUCCEEDED
         transient = store.read_current("web-external")
-        assert transient.metadata["publication_type"] == "transient"
-        assert transient.metadata["presentation"] is None
-        assert transient.metadata["reconstruction"] is None
-        assert transient.metadata["actions"] == []
+        assert transient.metadata["publication"]["type"] == "transient"
+        assert set(transient.metadata) == {"schema_version", "publication"}
         with Image.open(BytesIO(transient.image)) as published_image:
             assert published_image.getpixel((0, 0)) == (200, 100, 50)
 
@@ -221,8 +207,8 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         )
         assert refresh.wait(2).status is PublicationStatus.SUCCEEDED
         restored = store.read_current("web-external")
-        assert restored.metadata["publication_type"] == "scheduled"
-        assert restored.metadata["presentation"]["reveal_stage_index"] == 2
+        assert restored.metadata["publication"]["type"] == "scheduled"
+        assert restored.metadata["content"]["reveal_stage"] == prepared["visibility"]
         assert restored.manifest.publication_id != transient.manifest.publication_id
     finally:
         coordinator.close()
@@ -272,10 +258,8 @@ def test_information_view_can_be_explicitly_published_as_transient(tmp_path) -> 
         assert coordinator.wait_for_publication(information_identity, timeout=2)
         dataset = store.read_current("web-info")
         assert coordinator.acknowledgements == {"web-info": information_identity}
-        assert dataset.metadata["publication_type"] == "transient"
-        assert dataset.metadata["presentation"] is None
-        assert dataset.metadata["reconstruction"] is None
-        assert dataset.metadata["actions"] == []
+        assert dataset.metadata["publication"]["type"] == "transient"
+        assert set(dataset.metadata) == {"schema_version", "publication"}
     finally:
         coordinator.close()
 
@@ -323,9 +307,9 @@ def test_filesystem_failure_isolated_and_retried_per_destination(tmp_path, monke
         assert coordinator.acknowledgements == {"web-good": identity, "web-fail": None}
 
         good = store.read_current("web-good")
-        assert good.metadata["publication_type"] == "scheduled"
-        assert good.metadata["destination_id"] == "web-good"
-        assert good.metadata["presentation"]["reveal_stage_index"] == 2
+        assert good.metadata["publication"]["type"] == "scheduled"
+        assert good.metadata["publication"]["destination_id"] == "web-good"
+        assert good.metadata["content"]["reveal_stage"] == prepared["visibility"]
         assert attempts == {"web-good": 1, "web-fail": 1}
         with Image.open(BytesIO(good.image)) as published_image:
             assert published_image.tobytes() == expected_image_bytes
@@ -336,9 +320,9 @@ def test_filesystem_failure_isolated_and_retried_per_destination(tmp_path, monke
         assert coordinator.acknowledgements == {"web-good": identity, "web-fail": identity}
         assert attempts == {"web-good": 1, "web-fail": 2}
         recovered = store.read_current("web-fail")
-        assert recovered.metadata["publication_type"] == "scheduled"
-        assert recovered.metadata["destination_id"] == "web-fail"
-        assert recovered.metadata["presentation"]["reveal_stage_index"] == 2
+        assert recovered.metadata["publication"]["type"] == "scheduled"
+        assert recovered.metadata["publication"]["destination_id"] == "web-fail"
+        assert recovered.metadata["content"]["reveal_stage"] == prepared["visibility"]
         assert coordinator.desired_identity == identity
     finally:
         coordinator.close()

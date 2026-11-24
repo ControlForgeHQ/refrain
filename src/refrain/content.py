@@ -22,6 +22,7 @@ _ENTRY_FIELDS = {
     "id",
     "quotations",
     "actions",
+    "qr",
     "source",
     "attribution",
     "priority",
@@ -45,6 +46,8 @@ _PRESENTATION_STYLES = {"centered", "left-aligned"}
 _ACTION_VISIBILITIES = {"external", "internal"}
 _MAX_ACTIONS = 100
 _MAX_ACTION_PAYLOAD_BYTES = 10_240
+_QR_AUDIENCES = ("external", "internal")
+_MAX_QR_PAYLOAD_BYTES = 62
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -105,6 +108,75 @@ class ContentAction:
             raise ValueError(f"payload must not exceed {_MAX_ACTION_PAYLOAD_BYTES:,} UTF-8 bytes")
 
 
+def validate_qr_payload(payload: object) -> str | None:
+    """Validate an opaque QR payload, retaining its exact text or explicit null."""
+    if payload is None:
+        return None
+    if not isinstance(payload, str) or not payload:
+        raise ValueError("payload must be a nonempty string or null")
+    try:
+        size = len(payload.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise ValueError("payload must be valid UTF-8 text") from error
+    if size > _MAX_QR_PAYLOAD_BYTES:
+        raise ValueError(f"payload must not exceed {_MAX_QR_PAYLOAD_BYTES} UTF-8 bytes")
+    return payload
+
+
+@dataclass(frozen=True)
+class ContentQRDeclaration:
+    """One audience's opaque QR payload or explicit suppression."""
+
+    visibility: tuple[str, ...]
+    payload: str | None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.visibility, (tuple, list))
+            or len(self.visibility) != 1
+            or self.visibility[0] not in _QR_AUDIENCES
+        ):
+            raise ValueError("visibility must contain exactly one audience: 'external' or 'internal'")
+        object.__setattr__(self, "visibility", tuple(self.visibility))
+        validate_qr_payload(self.payload)
+
+
+def resolve_qr_payloads(
+    defaults: Mapping[str, str | None],
+    declarations: tuple[ContentQRDeclaration, ...] = (),
+    *,
+    overrides: Mapping[str, str | None] | None = None,
+) -> tuple[ContentQRDeclaration, ...]:
+    """Resolve viewer, entry and configuration precedence independently per audience.
+
+    Omitted keys inherit; explicit null suppresses. The returned declarations contain
+    only non-null payloads, ordered external then internal, ready for a checkpoint.
+    Explicit override values must already be valid; invalid inputs raise ValueError.
+    """
+    resolved: dict[str, str | None] = {audience: None for audience in _QR_AUDIENCES}
+    for audience, payload in defaults.items():
+        if audience not in _QR_AUDIENCES:
+            raise ValueError(f"unsupported QR audience: {audience!r}")
+        resolved[audience] = validate_qr_payload(payload)
+    seen: set[str] = set()
+    for declaration in declarations:
+        if not isinstance(declaration, ContentQRDeclaration):
+            raise ValueError("QR declarations must be ContentQRDeclaration values")
+        audience = declaration.visibility[0]
+        if audience in seen:
+            raise ValueError(f"duplicate QR audience: {audience!r}")
+        seen.add(audience)
+        resolved[audience] = declaration.payload
+    if overrides is not None:
+        for audience, payload in overrides.items():
+            if audience not in _QR_AUDIENCES:
+                raise ValueError(f"unsupported QR audience: {audience!r}")
+            resolved[audience] = validate_qr_payload(payload)
+    return tuple(
+        ContentQRDeclaration((audience,), payload) for audience, payload in resolved.items() if payload is not None
+    )
+
+
 @dataclass(frozen=True)
 class EligibilityRule:
     """One intrinsic eligibility condition; it is not evaluated against a date."""
@@ -147,6 +219,7 @@ class ContentEntry:
     text_color: tuple[str, ...] | None = None
     decoration_color: tuple[str, ...] | None = None
     actions: tuple[ContentAction, ...] = ()
+    qr: tuple[ContentQRDeclaration, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.actions, (tuple, list)) or any(
@@ -154,6 +227,11 @@ class ContentEntry:
         ):
             raise TypeError("actions must be a sequence of ContentAction values")
         object.__setattr__(self, "actions", tuple(self.actions))
+        if not isinstance(self.qr, (tuple, list)) or any(
+            not isinstance(declaration, ContentQRDeclaration) for declaration in self.qr
+        ):
+            raise TypeError("qr must be a sequence of ContentQRDeclaration values")
+        object.__setattr__(self, "qr", tuple(self.qr))
 
 
 def normalize_quotation(text: str) -> str:
@@ -250,6 +328,40 @@ def _validate_actions(value: object, file: Path) -> tuple[ContentAction, ...]:
             entry_excluded=False,
         )
     return tuple(actions)
+
+
+def _validate_qr(value: object, file: Path) -> tuple[ContentQRDeclaration, ...]:
+    if not isinstance(value, list):
+        _log_diagnostic(
+            ContentDiagnostic(file, "qr", "must be a sequence; all QR declarations are ignored"),
+            logging.WARNING,
+            entry_excluded=False,
+        )
+        return ()
+
+    declarations: list[ContentQRDeclaration] = []
+    seen: set[str] = set()
+    for index, member in enumerate(value):
+        field_name = f"qr[{index}]"
+        try:
+            if not isinstance(member, Mapping) or set(member) != {"visibility", "payload"}:
+                raise ValueError("must be a mapping with exactly visibility and payload fields")
+            if not isinstance(member["visibility"], list):
+                raise ValueError("visibility must be a sequence containing exactly one audience")
+            declaration = ContentQRDeclaration(member["visibility"], member["payload"])
+            audience = declaration.visibility[0]
+            if audience in seen:
+                raise ValueError(f"duplicate {audience!r} audience")
+        except (TypeError, ValueError) as error:
+            _log_diagnostic(
+                ContentDiagnostic(file, field_name, f"{error}; this QR declaration is ignored"),
+                logging.WARNING,
+                entry_excluded=False,
+            )
+            continue
+        declarations.append(declaration)
+        seen.add(audience)
+    return tuple(declarations)
 
 
 def _validate_calendar_rule(
@@ -514,6 +626,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         _validate_font_faces(data["font_faces"], file, diagnostics) if "font_faces" in data else MappingProxyType({})
     )
     actions = _validate_actions(data["actions"], file) if "actions" in data else ()
+    qr = _validate_qr(data["qr"], file) if "qr" in data else ()
 
     if len(diagnostics) != initial_diagnostic_count:
         return None
@@ -534,6 +647,7 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         text_color=text_color,
         decoration_color=decoration_color,
         actions=actions,
+        qr=qr,
     )
 
 

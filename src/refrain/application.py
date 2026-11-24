@@ -8,15 +8,17 @@ import random
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
+from types import MappingProxyType
 
 from PIL import Image
 
 from .artifacts import ArtifactStoreError, PreparedImageArtifactSet, PreparedImageArtifactStore
+from .checkpoint import CheckpointError, CheckpointStore
 from .config import (
     ApplicationConfiguration,
     ApplicationConfigurationError,
@@ -24,7 +26,7 @@ from .config import (
     PreparedImageVariantKey,
     load_application_config,
 )
-from .content import ContentEntry, ContentLibraryError, Quotation, _load_effective_content_library
+from .content import ContentEntry, ContentLibraryError, Quotation, _load_effective_content_library, resolve_qr_payloads
 from .display import DisplayBackend, DisplayBackendError, create_display_backend
 from .display.coordinator import (
     DisplayPublicationCoordinator,
@@ -45,7 +47,7 @@ from .persistence import (
     StateCommitError,
     StateRecoveryError,
 )
-from .preparation import DailyImagePreparationError
+from .preparation import DailyImagePreparationError, resolve_canonical_presentation
 from .presentation import build_presentation_snapshot
 from .publication_storage import PublicationStore
 from .recovery import recover_prepared_daily_images
@@ -210,6 +212,48 @@ def _commit_selection(
         return reloaded
 
 
+def _commit_selection_with_checkpoint(
+    store: PersistentStateStore,
+    artifact_store: PreparedImageArtifactStore,
+    configuration: ApplicationConfiguration,
+    proposal: SelectionProposal,
+    snapshot: DailySnapshot,
+) -> PersistentState:
+    checkpoint_store = CheckpointStore(store.path.parent / "publication.json")
+    previous = _reload(store)
+    if previous is None and proposal.base_revision == 0:
+        try:
+            checkpoint_store.invalidate()
+            artifact_store.invalidate_all()
+        except (CheckpointError, ArtifactStoreError) as error:
+            raise _RetryableApplicationError(f"cannot invalidate orphan selection artifacts: {error}") from error
+    state = _commit_selection(store, proposal, snapshot)
+    if previous is None or previous.revision != state.revision:
+        assert proposal.selected_candidate is not None
+        declarations = resolve_qr_payloads(configuration.qr_defaults, proposal.selected_candidate.entry.qr)
+        qr = [{"payload": item.payload, "visibility": list(item.visibility)} for item in declarations]
+        try:
+            checkpoint_store.initialize(state, qr)
+        except CheckpointError as error:
+            raise _RetryableApplicationError(f"cannot persist content checkpoint: {error}") from error
+    return state
+
+
+def _complete_checkpoint(
+    store: PersistentStateStore,
+    state: PersistentState,
+    configuration: ApplicationConfiguration,
+    chooser: random.Random,
+) -> dict[str, object]:
+    try:
+        return CheckpointStore(store.path.parent / "publication.json").complete(
+            state,
+            lambda snapshot, _content: resolve_canonical_presentation(snapshot, configuration, chooser=chooser),
+        )
+    except (CheckpointError, DailyImagePreparationError) as error:
+        raise _RetryableApplicationError(f"cannot complete publication checkpoint: {error}") from error
+
+
 def _reload(store: PersistentStateStore) -> PersistentState | None:
     try:
         return store.load()
@@ -282,10 +326,11 @@ def _load_stage_metadata(
     artifacts: PreparedImageArtifactSet,
     output_specifications: tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...],
     stage: int,
+    checkpoint: dict[str, object],
 ) -> dict[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]]:
     """Load each stage's metadata from the same compatible artifact variants as its images."""
     return {
-        specification: artifacts.variant_for(specification).load_metadata(stage)
+        specification: {"checkpoint": checkpoint, **artifacts.variant_for(specification).load_association(stage)}
         for specification in output_specifications
     }
 
@@ -295,10 +340,11 @@ def _publish_scheduled(
     identity: tuple[int, int],
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
     metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+    destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey],
 ) -> None:
     publish_with_metadata = getattr(coordinator, "publish_with_metadata", None)
     if callable(publish_with_metadata):
-        publish_with_metadata(identity, images, metadata)
+        publish_with_metadata(identity, images, metadata, destination_keys=destination_keys)
     else:
         coordinator.publish(identity, images)
 
@@ -327,21 +373,56 @@ def _destination_variant_images(
     }
 
 
+def _destination_keys(
+    configuration: ApplicationConfiguration, checkpoint: dict[str, object]
+) -> dict[str, ResolvedOutputSpecification | PreparedImageVariantKey]:
+    declarations = checkpoint["content"]["qr"]
+    keys = {}
+    for backend in configuration.display_backends:
+        for output in backend.outputs:
+            declaration = next((item for item in declarations if item["visibility"] == [output.audience]), None)
+            payload = None if declaration is None else declaration["payload"]
+            keys[output.identifier] = output.prepared_image_key_for_qr(payload)
+    return keys
+
+
 def _recover_images(
     state: PersistentState,
     artifact_store: PreparedImageArtifactStore,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
+    checkpoint: dict[str, object],
 ) -> PreparedImageArtifactSet:
     try:
-        return recover_prepared_daily_images(
-            state,
-            artifact_store,
-            resolve_reveal_stages(state.snapshot),
-            configuration,
-            configuration.required_prepared_image_keys,
-            chooser=chooser,
-        )
+        declarations = checkpoint["content"]["qr"]
+        keys = _destination_keys(configuration, checkpoint)
+        variants = {}
+        recovered = None
+        for backend in configuration.display_backends:
+            for output in backend.outputs:
+                declaration = next(
+                    (item for item in declarations if item["visibility"] == [output.audience]),
+                    None,
+                )
+                if output.presentation.qr_enabled is False:
+                    declaration = None
+                key = keys[output.identifier]
+                if key in variants:
+                    continue
+                recovered = recover_prepared_daily_images(
+                    state,
+                    artifact_store,
+                    resolve_reveal_stages(state.snapshot),
+                    configuration,
+                    (key,),
+                    checkpoint=checkpoint,
+                    qr_declaration=declaration,
+                    chooser=chooser,
+                )
+                variants.update(recovered.variants)
+        if recovered is None:
+            raise DailyImagePreparationError("no configured destination can be prepared")
+        return replace(recovered, variants=MappingProxyType(variants))
     except DailyImagePreparationError as error:
         raise _RetryableApplicationError(f"cannot prepare daily images: {error}") from error
     except ArtifactStoreError as error:
@@ -362,6 +443,7 @@ def _refresh_scheduled(
             tuple[int, int],
             Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
             Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
+            Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey],
         ],
         PublicationOperation,
     ],
@@ -383,18 +465,17 @@ def _refresh_scheduled(
         identity = (state.revision, decision.required_reveal_stage)
         if coordinator.desired_identity != identity:
             return rejected(PublicationStatus.INVALID)
+        checkpoint = _complete_checkpoint(store, state, configuration, chooser)
 
     with artifact_lock if artifact_lock is not None else Lock():
-        artifacts = _recover_images(state, artifact_store, configuration, chooser)
-        images = _load_stage_variants(artifacts, configuration.required_prepared_image_keys, identity[1])
+        artifacts = _recover_images(state, artifact_store, configuration, chooser, checkpoint)
+        images = _load_stage_variants(artifacts, artifacts.variant_keys, identity[1])
         transferred = False
         try:
-            metadata = _load_stage_metadata(artifacts, configuration.required_prepared_image_keys, identity[1])
+            metadata = _load_stage_metadata(artifacts, artifacts.variant_keys, identity[1], checkpoint)
             with state_lock:
                 current = _reload(store)
                 decision = evaluate_scheduling(wall_clock(), configuration, current)
-                if current is not None and current.revision == identity[0] and remember_artifacts is not None:
-                    remember_artifacts(current.revision, artifacts)
                 if (
                     shutdown.is_set()
                     or current is None
@@ -405,8 +486,16 @@ def _refresh_scheduled(
                     for image in images.values():
                         image.close()
                     return rejected(PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.INVALID)
+                current_checkpoint = _complete_checkpoint(store, current, configuration, chooser)
+                if not artifacts.association_matches(current_checkpoint):
+                    for image in images.values():
+                        image.close()
+                    return rejected(PublicationStatus.INVALID)
+                metadata = {key: {**value, "checkpoint": current_checkpoint} for key, value in metadata.items()}
+                if remember_artifacts is not None:
+                    remember_artifacts(current.revision, artifacts)
                 transferred = True
-                return admit(identity, images, metadata)
+                return admit(identity, images, metadata, _destination_keys(configuration, current_checkpoint))
         except BaseException:
             if not transferred:
                 for image in images.values():
@@ -469,6 +558,30 @@ def _record_selection_history(history_store: GlobalHistoryStore, state: Persiste
         _LOGGER.warning("Committed selection %s was not recorded in global history: %s", state.revision, error)
 
 
+def _commit_startup_selection(
+    store: PersistentStateStore,
+    artifact_store: PreparedImageArtifactStore,
+    history_store: GlobalHistoryStore,
+    configuration: ApplicationConfiguration,
+    proposal: SelectionProposal,
+    snapshot: DailySnapshot,
+) -> PersistentState:
+    try:
+        state = _commit_selection_with_checkpoint(store, artifact_store, configuration, proposal, snapshot)
+    except _RetryableApplicationError:
+        state = _reload(store)
+        if (
+            state is not None
+            and state.revision == proposal.base_revision + 1
+            and state.snapshot == snapshot
+            and state.repetition_history == proposal.proposed_repetition_history
+        ):
+            _record_selection_history(history_store, state)
+        raise
+    _record_selection_history(history_store, state)
+    return state
+
+
 def run_startup(
     config_file: str | Path | ApplicationConfiguration,
     state_path: str | Path,
@@ -510,8 +623,7 @@ def run_startup(
         while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
             assert decision.display_date is not None
             proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
-            state = _commit_selection(store, proposal, snapshot)
-            _record_selection_history(history_store, state)
+            state = _commit_startup_selection(store, artifact_store, history_store, configuration, proposal, snapshot)
             current_time = read_current_time()
             decision = evaluate_scheduling(current_time, configuration, state)
     except SchedulingEvaluationError as error:
@@ -566,8 +678,9 @@ def run_startup(
                 while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
                     assert decision.display_date is not None
                     proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
-                    state = _commit_selection(store, proposal, snapshot)
-                    _record_selection_history(history_store, state)
+                    state = _commit_startup_selection(
+                        store, artifact_store, history_store, configuration, proposal, snapshot
+                    )
                     current_time = read_current_time()
                     decision = evaluate_scheduling(current_time, configuration, state)
             except SchedulingEvaluationError as error:
@@ -576,20 +689,22 @@ def run_startup(
             stage = decision.required_reveal_stage
             if stage > state.highest_reveal_stage:
                 state = _persist_reveal_progress(store, state, stage)
+            checkpoint = _complete_checkpoint(store, state, configuration, chooser)
             artifacts = _recover_images(
                 state,
                 artifact_store,
                 configuration,
                 chooser,
+                checkpoint,
             )
             images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
             try:
                 images = _load_stage_variants(
                     artifacts,
-                    configuration.required_prepared_image_keys,
+                    artifacts.variant_keys,
                     stage,
                 )
-                metadata = _load_stage_metadata(artifacts, configuration.required_prepared_image_keys, stage)
+                metadata = _load_stage_metadata(artifacts, artifacts.variant_keys, stage, checkpoint)
             except ArtifactStoreError as error:
                 if images is not None:
                     for image in images.values():
@@ -616,7 +731,7 @@ def run_startup(
                     retry=False,
                     monotonic_clock=monotonic_clock,
                 )
-            _publish_scheduled(coordinator, identity, images, metadata)
+            _publish_scheduled(coordinator, identity, images, metadata, _destination_keys(configuration, checkpoint))
             coordinator.wait_for_publication(identity)
             break
     finally:
@@ -747,7 +862,9 @@ def run_application(
                         proposal.proposed_repetition_history,
                     )
                     with state_lock:
-                        state = _commit_selection(store, proposal, snapshot)
+                        state = _commit_selection_with_checkpoint(
+                            store, artifact_store, configuration, proposal, snapshot
+                        )
                     _record_selection_history(history_store, state)
                     pending_history = None
                     _LOGGER.info("Committed selection %s for %s", state.revision, state.snapshot.display_date)
@@ -762,7 +879,13 @@ def run_application(
                     with state_lock:
                         state = _persist_reveal_progress(store, state, stage)
                 with state_lock:
+                    checkpoint = _complete_checkpoint(store, state, configuration, chooser)
+                with state_lock:
                     current_artifacts = artifacts if artifact_revision == state.revision else None
+                    if current_artifacts is not None and not current_artifacts.association_matches(checkpoint):
+                        artifacts = current_artifacts = None
+                        if coordinator is not None:
+                            coordinator.clear_desired()
                 if current_artifacts is None:
                     if coordinator is not None:
                         desired_identity = coordinator.desired_identity
@@ -782,9 +905,10 @@ def run_application(
                             artifact_store,
                             configuration,
                             chooser,
+                            checkpoint,
                         )
                         try:
-                            artifact_store.cleanup(state.revision, configuration.required_prepared_image_keys)
+                            artifact_store.cleanup(state.revision, recovered.variant_keys, checkpoint=checkpoint)
                         except ArtifactStoreError as error:
                             _LOGGER.warning("Cannot clean obsolete prepared images: %s", error)
                         with state_lock:
@@ -885,13 +1009,14 @@ def run_application(
                     try:
                         images = _load_stage_variants(
                             current_artifacts,
-                            configuration.required_prepared_image_keys,
+                            current_artifacts.variant_keys,
                             stage,
                         )
                         metadata = _load_stage_metadata(
                             current_artifacts,
-                            configuration.required_prepared_image_keys,
+                            current_artifacts.variant_keys,
                             stage,
+                            checkpoint,
                         )
                     except ArtifactStoreError as error:
                         if images is not None:
@@ -909,7 +1034,9 @@ def run_application(
                             for image in images.values():
                                 image.close()
                             continue
-                        _publish_scheduled(coordinator, identity, images, metadata)
+                        _publish_scheduled(
+                            coordinator, identity, images, metadata, _destination_keys(configuration, checkpoint)
+                        )
                     continue
                 if last_failure is not None:
                     _LOGGER.info("Application operation recovered")
@@ -1027,7 +1154,23 @@ def run_demo(
                     if pending_selection is None:
                         state = _reload(store)
                         pending_selection = _select_snapshot(configuration, display_date, chooser, state)
-                    state = _commit_selection(store, *pending_selection)
+                    else:
+                        proposal, snapshot = pending_selection
+                        recovered = _reload(store)
+                        if (
+                            recovered is not None
+                            and recovered.revision == proposal.base_revision + 1
+                            and recovered.snapshot == snapshot
+                            and recovered.repetition_history == proposal.proposed_repetition_history
+                        ):
+                            state = recovered
+                            pending_selection = None
+                            selecting = False
+                            stage = 0
+                            artifacts = None
+                            _record_selection_history(history_store, state)
+                            continue
+                    state = _commit_selection_with_checkpoint(store, artifact_store, configuration, *pending_selection)
                     pending_selection = None
                     selecting = False
                     stage = 0
@@ -1036,33 +1179,40 @@ def run_demo(
                     _LOGGER.info("Committed demo selection %s for %s", state.revision, display_date)
                     continue
                 assert state is not None
+                checkpoint = _complete_checkpoint(store, state, configuration, chooser)
+                if artifacts is not None and not artifacts.association_matches(checkpoint):
+                    artifacts = None
+                    coordinator.clear_desired()
                 if artifacts is None:
                     artifacts = _recover_images(
                         state,
                         artifact_store,
                         configuration,
                         chooser,
+                        checkpoint,
                     )
                     try:
-                        artifact_store.cleanup(state.revision, configuration.required_prepared_image_keys)
+                        artifact_store.cleanup(state.revision, artifacts.variant_keys, checkpoint=checkpoint)
                     except ArtifactStoreError as error:
                         _LOGGER.warning("Cannot clean obsolete demo images: %s", error)
                     continue
                 if stage > state.highest_reveal_stage:
                     state = _persist_reveal_progress(store, state, stage)
+                    checkpoint = _complete_checkpoint(store, state, configuration, chooser)
                 identity = (state.revision, stage)
                 if coordinator.desired_identity != identity:
                     images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
                     try:
                         images = _load_stage_variants(
                             artifacts,
-                            configuration.required_prepared_image_keys,
+                            artifacts.variant_keys,
                             stage,
                         )
                         metadata = _load_stage_metadata(
                             artifacts,
-                            configuration.required_prepared_image_keys,
+                            artifacts.variant_keys,
                             stage,
+                            checkpoint,
                         )
                     except ArtifactStoreError as error:
                         if images is not None:
@@ -1073,7 +1223,9 @@ def run_demo(
                             f"cannot load prepared demo image for stage {stage}: {error}"
                         ) from error
                     assert images is not None
-                    _publish_scheduled(coordinator, identity, images, metadata)
+                    _publish_scheduled(
+                        coordinator, identity, images, metadata, _destination_keys(configuration, checkpoint)
+                    )
                     stage_requested_at = monotonic_clock()
                 coordinator.wait_for_any_publication(identity, cancellation_event=shutdown)
                 acknowledged_at = coordinator.first_successful_publication_time(identity)

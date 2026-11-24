@@ -16,11 +16,13 @@ import refrain.application as application
 import refrain.display
 import refrain.preparation as preparation
 import refrain.viewer as viewer
+from refrain.checkpoint import build_content_checkpoint
 from refrain.config import ApplicationConfiguration, load_application_config
 from refrain.content import load_content_library
 from refrain.display.coordinator import PublicationResult, PublicationStatus
 from refrain.geometry import ResolvedOutputSpecification
-from refrain.preparation import PresentationOverrides, prepare_daily_images
+from refrain.persistence import PersistentState
+from refrain.preparation import PresentationOverrides, prepare_daily_images, resolve_canonical_presentation
 from refrain.presentation import build_presentation_snapshot
 from refrain.publication_metadata import (
     finalize_publication_metadata,
@@ -119,6 +121,7 @@ def _completed_publication(
     configuration_text: str = _CONFIG,
     overrides: PresentationOverrides | None = None,
     resource_setup: Callable[[Path], None] | None = None,
+    qr: dict[str, object] | None = None,
 ) -> tuple[Path, Path, Path, dict[str, object]]:
     config_path, content_directory = _workspace(root)
     config_path.write_text(configuration_text, encoding="utf-8")
@@ -129,6 +132,11 @@ def _completed_publication(
     entry, quotation = viewer._select_entry(configuration, ("requested-entry", 2))
     snapshot = build_presentation_snapshot(configuration, entry, quotation, date(2026, 11, 16))
     output = specification or ResolvedOutputSpecification("16:10", (320, 200))
+    checkpoint = build_content_checkpoint(
+        PersistentState(1, snapshot, frozenset({snapshot.quotation_identity}), 0),
+        [] if qr is None else [qr],
+    )
+    checkpoint["presentation"] = resolve_canonical_presentation(snapshot, configuration, overrides=overrides)
     captured: dict[str, tuple[dict[str, object], ...]] = {}
     images = prepare_daily_images(
         snapshot,
@@ -137,7 +145,8 @@ def _completed_publication(
         (output,),
         selection_revision=1,
         on_metadata=lambda _specification, documents: captured.update(documents=documents),
-        overrides=overrides,
+        canonical_presentation=checkpoint["presentation"],
+        qr_declaration=qr,
     )
     try:
         prepared = captured["documents"][0]
@@ -146,18 +155,22 @@ def _completed_publication(
             for image in variant:
                 image.close()
     completed = finalize_publication_metadata(
-        prepared,
+        checkpoint,
         publication_type="scheduled",
         publication_id="test-publication",
         published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
         destination_id="test-destination",
         output_specification=output,
         audience="internal",
-        reveal_stage_index=prepared["presentation"]["reveal_stage_index"],
+        selection_revision=prepared["selection_revision"],
+        visibility=prepared["visibility"],
+        effective_presentation=prepared["effective_presentation"],
+        rendered_qr=prepared["rendered_qr"],
+        prepared_output_specification=prepared["output_specification"],
     )
     publication_path = root / "publication.json"
     publication_path.write_text(
-        serialize_publication_metadata(completed, stage="completed", audience="internal"),
+        serialize_publication_metadata(completed, stage="scheduled", audience="internal"),
         encoding="utf-8",
     )
     return config_path, content_directory, publication_path, completed
@@ -382,7 +395,8 @@ def test_publication_reconstruction_uses_committed_content_and_resolved_choices(
         captured.update(
             snapshot=snapshot,
             stages=stages,
-            resolved=kwargs["resolved_presentation"],
+            resolved=kwargs["canonical_presentation"],
+            qr=kwargs["qr_declaration"],
             overrides=kwargs["overrides"],
         )
         return prepare(snapshot, stages, configuration, specifications, **kwargs)
@@ -427,17 +441,17 @@ def test_publication_reconstruction_uses_committed_content_and_resolved_choices(
     assert snapshot.attribution == "An author"
     assert captured["stages"] == (CompositionVisibility(quotation=True, source=True, attribution=True),)
     resolved = captured["resolved"]
-    reconstruction = completed["reconstruction"]
-    assert resolved.font_bundle == reconstruction["fonts"]["bundle"] == "test-font"
+    presentation = completed["presentation"]
+    assert resolved == presentation
+    assert resolved["fonts"]["bundle"] == "test-font"
     assert captured["choices"].fonts["quotation"].identifier == "test-font"
-    assert resolved.background == reconstruction["background"] == "none"
-    assert resolved.decoration == reconstruction["decoration"] == "none"
-    assert resolved.text_color == reconstruction["colors"]["text"]
-    assert resolved.qr_enabled is completed["reconstruction"]["qr"]["enabled"] is True
+    assert resolved["background"] == "none"
+    assert resolved["decoration"] == "none"
+    assert resolved["colors"]["text"] == presentation["colors"]["text"]
+    assert captured["qr"] is None
     assert captured["overrides"].qr_enabled is False
-    assert resolved.min_font_size == reconstruction["font_size_range"]["minimum"]
-    assert resolved.max_font_size == reconstruction["font_size_range"]["maximum"]
-    assert resolved.insets.left == reconstruction["insets"]["left"]
+    assert resolved["font_size_range"] == presentation["font_size_range"]
+    assert resolved["insets"] == presentation["insets"]
     with Image.open(output) as image:
         assert image.size == (800, 600)
     assert {path: path.read_bytes() for path in sentinels} == sentinels
@@ -511,14 +525,12 @@ def test_publication_reconstructs_only_available_literary_fields(
 @pytest.mark.parametrize(
     ("mutation", "diagnostic"),
     [
-        (lambda document: document.update(publication_id=None), "publication_id"),
-        (lambda document: document.pop("destination_id"), "every supported publication field"),
+        (lambda document: document["publication"].update(id=None), "publication.id"),
+        (lambda document: document["publication"].pop("destination_id"), "publication"),
         (lambda document: document.update(schema_version=99), "unsupported publication metadata schema version"),
-        (
-            lambda document: document["reconstruction"]["content_entry"].update(quotations=["", "extra"]),
-            "exactly one quotation",
-        ),
-        (lambda document: document.update(audience="internal"), "every supported publication field"),
+        (lambda document: document["content"].update(quotation=""), "content.quotation"),
+        (lambda document: document.update(audience="internal"), "scheduled form"),
+        (lambda document: document.update(reconstruction={}), "scheduled form"),
     ],
 )
 def test_publication_input_rejects_invalid_completed_documents(
@@ -547,13 +559,13 @@ def test_publication_input_rejects_invalid_completed_documents(
     assert diagnostic in capsys.readouterr().err
 
 
-def test_publication_input_rejects_prepared_and_transient_documents(tmp_path: Path) -> None:
+def test_publication_input_rejects_checkpoints_and_transient_documents(tmp_path: Path) -> None:
     config_path, _content, publication_path, completed = _completed_publication(tmp_path)
-    prepared = dict(completed)
-    prepared.update(publication_id=None, published_at=None, destination_id=None)
-    publication_path.write_text(json.dumps(prepared), encoding="utf-8")
-    with pytest.raises(viewer.ViewerError, match="publication_id"):
-        viewer._read_publication_metadata(publication_path)
+    checkpoint = {key: value for key, value in completed.items() if key != "publication"}
+    for candidate in (checkpoint, {key: value for key, value in checkpoint.items() if key != "presentation"}):
+        publication_path.write_text(json.dumps(candidate), encoding="utf-8")
+        with pytest.raises(viewer.ViewerError, match="scheduled form"):
+            viewer._read_publication_metadata(publication_path)
 
     transient = finalize_publication_metadata(
         None,
@@ -564,10 +576,10 @@ def test_publication_input_rejects_prepared_and_transient_documents(tmp_path: Pa
         output_specification=ResolvedOutputSpecification("16:10", (320, 200)),
     )
     publication_path.write_text(
-        serialize_publication_metadata(transient, stage="completed"),
+        serialize_publication_metadata(transient, stage="transient"),
         encoding="utf-8",
     )
-    with pytest.raises(viewer.ViewerError, match="completed scheduled publication"):
+    with pytest.raises(viewer.ViewerError, match="scheduled form"):
         viewer._read_publication_metadata(publication_path)
 
 
@@ -602,10 +614,9 @@ def test_publication_input_converts_deep_json_recursion_to_cli_error(tmp_path: P
     path = tmp_path / "publication.json"
     nested = b"[" * 10000 + b"0" + b"]" * 10000
     path.write_bytes(
-        b'{"schema_version":1,"publication_id":'
+        b'{"schema_version":1,"publication":'
         + nested
-        + b',"publication_type":"scheduled","published_at":null,"destination_id":null,'
-        + b'"output_specification":{},"presentation":null,"reconstruction":null,"actions":[]}'
+        + b"}"
     )
 
     with pytest.raises(viewer.ViewerError, match="invalid publication metadata JSON"):
@@ -620,6 +631,9 @@ def test_publication_input_converts_deep_json_recursion_to_cli_error(tmp_path: P
         ["--push", "window"],
         ["--render-as", "window"],
         ["--list-destinations"],
+        ["--audience", "internal"],
+        ["--qr-external", "payload"],
+        ["--qr-internal", "payload"],
     ],
 )
 def test_publication_mode_rejects_incompatible_viewer_modes(
@@ -636,7 +650,7 @@ def test_publication_mode_reports_unavailable_published_resources(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path, _content, publication_path, completed = _completed_publication(tmp_path)
-    completed["reconstruction"]["fonts"]["bundle"] = "missing-font"
+    completed["presentation"]["fonts"]["bundle"] = "missing-font"
     publication_path.write_text(json.dumps(completed), encoding="utf-8")
 
     assert (
@@ -686,8 +700,23 @@ def test_publication_reconstruction_fails_for_unavailable_resolved_choices(
     mutation,
     diagnostic: str,
 ) -> None:
-    config_path, _content, publication_path, completed = _completed_publication(tmp_path)
-    mutation(completed["reconstruction"])
+    def register_tintable_decoration(root: Path) -> None:
+        decoration = root / "assets" / "decorations" / "test-frame"
+        decoration.mkdir(parents=True)
+        with Image.new("RGBA", (4, 4), (0, 0, 0, 0)) as layer:
+            layer.save(decoration / "frame.png")
+        (decoration / "decoration.yaml").write_text(
+            "format: 1\nid: test-frame\nlayers:\n  - image: frame.png\n    method: contain\n",
+            encoding="utf-8",
+        )
+
+    tint_test = "decoration tint color" in diagnostic
+    config_path, _content, publication_path, completed = _completed_publication(
+        tmp_path,
+        overrides=PresentationOverrides(decoration="test-frame") if tint_test else None,
+        resource_setup=register_tintable_decoration if tint_test else None,
+    )
+    mutation(completed["presentation"])
     publication_path.write_text(json.dumps(completed), encoding="utf-8")
 
     assert (
@@ -713,7 +742,7 @@ def test_explicit_viewer_overrides_take_precedence_over_only_the_published_value
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path, _content, publication_path, completed = _completed_publication(tmp_path)
-    reconstruction = completed["reconstruction"]
+    reconstruction = completed["presentation"]
     reconstruction["fonts"]["bundle"] = "missing-font"
     reconstruction["fonts"]["faces"] = {
         "quotation": "missing-face",
@@ -806,9 +835,12 @@ def test_publication_default_geometry_uses_full_16_by_10_design_canvas(
 def test_publication_rechecks_qr_viability_instead_of_reusing_original_availability(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_path, _content, _publication_path, completed = _completed_publication(tmp_path)
-    completed["reconstruction"]["qr"]["enabled"] = True
-    completed["reconstruction"]["qr"]["available"] = False
+    config_path, _content, _publication_path, completed = _completed_publication(
+        tmp_path,
+        specification=ResolvedOutputSpecification("16:10", (1600, 1000)),
+        qr={"visibility": ["internal"], "payload": "original payload"},
+    )
+    assert completed["content"]["qr"] == [{"visibility": ["internal"], "payload": "original payload"}]
     configuration = load_application_config(config_path)
     resolve = preparation.resolve_qr_placement
     placements = []
@@ -827,6 +859,35 @@ def test_publication_rechecks_qr_viability_instead_of_reusing_original_availabil
     image.close()
 
     assert len(placements) == 1
+
+
+def test_publication_reconstruction_uses_recorded_qr_without_current_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qr = {"visibility": ["internal"], "payload": "original payload"}
+    config_path, _content, _publication_path, completed = _completed_publication(
+        tmp_path, specification=ResolvedOutputSpecification("16:10", (1600, 1000)), qr=qr
+    )
+    configuration = load_application_config(config_path)
+    captured: dict[str, object] = {}
+    prepare = viewer.prepare_daily_images
+
+    def capture(*args, **kwargs):
+        captured["qr"] = kwargs["qr_declaration"]
+        captured["overrides"] = kwargs["overrides"]
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    image = viewer.render_publication(
+        configuration,
+        completed,
+        ResolvedOutputSpecification("16:10", (320, 200)),
+        overrides=PresentationOverrides(qr_enabled=False),
+    )
+    image.close()
+    assert captured["qr"] == qr
+    assert captured["overrides"].qr_enabled is False
+    assert completed["content"]["qr"] == [qr]
 
 
 def test_publication_preserves_registered_background_decoration_and_insets(
@@ -882,7 +943,7 @@ def test_publication_preserves_registered_background_decoration_and_insets(
     )
     image.close()
 
-    reconstruction = completed["reconstruction"]
+    reconstruction = completed["presentation"]
     selected = selected_choices[0]
     assert reconstruction["background"] == selected.background_identifier == "test-paper"
     assert reconstruction["decoration"] == selected.decoration_identifier == "test-frame"
@@ -920,7 +981,7 @@ def test_publication_preserves_each_resolved_font_face(tmp_path: Path, monkeypat
     )
     image.close()
 
-    assert completed["reconstruction"]["fonts"]["faces"] == {
+    assert completed["presentation"]["fonts"]["faces"] == {
         "quotation": "italic",
         "source": "bold",
         "attribution": "regular",
@@ -942,14 +1003,16 @@ def test_publication_reconstruction_pixels_match_fully_revealed_preparation(
     entry, quotation = viewer._select_entry(configuration, ("requested-entry", 2))
     snapshot = build_presentation_snapshot(configuration, entry, quotation, date(2026, 11, 16))
     document = viewer._read_publication_metadata(publication_path)
-    reconstruction_snapshot, resolved = viewer._publication_render_inputs(document)
+    reconstruction_snapshot = viewer._publication_render_inputs(document)
     specification = ResolvedOutputSpecification("16:10", (320, 200))
     prepared = prepare_daily_images(
         snapshot,
         (CompositionVisibility(quotation=True, source=True, attribution=True),),
         configuration,
         (specification,),
-        resolved_presentation=resolved,
+        canonical_presentation=document["presentation"],
+        qr_declaration=next(iter(document["content"]["qr"]), None),
+        strict_published_presentation=True,
     )
     reconstructed = viewer.render_publication(configuration, document, specification)
     try:
@@ -974,7 +1037,7 @@ def test_publication_actions_remain_opaque_and_are_never_executed(tmp_path: Path
     )
     config_path, _content, publication_path, completed = _completed_publication(tmp_path, entry_text=entry_text)
 
-    assert completed["actions"][0]["payload"] == str(action_target)
+    assert completed["content"]["actions"][0]["payload"] == str(action_target)
     assert (
         viewer.main(
             [
@@ -1145,10 +1208,11 @@ def test_render_destination_lookup_uses_configured_destination_identifier(tmp_pa
     config, _ = _workspace(tmp_path, with_entry=False)
     configuration = load_application_config(config)
 
-    backend_type, specification = viewer._resolve_render_destination(configuration, "configured-output")
+    backend_type, specification, audience = viewer._resolve_render_destination(configuration, "configured-output")
 
     assert backend_type == "image-server"
     assert specification == ResolvedOutputSpecification("16:10", (3840, 2400))
+    assert audience == "internal"
 
 
 def test_render_as_waveshare_exports_processed_pixels_without_hardware(
@@ -1799,6 +1863,7 @@ def _push_destination(
 ) -> dict[str, object]:
     return {
         "identifier": identifier,
+        "audience": "internal",
         "output_specification": specification,
         "supports_transient": supports_transient,
         "participating": participating,
@@ -1843,8 +1908,9 @@ def test_finished_image_arguments_parse(arguments: list[str]) -> None:
         (["--text-color", "black"], "--text-color"),
         (["--tint", "blue"], "--tint"),
         (["--style", "centered"], "--style"),
-        (["--qr"], "--qr/--no-qr"),
-        (["--no-qr"], "--qr/--no-qr"),
+        (["--qr-external", "payload"], "--qr-external"),
+        (["--qr-internal", "payload"], "--qr-internal"),
+        (["--no-qr"], "--no-qr"),
         (["--aspect", "16:9"], "--aspect"),
         (["--resolution", "320", "200"], "--resolution"),
         (["--output", "copy.png"], "--output"),
@@ -2005,7 +2071,7 @@ def test_push_rejects_invalid_discovered_destinations_before_loading_or_renderin
     monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
-    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("rendered"))
+    monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: pytest.fail("rendered"))
 
     assert viewer.main(["--push", target]) == 1
     assert diagnostic in capsys.readouterr().err
@@ -2039,12 +2105,13 @@ def test_image_push_discovers_before_loading_and_publishes_exact_pixels(
             calls.append("discover")
             return (destination,)
 
-        def publish_transient(self, target, specifications, images, *, on_accepted):
+        def publish_transient(self, target, specifications, images, *, audiences, on_accepted):
             calls.append("publish")
             assert target == "screen"
             assert specifications == {"screen": specification}
-            assert set(images) == {specification}
-            image = images[specification]
+            assert audiences == {"screen": "internal"}
+            assert set(images) == {"screen"}
+            image = images["screen"]
             assert image.mode == "RGB"
             assert image.size == (320, 240)
             assert image.getpixel((0, 0)) == (10, 20, 30)
@@ -2055,7 +2122,7 @@ def test_image_push_discovers_before_loading_and_publishes_exact_pixels(
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "_load_finished_image", load_image)
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
-    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
+    monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
 
     assert viewer.main(["--image", str(image_path), "--push", "screen"]) == 0
     assert calls == ["discover", "load-image", "publish"]
@@ -2132,11 +2199,12 @@ def test_image_push_all_preserves_destination_specs_and_reuses_same_raster(
         def discover(self):
             return destinations
 
-        def publish_transient(self, target, destination_specs, images, *, on_accepted):
+        def publish_transient(self, target, destination_specs, images, *, audiences, on_accepted):
             assert target == "@all"
             assert destination_specs == specifications
-            assert set(images) == set(specifications.values())
-            assert images[specifications["available"]] is images[specifications["unavailable"]]
+            assert audiences == {"available": "internal", "unavailable": "internal"}
+            assert set(images) == set(specifications)
+            assert images["available"] is images["unavailable"]
             assert all(image.size == (320, 240) for image in images.values())
             assert all(image.getpixel((0, 0)) == (10, 20, 30) for image in images.values())
             on_accepted()
@@ -2156,7 +2224,7 @@ def test_image_push_all_preserves_destination_specs_and_reuses_same_raster(
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "_load_finished_image", track_image)
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
-    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
+    monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
 
     assert viewer.main(["--image", str(image_path), "--push", "@all"]) == 0
     assert "Push accepted; publication has begun." in capsys.readouterr().out
@@ -2322,7 +2390,7 @@ def test_image_push_closes_image_after_terminal_runtime_outcomes(
         def discover(self):
             return (_push_destination("screen", specification),)
 
-        def publish_transient(self, _target, _specifications, _images, *, on_accepted):
+        def publish_transient(self, _target, _specifications, _images, *, audiences, on_accepted):
             if isinstance(outcome, RuntimeUnconfirmed):
                 on_accepted()
             if isinstance(outcome, Exception):
@@ -2365,7 +2433,7 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
         ),
     )
     calls: list[str] = []
-    rendered: dict[ResolvedOutputSpecification, Image.Image] = {}
+    rendered: dict[str, Image.Image] = {}
     captured: dict[str, object] = {}
 
     class Client:
@@ -2376,7 +2444,7 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
             calls.append("discover")
             return destinations
 
-        def publish_transient(self, target, specifications, images, *, on_accepted):
+        def publish_transient(self, target, specifications, images, *, audiences, on_accepted):
             calls.append("publish")
             captured.update(target=target, specifications=specifications, images=images)
             assert target == "@all"
@@ -2386,9 +2454,12 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
                 "first": specs[2],
                 "second": specs[0],
             }
-            assert set(images) == set(specs)
+            assert audiences == {identifier: "internal" for identifier in specifications}
+            assert set(images) == set(specifications)
+            assert images["window"] is images["second"]
             assert all(
-                image.mode == "RGB" and image.size == spec.requested_output_size for spec, image in images.items()
+                image.mode == "RGB" and image.size == specifications[identifier].requested_output_size
+                for identifier, image in images.items()
             )
             on_accepted()
             captured["accepted_output"] = capsys.readouterr().out
@@ -2401,18 +2472,24 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
         calls.append("load")
         return configuration
 
-    def render(_configuration, selector, output_specifications, **kwargs):
+    def render(_configuration, selector, selected_destinations, **kwargs):
         calls.append("render")
         assert selector == ("@preview", 2)
-        assert set(output_specifications) == set(specs)
+        assert {destination["output_specification"] for destination in selected_destinations} == set(specs)
         assert kwargs["overrides"].qr_enabled is False
-        rendered.update({spec: Image.new("RGB", spec.requested_output_size, "white") for spec in output_specifications})
+        variants = {spec: Image.new("RGB", spec.requested_output_size, "white") for spec in specs}
+        rendered.update(
+            {
+                destination["identifier"]: variants[destination["output_specification"]]
+                for destination in selected_destinations
+            }
+        )
         return rendered
 
     monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "load_application_config", load_configuration)
-    monkeypatch.setattr(viewer, "render_preview_variants", render)
+    monkeypatch.setattr(viewer, "_render_push_variants", render)
 
     assert viewer.main(["--config", str(config_path), "--no-qr", "--push", "@all"]) == 0
     assert calls == ["discover", "load", "render", "publish"]
@@ -2444,20 +2521,21 @@ def test_explicit_push_preserves_destination_and_failed_participation(
         def discover(self):
             return (destination,)
 
-        def publish_transient(self, target, specifications, images, *, on_accepted):
+        def publish_transient(self, target, specifications, images, *, audiences, on_accepted):
             captured.update(target=target, specifications=specifications, images=images)
+            assert audiences == {"opaque:id": "internal"}
             on_accepted()
             return PublicationResult(PublicationStatus.SUCCEEDED, {"opaque:id": (True, None)})
 
     monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: configuration)
-    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: {spec: image})
+    monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: {"opaque:id": image})
 
     assert viewer.main(["--config", str(config_path), "--push", "opaque:id"]) == 0
     assert captured["target"] == "opaque:id"
     assert captured["specifications"] == {"opaque:id": spec}
-    assert captured["images"] == {spec: image}
+    assert captured["images"] == {"opaque:id": image}
     _assert_image_closed(image)
     assert "Push completed successfully." in capsys.readouterr().out
 
@@ -2499,7 +2577,7 @@ def test_push_reports_busy_and_per_destination_failures(
     monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: configuration)
-    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: {spec: rendered})
+    monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: {"screen": rendered})
 
     assert viewer.main(["--config", str(config_path), "--push", "screen"]) == 1
     error = capsys.readouterr().err
@@ -2574,7 +2652,7 @@ def test_push_closes_images_when_submission_raises(
     monkeypatch.setattr(viewer, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: configuration)
-    monkeypatch.setattr(viewer, "render_preview_variants", lambda *_args, **_kwargs: {spec: rendered})
+    monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: {"screen": rendered})
 
     assert viewer.main(["--config", str(config_path), "--push", "screen"]) == 1
     assert expected_diagnostic in capsys.readouterr().err

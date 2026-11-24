@@ -302,9 +302,10 @@ def test_real_transient_preserves_scheduled_state_and_acknowledgements(resident)
     client = RuntimeControlClient(metadata)
     records = client.discover()
     specs = {item["identifier"]: item["output_specification"] for item in records}
+    audiences = {item["identifier"]: item["audience"] for item in records}
     specification = records[0]["output_specification"]
     with Image.new("RGB", specification.requested_output_size, (17, 81, 93)) as image:
-        result = client.publish_transient("@all", specs, {specification: image})
+        result = client.publish_transient("@all", specs, {specification: image}, audiences=audiences)
     assert result.status.value == "succeeded"
     assert published == ["one", "two", "one", "two"]
     assert pixels[-2:] == [(17, 81, 93), (17, 81, 93)]
@@ -323,11 +324,12 @@ def test_newly_due_scheduled_stage_rejects_transient_before_publication(resident
     client = RuntimeControlClient(metadata)
     records = client.discover()
     specs = {item["identifier"]: item["output_specification"] for item in records}
+    audiences = {item["identifier"]: item["audience"] for item in records}
     specification = records[0]["output_specification"]
     # The scheduler remains asleep while the control request observes the newly due stage.
     clock[0] = at(10, 18)
     with Image.new("RGB", specification.requested_output_size, (17, 81, 93)) as image:
-        result = client.publish_transient("@all", specs, {specification: image})
+        result = client.publish_transient("@all", specs, {specification: image}, audiences=audiences)
     assert result.status.value == "busy"
     assert published == ["one", "two"]
     assert coordinator.desired_identity == before_identity

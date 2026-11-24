@@ -191,10 +191,11 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
     class Coordinator:
         desired_identity = (1, 1)
 
-        def force_scheduled_publication(self, identity, images, metadata):
+        def force_scheduled_publication(self, identity, images, metadata, destination_keys):
             assert identity == self.desired_identity
             assert set(images) == set(configuration.required_output_specifications)
             assert set(metadata) == set(configuration.required_prepared_image_keys)
+            assert set(destination_keys) == {"epaper"}
             for specification, image in images.items():
                 assert image.size == specification.requested_output_size
                 image.close()
@@ -278,11 +279,20 @@ quotations:
     }
     assert result.presented_stage == 1
     assert len({dataset.manifest.publication_id for dataset in published.values()}) == 3
-    assert published["web-external"].metadata["presentation"]["reveal_stage_index"] == 1
-    assert [action["type"] for action in published["web-external"].metadata["actions"]] == ["external-action"]
-    assert [action["type"] for action in published["web-internal"].metadata["actions"]] == ["internal-action"]
-    assert published["web-internal"].metadata["reconstruction"] != published["web-custom"].metadata["reconstruction"]
-    assert published["web-custom"].metadata["destination_id"] == "web-custom"
+    assert published["web-external"].metadata["content"]["reveal_stage"] == {
+        "quotation": True,
+        "source": True,
+        "attribution": False,
+    }
+    assert [action["type"] for action in published["web-external"].metadata["content"]["actions"]] == [
+        "external-action"
+    ]
+    assert [action["type"] for action in published["web-internal"].metadata["content"]["actions"]] == [
+        "internal-action"
+    ]
+    assert published["web-internal"].metadata["presentation"]["fonts"]["bundle"] != "test-font-alt"
+    assert published["web-custom"].metadata["presentation"]["fonts"]["bundle"] == "test-font-alt"
+    assert published["web-custom"].metadata["publication"]["destination_id"] == "web-custom"
 
     class RejectingChooser:
         def choice(self, _values):
@@ -305,9 +315,11 @@ quotations:
         for identifier in published
     )
     assert all(
-        republished[identifier].metadata["presentation"]["reveal_stage_index"] == 1 for identifier in republished
+        republished[identifier].metadata["content"]["reveal_stage"]
+        == {"quotation": True, "source": True, "attribution": False}
+        for identifier in republished
     )
-    metadata_path = publication_root / "web-external" / f"{republished['web-external'].manifest.publication_id}.json"
+    metadata_path = publication_root / "web-external" / republished["web-external"].manifest.metadata_filename
 
     shutil.rmtree(workspace.content)
     from refrain.viewer import main as viewer_main
@@ -346,7 +358,10 @@ def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_r
     state_bytes = workspace.state.read_bytes()
     history_bytes = workspace.history.read_bytes()
     configuration = application.load_application_config(workspace.config)
-    old_manifest_path = workspace.artifacts / f"revision-{first.state.revision}" / "manifest.json"
+    revision_directory = workspace.artifacts / f"revision-{first.state.revision}"
+    manifests = list(revision_directory.glob("group-*/manifest.json"))
+    assert len(manifests) == 1
+    old_manifest_path = manifests[0]
     old_manifest = old_manifest_path.read_bytes()
     metadata_paths = sorted(old_manifest_path.parent.glob("images-*/variant-*/stage-*.json"))
     expected_metadata_count = 3 * len(configuration.required_output_specifications)
@@ -415,7 +430,9 @@ def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace
     configuration = application.load_application_config(workspace.config)
     store = PersistentStateStore(workspace.state)
     artifact_store = PreparedImageArtifactStore(workspace.artifacts)
-    old = application._recover_images(store.load(), artifact_store, configuration, Random(1))
+    state = store.load()
+    checkpoint = application._complete_checkpoint(store, state, configuration, Random(1))
+    old = application._recover_images(state, artifact_store, configuration, Random(1), checkpoint)
     specification = configuration.required_output_specifications[0]
     old.variant_for(specification).stage_paths[-1].unlink()
     remembered = []
@@ -423,8 +440,9 @@ def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace
     class Coordinator:
         desired_identity = (1, 1)
 
-    def admit(_identity, images, metadata):
+    def admit(_identity, images, metadata, destination_keys):
         assert metadata
+        assert set(destination_keys) == {"epaper"}
         for image in images.values():
             image.close()
         return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
@@ -457,7 +475,7 @@ def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: 
     class Coordinator:
         desired_identity = (1, 0)
 
-        def force_scheduled_publication(self, identity, images, metadata):
+        def force_scheduled_publication(self, identity, images, metadata, destination_keys):
             pytest.fail("stale refresh must not be admitted")
 
     result = application._refresh_scheduled(
@@ -1498,6 +1516,8 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         application.resolve_reveal_stages(state.snapshot),
         configuration.required_output_specifications,
         snapshot=state.snapshot,
+        checkpoint=json.loads(workspace.state.with_name("publication.json").read_text(encoding="utf-8")),
+        qr_declaration=None,
     )
     assert artifacts is not None
     assert set(artifacts.output_specifications) == set(expected_specifications.values())
@@ -1694,10 +1714,10 @@ def run_continuously(
             self.requested = []
             coordinators.append(self)
 
-        def publish(self, identity, image):
+        def publish(self, identity, image, **kwargs):
             self.requested.append(identity)
             presentations.append(identity)
-            super().publish(identity, image)
+            super().publish(identity, image, **kwargs)
 
     def initialize(configuration):
         initializations.append(configuration.type)

@@ -20,16 +20,19 @@ from refrain import (
     CompositionVisibility,
     ContentEntry,
     DailySnapshot,
+    DestinationPresentation,
     PersistentStateStore,
     PreparedImageArtifactSet,
     PreparedImageArtifactStore,
+    PreparedImageVariantKey,
     Quotation,
     QuotationCandidate,
     ResolvedOutputSpecification,
     SchedulingContext,
     SelectionProposal,
 )
-from refrain.publication_metadata import content_entry
+from refrain.checkpoint import build_content_checkpoint
+from refrain.persistence import PersistentState
 
 _STAGES = (
     CompositionVisibility(),
@@ -46,53 +49,66 @@ def _store_one(store, revision, stages, images):
 
 def _metadata(revision, stages, variants):
     result = {}
-    for specification in variants:
-        result[specification] = tuple(
+    for key in variants:
+        specification = key.output_specification if isinstance(key, PreparedImageVariantKey) else key
+        result[key] = tuple(
             {
-                "schema_version": 1,
-                "publication_id": None,
-                "publication_type": "scheduled",
-                "published_at": None,
-                "destination_id": None,
+                "selection_revision": revision,
+                "visibility": {
+                    "quotation": stage.quotation,
+                    "source": stage.source,
+                    "attribution": stage.attribution,
+                },
+                "effective_presentation": _presentation(),
+                "rendered_qr": None,
                 "output_specification": {
                     "aspect_ratio": specification.aspect_ratio,
                     "requested_output_size": list(specification.requested_output_size),
                 },
-                "presentation": {
-                    "display_date": "2026-10-26",
-                    "quotation_identity": "A thought worth keeping.",
-                    "selection_revision": revision,
-                    "reveal_stage_index": index,
-                    "reveal_schedule": {
-                        "quotation": "06:00",
-                        "source": "12:00",
-                        "attribution": "18:00",
-                    },
-                    "reveal_stage": {
-                        "quotation": stage.quotation,
-                        "source": stage.source,
-                        "attribution": stage.attribution,
-                    },
-                },
-                "reconstruction": {
-                    "content_entry": content_entry(_committed(stages)),
-                    "presentation_style": "centered",
-                    "background": "none",
-                    "decoration": "none",
-                    "fonts": {
-                        "bundle": "test",
-                        "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
-                    },
-                    "colors": {"text": "black", "decoration": None},
-                    "qr": {"enabled": True, "available": False},
-                    "font_size_range": {"minimum": 12, "maximum": 32},
-                    "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
-                },
-                "actions": [],
             }
-            for index, stage in enumerate(stages)
+            for stage in stages
         )
     return result
+
+
+def _presentation():
+    return {
+        "style": "centered",
+        "background": "none",
+        "decoration": "none",
+        "fonts": {
+            "bundle": "test",
+            "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
+        },
+        "colors": {"text": "black", "decoration": None},
+        "font_size_range": {"minimum": 12, "maximum": 32},
+        "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+    }
+
+
+def _checkpoint(revision, snapshot):
+    state = PersistentState(revision, snapshot, frozenset({snapshot.quotation_identity}), 0)
+    checkpoint = build_content_checkpoint(state, [])
+    checkpoint["presentation"] = _presentation()
+    return checkpoint
+
+
+class ArtifactStore(PreparedImageArtifactStore):
+    """Supply the complete checkpoint and QR context required by cache operations."""
+
+    def store(self, revision, stages, variants, metadata, *, snapshot, **kwargs):
+        valid_revision = revision if type(revision) is int and revision > 0 else 1
+        if "checkpoint" not in kwargs:
+            kwargs["checkpoint"] = _checkpoint(valid_revision, snapshot)
+        kwargs.setdefault("qr_declaration", None)
+        return super().store(revision, stages, variants, metadata, snapshot=snapshot, **kwargs)
+
+    def load(self, revision, stages, output_specifications, *, snapshot, **kwargs):
+        valid_revision = revision if type(revision) is int and revision > 0 else 1
+        if "checkpoint" not in kwargs:
+            kwargs["checkpoint"] = _checkpoint(valid_revision, snapshot)
+        kwargs.setdefault("qr_declaration", None)
+        return super().load(revision, stages, output_specifications, snapshot=snapshot, **kwargs)
 
 
 def _load_one(store, revision, stages):
@@ -143,11 +159,15 @@ def images():
 
 @pytest.fixture
 def store(tmp_path: Path) -> PreparedImageArtifactStore:
-    return PreparedImageArtifactStore(tmp_path / "derived" / "artifacts")
+    return ArtifactStore(tmp_path / "derived" / "artifacts")
 
 
-def rewrite_manifest(result: PreparedImageArtifactSet, mutate) -> None:
-    path = result.directory / "manifest.json"
+def _group_directory(result, specification=_SPECIFICATION):
+    return result.variant_for(specification).stage_paths[0].parent.parent.parent
+
+
+def rewrite_manifest(result: PreparedImageArtifactSet, mutate, specification=_SPECIFICATION) -> None:
+    path = _group_directory(result, specification) / "manifest.json"
     document = json.loads(path.read_bytes())
     mutate(document["artifacts"])
     document["sha256"] = hashlib.sha256(
@@ -164,8 +184,8 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
     assert result.directory == store.root / "revision-1"
     stage_paths = _variant(result).stage_paths
     assert tuple(path.name for path in stage_paths) == tuple(f"stage-{i}.png" for i in range(count))
-    metadata = json.loads((result.directory / "manifest.json").read_bytes())["artifacts"]
-    assert set(metadata) == {"revision", "image_directory", "variants"}
+    metadata = json.loads((_group_directory(result) / "manifest.json").read_bytes())["artifacts"]
+    assert set(metadata) == {"revision", "image_directory", "variants", "presentation_requirements", "association"}
     variant_metadata = metadata["variants"][0]
     assert set(variant_metadata) == {"aspect_ratio", "requested_output_size", "mode", "stages"}
     assert variant_metadata["aspect_ratio"] == _SPECIFICATION.aspect_ratio
@@ -178,14 +198,18 @@ def test_complete_sets_survive_restart_and_have_independently_readable_pngs(stor
             assert image.size == original.size
             assert image.mode == original.mode
             assert image.tobytes() == original.tobytes()
-    reloaded = PreparedImageArtifactStore(store.root).load(
+    reloaded = ArtifactStore(store.root).load(
         1, snapshot[:count], (_SPECIFICATION,), snapshot=_committed(snapshot[:count])
     )
     assert reloaded == result
     with reloaded.load_stage(_SPECIFICATION, count - 1) as image:
         assert image.tobytes() == images[count - 1].tobytes()
-    metadata = reloaded.variant_for(_SPECIFICATION).load_metadata(count - 1)
-    assert metadata["presentation"]["reveal_stage_index"] == count - 1
+    association = reloaded.variant_for(_SPECIFICATION).load_association(count - 1)
+    assert association["visibility"] == {
+        "quotation": snapshot[count - 1].quotation,
+        "source": snapshot[count - 1].source,
+        "attribution": snapshot[count - 1].attribution,
+    }
 
 
 def test_multiple_variants_keep_aspect_identity_and_validate_each_raster(store, snapshot, images) -> None:
@@ -221,6 +245,33 @@ def test_multiple_variants_keep_aspect_identity_and_validate_each_raster(store, 
         assert image.mode == "L" and image.getpixel((0, 0)) == 120
 
 
+def test_cache_associates_rendered_qr_and_shares_identical_payloads(store, snapshot, images) -> None:
+    checkpoint = _checkpoint(1, _committed(snapshot))
+    external = {"visibility": ["external"], "payload": "shared"}
+    internal = {"visibility": ["internal"], "payload": "shared"}
+    checkpoint["content"]["qr"] = [external, internal]
+    key = PreparedImageVariantKey(_SPECIFICATION, DestinationPresentation(), qr_payload="shared")
+    associations = _metadata(1, snapshot, {key: images})
+    for association in associations[key]:
+        association["rendered_qr"] = external
+    store.store(
+        1,
+        snapshot,
+        {key: images},
+        associations,
+        snapshot=_committed(snapshot),
+        checkpoint=checkpoint,
+        qr_declaration=external,
+    )
+    recovered = store.load(
+        1, snapshot, (key,), snapshot=_committed(snapshot), checkpoint=checkpoint, qr_declaration=internal
+    )
+    assert recovered.variant_for(key).load_association(0)["rendered_qr"] == internal
+    assert store.load(
+        1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot), checkpoint=checkpoint, qr_declaration=None
+    ) is None
+
+
 def test_equivalent_specifications_are_deduplicated_and_expected_set_is_exact(store, snapshot, images) -> None:
     equivalent = ResolvedOutputSpecification("4:3", [32, 24])
     assert equivalent == _SPECIFICATION
@@ -229,10 +280,12 @@ def test_equivalent_specifications_are_deduplicated_and_expected_set_is_exact(st
 
     with pytest.raises(ValueError, match="equivalent duplicates"):
         store.load(1, snapshot, (_SPECIFICATION, equivalent), snapshot=_committed(snapshot))
-    with pytest.raises(ArtifactValidationError, match="exactly 2 output variants"):
+    assert (
         store.load(
             1, snapshot, (_SPECIFICATION, ResolvedOutputSpecification("16:9", (32, 24))), snapshot=_committed(snapshot)
         )
+        is None
+    )
     assert result.output_specifications == (_SPECIFICATION,)
 
 
@@ -271,11 +324,9 @@ def test_missing_unexpected_or_corrupt_variant_invalidates_the_complete_set(stor
         for image in other_images:
             image.close()
 
-    with pytest.raises(ArtifactValidationError, match="exactly 1 output variants"):
-        store.load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
+    assert store.load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot)) is not None
     changed_aspect = ResolvedOutputSpecification("5:3", (32, 24))
-    with pytest.raises(ArtifactValidationError):
-        store.load(1, snapshot, (_SPECIFICATION, changed_aspect), snapshot=_committed(snapshot))
+    assert store.load(1, snapshot, (_SPECIFICATION, changed_aspect), snapshot=_committed(snapshot)) is None
 
     missing_stage = result.variant_for(other_specification).stage_paths[0]
     missing_stage_bytes = missing_stage.read_bytes()
@@ -326,6 +377,7 @@ def test_requested_dimensions_are_validated_per_variant(store, snapshot, images)
         lambda metadata: metadata["variants"][0]["stages"][0].update(
             sha256=hashlib.sha256(path.read_bytes()).hexdigest()
         ),
+        larger_specification,
     )
     with pytest.raises(ArtifactValidationError, match="expected PNG size"):
         store.load(1, snapshot, (larger_specification, _SPECIFICATION), snapshot=_committed(snapshot))
@@ -369,14 +421,23 @@ def test_revisions_have_distinct_locations(store, snapshot, images) -> None:
 def test_artifact_association_uses_revision_and_expected_stages(store, snapshot, images) -> None:
     _store_one(store, 1, snapshot, images)
     different_stages = (CompositionVisibility(), CompositionVisibility(attribution=True))
-    with pytest.raises(ArtifactValidationError, match="exactly 2 stages"):
-        _load_one(store, 1, different_stages)
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        store.load(1, different_stages, (_SPECIFICATION,), snapshot=_committed(snapshot))
 
 
 def test_missing_revision_is_distinct_from_incomplete_set(store, snapshot) -> None:
     assert _load_one(store, 1, snapshot[:1]) is None
     directory = store.root / "revision-1"
     directory.mkdir(parents=True)
+    group = artifacts._group_directory(
+        store.root,
+        1,
+        DestinationPresentation(),
+        _SPECIFICATION,
+        _checkpoint(1, _committed(snapshot[:1])),
+        None,
+    )
+    group.mkdir()
     with pytest.raises(ArtifactValidationError, match="manifest.json"):
         _load_one(store, 1, snapshot[:1])
 
@@ -400,7 +461,7 @@ def test_missing_or_damaged_stage_is_rejected(store, snapshot, images, damage) -
 @pytest.mark.parametrize("damage", ["missing", "invalid-json", "checksum", "duplicate", "not-object"])
 def test_missing_or_corrupt_manifest_is_rejected(store, snapshot, images, damage) -> None:
     result = _store_one(store, 1, snapshot, images)
-    path = result.directory / "manifest.json"
+    path = _group_directory(result) / "manifest.json"
     if damage == "missing":
         path.unlink()
     elif damage == "invalid-json":
@@ -422,9 +483,9 @@ def test_missing_or_corrupt_manifest_is_rejected(store, snapshot, images, damage
     [
         lambda m: m.update(revision=2),
         lambda m: m.update(revision=True),
-        lambda m: m["variants"][0].update(requested_size=[33, 24]),
-        lambda m: m["variants"][0].update(requested_size=[32.0, 24]),
-        lambda m: m["variants"][0].update(requested_size=[32, 32]),
+        lambda m: m["variants"][0].update(requested_output_size=[33, 24]),
+        lambda m: m["variants"][0].update(requested_output_size=[32.0, 24]),
+        lambda m: m["variants"][0].update(requested_output_size=[32, 32]),
         lambda m: m["variants"][0].update(aspect_ratio="unknown"),
         lambda m: m["variants"][0].update(mode="P"),
         lambda m: m["variants"][0].update(mode=[]),
@@ -470,8 +531,8 @@ def test_image_representation_and_decoding_are_checked_beyond_digest(store, snap
 
 def test_stage_count_and_extra_files_are_rejected(store, snapshot, images) -> None:
     result = _store_one(store, 1, snapshot, images)
-    with pytest.raises(ArtifactValidationError, match="exactly 2 stages"):
-        _load_one(store, 1, snapshot[:2])
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        store.load(1, snapshot[:2], (_SPECIFICATION,), snapshot=_committed(snapshot))
     stage_paths = _variant(result).stage_paths
     (stage_paths[0].parent / "stage-3.png").write_bytes(stage_paths[0].read_bytes())
     with pytest.raises(ArtifactValidationError, match="exactly the expected stage"):
@@ -482,7 +543,7 @@ def test_stage_count_and_extra_files_are_rejected(store, snapshot, images) -> No
 @pytest.mark.parametrize("existing", [False, True])
 def test_failed_publication_never_exposes_partial_set(store, snapshot, images, monkeypatch, point, existing) -> None:
     previous = _store_one(store, 1, snapshot, images) if existing else None
-    previous_manifest = (previous.directory / "manifest.json").read_bytes() if existing else None
+    previous_manifest = (_group_directory(previous) / "manifest.json").read_bytes() if existing else None
     original_replace = artifacts.os.replace
 
     def fail(*args, **kwargs):
@@ -509,14 +570,14 @@ def test_failed_publication_never_exposes_partial_set(store, snapshot, images, m
         assert not failure.value.published
 
     if existing:
-        assert (previous.directory / "manifest.json").read_bytes() == previous_manifest
+        assert (_group_directory(previous) / "manifest.json").read_bytes() == previous_manifest
         assert (
-            PreparedImageArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
+            ArtifactStore(store.root).load(1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
             == previous
         )
     else:
         try:
-            result = PreparedImageArtifactStore(store.root).load(
+            result = ArtifactStore(store.root).load(
                 1, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot)
             )
         except ArtifactValidationError:
@@ -621,7 +682,7 @@ def test_cleanup_removes_old_revisions_and_abandoned_transactions_but_preserves_
     assert not first.directory.exists()
     assert not temporary.exists()
     assert _load_one(store, 2, snapshot) == current
-    (current.directory / "manifest.json").unlink()
+    (_group_directory(current) / "manifest.json").unlink()
     store.cleanup(2)
     assert current.directory.is_dir()
     assert all(path.exists() for path in _variant(current).stage_paths)
@@ -630,9 +691,10 @@ def test_cleanup_removes_old_revisions_and_abandoned_transactions_but_preserves_
 def test_cleanup_removes_superseded_active_payloads_and_preserves_manifest_target(store, snapshot, images) -> None:
     superseded = _store_one(store, 2, snapshot, images)
     current = _store_one(store, 2, snapshot, tuple(reversed(images)))
-    unrelated = current.directory / "notes.txt"
+    group = _group_directory(current)
+    unrelated = group / "notes.txt"
     unrelated.write_text("keep", encoding="utf-8")
-    unowned_payload = current.directory / ("images-" + "f" * 32)
+    unowned_payload = group / ("images-" + "f" * 32)
     unowned_payload.mkdir()
     (unowned_payload / "user-file").write_text("keep", encoding="utf-8")
 
@@ -645,7 +707,7 @@ def test_cleanup_removes_superseded_active_payloads_and_preserves_manifest_targe
     assert _load_one(store, 2, snapshot) == current
 
     store.cleanup(2)
-    assert {path.name for path in current.directory.iterdir()} == {
+    assert {path.name for path in group.iterdir()} == {
         _variant(current).stage_paths[0].parent.parent.name,
         "manifest.json",
         unrelated.name,
@@ -671,7 +733,7 @@ def test_cleanup_removes_payload_from_interrupted_active_revision_replacement(
     assert _load_one(store, 2, snapshot) == current
     store.cleanup(2)
 
-    assert {path.name for path in current.directory.iterdir()} == {
+    assert {path.name for path in _group_directory(current).iterdir()} == {
         _variant(current).stage_paths[0].parent.parent.name,
         "manifest.json",
     }
@@ -733,7 +795,7 @@ def test_cleanup_does_not_follow_links_or_remove_link_bearing_trees(
     symlink_or_skip(_variant(old).stage_paths[0].parent / "stage-9.png", sentinel)
     temporary = store.root / (".tmp-revision-9-" + "a" * 32)
     symlink_or_skip(temporary, outside, directory=True)
-    active_payload_link = current.directory / ("images-" + "b" * 32)
+    active_payload_link = _group_directory(current) / ("images-" + "b" * 32)
     symlink_or_skip(active_payload_link, outside, directory=True)
     store.cleanup(2)
     assert sentinel.read_bytes() == b"authoritative"
@@ -752,14 +814,14 @@ def test_links_are_not_accepted_for_loading_or_storage(
     if location == "ancestor":
         alias = tmp_path / "alias"
         symlink_or_skip(alias, store.root.parent, directory=True)
-        store = PreparedImageArtifactStore(alias / store.root.name)
+        store = ArtifactStore(alias / store.root.name)
     else:
         path = {
             "root": store.root,
             "revision": result.directory,
             "payload": _variant(result).stage_paths[0].parent.parent,
             "stage": _variant(result).stage_paths[0],
-            "manifest": result.directory / "manifest.json",
+            "manifest": _group_directory(result) / "manifest.json",
         }[location]
         moved = tmp_path / "moved"
         path.rename(moved)
@@ -802,7 +864,7 @@ def test_cleanup_failure_is_reported_without_invalidating_current(
         with pytest.raises(ArtifactCleanupError, match="cleanup denied"):
             store.cleanup(2)
     assert (
-        PreparedImageArtifactStore(store.root).load(2, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
+        ArtifactStore(store.root).load(2, snapshot, (_SPECIFICATION,), snapshot=_committed(snapshot))
         == current
     )
 

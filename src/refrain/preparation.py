@@ -6,7 +6,7 @@ import io
 import logging
 import random
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from importlib.resources import files
 from types import MappingProxyType
@@ -37,7 +37,6 @@ from .geometry import (
     round_half_up,
 )
 from .persistence import DailySnapshot, ResolvedFont
-from .publication_metadata import build_prepared_metadata, content_entry
 from .qr import (
     PRODUCTION_QR_PARAMETERS,
     QRCodeGenerationError,
@@ -258,9 +257,177 @@ def _resolve_presentation_choices(
         (
             destination_presentation.qr_enabled
             if overrides.qr_enabled is None and destination_presentation.qr_enabled is not None
-            else configuration.qr_enabled if overrides.qr_enabled is None else overrides.qr_enabled
+            else True if overrides.qr_enabled is None else overrides.qr_enabled
         ),
         overrides.qr_enabled is not None or destination_presentation.qr_enabled is not None,
+    )
+
+
+def _presentation_document(
+    choices: _PresentationChoices,
+    configuration: ApplicationConfiguration,
+    overrides: PresentationOverrides,
+) -> dict[str, object]:
+    insets = (
+        configuration.presentation_insets
+        if choices.decoration is None or choices.decoration.presentation_insets is None
+        else choices.decoration.presentation_insets
+    )
+    return {
+        "style": choices.presentation_style,
+        "background": choices.background_identifier,
+        "decoration": choices.decoration_identifier,
+        "fonts": {
+            "bundle": choices.fonts["quotation"].identifier.split(":", 1)[0],
+            "faces": {
+                role: font.identifier.split(":", 1)[1] if ":" in font.identifier else "regular"
+                for role, font in choices.fonts.items()
+            },
+        },
+        "colors": {"text": choices.text_color_identifier, "decoration": choices.decoration_color_identifier},
+        "font_size_range": {
+            "minimum": configuration.min_font_size if overrides.min_font_size is None else overrides.min_font_size,
+            "maximum": configuration.max_font_size if overrides.max_font_size is None else overrides.max_font_size,
+        },
+        "insets": {side: getattr(insets, side) for side in ("left", "right", "top", "bottom")},
+    }
+
+
+def resolve_canonical_presentation(
+    snapshot: DailySnapshot,
+    configuration: ApplicationConfiguration,
+    *,
+    chooser: random.Random | None = None,
+    overrides: PresentationOverrides | None = None,
+) -> dict[str, object]:
+    """Resolve destination-independent artistic choices without rendering or persistence."""
+    if not isinstance(snapshot, DailySnapshot) or not isinstance(configuration, ApplicationConfiguration):
+        raise DailyImagePreparationError("canonical resolution requires a snapshot and validated configuration")
+    effective_overrides = overrides if overrides is not None else PresentationOverrides()
+    choices = _resolve_presentation_choices(
+        snapshot,
+        configuration,
+        chooser if chooser is not None else random.Random(),
+        force_white_background=False,
+        forced_decoration_tint=None,
+        overrides=effective_overrides,
+    )
+    document = _presentation_document(choices, configuration, effective_overrides)
+    bounds = document["font_size_range"]
+    if (
+        type(bounds["minimum"]) is not int
+        or type(bounds["maximum"]) is not int
+        or bounds["minimum"] <= 0
+        or bounds["maximum"] < bounds["minimum"]
+    ):
+        raise DailyImagePreparationError("invalid effective font-size range")
+    return document
+
+
+def _resolved_from_document(document: Mapping[str, object]) -> ResolvedPresentation:
+    try:
+        fonts = document["fonts"]
+        colors = document["colors"]
+        bounds = document["font_size_range"]
+        insets = document["insets"]
+        return ResolvedPresentation(
+            background=document["background"],
+            decoration=document["decoration"],
+            font_bundle=fonts["bundle"],
+            font_faces=fonts["faces"],
+            text_color=colors["text"],
+            decoration_color=colors["decoration"],
+            presentation_style=document["style"],
+            qr_enabled=True,
+            min_font_size=bounds["minimum"],
+            max_font_size=bounds["maximum"],
+            insets=PresentationInsets(**insets),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise DailyImagePreparationError(f"invalid canonical presentation: {error}") from error
+
+
+def _resolve_effective_choices(
+    snapshot: DailySnapshot,
+    configuration: ApplicationConfiguration,
+    chooser: random.Random,
+    canonical: ResolvedPresentation,
+    destination: DestinationPresentation,
+    overrides: PresentationOverrides,
+) -> tuple[_PresentationChoices, ResolvedPresentation]:
+    decoration_id = overrides.decoration or destination.decoration or canonical.decoration
+    decoration = configuration.decorations.get(decoration_id) if decoration_id != "none" else None
+    if decoration_id != "none" and decoration is None:
+        if overrides.decoration is not None:
+            raise DailyImagePreparationError(f"explicit decoration {decoration_id!r} is unavailable")
+        _LOGGER.warning("Canonical decoration %r is unavailable; using no decoration", decoration_id)
+        decoration_id = "none"
+    background_id = overrides.background or destination.background or canonical.background
+    if background_id != "none" and background_id not in configuration.backgrounds:
+        if overrides.background is not None:
+            raise DailyImagePreparationError(f"explicit background {background_id!r} is unavailable")
+        _LOGGER.warning("Canonical background %r is unavailable; using paper white", background_id)
+        background_id = "none"
+
+    def effective_color(value: str, explicit: bool, label: str) -> str:
+        if value in configuration.palette:
+            return value
+        if explicit:
+            raise DailyImagePreparationError(f"explicit {label} {value!r} is unavailable")
+        _LOGGER.warning("%s %r is unavailable; using black", label, value)
+        return "black"
+
+    text_override = overrides.text_color or destination.text_color
+    if isinstance(text_override, tuple):
+        text_override = text_override[0]
+    text = effective_color(text_override or canonical.text_color, overrides.text_color is not None, "text color")
+    tint_override = overrides.tint or destination.decoration_color
+    if isinstance(tint_override, tuple):
+        tint_override = tint_override[0]
+    tintable = decoration is not None and any(
+        _decoration_layer_is_tintable(decoration, layer) for layer in decoration.layers
+    )
+    tint = tint_override or canonical.decoration_color
+    if tintable and tint is None and overrides.decoration is not None:
+        raise DailyImagePreparationError("explicit tint is required for a tintable decoration")
+    if tintable and tint is not None:
+        tint = effective_color(tint, overrides.tint is not None, "decoration color")
+    else:
+        tint = None
+
+    font_id = overrides.font or destination.font or canonical.font_bundle
+    roles = (
+        dict(canonical.font_faces) if overrides.font is None and destination.font is None else dict(snapshot.font_faces)
+    )
+    roles.update(overrides.font_faces)
+    font_snapshot = replace(snapshot, font=font_id, font_faces=roles)
+    font_overrides = PresentationOverrides(font=overrides.font, font_faces=overrides.font_faces)
+    fonts = _resolve_fonts(font_snapshot, configuration, decoration, chooser, font_overrides, recovery_only=True)
+    insets = canonical.insets
+    if decoration_id != canonical.decoration:
+        insets = (
+            configuration.presentation_insets
+            if decoration is None or decoration.presentation_insets is None
+            else decoration.presentation_insets
+        )
+    effective = replace(canonical, insets=insets)
+    return (
+        _PresentationChoices(
+            decoration_id,
+            decoration,
+            background_id,
+            overrides.background is not None,
+            overrides.decoration is not None,
+            _palette_color(configuration, text),
+            text,
+            None if tint is None else _palette_color(configuration, tint),
+            tint,
+            MappingProxyType(fonts),
+            overrides.style or canonical.presentation_style,
+            overrides.qr_enabled is not False and destination.qr_enabled is not False,
+            overrides.qr_enabled is not None or destination.qr_enabled is not None,
+        ),
+        effective,
     )
 
 
@@ -332,12 +499,21 @@ def _resolve_published_presentation_choices(
             )
     else:
         decoration_color_identifier = resolved.decoration_color
-        if decoration_color_identifier is not None and decoration_color_identifier not in configuration.palette:
+        tintable = decoration is not None and any(
+            _decoration_layer_is_tintable(decoration, layer) for layer in decoration.layers
+        )
+        if (
+            tintable
+            and decoration_color_identifier is not None
+            and decoration_color_identifier not in configuration.palette
+        ):
             raise DailyImagePreparationError(
                 f"published decoration tint color {decoration_color_identifier!r} is unavailable in the "
                 "configured palette"
             )
     tintable = decoration is not None and any(decoration.tintable and layer.tintable for layer in decoration.layers)
+    if tintable and decoration_color_identifier is None and overrides.decoration is not None:
+        raise DailyImagePreparationError("explicit tint is required for a tintable decoration")
     decoration_tint = (
         _palette_color(configuration, decoration_color_identifier)
         if tintable and decoration_color_identifier is not None
@@ -1026,13 +1202,15 @@ def _resolve_fonts(
     chooser: random.Random,
     overrides: PresentationOverrides,
     destination_presentation: DestinationPresentation = DestinationPresentation(),
+    *,
+    recovery_only: bool = False,
 ) -> dict[str, ResolvedFont]:
     preferences: list[tuple[str, str]] = []
     if destination_presentation.font is not None:
         preferences.append(("destination presentation", destination_presentation.font))
     if snapshot.font is not None:
         preferences.append(("content entry", snapshot.font))
-    if decoration is not None and decoration.font is not None:
+    if not recovery_only and decoration is not None and decoration.font is not None:
         preferences.append(("selected decoration", decoration.font))
 
     resolved_bundle: FontResource | None = None
@@ -1289,6 +1467,7 @@ def _prepare_daily_images_for_specification(
         Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, PixelBounds], None] | None
     ) = None,
     qr_disabled_reason: str | None = None,
+    qr_declaration: Mapping[str, object] | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
     on_presentation_image: (
         Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
@@ -1315,6 +1494,8 @@ def _prepare_daily_images_for_specification(
     def resolve_effective_qr(
         effective_decoration: DecorationResource | None,
     ) -> tuple[QRCodePlacement | None, str | None]:
+        if qr_declaration is None:
+            return None, "no QR payload for this audience"
         if not choices.qr_enabled:
             return None, qr_disabled_reason or (
                 "QR generation is disabled by viewer override"
@@ -1338,7 +1519,7 @@ def _prepare_daily_images_for_specification(
     qr_placement, qr_unavailable_reason = resolve_effective_qr(decoration)
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
     text_color = choices.text_color
-    qr_parameters = PRODUCTION_QR_PARAMETERS
+    qr_parameters = replace(PRODUCTION_QR_PARAMETERS, url=None if qr_declaration is None else qr_declaration["payload"])
     decoration_tint = choices.decoration_tint
     nine_slice_guides: list[NineSliceGuide] = []
     effective_background_identifier = choices.background_identifier
@@ -1399,6 +1580,8 @@ def _prepare_daily_images_for_specification(
                 decoration_layers = ()
                 nine_slice_guides.clear()
                 qr_placement, qr_unavailable_reason = resolve_effective_qr(None)
+                if resolved_presentation is not None:
+                    resolved_presentation = replace(resolved_presentation, insets=configuration.presentation_insets)
             composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
                 snapshot,
                 configuration,
@@ -1463,17 +1646,20 @@ def _prepare_daily_images_for_specification(
                             "cannot capture publication metadata for an RGB tint without a palette identifier"
                         )
                     actual_insets = (
-                        configuration.presentation_insets
-                        if decoration is None or decoration.presentation_insets is None
-                        else decoration.presentation_insets
+                        resolved_presentation.insets
+                        if resolved_presentation is not None
+                        else (
+                            configuration.presentation_insets
+                            if decoration is None or decoration.presentation_insets is None
+                            else decoration.presentation_insets
+                        )
                     )
                     font_faces = {
                         role: (resolved.identifier.split(":", 1)[1] if ":" in resolved.identifier else "regular")
                         for role, resolved in fonts.items()
                     }
-                    reconstruction = {
-                        "content_entry": content_entry(snapshot),
-                        "presentation_style": style,
+                    effective_presentation = {
+                        "style": style,
                         "background": effective_background_identifier,
                         "decoration": decoration_identifier,
                         "fonts": {
@@ -1482,17 +1668,29 @@ def _prepare_daily_images_for_specification(
                         },
                         "colors": {
                             "text": choices.text_color_identifier,
-                            "decoration": choices.decoration_color_identifier if decoration is not None else None,
+                            "decoration": (
+                                choices.decoration_color_identifier
+                                if decoration is not None
+                                and any(_decoration_layer_is_tintable(decoration, layer) for layer in decoration_layers)
+                                else None
+                            ),
                         },
-                        "qr": {"enabled": choices.qr_enabled, "available": qr_placement is not None},
                         "font_size_range": {
                             "minimum": (
-                                configuration.min_font_size
+                                (
+                                    configuration.min_font_size
+                                    if resolved_presentation is None
+                                    else resolved_presentation.min_font_size
+                                )
                                 if overrides.min_font_size is None
                                 else overrides.min_font_size
                             ),
                             "maximum": (
-                                configuration.max_font_size
+                                (
+                                    configuration.max_font_size
+                                    if resolved_presentation is None
+                                    else resolved_presentation.max_font_size
+                                )
                                 if overrides.max_font_size is None
                                 else overrides.max_font_size
                             ),
@@ -1505,15 +1703,25 @@ def _prepare_daily_images_for_specification(
                         },
                     }
                     metadata = tuple(
-                        build_prepared_metadata(
-                            selection_revision=selection_revision,
-                            snapshot=snapshot,
-                            output_specification=output_specification,
-                            stage_index=index,
-                            visibility=stage,
-                            reconstruction=reconstruction,
-                        )
-                        for index, stage in enumerate(stages)
+                        {
+                            "selection_revision": selection_revision,
+                            "visibility": {
+                                "quotation": stage.quotation,
+                                "source": stage.source,
+                                "attribution": stage.attribution,
+                            },
+                            "effective_presentation": effective_presentation,
+                            "rendered_qr": (
+                                {"payload": qr_declaration["payload"], "visibility": list(qr_declaration["visibility"])}
+                                if qr_placement is not None and qr_declaration is not None
+                                else None
+                            ),
+                            "output_specification": {
+                                "aspect_ratio": output_specification.aspect_ratio,
+                                "requested_output_size": list(output_specification.requested_output_size),
+                            },
+                        }
+                        for stage in stages
                     )
                     on_metadata(variant_key, metadata)
                 return tuple(_resize_presentation_to_output(image, geometry.requested_output_size) for image in images)
@@ -1551,6 +1759,9 @@ def prepare_daily_images(
     forced_decoration_tint: tuple[int, int, int] | None = None,
     overrides: PresentationOverrides | None = None,
     resolved_presentation: ResolvedPresentation | None = None,
+    canonical_presentation: Mapping[str, object] | None = None,
+    qr_declaration: Mapping[str, object] | None = None,
+    strict_published_presentation: bool = False,
     qr_disabled_reason: str | None = None,
     on_diagnostics: Callable[[ResolvedOutputSpecification, PreparationDiagnostics], None] | None = None,
     on_presentation_image: (
@@ -1566,6 +1777,23 @@ def prepare_daily_images(
         raise DailyImagePreparationError("configuration must be a validated ApplicationConfiguration")
     if resolved_presentation is not None and not isinstance(resolved_presentation, ResolvedPresentation):
         raise DailyImagePreparationError("resolved_presentation must be ResolvedPresentation")
+    if canonical_presentation is not None:
+        if resolved_presentation is not None:
+            raise DailyImagePreparationError("provide only one resolved presentation")
+        resolved_presentation = _resolved_from_document(canonical_presentation)
+    if qr_declaration is not None:
+        from .content import validate_qr_payload
+
+        try:
+            if set(qr_declaration) != {"payload", "visibility"} or qr_declaration["visibility"] not in (
+                ["external"],
+                ["internal"],
+            ):
+                raise ValueError("QR declaration must identify exactly one audience")
+            if validate_qr_payload(qr_declaration["payload"]) is None:
+                raise ValueError("QR declaration requires a payload")
+        except (TypeError, ValueError, KeyError) as error:
+            raise DailyImagePreparationError(f"invalid QR declaration: {error}") from error
     if on_metadata is not None and (type(selection_revision) is not int or selection_revision <= 0):
         raise DailyImagePreparationError("metadata capture requires a positive selection_revision")
     if not isinstance(output_specifications, Sequence) or isinstance(output_specifications, (str, bytes)):
@@ -1575,12 +1803,17 @@ def prepare_daily_images(
         for specification in output_specifications
     ):
         raise DailyImagePreparationError("output_specifications must contain resolved specifications or variant keys")
-    group_specifications: dict[DestinationPresentation, set[ResolvedOutputSpecification]] = {}
+    group_specifications: dict[DestinationPresentation, set[ResolvedOutputSpecification | PreparedImageVariantKey]] = {}
     for key in output_specifications:
         if isinstance(key, PreparedImageVariantKey):
-            if key.presentation.is_empty:
+            if key.presentation.is_empty and key.qr_payload is None:
                 raise DailyImagePreparationError("prepared variant keys must have nonempty presentation requirements")
-            group_specifications.setdefault(key.presentation, set()).add(key.output_specification)
+            expected_payload = (
+                None if key.presentation.qr_enabled is False or qr_declaration is None else qr_declaration["payload"]
+            )
+            if key.qr_payload != expected_payload:
+                raise DailyImagePreparationError("variant QR payload does not match the selected QR declaration")
+            group_specifications.setdefault(key.presentation, set()).add(key)
         else:
             group_specifications.setdefault(DestinationPresentation(), set()).add(key)
     results: dict[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]] = {}
@@ -1588,24 +1821,51 @@ def prepare_daily_images(
     effective_overrides = PresentationOverrides() if overrides is None else overrides
     try:
         for destination_presentation, specifications in group_specifications.items():
-            choices = _resolve_presentation_choices(
-                snapshot,
-                configuration,
-                chooser,
-                force_white_background=force_white_background,
-                forced_decoration_tint=forced_decoration_tint,
-                overrides=effective_overrides,
-                resolved_presentation=resolved_presentation,
-                destination_presentation=destination_presentation,
-            )
-            for output_specification in sorted(
+            group_presentation = resolved_presentation
+            if canonical_presentation is not None and not strict_published_presentation:
+                choices, group_presentation = _resolve_effective_choices(
+                    snapshot,
+                    configuration,
+                    chooser,
+                    resolved_presentation,
+                    destination_presentation,
+                    effective_overrides,
+                )
+            else:
+                choices = _resolve_presentation_choices(
+                    snapshot,
+                    configuration,
+                    chooser,
+                    force_white_background=force_white_background,
+                    forced_decoration_tint=forced_decoration_tint,
+                    overrides=effective_overrides,
+                    resolved_presentation=resolved_presentation,
+                    destination_presentation=destination_presentation,
+                )
+                if (
+                    strict_published_presentation
+                    and group_presentation is not None
+                    and effective_overrides.decoration is not None
+                ):
+                    insets = (
+                        configuration.presentation_insets
+                        if choices.decoration is None or choices.decoration.presentation_insets is None
+                        else choices.decoration.presentation_insets
+                    )
+                    group_presentation = replace(group_presentation, insets=insets)
+            for variant_key in sorted(
                 specifications,
-                key=lambda specification: (specification.aspect_ratio, specification.requested_output_size),
+                key=lambda key: (
+                    (key.output_specification if isinstance(key, PreparedImageVariantKey) else key).aspect_ratio,
+                    (
+                        key.output_specification if isinstance(key, PreparedImageVariantKey) else key
+                    ).requested_output_size,
+                ),
             ):
-                variant_key = (
-                    output_specification
-                    if destination_presentation.is_empty
-                    else PreparedImageVariantKey(output_specification, destination_presentation)
+                output_specification = (
+                    variant_key.output_specification
+                    if isinstance(variant_key, PreparedImageVariantKey)
+                    else variant_key
                 )
                 results[variant_key] = _prepare_daily_images_for_specification(
                     snapshot,
@@ -1615,12 +1875,13 @@ def prepare_daily_images(
                     choices,
                     effective_overrides,
                     variant_key,
-                    resolved_presentation=resolved_presentation,
+                    resolved_presentation=group_presentation,
                     selection_revision=selection_revision,
                     on_metadata=on_metadata,
                     strict_decoration=strict_decoration,
                     on_resolved_bounds=on_resolved_bounds,
                     qr_disabled_reason=qr_disabled_reason,
+                    qr_declaration=qr_declaration,
                     on_diagnostics=on_diagnostics,
                     on_presentation_image=on_presentation_image,
                 )
@@ -1638,5 +1899,6 @@ __all__ = [
     "PreparationDiagnostics",
     "PresentationOverrides",
     "ResolvedPresentation",
+    "resolve_canonical_presentation",
     "prepare_daily_images",
 ]
