@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -16,13 +17,20 @@ from .config import (
     ApplicationConfigurationError,
     load_application_config,
 )
-from .content import ContentEntry, ContentLibraryError, Quotation, load_content_library, normalize_quotation
+from .content import (
+    ContentEntry,
+    ContentLibraryError,
+    Quotation,
+    load_content_library,
+    normalize_quotation,
+    resolve_qr_payloads,
+    validate_qr_payload,
+)
 from .display.coordinator import PublicationResult, PublicationStatus
 from .display.postprocessing import post_process_destination_image
 from .geometry import (
     SUPPORTED_PRESENTATION_ASPECTS,
     PresentationGeometryError,
-    PresentationInsets,
     ResolvedOutputSpecification,
     design_canvas_for_aspect,
     validate_requested_size,
@@ -32,8 +40,8 @@ from .persistence import DailySnapshot, SchedulingContext
 from .preparation import (
     DailyImagePreparationError,
     PresentationOverrides,
-    ResolvedPresentation,
     prepare_daily_images,
+    resolve_canonical_presentation,
 )
 from .presentation import build_presentation_snapshot
 from .presentation_diagnostics import overlay_presentation_diagnostics
@@ -117,6 +125,33 @@ def _positive_font_size(value: str) -> int:
     return int(value)
 
 
+def _qr_payload(value: str) -> str:
+    if value == "none":
+        return value
+    try:
+        validate_qr_payload(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    return value
+
+
+def _selected_qr(
+    configuration: ApplicationConfiguration,
+    entry: ContentEntry,
+    audience: str,
+    overrides: Mapping[str, str | None] | None,
+) -> dict[str, object] | None:
+    declarations = resolve_qr_payloads(configuration.qr_defaults, entry.qr, overrides=overrides)
+    return next(
+        (
+            {"visibility": list(declaration.visibility), "payload": declaration.payload}
+            for declaration in declarations
+            if audience in declaration.visibility
+        ),
+        None,
+    )
+
+
 def _select_entry(
     configuration: ApplicationConfiguration,
     selector: tuple[str, int],
@@ -162,6 +197,8 @@ def render_preview(
     overrides: PresentationOverrides | None = None,
     debug_layout: bool = False,
     destination_type: str | None = None,
+    audience: str = "internal",
+    qr_overrides: Mapping[str, str | None] | None = None,
 ) -> Image.Image:
     """Render one fully revealed output image without runtime persistence or backends."""
     specification = output_specification or _output_specification("16:10", None)
@@ -171,6 +208,8 @@ def render_preview(
         (specification,),
         overrides=overrides,
         debug_layout=debug_layout,
+        audience=audience,
+        qr_overrides=qr_overrides,
     )[specification]
     if destination_type is not None:
         try:
@@ -199,39 +238,27 @@ def _read_publication_metadata(path: str | Path) -> dict[str, object]:
             f"{_MAX_PUBLICATION_METADATA_BYTES:,}-byte input limit"
         )
     try:
-        document = parse_publication_metadata(contents, stage="completed")
+        document = parse_publication_metadata(contents, stage="scheduled")
     except PublicationMetadataError as error:
         raise ViewerError(f"invalid publication metadata: {error}") from error
-    if document["publication_type"] != "scheduled":
-        raise ViewerError("publication reconstruction requires a completed scheduled publication")
     return document
 
 
 def _publication_render_inputs(
     document: Mapping[str, object],
-) -> tuple[DailySnapshot, ResolvedPresentation]:
+) -> DailySnapshot:
     presentation = document["presentation"]
-    reconstruction = document["reconstruction"]
-    if not isinstance(presentation, dict) or not isinstance(reconstruction, dict):
-        raise ViewerError("completed scheduled publication is missing its reconstruction data")
-    entry = reconstruction["content_entry"]
-    if not isinstance(entry, dict):
-        raise ViewerError("completed scheduled publication has invalid reconstruction content")
-    quotations = entry["quotations"]
-    if not isinstance(quotations, list):
-        raise ViewerError("completed scheduled publication has invalid reconstruction content")
-    reveal_schedule = presentation["reveal_schedule"]
-    if not isinstance(reveal_schedule, dict):
-        raise ViewerError("completed scheduled publication has invalid reveal schedule")
+    content = document["content"]
     try:
-        display_date = date.fromisoformat(presentation["display_date"])
+        reveal_schedule = content["reveal_schedule"]
+        display_date = date.fromisoformat(content["display_date"])
         snapshot = DailySnapshot(
-            entry_id=entry["id"],
-            quotation_text=quotations[0],
-            quotation_identity=presentation["quotation_identity"],
-            source=entry.get("source"),
-            attribution=entry.get("attribution"),
-            presentation_style=reconstruction["presentation_style"],
+            entry_id="viewer-publication",
+            quotation_text=content["quotation"],
+            quotation_identity=normalize_quotation(content["quotation"]),
+            source=content.get("source"),
+            attribution=content.get("attribution"),
+            presentation_style=presentation["style"],
             font=None,
             font_faces={},
             background=None,
@@ -241,32 +268,9 @@ def _publication_render_inputs(
             reveal_schedule=reveal_schedule,
             scheduling=SchedulingContext(display_date, reveal_schedule["quotation"]),
         )
-        font_size_range = reconstruction["font_size_range"]
-        insets = reconstruction["insets"]
-        fonts = reconstruction["fonts"]
-        colors = reconstruction["colors"]
-        qr = reconstruction["qr"]
-        resolved = ResolvedPresentation(
-            background=reconstruction["background"],
-            decoration=reconstruction["decoration"],
-            font_bundle=fonts["bundle"],
-            font_faces=fonts["faces"],
-            text_color=colors["text"],
-            decoration_color=colors["decoration"],
-            presentation_style=reconstruction["presentation_style"],
-            qr_enabled=qr["enabled"],
-            min_font_size=font_size_range["minimum"],
-            max_font_size=font_size_range["maximum"],
-            insets=PresentationInsets(
-                left=insets["left"],
-                right=insets["right"],
-                top=insets["top"],
-                bottom=insets["bottom"],
-            ),
-        )
     except (KeyError, TypeError, ValueError) as error:
         raise ViewerError(f"cannot use publication reconstruction data: {error}") from error
-    return snapshot, resolved
+    return snapshot
 
 
 def render_publication(
@@ -278,7 +282,7 @@ def render_publication(
     debug_layout: bool = False,
 ) -> Image.Image:
     """Render a fully revealed presentation from validated completed metadata."""
-    snapshot, resolved_presentation = _publication_render_inputs(document)
+    snapshot = _publication_render_inputs(document)
 
     def annotate_diagnostics(_specification, image, diagnostics) -> None:
         annotated = overlay_presentation_diagnostics(image, diagnostics)
@@ -299,11 +303,13 @@ def render_publication(
             configuration,
             (output_specification,),
             overrides=PresentationOverrides() if overrides is None else overrides,
-            resolved_presentation=resolved_presentation,
+            canonical_presentation=document["presentation"],
+            qr_declaration=next(iter(document["content"]["qr"]), None),
+            strict_published_presentation=True,
             on_presentation_image=annotate_diagnostics if debug_layout else None,
         )
     except (ValueError, TypeError) as error:
-        raise ViewerError(f"cannot reconstruct publication {document['publication_id']!r}: {error}") from error
+        raise ViewerError(f"cannot reconstruct publication {document['publication']['id']!r}: {error}") from error
     images = prepared[output_specification]
     return images[0]
 
@@ -315,6 +321,8 @@ def render_preview_variants(
     *,
     overrides: PresentationOverrides | None = None,
     debug_layout: bool = False,
+    audience: str = "internal",
+    qr_overrides: Mapping[str, str | None] | None = None,
 ) -> Mapping[ResolvedOutputSpecification, Image.Image]:
     """Render one coherent, fully revealed presentation across output specifications."""
     entry, quotation = _select_entry(configuration, selector)
@@ -334,6 +342,7 @@ def render_preview_variants(
             configuration,
             output_specifications,
             overrides=overrides,
+            qr_declaration=_selected_qr(configuration, entry, audience, qr_overrides),
             on_presentation_image=annotate_diagnostics if debug_layout else None,
         )
     except (ValueError, TypeError) as error:
@@ -344,6 +353,68 @@ def render_preview_variants(
         for images in prepared.values():
             for image in images:
                 image.close()
+        raise
+
+
+def _render_push_variants(
+    configuration: ApplicationConfiguration,
+    selector: tuple[str, int],
+    destinations: Sequence[dict[str, object]],
+    *,
+    overrides: PresentationOverrides,
+    qr_overrides: Mapping[str, str | None] | None,
+    debug_layout: bool,
+) -> dict[str, Image.Image]:
+    entry, quotation = _select_entry(configuration, selector)
+    images: dict[str, Image.Image] = {}
+    groups: dict[tuple[ResolvedOutputSpecification, str | None], tuple[dict[str, object] | None, list[str]]] = {}
+    try:
+        snapshot = build_presentation_snapshot(configuration, entry, quotation, date.today())
+        visibility = resolve_reveal_stages(snapshot)[-1]
+        canonical = resolve_canonical_presentation(snapshot, configuration, overrides=overrides)
+        resolved_overrides = replace(
+            overrides,
+            font=canonical["fonts"]["bundle"] if overrides.font is not None else None,
+            background=canonical["background"] if overrides.background is not None else None,
+            decoration=canonical["decoration"] if overrides.decoration is not None else None,
+            text_color=canonical["colors"]["text"] if overrides.text_color is not None else None,
+            tint=canonical["colors"]["decoration"] if overrides.tint is not None else None,
+        )
+        for destination in destinations:
+            declaration = _selected_qr(configuration, entry, destination["audience"], qr_overrides)
+            if overrides.qr_enabled is False:
+                declaration = None
+            specification = destination["output_specification"]
+            payload = None if declaration is None else declaration["payload"]
+            key = (specification, payload)
+            if key not in groups:
+                groups[key] = (declaration, [])
+            groups[key][1].append(str(destination["identifier"]))
+
+        def annotate_diagnostics(_specification, image, diagnostics) -> None:
+            annotated = overlay_presentation_diagnostics(image, diagnostics)
+            if annotated is not image:
+                image.paste(annotated)
+                annotated.close()
+
+        for (specification, _payload), (declaration, identifiers) in groups.items():
+            prepared = prepare_daily_images(
+                snapshot,
+                (visibility,),
+                configuration,
+                (specification,),
+                canonical_presentation=canonical,
+                overrides=resolved_overrides,
+                qr_declaration=declaration,
+                on_presentation_image=annotate_diagnostics if debug_layout else None,
+            )
+            image = prepared[specification][0]
+            for identifier in identifiers:
+                images[identifier] = image
+        return images
+    except Exception:
+        for image in {id(image): image for image in images.values()}.values():
+            image.close()
         raise
 
 
@@ -389,11 +460,11 @@ def _fit_preview_image(image: Image.Image, available_size: tuple[int, int]) -> I
 def _resolve_render_destination(
     configuration: ApplicationConfiguration,
     identifier: str,
-) -> tuple[str, ResolvedOutputSpecification]:
+) -> tuple[str, ResolvedOutputSpecification, str]:
     for backend in configuration.display_backends:
         for destination in backend.outputs:
             if destination.identifier == identifier:
-                return backend.type, destination.output_specification
+                return backend.type, destination.output_specification, destination.audience
     raise ViewerError(
         f"destination {identifier!r} is not configured in the viewer configuration; "
         "check --config and the destination ID"
@@ -467,6 +538,8 @@ def run_viewer(
     window: bool = False,
     overrides: PresentationOverrides | None = None,
     debug_layout: bool = False,
+    audience: str | None = None,
+    qr_overrides: Mapping[str, str | None] | None = None,
 ) -> None:
     """Load one configuration and render/export a single presentation."""
     if config_file is None:
@@ -488,7 +561,9 @@ def run_viewer(
     if render_as is not None:
         if aspect is not None or resolution is not None:
             raise ViewerError("--render-as cannot be combined with --aspect or --resolution")
-        destination_type, specification = _resolve_render_destination(configuration, render_as)
+        if audience is not None:
+            raise ViewerError("--render-as cannot be combined with --audience")
+        destination_type, specification, audience = _resolve_render_destination(configuration, render_as)
     else:
         destination_type = None
         specification = _output_specification("16:10" if aspect is None else aspect, resolution)
@@ -499,6 +574,8 @@ def run_viewer(
         overrides=PresentationOverrides() if overrides is None else overrides,
         debug_layout=debug_layout,
         destination_type=destination_type,
+        audience=audience or "internal",
+        qr_overrides=qr_overrides,
     )
     try:
         if output is not None:
@@ -595,6 +672,7 @@ def _run_destination_discovery() -> int:
 
     headers = (
         "Destination",
+        "Audience",
         "Aspect",
         "Resolution",
         "Transient",
@@ -610,11 +688,16 @@ def _run_destination_discovery() -> int:
         rows.append(
             (
                 destination["identifier"],
+                destination["audience"],
                 specification.aspect_ratio,
                 f"{width}x{height}",
                 "yes" if destination["supports_transient"] else "no",
                 "participating" if destination["participating"] else "not participating",
-                "available" if destination["available"] else "unavailable/failed",
+                (
+                    "unknown"
+                    if destination["available"] == "unknown"
+                    else "available" if destination["available"] else "unavailable/failed"
+                ),
                 "accepted" if destination["publication_accepted"] else "not accepted",
                 "yes" if destination["withdrawn"] else "no",
             )
@@ -656,6 +739,13 @@ def _select_push_destinations(
             + "; configure a transient-capable destination or select a supported target"
         )
 
+    if len(selected) > 64:
+        raise ViewerError("a transient push may select at most 64 destinations")
+    for destination in selected:
+        if destination.get("audience") not in {"external", "internal"}:
+            raise ViewerError(f"destination {destination['identifier']!r} has an invalid or missing audience")
+        if not isinstance(destination.get("output_specification"), ResolvedOutputSpecification):
+            raise ViewerError(f"destination {destination['identifier']!r} has an invalid output specification")
     specifications = {str(destination["identifier"]): destination["output_specification"] for destination in selected}
     return target, selected, specifications
 
@@ -711,6 +801,7 @@ def _run_push(
     overrides: PresentationOverrides,
     debug_layout: bool,
     image_path: str | Path | None = None,
+    qr_overrides: Mapping[str, str | None] | None = None,
 ) -> int:
     try:
         paths = resolve_application_paths()
@@ -760,7 +851,7 @@ def _run_push(
                 )
                 finished_image.close()
                 return 1
-        images = {specification: finished_image for specification in dict.fromkeys(specifications.values())}
+        images = {str(destination["identifier"]): finished_image for destination in selected}
     else:
         config_path = Path(config_file if config_file is not None else paths.config_file).absolute()
         if not config_path.is_file():
@@ -778,14 +869,15 @@ def _run_push(
 
         print("Preparing presentation variants for push.", flush=True)
         try:
-            images = render_preview_variants(
+            images = _render_push_variants(
                 configuration,
                 selector,
-                tuple(dict.fromkeys(specifications.values())),
+                selected,
                 overrides=overrides,
+                qr_overrides=qr_overrides,
                 debug_layout=debug_layout,
             )
-        except (ViewerError, DailyImagePreparationError) as error:
+        except (ViewerError, DailyImagePreparationError, ValueError, TypeError) as error:
             print(f"refrain-viewer: {error}", file=sys.stderr)
             return 1
 
@@ -797,6 +889,7 @@ def _run_push(
             runtime_target,
             specifications,
             images,
+            audiences={str(destination["identifier"]): destination["audience"] for destination in selected},
             on_accepted=report_accepted,
         )
     except RuntimeUnconfirmed:
@@ -852,7 +945,10 @@ def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: ar
         ("--text-color", arguments.text_color),
         ("--tint", arguments.tint),
         ("--style", arguments.style),
-        ("--qr/--no-qr", arguments.qr_enabled is not None),
+        ("--no-qr", arguments.no_qr),
+        ("--qr-external", arguments.qr_external),
+        ("--qr-internal", arguments.qr_internal),
+        ("--audience", arguments.audience),
         ("--aspect", arguments.aspect),
         ("--resolution", arguments.resolution),
         ("--render-as", arguments.render_as),
@@ -861,6 +957,7 @@ def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: ar
         ("--debug-layout", arguments.debug_layout),
         ("--push", arguments.push),
         ("--image", arguments.image),
+        ("--publication", arguments.publication),
     ):
         if value is not None and value is not False:
             conflicts.append(option)
@@ -877,6 +974,7 @@ def _validate_push_arguments(parser: argparse.ArgumentParser, arguments: argpars
         ("--resolution", arguments.resolution),
         ("--render-as", arguments.render_as),
         ("--list-destinations", arguments.list_destinations),
+        ("--audience", arguments.audience),
     ):
         if value is not None and value is not False:
             conflicts.append(option)
@@ -893,6 +991,9 @@ def _validate_publication_arguments(parser: argparse.ArgumentParser, arguments: 
             ("--push", arguments.push),
             ("--render-as", arguments.render_as),
             ("--list-destinations", arguments.list_destinations),
+            ("--audience", arguments.audience),
+            ("--qr-external", arguments.qr_external),
+            ("--qr-internal", arguments.qr_internal),
         )
         if value is not None and value is not False
     ]
@@ -903,7 +1004,11 @@ def _validate_publication_arguments(parser: argparse.ArgumentParser, arguments: 
 def _validate_render_as_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
     conflicts = [
         option
-        for option, value in (("--aspect", arguments.aspect), ("--resolution", arguments.resolution))
+        for option, value in (
+            ("--aspect", arguments.aspect),
+            ("--resolution", arguments.resolution),
+            ("--audience", arguments.audience),
+        )
         if value is not None
     ]
     if conflicts:
@@ -926,7 +1031,11 @@ def _validate_image_arguments(parser: argparse.ArgumentParser, arguments: argpar
         ("--text-color", arguments.text_color),
         ("--tint", arguments.tint),
         ("--style", arguments.style),
-        ("--qr/--no-qr", arguments.qr_enabled is not None),
+        ("--no-qr", arguments.no_qr),
+        ("--qr-external", arguments.qr_external),
+        ("--qr-internal", arguments.qr_internal),
+        ("--audience", arguments.audience),
+        ("--publication", arguments.publication),
         ("--aspect", arguments.aspect),
         ("--resolution", arguments.resolution),
         ("--render-as", arguments.render_as),
@@ -974,10 +1083,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--text-color", type=_resource_preference, metavar="COLOR_ID|@POOL")
     parser.add_argument("--tint", type=_resource_preference, metavar="COLOR_ID|@POOL")
     parser.add_argument("--style", choices=("centered", "left-aligned"))
-    qr_options = parser.add_mutually_exclusive_group()
-    qr_options.add_argument("--qr", dest="qr_enabled", action="store_true")
-    qr_options.add_argument("--no-qr", dest="qr_enabled", action="store_false")
-    parser.set_defaults(qr_enabled=None)
+    parser.add_argument("--no-qr", action="store_true", help="suppress literary QR")
+    parser.add_argument("--qr-external", type=_qr_payload, metavar="CONTENT|none")
+    parser.add_argument("--qr-internal", type=_qr_payload, metavar="CONTENT|none")
+    parser.add_argument("--audience", choices=("external", "internal"))
     parser.add_argument("--aspect", choices=tuple(SUPPORTED_PRESENTATION_ASPECTS))
     parser.add_argument("--resolution", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
     parser.add_argument(
@@ -1004,6 +1113,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
+    if arguments.no_qr and (arguments.qr_external is not None or arguments.qr_internal is not None):
+        parser.error("--no-qr cannot be combined with --qr-external or --qr-internal")
     if arguments.publication is not None:
         _validate_publication_arguments(parser, arguments)
     if arguments.list_destinations:
@@ -1051,8 +1162,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         text_color=arguments.text_color,
         tint=arguments.tint,
         style=arguments.style,
-        qr_enabled=arguments.qr_enabled,
+        qr_enabled=False if arguments.no_qr else None,
     )
+    qr_overrides = {
+        audience: None if value == "none" else value
+        for audience, value in (("external", arguments.qr_external), ("internal", arguments.qr_internal))
+        if value is not None
+    }
     resolution = None if arguments.resolution is None else tuple(arguments.resolution)
     if arguments.publication is not None:
         try:
@@ -1077,6 +1193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             selector=arguments.entry or _DEFAULT_SELECTOR,
             overrides=overrides,
             debug_layout=arguments.debug_layout,
+            qr_overrides=qr_overrides,
         )
     try:
         run_viewer(
@@ -1089,6 +1206,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             window=arguments.window,
             overrides=overrides,
             debug_layout=arguments.debug_layout,
+            audience=arguments.audience,
+            qr_overrides=qr_overrides,
         )
     except (ApplicationPathError, ViewerError, DailyImagePreparationError) as error:
         print(f"refrain-viewer: {error}", file=sys.stderr)

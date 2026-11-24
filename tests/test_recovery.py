@@ -43,7 +43,9 @@ from refrain import (
 from refrain import (
     recover_prepared_daily_images as _recover_daily_images,
 )
+from refrain.checkpoint import build_content_checkpoint
 from refrain.config import BackgroundResource
+from refrain.preparation import resolve_canonical_presentation
 
 _STAGES = (
     CompositionVisibility(),
@@ -77,6 +79,12 @@ _CONFIGURATION = ApplicationConfiguration(
 )
 
 
+def _checkpoint(state, configuration=_CONFIGURATION):
+    checkpoint = build_content_checkpoint(state, [])
+    checkpoint["presentation"] = resolve_canonical_presentation(state.snapshot, configuration)
+    return checkpoint
+
+
 def _prepare_variants(snapshot, stages, configuration, **kwargs):
     return _prepare_daily_image_variants(
         snapshot,
@@ -92,6 +100,9 @@ def _prepare_images(snapshot, stages, configuration, **kwargs):
 
 
 def _recover(state, artifact_store, stages, configuration=_CONFIGURATION, **kwargs):
+    if "checkpoint" not in kwargs:
+        kwargs["checkpoint"] = _checkpoint(state, configuration)
+    kwargs.setdefault("qr_declaration", None)
     return _recover_daily_images(
         state,
         artifact_store,
@@ -164,7 +175,9 @@ def test_artifact_write_rejects_mismatched_frozen_stages(committed_state, artifa
         CompositionVisibility(source=True, attribution=True),
     )
     with pytest.raises(ValueError, match="committed reveal sequence"):
-        artifact_store.store(state.revision, wrong, {}, {}, snapshot=state.snapshot)
+        artifact_store.store(
+            state.revision, wrong, {}, {}, snapshot=state.snapshot, checkpoint=_checkpoint(state), qr_declaration=None
+        )
     assert not artifact_store.root.exists()
 
 
@@ -182,31 +195,77 @@ def test_artifact_operations_require_matching_committed_stages(committed_state, 
     with pytest.raises(TypeError):
         artifact_store.load_groups(state.revision, _STAGES, (_OUTPUT_SPECIFICATION,))
     with pytest.raises(TypeError, match="DailySnapshot"):
-        artifact_store.load(state.revision, _STAGES, (_OUTPUT_SPECIFICATION,), snapshot=None)
+        artifact_store.load(
+            state.revision,
+            _STAGES,
+            (_OUTPUT_SPECIFICATION,),
+            snapshot=None,
+            checkpoint=_checkpoint(state),
+            qr_declaration=None,
+        )
     with pytest.raises(ValueError, match="committed reveal sequence"):
-        artifact_store.load(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+        artifact_store.load(
+            state.revision,
+            wrong,
+            (_OUTPUT_SPECIFICATION,),
+            snapshot=state.snapshot,
+            checkpoint=_checkpoint(state),
+            qr_declaration=None,
+        )
     with pytest.raises(ValueError, match="committed reveal sequence"):
-        artifact_store.load_groups(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+        artifact_store.load_groups(
+            state.revision,
+            wrong,
+            (_OUTPUT_SPECIFICATION,),
+            snapshot=state.snapshot,
+            checkpoint=_checkpoint(state),
+            qr_declaration=None,
+        )
     assert not artifact_store.root.exists()
 
     _store_images(artifact_store, state)
     with pytest.raises(ValueError, match="committed reveal sequence"):
-        artifact_store.load(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+        artifact_store.load(
+            state.revision,
+            wrong,
+            (_OUTPUT_SPECIFICATION,),
+            snapshot=state.snapshot,
+            checkpoint=_checkpoint(state),
+            qr_declaration=None,
+        )
     with pytest.raises(ValueError, match="committed reveal sequence"):
-        artifact_store.load_groups(state.revision, wrong, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+        artifact_store.load_groups(
+            state.revision,
+            wrong,
+            (_OUTPUT_SPECIFICATION,),
+            snapshot=state.snapshot,
+            checkpoint=_checkpoint(state),
+            qr_declaration=None,
+        )
 
 
 def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
     metadata = {}
+    checkpoint = _checkpoint(state)
     variants = _prepare_variants(
         state.snapshot,
         stages,
         _CONFIGURATION,
         selection_revision=state.revision,
+        canonical_presentation=checkpoint["presentation"],
+        qr_declaration=None,
         on_metadata=lambda specification, documents: metadata.__setitem__(specification, documents),
     )
     try:
-        return store.store(state.revision, stages, variants, metadata, snapshot=state.snapshot)
+        return store.store(
+            state.revision,
+            stages,
+            variants,
+            metadata,
+            snapshot=state.snapshot,
+            checkpoint=checkpoint,
+            qr_declaration=None,
+        )
     finally:
         for images in variants.values():
             for image in images:
@@ -218,7 +277,14 @@ def _variant(artifact_set):
 
 
 def _load(store, state, stages):
-    return store.load(state.revision, stages, (_OUTPUT_SPECIFICATION,), snapshot=state.snapshot)
+    return store.load(
+        state.revision,
+        stages,
+        (_OUTPUT_SPECIFICATION,),
+        snapshot=state.snapshot,
+        checkpoint=_checkpoint(state),
+        qr_declaration=None,
+    )
 
 
 def _metadata_for(state, stages, configuration=_CONFIGURATION):
@@ -228,6 +294,8 @@ def _metadata_for(state, stages, configuration=_CONFIGURATION):
         stages,
         configuration,
         selection_revision=state.revision,
+        canonical_presentation=_checkpoint(state, configuration)["presentation"],
+        qr_declaration=None,
         on_metadata=lambda specification, documents: metadata.__setitem__(specification, documents),
     )
     for images in variants.values():
@@ -257,7 +325,8 @@ def test_missing_preference_falls_back_without_changing_committed_selection(
     with result.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
         assert image.getpixel((0, 0)) == (255, 255, 255)
     assert "Requested background 'removed-paper' from content entry is unavailable" in caplog.text
-    assert result.variant_for(_OUTPUT_SPECIFICATION).load_metadata(0)["reconstruction"]["background"] == "none"
+    association = result.variant_for(_OUTPUT_SPECIFICATION).load_association(0)
+    assert association["effective_presentation"]["background"] == "none"
 
 
 def test_unusable_selected_background_is_recorded_as_the_actual_white_fallback(
@@ -277,7 +346,8 @@ def test_unusable_selected_background_is_recorded_as_the_actual_white_fallback(
 
     result = _recover(state, artifact_store, _STAGES, configuration)
 
-    assert result.variant_for(_OUTPUT_SPECIFICATION).load_metadata(0)["reconstruction"]["background"] == "none"
+    association = result.variant_for(_OUTPUT_SPECIFICATION).load_association(0)
+    assert association["effective_presentation"]["background"] == "none"
     with result.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
         assert image.getpixel((0, 0)) == (255, 255, 255)
     assert state_path.read_bytes() == before
@@ -324,7 +394,8 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
         _CONFIGURATION,
         backgrounds={"paper": BackgroundResource("paper", background_path, False)},
     )
-    images = _prepare_images(snapshot, _STAGES, configured)
+    checkpoint = _checkpoint(state, configured)
+    images = _prepare_images(snapshot, _STAGES, configured, canonical_presentation=checkpoint["presentation"])
     try:
         prepared = artifact_store.store(
             state.revision,
@@ -332,6 +403,8 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
             {_OUTPUT_SPECIFICATION: images},
             _metadata_for(state, _STAGES, configured),
             snapshot=state.snapshot,
+            checkpoint=checkpoint,
+            qr_declaration=None,
         )
     finally:
         for image in images:
@@ -343,7 +416,7 @@ def test_valid_prepared_images_are_reused_without_resolving_missing_preferences(
         lambda *_args, **_kwargs: pytest.fail("unexpected regeneration"),
     )
 
-    recovered = _recover(state, artifact_store, _STAGES)
+    recovered = _recover(state, artifact_store, _STAGES, checkpoint=checkpoint)
 
     assert recovered == prepared
     with recovered.load_stage(_OUTPUT_SPECIFICATION, 0) as image:
@@ -356,7 +429,7 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
 ) -> None:
     state, state_path = committed_state
     expected = _store_images(artifact_store, state)
-    manifest_path = expected.directory / "manifest.json"
+    manifest_path = _variant(expected).stage_paths[0].parent.parent.parent / "manifest.json"
     manifest_before = manifest_path.read_bytes()
     image_bytes_before = tuple(path.read_bytes() for path in _variant(expected).stage_paths)
     state_bytes_before = state_path.read_bytes()
@@ -427,6 +500,8 @@ def test_changed_override_regenerates_only_its_incompatible_group(
         _STAGES,
         initial_configuration,
         initial_configuration.required_prepared_image_keys,
+        checkpoint=_checkpoint(state, initial_configuration),
+        qr_declaration=None,
     )
     shared_key = PreparedImageVariantKey(specification, shared)
     original_key = PreparedImageVariantKey(specification, original)
@@ -450,13 +525,15 @@ def test_changed_override_regenerates_only_its_incompatible_group(
         _STAGES,
         changed_configuration,
         changed_configuration.required_prepared_image_keys,
+        checkpoint=_checkpoint(state, initial_configuration),
+        qr_declaration=None,
     )
     changed_key = PreparedImageVariantKey(specification, changed)
 
     assert prepared_groups == [(changed_key,)]
     assert recovered.variant_for(shared_key).stage_paths == shared_paths
     assert recovered.variant_for(shared_key).stage_paths != original_paths
-    assert recovered.variant_for(changed_key).load_metadata(0)["reconstruction"]["background"] == "none"
+    assert recovered.variant_for(changed_key).load_association(0)["effective_presentation"]["background"] == "none"
     assert state_path.read_bytes() == state_bytes
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args, **_kwargs: pytest.fail("unexpected rendering"))
@@ -466,6 +543,8 @@ def test_changed_override_regenerates_only_its_incompatible_group(
         _STAGES,
         changed_configuration,
         changed_configuration.required_prepared_image_keys,
+        checkpoint=_checkpoint(state, initial_configuration),
+        qr_declaration=None,
     )
     assert restarted.variant_for(shared_key).stage_paths == recovered.variant_for(shared_key).stage_paths
     assert restarted.variant_for(changed_key).stage_paths == recovered.variant_for(changed_key).stage_paths
@@ -487,10 +566,11 @@ def test_valid_artifacts_are_reused_after_font_resource_changes(
         default_fonts=("committed-font",),
     )
 
-    original = _recover(state, artifact_store, _STAGES, configured)
+    checkpoint = _checkpoint(state, configured)
+    original = _recover(state, artifact_store, _STAGES, configured, checkpoint=checkpoint)
     font_path.write_bytes(changed_font)
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_args: pytest.fail("unexpected regeneration"))
-    recovered = _recover(state, artifact_store, _STAGES, configured)
+    recovered = _recover(state, artifact_store, _STAGES, configured, checkpoint=checkpoint)
 
     assert recovered == original
     assert state_path.read_bytes() == state_bytes_before
@@ -525,7 +605,8 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
             old_set = _store_images(artifact_store, replace(state, snapshot=old_snapshot), _STAGES[:2])
         else:
             old_set = _store_images(artifact_store, state)
-        previous_payloads = tuple(old_set.directory.glob("images-*"))
+        group = _variant(old_set).stage_paths[0].parent.parent.parent
+        previous_payloads = tuple(group.glob("images-*"))
 
         if damage == "missing-stage":
             _variant(old_set).stage_paths[1].unlink()
@@ -541,7 +622,7 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
             variant = _variant(old_set)
             stage_zero = variant.metadata_paths[0].read_bytes()
             variant.metadata_paths[1].write_bytes(stage_zero)
-            path = old_set.directory / "manifest.json"
+            path = group / "manifest.json"
             manifest = json.loads(path.read_bytes())
             manifest["artifacts"]["variants"][0]["stages"][1]["metadata_sha256"] = hashlib.sha256(
                 stage_zero
@@ -557,9 +638,9 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
             ).hexdigest()
             path.write_text(json.dumps(manifest), encoding="utf-8")
         elif damage == "missing-manifest":
-            (old_set.directory / "manifest.json").unlink()
+            (group / "manifest.json").unlink()
         elif damage == "invalid-manifest":
-            (old_set.directory / "manifest.json").write_bytes(b"{")
+            (group / "manifest.json").write_bytes(b"{")
         elif damage == "old-manifest":
             metadata = {
                 "revision": state.revision,
@@ -572,7 +653,7 @@ def test_regenerates_and_replaces_absent_or_invalid_artifacts(committed_state, a
                 metadata, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
             document = {"artifacts": metadata, "sha256": hashlib.sha256(serialized).hexdigest()}
-            (old_set.directory / "manifest.json").write_text(json.dumps(document), encoding="utf-8")
+            (group / "manifest.json").write_text(json.dumps(document), encoding="utf-8")
 
     result = _recover(state, artifact_store, _STAGES)
     reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state, _STAGES)
@@ -615,11 +696,14 @@ def test_repeated_recovery_uses_reloaded_artifacts_without_rewriting(
             return values[0]
 
     chooser = CountingChooser()
-    first = _recover(state, artifact_store, _STAGES, chooser=chooser)
-    assert chooser.calls > 0
-    manifest = (first.directory / "manifest.json").read_bytes()
-    metadata_before = tuple(_variant(first).load_metadata(index) for index in range(len(_STAGES)))
-    assert tuple(document["presentation"]["reveal_stage_index"] for document in metadata_before) == (0, 1, 2)
+    checkpoint = _checkpoint(state)
+    first = _recover(state, artifact_store, _STAGES, chooser=chooser, checkpoint=checkpoint)
+    manifest_path = _variant(first).stage_paths[0].parent.parent.parent / "manifest.json"
+    manifest = manifest_path.read_bytes()
+    metadata_before = tuple(_variant(first).load_association(index) for index in range(len(_STAGES)))
+    assert tuple(document["visibility"] for document in metadata_before) == tuple(
+        {"quotation": stage.quotation, "source": stage.source, "attribution": stage.attribution} for stage in _STAGES
+    )
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
 
@@ -632,11 +716,12 @@ def test_repeated_recovery_uses_reloaded_artifacts_without_rewriting(
         PreparedImageArtifactStore(artifact_store.root),
         _STAGES,
         chooser=RejectingChooser(),
+        checkpoint=checkpoint,
     )
 
     assert second == first
-    assert (second.directory / "manifest.json").read_bytes() == manifest
-    assert tuple(_variant(second).load_metadata(index) for index in range(len(_STAGES))) == metadata_before
+    assert manifest_path.read_bytes() == manifest
+    assert tuple(_variant(second).load_association(index) for index in range(len(_STAGES))) == metadata_before
 
 
 @pytest.mark.parametrize(
@@ -769,7 +854,17 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
 ) -> None:
     state, _ = committed_state
     error = ArtifactValidationError("damaged artifact")
-    monkeypatch.setattr(artifact_store, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    load_group = artifact_store._load_group
+    damaged = True
+
+    def fail_once(*args, **kwargs):
+        nonlocal damaged
+        if damaged:
+            damaged = False
+            raise error
+        return load_group(*args, **kwargs)
+
+    monkeypatch.setattr(artifact_store, "_load_group", fail_once)
     prepared = []
 
     def prepare(snapshot, stages, configuration, output_specifications, **kwargs):

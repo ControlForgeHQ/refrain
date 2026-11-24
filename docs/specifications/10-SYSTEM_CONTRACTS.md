@@ -61,6 +61,16 @@ Do not introduce capabilities solely to demonstrate extensibility.
 
 Material architectural changes require approval before implementation establishes new behavior.
 
+### Filesystem trust model
+
+Refrain relies on operating-system permissions and its documented ownership boundaries to protect application-managed storage against unauthorized modification.
+
+External processes must not concurrently modify Refrain-owned storage except through documented application interfaces and coordination mechanisms.
+
+Filesystem safety requirements must protect against misconfiguration, existing filesystem redirection, unexpected objects, and ordinary filesystem failures.
+
+Protection against concurrent external filesystem manipulation that violates these ownership boundaries is not required. Conventional standard-library filesystem operations are permitted.
+
 ### Operational priorities
 
 Refrain prioritizes continuity of the committed daily selection and its reveal progression over immediate application of configuration changes. Configuration changes do not retroactively modify committed content or completed publications. Their effects follow the owning subsystem's established resolution, preparation, and lifecycle rules.

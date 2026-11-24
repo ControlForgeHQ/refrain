@@ -130,11 +130,13 @@ def _destination(
     *,
     participating: bool = True,
     withdrawn: bool = False,
-    available: bool = True,
+    available: bool | str = True,
     publication_accepted: bool = False,
+    audience: str = "internal",
 ) -> dict[str, object]:
     return {
         "identifier": identifier,
+        "audience": audience,
         "output_specification": ResolvedOutputSpecification("16:9", (1920, 1080)),
         "supports_transient": True,
         "participating": participating,
@@ -148,9 +150,10 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     paths: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     records = (
-        _destination("window", publication_accepted=True),
+        _destination("window", publication_accepted=True, audience="external"),
         _destination("wquxga", participating=False, withdrawn=True),
         _destination("epaper-destination-with-a-long-name", available=False),
+        _destination("publish", available="unknown"),
     )
     seen = {}
 
@@ -174,6 +177,7 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
     expected_cells = (
         (
             "Destination",
+            "Audience",
             "Aspect",
             "Resolution",
             "Transient",
@@ -182,10 +186,11 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
             "Publication",
             "Withdrawn",
         ),
-        ("window", "16:9", "1920x1080", "yes", "participating", "available", "accepted", "no"),
-        ("wquxga", "16:9", "1920x1080", "yes", "not participating", "available", "not accepted", "yes"),
+        ("window", "external", "16:9", "1920x1080", "yes", "participating", "available", "accepted", "no"),
+        ("wquxga", "internal", "16:9", "1920x1080", "yes", "not participating", "available", "not accepted", "yes"),
         (
             "epaper-destination-with-a-long-name",
+            "internal",
             "16:9",
             "1920x1080",
             "yes",
@@ -194,6 +199,7 @@ def test_list_destinations_uses_only_runtime_discovery_and_preserves_runtime_val
             "not accepted",
             "no",
         ),
+        ("publish", "internal", "16:9", "1920x1080", "yes", "participating", "unknown", "not accepted", "no"),
     )
     assert len(lines) == len(expected_cells)
     column_starts = []
@@ -270,7 +276,9 @@ def test_discovery_control_errors_are_actionable(
         ["--text-color", "black"],
         ["--tint", "gold"],
         ["--style", "centered"],
-        ["--qr"],
+        ["--qr-external", "external payload"],
+        ["--qr-internal", "internal payload"],
+        ["--audience", "external"],
         ["--no-qr"],
         ["--aspect", "16:10"],
         ["--resolution", "320", "200"],

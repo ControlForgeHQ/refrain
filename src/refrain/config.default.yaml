@@ -18,6 +18,9 @@ scheduling:
 presentation:
   information_view:
     duration: 60
+  qr:
+    external: "https://github.com/ControlForgeHQ/refrain"
+    internal: "https://github.com/ControlForgeHQ/refrain"
 
 # Custom colors
 palette:

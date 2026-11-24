@@ -635,8 +635,8 @@ def test_recoverable_operations_retry_same_selection_and_stage(demo, monkeypatch
     demo.assert_clean()
 
 
-def test_uncertain_published_commit_recovers_after_transient_reload_failure(demo, monkeypatch):
-    demo.entry()
+def test_uncertain_published_commit_recovers_after_transient_reload_failure(demo, monkeypatch, caplog):
+    demo.entry(extra='qr:\n  - visibility: [internal]\n    payload: "demo"\n')
     original_commit = application.PersistentStateStore.commit
     original_load = application.PersistentStateStore.load
     committed = False
@@ -668,23 +668,27 @@ def test_uncertain_published_commit_recovers_after_transient_reload_failure(demo
     monkeypatch.setattr(application.PersistentStateStore, "load", load)
     demo.clock.limit = 4
     history_lengths = []
+    checkpoints = []
 
     def inspect(timeout):
         history = demo.sessions[-1] / "global-history.jsonl"
         if history.exists():
             history_lengths.append(len(history.read_text(encoding="utf-8").splitlines()))
+        checkpoint = demo.sessions[-1] / "publication.json"
+        if checkpoint.exists():
+            checkpoints.append(json.loads(checkpoint.read_text(encoding="utf-8")))
 
     demo.clock.on_wait = inspect
     demo.run()
     assert committed and reload_failed
-    assert commit_calls == [0, 0]
-    assert commit_arguments[0][0] is commit_arguments[1][0]
-    assert commit_arguments[0][1] is commit_arguments[1][1]
+    assert commit_calls == [0]
     assert commit_arguments[0] == demo.selected[0]
     assert len(demo.selected) == 1
     assert [identity for identity, *_ in demo.publications] == [(1, 0), (1, 1), (1, 2)]
     assert demo.clock.waits == [1, 2.5, 2.5, 2.5]
     assert history_lengths == [1, 1, 1]
+    assert checkpoints and all(checkpoint["content"]["qr"] == [] for checkpoint in checkpoints)
+    assert "original QR payloads cannot be recovered" in caplog.text
     demo.assert_clean()
 
 

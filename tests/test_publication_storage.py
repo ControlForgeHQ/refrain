@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +13,7 @@ from PIL import Image
 import refrain.publication_storage as publication_storage_module
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.paths import ApplicationPaths
-from refrain.publication_metadata import build_prepared_metadata, finalize_publication_metadata
+from refrain.publication_metadata import finalize_publication_metadata
 from refrain.publication_storage import (
     PUBLICATION_MANIFEST_VERSION,
     PublicationManifest,
@@ -23,7 +23,6 @@ from refrain.publication_storage import (
     serialize_publication_manifest,
     validate_publication_root,
 )
-from refrain.renderer import CompositionVisibility
 
 _OUTPUT = ResolvedOutputSpecification("16:9", (16, 9))
 
@@ -47,58 +46,44 @@ def _paths(root: Path) -> ApplicationPaths:
 
 
 def _metadata(publication_id: str, destination_id: str = "screen") -> dict[str, object]:
-    snapshot = SimpleNamespace(
-        entry_id="entry",
-        quotation_text="A publication-ready quotation.",
-        quotation_identity="A publication-ready quotation.",
-        source=None,
-        attribution=None,
-        font=None,
-        background=None,
-        decoration=None,
-        font_faces={},
-        text_color=None,
-        decoration_color=None,
-        reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
-        display_date=date(2026, 11, 16),
-        actions=(),
-        presentation_style="centered",
-    )
-    prepared = build_prepared_metadata(
-        selection_revision=1,
-        snapshot=snapshot,
-        output_specification=_OUTPUT,
-        stage_index=0,
-        visibility=CompositionVisibility(),
-        reconstruction={
-            "content_entry": {
-                "id": "entry",
-                "quotations": [snapshot.quotation_text],
-                "presentation_style": "centered",
-                "reveal": {"source": "12:00", "attribution": "18:00"},
-            },
-            "presentation_style": "centered",
-            "background": "none",
-            "decoration": "none",
-            "fonts": {
-                "bundle": "lora",
-                "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
-            },
-            "colors": {"text": "black", "decoration": None},
-            "qr": {"enabled": True, "available": False},
-            "font_size_range": {"minimum": 12, "maximum": 32},
-            "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+    visibility = {"quotation": True, "source": False, "attribution": False}
+    presentation = {
+        "style": "centered",
+        "background": "none",
+        "decoration": "none",
+        "fonts": {
+            "bundle": "lora",
+            "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
         },
-    )
+        "colors": {"text": "black", "decoration": None},
+        "font_size_range": {"minimum": 12, "maximum": 32},
+        "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+    }
+    checkpoint = {
+        "schema_version": 1,
+        "content": {
+            "display_date": "2026-11-16",
+            "selection_revision": 1,
+            "reveal_schedule": {"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
+            "reveal_stage": visibility,
+            "quotation": "A publication-ready quotation.",
+            "actions": [],
+            "qr": [],
+        },
+        "presentation": presentation,
+    }
     return finalize_publication_metadata(
-        prepared,
+        checkpoint,
         publication_type="scheduled",
         publication_id=publication_id,
         published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
         destination_id=destination_id,
         output_specification=_OUTPUT,
         audience="internal",
-        reveal_stage_index=0,
+        selection_revision=1,
+        visibility=visibility,
+        effective_presentation=presentation,
+        prepared_output_specification=_OUTPUT,
     )
 
 
@@ -127,8 +112,8 @@ def test_manifest_contract_round_trips_and_rejects_unsafe_or_unknown_values() ->
     assert parse_publication_manifest(encoded) == manifest
     assert json.loads(encoded)["schema_version"] == PUBLICATION_MANIFEST_VERSION
     for field, value in (
-        ("publication_id", "../outside"),
-        ("publication_id", "x" * 241),
+        ("id", "../outside"),
+        ("id", "x" * 241),
         ("image_filename", "../outside.png"),
         ("metadata_filename", "/outside.json"),
         ("image_sha256", "A" * 64),
@@ -160,7 +145,7 @@ def test_initial_publish_replacement_hash_verification_and_destination_isolation
         first_manifest = store.publish("screen", first_image, _metadata("publication-1"), audience="internal")
     first_dataset = store.read_current("screen")
     assert first_dataset.manifest == first_manifest
-    assert first_dataset.metadata["publication_id"] == "publication-1"
+    assert first_dataset.metadata["publication"]["id"] == "publication-1"
     assert hashlib.sha256(first_dataset.image).hexdigest() == first_manifest.image_sha256
     assert (store.root / "screen" / "publication-1.png").is_file()
 
@@ -168,8 +153,9 @@ def test_initial_publish_replacement_hash_verification_and_destination_isolation
         second_manifest = store.publish("screen", second_image, _metadata("publication-2"), audience="internal")
     current = store.read_current("screen")
     assert current.manifest == second_manifest
-    assert current.metadata["publication_id"] == "publication-2"
+    assert current.metadata["publication"]["id"] == "publication-2"
     assert sorted(path.name for path in (store.root / "screen").iterdir()) == [
+        ".refrain-owned",
         "manifest.json",
         "publication-2.json",
         "publication-2.png",
@@ -208,10 +194,8 @@ def test_transient_completed_metadata_can_be_stored_without_scheduled_context(tm
         store.publish("screen", image, metadata)
 
     dataset = store.read_current("screen")
-    assert dataset.metadata["publication_type"] == "transient"
-    assert dataset.metadata["presentation"] is None
-    assert dataset.metadata["reconstruction"] is None
-    assert dataset.metadata["actions"] == []
+    assert dataset.metadata["publication"]["type"] == "transient"
+    assert set(dataset.metadata) == {"schema_version", "publication"}
 
 
 @pytest.mark.parametrize("failure_point", ["image", "metadata", "manifest", "replace"])
@@ -263,7 +247,7 @@ def test_precommit_failures_preserve_the_previous_dataset(
 
 
 def test_replacement_failure_after_os_replace_reports_committed_dataset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
@@ -275,14 +259,16 @@ def test_replacement_failure_after_os_replace_reports_committed_dataset(
         raise OSError("post-replacement interruption")
 
     monkeypatch.setattr(store, "_replace_manifest", replace_then_fail)
-    with _image(2) as image, pytest.raises(PublicationStorageError, match="post-commit") as error:
-        store.publish("screen", image, _metadata("new"), audience="internal")
-    assert error.value.published is True
-    assert store.read_current("screen").manifest.publication_id == "new"
+    with _image(2) as image:
+        manifest = store.publish("screen", image, _metadata("new"), audience="internal")
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "new"
+    assert "committed despite a replacement error" in caplog.text
+    assert "post-replacement interruption" in caplog.text
 
 
 def test_postcommit_cleanup_failure_keeps_the_new_dataset_valid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
@@ -292,16 +278,20 @@ def test_postcommit_cleanup_failure_keeps_the_new_dataset_valid(
         "_cleanup_contents",
         lambda *_args: (_ for _ in ()).throw(PublicationStorageError("cleanup interrupted")),
     )
-    with _image(2) as image, pytest.raises(PublicationStorageError, match="cleanup failed") as error:
-        store.publish("screen", image, _metadata("new"), audience="internal")
-    assert error.value.published is True
-    assert store.read_current("screen").manifest.publication_id == "new"
+    with _image(2) as image:
+        manifest = store.publish("screen", image, _metadata("new"), audience="internal")
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "new"
+    assert "cleanup failed" in caplog.text
+    assert "cleanup interrupted" in caplog.text
+    assert (store.root / "screen" / "old.png").is_file()
 
 
-def test_stale_temporary_contents_are_reconciled_without_touching_unknown_files(tmp_path: Path) -> None:
+def test_stale_and_unknown_contents_in_owned_directory_are_reconciled(tmp_path: Path) -> None:
     root = tmp_path / "publish"
     destination = root / "screen"
     destination.mkdir(parents=True)
+    (destination / ".refrain-owned").touch()
     (destination / "orphan.png").write_bytes(b"interrupted image")
     stale = destination / (".refrain-" + "0" * 32 + ".manifest.tmp")
     stale.write_bytes(b"interrupted manifest")
@@ -312,14 +302,15 @@ def test_stale_temporary_contents_are_reconciled_without_touching_unknown_files(
     assert not stale.exists()
 
     unknown = destination / "user-file.txt"
-    unknown.write_text("preserve")
-    with _image(1) as image, pytest.raises(PublicationStorageError, match="unrecognized"):
+    unknown.write_text("obsolete")
+    with _image(1) as image:
         store.publish("screen", image, _metadata("next"), audience="internal")
-    assert unknown.read_text() == "preserve"
+    assert not unknown.exists()
+    assert store.read_current("screen").manifest.publication_id == "next"
 
 
 @pytest.mark.parametrize("corruption", ["malformed", "missing-image", "bad-hash"])
-def test_invalid_existing_publication_is_reported_without_replacement(tmp_path: Path, corruption: str) -> None:
+def test_owned_invalid_publication_can_be_replaced(tmp_path: Path, corruption: str) -> None:
     store = _store(tmp_path / "publish")
     with _image() as image:
         store.publish("screen", image, _metadata("old"), audience="internal")
@@ -335,12 +326,15 @@ def test_invalid_existing_publication_is_reported_without_replacement(tmp_path: 
         document["image_sha256"] = "0" * 64
         manifest_path.write_bytes(json.dumps(document).encode())
     damaged_manifest = manifest_path.read_bytes()
-
-    with _image(1) as image, pytest.raises(PublicationStorageError):
-        store.publish("screen", image, _metadata("next"), audience="internal")
-    assert manifest_path.read_bytes() == damaged_manifest
     if corruption == "malformed":
         assert original_manifest != damaged_manifest
+    with pytest.raises(PublicationStorageError):
+        store.read_current("screen")
+    with _image(1) as image:
+        manifest = store.publish("screen", image, _metadata("next"), audience="internal")
+    assert store.read_current("screen").manifest == manifest
+    assert manifest.publication_id == "next"
+    assert (store.root / "screen" / ".refrain-owned").read_bytes() == b""
 
 
 def test_manifest_swap_exposes_only_complete_old_or_new_datasets(
@@ -422,18 +416,10 @@ def test_unverifiable_manifest_replacement_retains_old_and_new_files(
     store = _store(tmp_path / "publish")
     with _image(1) as image:
         store.publish("screen", image, _metadata("old"), audience="internal")
-    read_file = publication_storage_module._read_regular_file
-    manifest_reads = 0
-
-    def fail_commit_verification(path: Path, *, limit: int | None = None) -> bytes:
-        nonlocal manifest_reads
-        if path.name == "manifest.json":
-            manifest_reads += 1
-            if manifest_reads == 2:
-                raise PublicationStorageError("injected manifest read failure")
-        return read_file(path, limit=limit)
-
-    monkeypatch.setattr(publication_storage_module, "_read_regular_file", fail_commit_verification)
+    read_current = store.read_current
+    monkeypatch.setattr(
+        store, "read_current", lambda *_args: (_ for _ in ()).throw(PublicationStorageError("verification unavailable"))
+    )
     replace = store._replace_manifest
 
     def replace_then_fail(temporary: Path, manifest: Path) -> None:
@@ -447,7 +433,7 @@ def test_unverifiable_manifest_replacement_retains_old_and_new_files(
     assert error.value.published is True
     assert (store.root / "screen" / "old.png").is_file()
     assert (store.root / "screen" / "new.png").is_file()
-    monkeypatch.setattr(publication_storage_module, "_read_regular_file", read_file)
+    monkeypatch.setattr(store, "read_current", read_current)
     assert store.read_current("screen").manifest.publication_id == "new"
 
 
@@ -548,28 +534,19 @@ def test_custom_root_cannot_be_nested_under_standard_publication_storage(tmp_pat
     assert not paths.publish_directory.exists()
 
 
-def test_cleanup_validates_all_candidates_before_deleting_any(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_rejects_invalid_marker_before_deleting_any(tmp_path: Path) -> None:
     root = tmp_path / "publish"
     destination = root / "screen"
     destination.mkdir(parents=True)
     obsolete = destination / "obsolete.png"
-    obsolete.write_bytes(b"keep until all candidates validate")
-    unexpected = destination / "notes.txt"
-    unexpected.write_text("unowned", encoding="utf-8")
+    obsolete.write_bytes(b"keep")
+    marker = destination / ".refrain-owned"
+    marker.write_bytes(b"invalid")
     store = _store(root)
-    original_iterdir = Path.iterdir
-
-    def ordered_iterdir(path: Path):
-        if path == destination:
-            return iter((obsolete, unexpected))
-        return original_iterdir(path)
-
-    monkeypatch.setattr(Path, "iterdir", ordered_iterdir)
-
-    with pytest.raises(PublicationStorageError, match="unrecognized"):
+    with pytest.raises(PublicationStorageError, match="ownership marker"):
         store._cleanup_contents(destination, {"manifest.json"})
-
-    assert obsolete.read_bytes() == b"keep until all candidates validate"
+    assert obsolete.read_bytes() == b"keep"
+    assert marker.read_bytes() == b"invalid"
 
 
 def test_cleanup_rejects_a_destination_outside_its_publication_root(tmp_path: Path) -> None:

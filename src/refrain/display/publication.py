@@ -36,22 +36,40 @@ class FilesystemPublicationDisplayBackend:
         image: Image.Image,
         prepared_metadata: dict[str, object],
     ) -> None:
-        """Finalize cached preparation data independently for this destination."""
-        presentation = prepared_metadata.get("presentation")
-        if not isinstance(presentation, dict):
-            raise DisplayBackendUpdateError("prepared publication metadata has no presentation")
+        """Finalize a checkpoint and its cached image associations for this destination."""
         try:
+            checkpoint = prepared_metadata["checkpoint"]
+            rendered_qr = prepared_metadata["rendered_qr"]
+            if rendered_qr is not None:
+                declarations = checkpoint["content"]["qr"]
+                if rendered_qr not in declarations:
+                    raise ValueError("rendered QR declaration does not match the checkpoint")
+                rendered_qr = next(
+                    (
+                        declaration
+                        for declaration in declarations
+                        if declaration["payload"] == rendered_qr["payload"]
+                        and declaration["visibility"] == [destination.audience]
+                    ),
+                    None,
+                )
+                if rendered_qr is None:
+                    raise ValueError("rendered QR payload does not match the destination audience")
             metadata = finalize_publication_metadata(
-                prepared_metadata,
+                checkpoint,
                 publication_type="scheduled",
                 publication_id=uuid.uuid4().hex,
                 published_at=datetime.now(timezone.utc),
                 destination_id=destination.identifier,
                 output_specification=destination.output_specification,
                 audience=destination.audience,
-                reveal_stage_index=presentation.get("reveal_stage_index"),
+                selection_revision=prepared_metadata["selection_revision"],
+                visibility=prepared_metadata["visibility"],
+                effective_presentation=prepared_metadata["effective_presentation"],
+                rendered_qr=rendered_qr,
+                prepared_output_specification=prepared_metadata["output_specification"],
             )
-        except (TypeError, ValueError) as error:
+        except (KeyError, TypeError, ValueError) as error:
             raise DisplayBackendUpdateError(f"cannot finalize scheduled publication: {error}") from error
         self._commit(destination, image, metadata, audience=destination.audience)
 
@@ -85,10 +103,16 @@ class FilesystemPublicationDisplayBackend:
                     current = self._store.read_current(destination.identifier)
                 except PublicationStorageError:
                     current = None
-                if current is not None and current.manifest.publication_id == metadata["publication_id"]:
+                publication = metadata.get("publication")
+                if (
+                    current is not None
+                    and isinstance(publication, dict)
+                    and current.manifest.publication_id == publication.get("id")
+                    and current.metadata == metadata
+                ):
                     _LOGGER.warning(
                         "Publication %s committed but cleanup was incomplete: %s",
-                        metadata["publication_id"],
+                        publication["id"],
                         error,
                     )
                     return

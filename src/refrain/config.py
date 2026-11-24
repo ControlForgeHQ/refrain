@@ -18,6 +18,7 @@ from PIL import Image
 
 from ._yaml import load_yaml, yaml_error_location
 from .assets import _validate_source_image, parse_font_faces, valid_identifier
+from .content import validate_qr_payload
 from .geometry import (
     DEFAULT_PRESENTATION_INSETS,
     SUPPORTED_PRESENTATION_ASPECTS,
@@ -215,6 +216,10 @@ class PreparedImageVariantKey:
 
     output_specification: ResolvedOutputSpecification
     presentation: DestinationPresentation
+    qr_payload: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        validate_qr_payload(self.qr_payload)
 
 
 @dataclass(frozen=True)
@@ -236,6 +241,13 @@ class DisplayOutputConfiguration:
         if self.presentation.is_empty:
             return self.output_specification
         return PreparedImageVariantKey(self.output_specification, self.presentation)
+
+    def prepared_image_key_for_qr(self, payload: str | None) -> ResolvedOutputSpecification | PreparedImageVariantKey:
+        """Return the pixel-compatibility key for a resolved audience payload."""
+        validate_qr_payload(payload)
+        if payload is None or self.presentation.qr_enabled is False:
+            return self.prepared_image_key
+        return PreparedImageVariantKey(self.output_specification, self.presentation, payload)
 
 
 @dataclass(frozen=True)
@@ -275,6 +287,9 @@ class ApplicationConfiguration:
     storage: StorageConfiguration = field(default_factory=StorageConfiguration)
     information_view_duration: int = 60
     qr_enabled: bool = True
+    qr_defaults: Mapping[str, str | None] = field(
+        default_factory=lambda: MappingProxyType({"external": None, "internal": None})
+    )
     backgrounds: Mapping[str, BackgroundResource] = field(default_factory=lambda: MappingProxyType({}))
     default_backgrounds: tuple[str, ...] = ("none",)
     decorations: Mapping[str, DecorationResource] = field(default_factory=lambda: MappingProxyType({}))
@@ -684,7 +699,7 @@ def _parse_presentation(
     data: dict[str, object],
     report: Callable[..., None],
     aspect_ratios: tuple[str, ...],
-) -> tuple[PresentationInsets, int, bool]:
+) -> tuple[PresentationInsets, int, Mapping[str, str | None]]:
     presentation = _mapping(data.get("presentation", {}), "presentation", report)
     _known_fields(presentation, {"insets", "information_view", "qr"}, "presentation", report)
 
@@ -711,13 +726,19 @@ def _parse_presentation(
         )
         duration = 60
 
-    qr = _mapping(presentation.get("qr", {}), "presentation.qr", report)
-    _known_fields(qr, {"enabled"}, "presentation.qr", report)
-    qr_enabled = qr.get("enabled", True)
-    if "enabled" in qr and type(qr_enabled) is not bool:
-        report("presentation.qr.enabled", "must be a YAML boolean; QR generation remains enabled", logging.WARNING)
-        qr_enabled = True
-    return insets, duration, qr_enabled
+    qr = presentation.get("qr", {})
+    if not isinstance(qr, dict):
+        report("presentation.qr", "must be a mapping; using null for both audiences")
+        qr = {}
+    _known_fields(qr, {"external", "internal"}, "presentation.qr", report)
+    qr_defaults: dict[str, str | None] = {}
+    for audience in ("external", "internal"):
+        try:
+            qr_defaults[audience] = validate_qr_payload(qr.get(audience))
+        except ValueError as error:
+            report(f"presentation.qr.{audience}", f"{error}; using null")
+            qr_defaults[audience] = None
+    return insets, duration, MappingProxyType(qr_defaults)
 
 
 def _parse_destination_overrides(
@@ -1160,7 +1181,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
     )
     day_start, reveal = _parse_scheduling(data, report)
     content_directory, storage = _parse_storage(data, file, report)
-    presentation_insets, information_view_duration, qr_enabled = _parse_presentation(data, report, configured_aspects)
+    presentation_insets, information_view_duration, qr_defaults = _parse_presentation(data, report, configured_aspects)
 
     package_root = files("refrain")
     fonts_data = _mapping(data.get("fonts", {}), "fonts", report)
@@ -1211,7 +1232,7 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         min_font_size=min_font_size,
         max_font_size=max_font_size,
         information_view_duration=information_view_duration,
-        qr_enabled=qr_enabled,
+        qr_defaults=qr_defaults,
         backgrounds=MappingProxyType(background_registry),
         default_backgrounds=default_backgrounds,
         decorations=MappingProxyType(decoration_registry),

@@ -1043,7 +1043,7 @@ def test_loads_documented_defaults_with_explicit_required_settings(tmp_path: Pat
     assert config.max_font_size == 100
     assert config.information_view_duration == 60
     assert config.font_faces == {}
-    assert config.qr_enabled is True
+    assert config.qr_defaults == {"external": None, "internal": None}
     assert config.default_backgrounds == config.default_decorations == ("none",)
     assert config.default_text_colors == config.default_decoration_colors == ("black",)
 
@@ -1094,7 +1094,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
             "presentation": {
                 "insets": {"left": 384, "right": 384, "top": 324, "bottom": 324},
                 "information_view": {"duration": 30},
-                "qr": {"enabled": False},
+                "qr": {"external": "https://example.test/external", "internal": None},
             },
             "palette": {"black": "#101010", "sage": "#8A9B79"},
             "fonts": {
@@ -1134,7 +1134,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
     assert config.content_directory == tmp_path / "entries"
     assert config.storage.state == tmp_path / "state"
     assert config.information_view_duration == 30
-    assert config.qr_enabled is False
+    assert config.qr_defaults == {"external": "https://example.test/external", "internal": None}
     assert config.display_backends[1].service_enabled is True
 
 
@@ -1215,6 +1215,7 @@ def test_destination_overrides_accept_registered_font_and_builtin_and_custom_col
             }
         ],
         palette={"custom-ink": "#123456"},
+        presentation={"qr": {"internal": "https://example.test/quotation"}},
     )
 
     configuration = load_application_config(write_config(tmp_path / "config.yaml", data))
@@ -1380,17 +1381,19 @@ def test_valid_destination_overrides_reach_image_preparation(tmp_path: Path) -> 
         configuration.required_prepared_image_keys,
         chooser=Random(0),
         selection_revision=1,
+        qr_declaration={"visibility": ["internal"], "payload": "https://example.test/quotation"},
         on_metadata=metadata.__setitem__,
     )
 
     try:
         key = configuration.display_backends[0].outputs[0].prepared_image_key
-        reconstruction = metadata[key][0]["reconstruction"]
-        assert reconstruction["background"] == "none"
-        assert reconstruction["decoration"] == "none"
-        assert reconstruction["fonts"]["bundle"] == "registered-outside-pool"
-        assert reconstruction["colors"]["text"] == "custom-ink"
-        assert reconstruction["qr"]["enabled"] is False
+        association = metadata[key][0]
+        effective = association["effective_presentation"]
+        assert effective["background"] == "none"
+        assert effective["decoration"] == "none"
+        assert effective["fonts"]["bundle"] == "registered-outside-pool"
+        assert effective["colors"]["text"] == "custom-ink"
+        assert association["rendered_qr"] is None
     finally:
         for images in variants.values():
             for image in images:
@@ -1626,7 +1629,8 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
     assert config.min_font_size == 56
     assert config.max_font_size == 200
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
-    assert config.qr_enabled is True
+    assert set(config.qr_defaults) == {"external", "internal"}
+    assert all(value is None or isinstance(value, str) for value in config.qr_defaults.values())
     assert config.storage.state is config.storage.artifacts is None
     assert config.storage.publish is None
 
