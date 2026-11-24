@@ -219,9 +219,12 @@ def test_application_finalizes_each_destination_and_backend_preserves_transient_
         coordinator.close()
 
 
-def test_metadata_finalization_failure_isolated_from_other_and_image_only_destinations(tmp_path) -> None:
+def test_metadata_finalization_failure_is_recoverable_and_isolated_from_other_destinations(
+    tmp_path, monkeypatch
+) -> None:
     from refrain.display.publication import FilesystemPublicationDisplayBackend
 
+    monkeypatch.setattr("refrain.display.coordinator._MAX_RETRY_ATTEMPTS", 1)
     publish_configuration = DisplayBackendConfiguration(
         "publish",
         outputs=(
@@ -249,7 +252,6 @@ def test_metadata_finalization_failure_isolated_from_other_and_image_only_destin
     coordinator = DisplayPublicationCoordinator(
         (publish_configuration, window_configuration),
         backend_factory,
-        retry=False,
         publication_finalizer=_finalize_publication_event,
     )
     prepared = _prepared_metadata()
@@ -271,7 +273,21 @@ def test_metadata_finalization_failure_isolated_from_other_and_image_only_destin
         assert [action["type"] for action in internal.metadata["content"]["actions"]] == ["internal"]
         with pytest.raises(PublicationStorageError):
             store.read_current("web-external")
-        assert direct_pixels == [(9, 0, 0)]
+        failed_external = coordinator._states["web-external"]
+        assert failed_external.recoverable_failure
+        assert failed_external.retry_attempts == 1
+
+        valid_identity = (6, 1)
+        coordinator.publish_with_metadata(valid_identity, _images(_WIDE, value=10), {_WIDE: _prepared_metadata()})
+        assert coordinator.wait_for_publication(valid_identity, timeout=2)
+        assert coordinator.acknowledgements == {
+            "web-external": valid_identity,
+            "web-internal": valid_identity,
+            "window": valid_identity,
+        }
+        assert store.read_current("web-external").metadata["content"]["quotation"] == "A publication-ready quotation."
+        assert direct_pixels == [(9, 0, 0), (10, 0, 0)]
+        assert coordinator._states["web-external"].retry_attempts == 0
     finally:
         coordinator.close()
 

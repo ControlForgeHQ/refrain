@@ -401,7 +401,7 @@ def _finalize_publication_event(
             prepared_output_specification=prepared_metadata["output_specification"],
         )
     except (KeyError, TypeError, ValueError) as error:
-        raise DisplayBackendUpdateError(f"cannot finalize publication metadata: {error}", recoverable=False) from error
+        raise DisplayBackendUpdateError(f"cannot finalize publication metadata: {error}") from error
 
 
 def _publish_information_view(
