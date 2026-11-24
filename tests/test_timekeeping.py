@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from zoneinfo import ZoneInfo
@@ -113,6 +113,16 @@ def test_reveal_deadline_uses_operating_system_local_timezone_and_returns_utc() 
     deadline = next_scheduling_deadline(datetime(2026, 10, 26, 10, 0, tzinfo=zone), make_configuration(), state)
 
     assert deadline == datetime(2026, 10, 26, 22, 0, tzinfo=timezone.utc)
+
+
+def test_changed_local_timezone_keeps_frozen_deadline(set_local_timezone) -> None:
+    state = make_state()
+    set_local_timezone(timezone(timedelta(hours=5, minutes=45)))
+    now = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
+    assert next_scheduling_deadline(now, make_configuration(), state) == datetime(
+        2026, 10, 26, 16, 0, tzinfo=timezone.utc
+    )
+    assert evaluate_scheduling(now, make_configuration(), state).required_reveal_stage == 0
 
 
 def test_next_deadline_resolves_day_start_across_dst_gap_and_fold() -> None:

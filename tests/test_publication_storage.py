@@ -96,7 +96,7 @@ def _metadata(publication_id: str, destination_id: str = "screen") -> dict[str, 
         published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
         destination_id=destination_id,
         output_specification=_OUTPUT,
-        audience="private",
+        audience="internal",
         reveal_stage_index=0,
     )
 
@@ -149,14 +149,14 @@ def test_manifest_contract_round_trips_and_rejects_unsafe_or_unknown_values() ->
 def test_invalid_destination_identifiers_are_rejected_before_path_creation(tmp_path: Path, destination_id: str) -> None:
     store = _store(tmp_path / "publish")
     with pytest.raises(PublicationStorageError, match="destination_id"):
-        store.publish(destination_id, _image(), _metadata("pub-1"), audience="private")
+        store.publish(destination_id, _image(), _metadata("pub-1"), audience="internal")
     assert not (tmp_path / "publish").exists()
 
 
 def test_initial_publish_replacement_hash_verification_and_destination_isolation(tmp_path: Path) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as first_image:
-        first_manifest = store.publish("screen", first_image, _metadata("publication-1"), audience="private")
+        first_manifest = store.publish("screen", first_image, _metadata("publication-1"), audience="internal")
     first_dataset = store.read_current("screen")
     assert first_dataset.manifest == first_manifest
     assert first_dataset.metadata["publication_id"] == "publication-1"
@@ -164,7 +164,7 @@ def test_initial_publish_replacement_hash_verification_and_destination_isolation
     assert (store.root / "screen" / "publication-1.png").is_file()
 
     with _image(2) as second_image:
-        second_manifest = store.publish("screen", second_image, _metadata("publication-2"), audience="private")
+        second_manifest = store.publish("screen", second_image, _metadata("publication-2"), audience="internal")
     current = store.read_current("screen")
     assert current.manifest == second_manifest
     assert current.metadata["publication_id"] == "publication-2"
@@ -175,7 +175,7 @@ def test_initial_publish_replacement_hash_verification_and_destination_isolation
     ]
 
     with _image(3) as other_image:
-        store.publish("other", other_image, _metadata("publication-3", "other"), audience="private")
+        store.publish("other", other_image, _metadata("publication-3", "other"), audience="internal")
     assert store.read_current("screen").manifest.publication_id == "publication-2"
     assert store.read_current("other").manifest.publication_id == "publication-3"
 
@@ -183,13 +183,13 @@ def test_initial_publish_replacement_hash_verification_and_destination_isolation
 def test_publication_rejects_metadata_association_and_image_dimension_mismatches(tmp_path: Path) -> None:
     store = _store(tmp_path / "publish")
     with pytest.raises(PublicationStorageError, match="destination"):
-        store.publish("screen", _image(), _metadata("pub-1", "other"), audience="private")
+        store.publish("screen", _image(), _metadata("pub-1", "other"), audience="internal")
     with pytest.raises(PublicationStorageError, match="dimensions"):
         store.publish(
             "screen",
             Image.new("RGB", (9, 16)),
             _metadata("pub-1"),
-            audience="private",
+            audience="internal",
         )
     assert not store.root.exists()
 
@@ -219,7 +219,7 @@ def test_precommit_failures_preserve_the_previous_dataset(
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     previous_manifest = (store.root / "screen" / "manifest.json").read_bytes()
 
     if failure_point == "image":
@@ -253,7 +253,7 @@ def test_precommit_failures_preserve_the_previous_dataset(
         monkeypatch.setattr(store, "_replace_manifest", lambda *_args: (_ for _ in ()).throw(OSError("replace failed")))
 
     with _image(2) as image, pytest.raises(PublicationStorageError, match="before manifest commit") as error:
-        store.publish("screen", image, _metadata("new"), audience="private")
+        store.publish("screen", image, _metadata("new"), audience="internal")
     assert error.value.published is False
     assert (store.root / "screen" / "manifest.json").read_bytes() == previous_manifest
     assert store.read_current("screen").manifest.publication_id == "old"
@@ -266,7 +266,7 @@ def test_replacement_failure_after_os_replace_reports_committed_dataset(
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     replace = store._replace_manifest
 
     def replace_then_fail(temporary: Path, manifest: Path) -> None:
@@ -275,7 +275,7 @@ def test_replacement_failure_after_os_replace_reports_committed_dataset(
 
     monkeypatch.setattr(store, "_replace_manifest", replace_then_fail)
     with _image(2) as image, pytest.raises(PublicationStorageError, match="post-commit") as error:
-        store.publish("screen", image, _metadata("new"), audience="private")
+        store.publish("screen", image, _metadata("new"), audience="internal")
     assert error.value.published is True
     assert store.read_current("screen").manifest.publication_id == "new"
 
@@ -285,14 +285,14 @@ def test_postcommit_cleanup_failure_keeps_the_new_dataset_valid(
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     monkeypatch.setattr(
         store,
         "_cleanup_contents",
         lambda *_args: (_ for _ in ()).throw(PublicationStorageError("cleanup interrupted")),
     )
     with _image(2) as image, pytest.raises(PublicationStorageError, match="cleanup failed") as error:
-        store.publish("screen", image, _metadata("new"), audience="private")
+        store.publish("screen", image, _metadata("new"), audience="internal")
     assert error.value.published is True
     assert store.read_current("screen").manifest.publication_id == "new"
 
@@ -306,14 +306,14 @@ def test_stale_temporary_contents_are_reconciled_without_touching_unknown_files(
     stale.write_bytes(b"interrupted manifest")
     store = _store(root)
     with _image() as image:
-        store.publish("screen", image, _metadata("current"), audience="private")
+        store.publish("screen", image, _metadata("current"), audience="internal")
     assert not (destination / "orphan.png").exists()
     assert not stale.exists()
 
     unknown = destination / "user-file.txt"
     unknown.write_text("preserve")
     with _image(1) as image, pytest.raises(PublicationStorageError, match="unrecognized"):
-        store.publish("screen", image, _metadata("next"), audience="private")
+        store.publish("screen", image, _metadata("next"), audience="internal")
     assert unknown.read_text() == "preserve"
 
 
@@ -321,7 +321,7 @@ def test_stale_temporary_contents_are_reconciled_without_touching_unknown_files(
 def test_invalid_existing_publication_is_reported_without_replacement(tmp_path: Path, corruption: str) -> None:
     store = _store(tmp_path / "publish")
     with _image() as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     manifest_path = store.root / "screen" / "manifest.json"
     original_manifest = manifest_path.read_bytes()
     manifest = parse_publication_manifest(original_manifest)
@@ -336,7 +336,7 @@ def test_invalid_existing_publication_is_reported_without_replacement(tmp_path: 
     damaged_manifest = manifest_path.read_bytes()
 
     with _image(1) as image, pytest.raises(PublicationStorageError):
-        store.publish("screen", image, _metadata("next"), audience="private")
+        store.publish("screen", image, _metadata("next"), audience="internal")
     assert manifest_path.read_bytes() == damaged_manifest
     if corruption == "malformed":
         assert original_manifest != damaged_manifest
@@ -347,7 +347,7 @@ def test_manifest_swap_exposes_only_complete_old_or_new_datasets(
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     observations = []
     replace = store._replace_manifest
 
@@ -360,7 +360,7 @@ def test_manifest_swap_exposes_only_complete_old_or_new_datasets(
 
     monkeypatch.setattr(store, "_replace_manifest", inspect_commit)
     with _image(2) as image:
-        store.publish("screen", image, _metadata("new"), audience="private")
+        store.publish("screen", image, _metadata("new"), audience="internal")
     assert observations == ["old", "new"]
 
 
@@ -369,7 +369,7 @@ def test_reader_retries_when_cleanup_races_with_manifest_replacement(
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     read_dataset = store._read_dataset
     replaced = False
 
@@ -378,7 +378,7 @@ def test_reader_retries_when_cleanup_races_with_manifest_replacement(
         if manifest.publication_id == "old" and not replaced:
             replaced = True
             with _image(2) as image:
-                _store(store.root).publish("screen", image, _metadata("new"), audience="private")
+                _store(store.root).publish("screen", image, _metadata("new"), audience="internal")
         return read_dataset(destination, manifest)
 
     monkeypatch.setattr(store, "_read_dataset", replace_before_read)
@@ -405,7 +405,7 @@ def test_reader_retries_when_initial_manifest_appears_after_first_check(
         if dataset is None and not appeared:
             appeared = True
             with _image() as image:
-                _store(root).publish("screen", image, _metadata("initial"), audience="private")
+                _store(root).publish("screen", image, _metadata("initial"), audience="internal")
         return dataset
 
     monkeypatch.setattr(store, "_load_current", publish_after_missing_manifest)
@@ -420,7 +420,7 @@ def test_unverifiable_manifest_replacement_retains_old_and_new_files(
 ) -> None:
     store = _store(tmp_path / "publish")
     with _image(1) as image:
-        store.publish("screen", image, _metadata("old"), audience="private")
+        store.publish("screen", image, _metadata("old"), audience="internal")
     read_file = publication_storage_module._read_regular_file
     manifest_reads = 0
 
@@ -441,7 +441,7 @@ def test_unverifiable_manifest_replacement_retains_old_and_new_files(
 
     monkeypatch.setattr(store, "_replace_manifest", replace_then_fail)
     with _image(2) as image, pytest.raises(PublicationStorageError, match="outcome is uncertain") as error:
-        store.publish("screen", image, _metadata("new"), audience="private")
+        store.publish("screen", image, _metadata("new"), audience="internal")
 
     assert error.value.published is True
     assert (store.root / "screen" / "old.png").is_file()
@@ -468,7 +468,7 @@ def test_custom_root_cannot_be_inside_a_standard_purge_tree(tmp_path: Path) -> N
     store = PublicationStore(custom_root, application_paths=paths)
 
     with _image() as image, pytest.raises(PublicationStorageError, match="purge-owned directory"):
-        store.publish("screen", image, _metadata("publication-1"), audience="private")
+        store.publish("screen", image, _metadata("publication-1"), audience="internal")
 
     assert not custom_root.exists()
 
@@ -480,7 +480,7 @@ def test_standard_and_external_custom_roots_are_accepted(tmp_path: Path, use_sta
     store = PublicationStore(root, application_paths=paths)
 
     with _image() as image:
-        store.publish("screen", image, _metadata("publication-1"), audience="private")
+        store.publish("screen", image, _metadata("publication-1"), audience="internal")
 
     assert store.read_current("screen").manifest.publication_id == "publication-1"
 
@@ -491,7 +491,7 @@ def test_custom_root_cannot_be_nested_under_standard_publication_storage(tmp_pat
     store = PublicationStore(custom_root, application_paths=paths)
 
     with _image() as image, pytest.raises(PublicationStorageError, match="purge-owned directory"):
-        store.publish("screen", image, _metadata("publication-1"), audience="private")
+        store.publish("screen", image, _metadata("publication-1"), audience="internal")
 
     assert not paths.publish_directory.exists()
 
@@ -580,14 +580,14 @@ def test_publication_root_and_destination_symlinks_are_rejected(tmp_path: Path, 
     linked_root = tmp_path / "linked-root"
     symlink_or_skip(linked_root, outside, directory=True)
     with pytest.raises(PublicationStorageError, match="link"):
-        _store(linked_root).publish("screen", _image(), _metadata("pub"), audience="private")
+        _store(linked_root).publish("screen", _image(), _metadata("pub"), audience="internal")
     assert sentinel.read_text() == "outside"
 
     root = tmp_path / "publish"
     root.mkdir()
     symlink_or_skip(root / "screen", outside, directory=True)
     with pytest.raises(PublicationStorageError, match="link"):
-        _store(root).publish("screen", _image(), _metadata("pub"), audience="private")
+        _store(root).publish("screen", _image(), _metadata("pub"), audience="internal")
     assert sentinel.read_text() == "outside"
 
 
@@ -606,7 +606,7 @@ def test_manifest_file_symlink_is_rejected_without_following_target(tmp_path: Pa
 def test_referenced_file_symlink_is_rejected_without_following_target(tmp_path: Path, symlink_or_skip) -> None:
     store = _store(tmp_path / "publish")
     with _image() as image:
-        store.publish("screen", image, _metadata("pub"), audience="private")
+        store.publish("screen", image, _metadata("pub"), audience="internal")
     dataset_path = store.root / "screen" / "pub.png"
     outside = tmp_path / "outside.png"
     outside.write_bytes(dataset_path.read_bytes())
@@ -621,5 +621,5 @@ def test_referenced_file_symlink_is_rejected_without_following_target(tmp_path: 
 def test_destination_directory_has_exactly_the_validated_identifier(tmp_path: Path) -> None:
     store = _store(tmp_path / "publish")
     with _image() as image:
-        store.publish("screen_1-2", image, _metadata("pub-1", "screen_1-2"), audience="private")
+        store.publish("screen_1-2", image, _metadata("pub-1", "screen_1-2"), audience="internal")
     assert (store.root / "screen_1-2" / "manifest.json").is_file()

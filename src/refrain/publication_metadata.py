@@ -118,8 +118,8 @@ def validate_publication_metadata(document: object, *, stage: str, audience: str
     """Validate the shared metadata shape at preparation or completed-publication stage."""
     if not isinstance(stage, str) or stage not in {"preparation", "completed"}:
         raise ValueError("stage must be 'preparation' or 'completed'")
-    if audience is not None and (not isinstance(audience, str) or audience not in {"public", "private"}):
-        raise ValueError("audience must be 'public' or 'private'")
+    if audience is not None and (not isinstance(audience, str) or audience not in {"external", "internal"}):
+        raise ValueError("audience must be 'external' or 'internal'")
     if not isinstance(document, dict) or set(document) != _TOP_LEVEL_FIELDS:
         raise PublicationMetadataError("metadata must contain every supported publication field")
     _validate_utf8_strings(document)
@@ -366,7 +366,7 @@ def validate_publication_metadata(document: object, *, stage: str, audience: str
         if (
             not isinstance(visibility, list)
             or not visibility
-            or any(not isinstance(value, str) or value not in {"public", "private"} for value in visibility)
+            or any(not isinstance(value, str) or value not in {"external", "internal"} for value in visibility)
             or len(set(visibility)) != len(visibility)
             or not isinstance(payload, str)
             or len(payload.encode("utf-8")) > 10_240
@@ -419,8 +419,8 @@ def finalize_publication_metadata(
     else:
         if prepared_metadata is None:
             raise PublicationMetadataError("scheduled publication requires prepared metadata")
-        if not isinstance(audience, str) or audience not in {"public", "private"}:
-            raise PublicationMetadataError("scheduled publication requires a public or private audience")
+        if not isinstance(audience, str) or audience not in {"external", "internal"}:
+            raise PublicationMetadataError("scheduled publication requires an external or internal audience")
         validate_publication_metadata(prepared_metadata, stage="preparation")
         prepared_output = prepared_metadata["output_specification"]
         if prepared_output != output:
@@ -453,7 +453,7 @@ def serialize_publication_metadata(
 ) -> str:
     """Serialize validated publication metadata as deterministic UTF-8 JSON text."""
     if stage == "completed" and isinstance(document, dict) and document.get("publication_type") == "scheduled":
-        if not isinstance(audience, str) or audience not in {"public", "private"}:
+        if not isinstance(audience, str) or audience not in {"external", "internal"}:
             raise PublicationMetadataError("scheduled publication serialization requires a destination audience")
     validate_publication_metadata(document, stage=stage, audience=audience)
     try:

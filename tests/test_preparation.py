@@ -69,7 +69,7 @@ def test_preparation_metadata_records_resolved_font_faces_and_publication_nulls(
     )
     snapshot = replace(
         snapshot,
-        actions=(ContentAction("play", ("private",), "opaque payload"),),
+        actions=(ContentAction("play", ("internal",), "opaque payload"),),
         text_color=("missing-palette-color",),
         background="missing-background",
         decoration="missing-decoration",
@@ -101,7 +101,7 @@ def test_preparation_metadata_records_resolved_font_faces_and_publication_nulls(
         }
         assert prepared["presentation"]["reveal_stage_index"] == 1
         assert prepared["presentation"]["reveal_stage"]["source"] is True
-        assert prepared["actions"] == [{"type": "play", "visibility": ["private"], "payload": "opaque payload"}]
+        assert prepared["actions"] == [{"type": "play", "visibility": ["internal"], "payload": "opaque payload"}]
         assert "actions" not in prepared["reconstruction"]["content_entry"]
         assert prepared["reconstruction"]["background"] == "none"
         assert prepared["reconstruction"]["decoration"] == "none"
@@ -175,7 +175,7 @@ def _configuration(
         display_backends=(
             DisplayBackendConfiguration(
                 "window",
-                outputs=(DisplayOutputConfiguration("window", output_specification, audience="private"),),
+                outputs=(DisplayOutputConfiguration("window", output_specification, audience="internal"),),
             ),
         ),
         day_start=time(6),
@@ -1616,7 +1616,7 @@ def test_failed_decoration_discards_all_artwork_and_recovers_effective_presentat
                 published_at=datetime(2026, 10, 26, tzinfo=timezone.utc),
                 destination_id="window",
                 output_specification=specification,
-                audience="private",
+                audience="internal",
                 reveal_stage_index=index,
             )
             assert completed["reconstruction"] == effective

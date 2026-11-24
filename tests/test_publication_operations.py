@@ -36,8 +36,8 @@ def _prepared_metadata() -> dict[str, object]:
         reveal_schedule={"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
         display_date=date(2026, 11, 16),
         actions=(
-            SimpleNamespace(type="public-action", visibility=("public",), payload="public"),
-            SimpleNamespace(type="private-action", visibility=("private",), payload="private"),
+            SimpleNamespace(type="external-action", visibility=("external",), payload="external"),
+            SimpleNamespace(type="internal-action", visibility=("internal",), payload="internal"),
         ),
         presentation_style="centered",
     )
@@ -77,7 +77,7 @@ def _configuration(
     return DisplayBackendConfiguration(
         backend_type,
         outputs=tuple(
-            DisplayOutputConfiguration(identifier, specification, audience="private")
+            DisplayOutputConfiguration(identifier, specification, audience="internal")
             for identifier, specification in outputs
         ),
     )
@@ -172,8 +172,8 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
     from refrain.display.publication import FilesystemPublicationDisplayBackend
 
     outputs = (
-        DisplayOutputConfiguration("web-public", _WIDE, audience="public"),
-        DisplayOutputConfiguration("web-private", _WIDE, audience="private"),
+        DisplayOutputConfiguration("web-external", _WIDE, audience="external"),
+        DisplayOutputConfiguration("web-internal", _WIDE, audience="internal"),
     )
     configuration = DisplayBackendConfiguration("publish", outputs=outputs)
     store = PublicationStore(tmp_path / "publications")
@@ -187,24 +187,24 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
     try:
         coordinator.publish_with_metadata((4, 2), {_WIDE: image}, {_WIDE: prepared})
         assert coordinator.wait_for_publication((4, 2), timeout=2)
-        public = store.read_current("web-public")
-        private = store.read_current("web-private")
-        assert public.metadata["publication_type"] == private.metadata["publication_type"] == "scheduled"
-        assert public.manifest.publication_id != private.manifest.publication_id
-        assert public.metadata["destination_id"] == "web-public"
-        assert private.metadata["destination_id"] == "web-private"
-        assert [action["type"] for action in public.metadata["actions"]] == ["public-action"]
-        assert [action["type"] for action in private.metadata["actions"]] == ["private-action"]
+        external = store.read_current("web-external")
+        internal = store.read_current("web-internal")
+        assert external.metadata["publication_type"] == internal.metadata["publication_type"] == "scheduled"
+        assert external.manifest.publication_id != internal.manifest.publication_id
+        assert external.metadata["destination_id"] == "web-external"
+        assert internal.metadata["destination_id"] == "web-internal"
+        assert [action["type"] for action in external.metadata["actions"]] == ["external-action"]
+        assert [action["type"] for action in internal.metadata["actions"]] == ["internal-action"]
         assert prepared["publication_id"] is None
 
         transient_image = Image.new("RGB", _WIDE.requested_output_size, (200, 100, 50))
         operation = coordinator.publish_transient(
             "@all",
-            {"web-public": _WIDE, "web-private": _WIDE},
+            {"web-external": _WIDE, "web-internal": _WIDE},
             {_WIDE: transient_image},
         )
         assert operation.wait(2).status is PublicationStatus.SUCCEEDED
-        transient = store.read_current("web-public")
+        transient = store.read_current("web-external")
         assert transient.metadata["publication_type"] == "transient"
         assert transient.metadata["presentation"] is None
         assert transient.metadata["reconstruction"] is None
@@ -212,7 +212,7 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         with Image.open(BytesIO(transient.image)) as published_image:
             assert published_image.getpixel((0, 0)) == (200, 100, 50)
 
-        assert coordinator.acknowledgements == {"web-public": (4, 2), "web-private": (4, 2)}
+        assert coordinator.acknowledgements == {"web-external": (4, 2), "web-internal": (4, 2)}
         refresh_image = Image.new("RGB", _WIDE.requested_output_size, (12, 34, 56))
         refresh = coordinator.force_scheduled_publication_with_metadata(
             (4, 2),
@@ -220,7 +220,7 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
             {_WIDE: prepared},
         )
         assert refresh.wait(2).status is PublicationStatus.SUCCEEDED
-        restored = store.read_current("web-public")
+        restored = store.read_current("web-external")
         assert restored.metadata["publication_type"] == "scheduled"
         assert restored.metadata["presentation"]["reveal_stage_index"] == 2
         assert restored.manifest.publication_id != transient.manifest.publication_id
@@ -231,7 +231,7 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
 def test_scheduled_publish_without_prepared_metadata_fails_without_acknowledgement(tmp_path) -> None:
     from refrain.display.publication import FilesystemPublicationDisplayBackend
 
-    configuration = _configuration("publish", (("web-public", _WIDE),))
+    configuration = _configuration("publish", (("web-external", _WIDE),))
     store = PublicationStore(tmp_path / "publications")
     coordinator = DisplayPublicationCoordinator(
         (configuration,),
@@ -243,11 +243,11 @@ def test_scheduled_publish_without_prepared_metadata_fails_without_acknowledgeme
         coordinator.publish(identity, {_WIDE: Image.new("RGB", _WIDE.requested_output_size, (1, 2, 3))})
 
         assert not coordinator.wait_for_publication(identity, timeout=2)
-        assert coordinator.acknowledgements == {"web-public": None}
-        assert coordinator.publication_results(identity)["web-public"][0] is False
-        assert "missing prepared metadata" in coordinator.publication_results(identity)["web-public"][1]
+        assert coordinator.acknowledgements == {"web-external": None}
+        assert coordinator.publication_results(identity)["web-external"][0] is False
+        assert "missing prepared metadata" in coordinator.publication_results(identity)["web-external"][1]
         with pytest.raises(PublicationStorageError):
-            store.read_current("web-public")
+            store.read_current("web-external")
     finally:
         coordinator.close()
 
@@ -284,8 +284,8 @@ def test_filesystem_failure_isolated_and_retried_per_destination(tmp_path, monke
     from refrain.display.publication import FilesystemPublicationDisplayBackend
 
     outputs = (
-        DisplayOutputConfiguration("web-good", _WIDE, audience="private"),
-        DisplayOutputConfiguration("web-fail", _WIDE, audience="private"),
+        DisplayOutputConfiguration("web-good", _WIDE, audience="internal"),
+        DisplayOutputConfiguration("web-fail", _WIDE, audience="internal"),
     )
     configuration = DisplayBackendConfiguration("publish", outputs=outputs)
     store = PublicationStore(tmp_path / "publications")

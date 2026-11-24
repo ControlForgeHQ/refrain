@@ -83,11 +83,11 @@ def test_actions_default_to_empty_and_preserve_order_duplicates_and_opaque_paylo
         "AAEC/w==",
     )
     actions = [
-        {"type": "future-Action_2", "visibility": ["private"], "payload": payloads[0]},
-        {"type": "same", "visibility": ["public", "private"], "payload": payloads[1]},
-        {"type": "same", "visibility": ["public", "private"], "payload": payloads[1]},
+        {"type": "future-Action_2", "visibility": ["internal"], "payload": payloads[0]},
+        {"type": "same", "visibility": ["external", "internal"], "payload": payloads[1]},
+        {"type": "same", "visibility": ["external", "internal"], "payload": payloads[1]},
         *(
-            {"type": f"opaque-{index}", "visibility": ["public"], "payload": payload}
+            {"type": f"opaque-{index}", "visibility": ["external"], "payload": payload}
             for index, payload in enumerate(payloads[2:], start=2)
         ),
     ]
@@ -110,7 +110,7 @@ def test_actions_default_to_empty_and_preserve_order_duplicates_and_opaque_paylo
     assert "actions" not in caplog.text
 
 
-@pytest.mark.parametrize("visibility", [["public"], ["private"], ["public", "private"], ["private", "public"]])
+@pytest.mark.parametrize("visibility", [["external"], ["internal"], ["external", "internal"], ["internal", "external"]])
 def test_actions_accept_explicit_visibility_audiences(tmp_path: Path, visibility: list[str]) -> None:
     write_entry(
         tmp_path / "entry.yaml",
@@ -129,28 +129,28 @@ def test_actions_accept_explicit_visibility_audiences(tmp_path: Path, visibility
     [
         None,
         [],
-        {"visibility": ["public"]},
+        {"visibility": ["external"]},
         {"type": "play"},
-        {"type": "", "visibility": ["private"]},
-        {"type": "bad type", "visibility": ["private"]},
-        {"type": "é", "visibility": ["private"]},
+        {"type": "", "visibility": ["internal"]},
+        {"type": "bad type", "visibility": ["internal"]},
+        {"type": "é", "visibility": ["internal"]},
         {"type": "play", "visibility": []},
-        {"type": "play", "visibility": "private"},
+        {"type": "play", "visibility": "internal"},
         {"type": "play", "visibility": None},
-        {"type": "play", "visibility": ["public", "public"]},
-        {"type": "play", "visibility": ["private", "private"]},
-        {"type": "play", "visibility": ["public", "unknown"]},
+        {"type": "play", "visibility": ["external", "external"]},
+        {"type": "play", "visibility": ["internal", "internal"]},
+        {"type": "play", "visibility": ["external", "unknown"]},
         {"type": "play", "visibility": ["unknown"]},
-        {"type": "play", "visibility": ["public"], "payload": None},
-        {"type": "play", "visibility": ["public"], "payload": {"opaque": "mapping"}},
-        {"type": "play", "visibility": ["public"], "payload": ["opaque", "sequence"]},
-        {"type": "play", "visibility": ["public"], "extra": "unsupported"},
+        {"type": "play", "visibility": ["external"], "payload": None},
+        {"type": "play", "visibility": ["external"], "payload": {"opaque": "mapping"}},
+        {"type": "play", "visibility": ["external"], "payload": ["opaque", "sequence"]},
+        {"type": "play", "visibility": ["external"], "extra": "unsupported"},
     ],
 )
 def test_malformed_actions_are_dropped_without_rejecting_entry(tmp_path: Path, caplog, action: object) -> None:
     write_entry(
         tmp_path / "entry.yaml",
-        entry_data(actions=[action, {"type": "retained", "visibility": ["private"]}]),
+        entry_data(actions=[action, {"type": "retained", "visibility": ["internal"]}]),
     )
 
     entries = load_content_library(tmp_path)
@@ -163,7 +163,7 @@ def test_malformed_actions_are_dropped_without_rejecting_entry(tmp_path: Path, c
     assert "entry is excluded" not in caplog.text
 
 
-@pytest.mark.parametrize("actions", [None, "not a sequence", {"type": "play", "visibility": ["private"]}])
+@pytest.mark.parametrize("actions", [None, "not a sequence", {"type": "play", "visibility": ["internal"]}])
 def test_malformed_action_collection_warns_and_keeps_entry_without_actions(
     tmp_path: Path, caplog, actions: object
 ) -> None:
@@ -179,7 +179,7 @@ def test_malformed_action_collection_warns_and_keeps_entry_without_actions(
 def test_action_payload_at_utf8_byte_limit_is_preserved(tmp_path: Path, payload: str) -> None:
     write_entry(
         tmp_path / "entry.yaml",
-        entry_data(actions=[{"type": "within-limit", "visibility": ["public"], "payload": payload}]),
+        entry_data(actions=[{"type": "within-limit", "visibility": ["external"], "payload": payload}]),
     )
 
     action = load_content_library(tmp_path)[0].actions[0]
@@ -192,7 +192,7 @@ def test_action_payload_at_utf8_byte_limit_is_preserved(tmp_path: Path, payload:
 def test_action_payload_over_utf8_byte_limit_is_dropped(tmp_path: Path, payload: str, caplog) -> None:
     write_entry(
         tmp_path / "entry.yaml",
-        entry_data(actions=[{"type": "too-large", "visibility": ["public"], "payload": payload}]),
+        entry_data(actions=[{"type": "too-large", "visibility": ["external"], "payload": payload}]),
     )
 
     entry = load_content_library(tmp_path)[0]
@@ -202,12 +202,12 @@ def test_action_payload_over_utf8_byte_limit_is_dropped(tmp_path: Path, payload:
 
 
 def test_action_limit_counts_valid_items_and_warns_after_first_100(tmp_path: Path, caplog) -> None:
-    actions = [{"type": f"action-{index}", "visibility": ["private"]} for index in range(99)]
+    actions = [{"type": f"action-{index}", "visibility": ["internal"]} for index in range(99)]
     actions.extend(
         [
-            {"type": "", "visibility": ["private"]},
-            {"type": "action-99", "visibility": ["private"]},
-            {"type": "ignored", "visibility": ["private"]},
+            {"type": "", "visibility": ["internal"]},
+            {"type": "action-99", "visibility": ["internal"]},
+            {"type": "ignored", "visibility": ["internal"]},
         ]
     )
     write_entry(tmp_path / "entry.yaml", entry_data(actions=actions))
@@ -223,7 +223,7 @@ def test_action_limit_counts_valid_items_and_warns_after_first_100(tmp_path: Pat
 def test_exactly_100_valid_actions_do_not_warn(tmp_path: Path, caplog) -> None:
     write_entry(
         tmp_path / "entry.yaml",
-        entry_data(actions=[{"type": f"action-{index}", "visibility": ["public"]} for index in range(100)]),
+        entry_data(actions=[{"type": f"action-{index}", "visibility": ["external"]} for index in range(100)]),
     )
 
     entry = load_content_library(tmp_path)[0]
@@ -383,7 +383,7 @@ def test_invalid_role_face_preferences_reject_only_the_affected_entry(
     assert any("invalid.yaml: font_faces" in record.message for record in caplog.records)
 
 
-@pytest.mark.parametrize("background", ["paper-a", "none", "unknown-resource", "Custom background", "Paper-a"])
+@pytest.mark.parametrize("background", ["paper-a", "none", "unknown-resource", "@custom", "Paper-a"])
 def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path, background: str, caplog) -> None:
     write_entry(
         tmp_path / "entry.yaml",
@@ -399,7 +399,7 @@ def test_background_preferences_preserved_without_resource_lookup(tmp_path: Path
     assert "background" not in caplog.text
 
 
-@pytest.mark.parametrize("decoration", ["frame-a", "none", "unknown-decoration", "Custom Decoration"])
+@pytest.mark.parametrize("decoration", ["frame-a", "none", "unknown-decoration", "@custom"])
 def test_decoration_preferences_are_preserved_for_every_quotation(tmp_path: Path, decoration: str) -> None:
     write_entry(
         tmp_path / "entry.yaml",
@@ -414,24 +414,24 @@ def test_decoration_preferences_are_preserved_for_every_quotation(tmp_path: Path
     assert all(candidate.entry.decoration == decoration for candidate in pool.candidates)
 
 
-@pytest.mark.parametrize("decoration", ["", " ", "\t\n", None, 1, False, [], {}])
+@pytest.mark.parametrize("decoration", ["", " ", "\t\n", "Custom Decoration", None, 1, False, [], {}])
 def test_invalid_decoration_preferences_are_rejected(tmp_path: Path, decoration: object) -> None:
     write_entry(tmp_path / "entry.yaml", entry_data(decoration=decoration))
 
     diagnostics = diagnostics_for(tmp_path)
 
     assert any(": decoration:" in diagnostic for diagnostic in diagnostics)
-    assert any("nonempty, nonblank string" in diagnostic for diagnostic in diagnostics)
+    assert any("resource identifier or pool reference" in diagnostic for diagnostic in diagnostics)
 
 
-@pytest.mark.parametrize("background", ["", " ", "\t\n", None, 1, False, [], {}])
+@pytest.mark.parametrize("background", ["", " ", "\t\n", "Custom background", None, 1, False, [], {}])
 def test_invalid_background_preferences_rejected(tmp_path: Path, background: object) -> None:
     write_entry(tmp_path / "entry.yaml", entry_data(background=background))
 
     diagnostics = diagnostics_for(tmp_path)
 
     assert any(": background:" in diagnostic for diagnostic in diagnostics)
-    assert any("nonempty, nonblank string" in diagnostic for diagnostic in diagnostics)
+    assert any("resource identifier or pool reference" in diagnostic for diagnostic in diagnostics)
 
 
 def test_invalid_background_entry_does_not_exclude_valid_entries(tmp_path: Path, caplog) -> None:

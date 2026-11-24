@@ -47,6 +47,8 @@ def recover_prepared_daily_images(
         raise TypeError("configuration must be a validated ApplicationConfiguration")
 
     ordered_stages = tuple(stages)
+    if ordered_stages != tuple(stage.visibility for stage in state.snapshot.resolved_reveal_stages):
+        raise DailyImagePreparationError("stages must match the committed reveal sequence")
     try:
         _validate_reveal_stages(
             ordered_stages,
@@ -96,6 +98,7 @@ def recover_prepared_daily_images(
             ordered_stages,
             prepared_variants,
             prepared_metadata,
+            snapshot=state.snapshot,
         )
         artifact_variants = dict(existing.variants)
         artifact_variants.update(new_artifacts.variants)

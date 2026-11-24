@@ -72,7 +72,7 @@ def _document():
     )
 
 
-def _finalized(document=None, *, audience="public", destination_id="default", publication_id="publication-1"):
+def _finalized(document=None, *, audience="external", destination_id="default", publication_id="publication-1"):
     prepared = _document() if document is None else document
     return finalize_publication_metadata(
         prepared,
@@ -125,7 +125,7 @@ def test_generated_content_entry_preserves_only_stable_resource_and_palette_refe
         source=None,
         attribution=None,
         font="@literary",
-        background="/private/assets/paper.png",
+        background="/internal/assets/paper.png",
         decoration="none",
         font_faces={"quotation": "regular"},
         text_color=("#FFFFFF",),
@@ -252,7 +252,7 @@ def test_publication_timestamp_requires_timezone_and_normalizes_to_utc() -> None
         published_at="2026-10-26T08:00:00-02:00",
         destination_id="default",
         output_specification=_OUTPUT,
-        audience="public",
+        audience="external",
         reveal_stage_index=0,
     )
 
@@ -265,7 +265,7 @@ def test_publication_timestamp_requires_timezone_and_normalizes_to_utc() -> None
             published_at="2026-10-26T08:00:00",
             destination_id="default",
             output_specification=_OUTPUT,
-            audience="public",
+            audience="external",
             reveal_stage_index=0,
         )
 
@@ -273,39 +273,39 @@ def test_publication_timestamp_requires_timezone_and_normalizes_to_utc() -> None
 def test_actions_are_filtered_by_audience_without_reordering_or_deduplication() -> None:
     prepared = _document()
     prepared["actions"] = [
-        {"type": "public", "visibility": ["public"], "payload": "1"},
-        {"type": "private", "visibility": ["private"], "payload": "2"},
-        {"type": "both", "visibility": ["public", "private"], "payload": "3"},
-        {"type": "public", "visibility": ["public"], "payload": "1"},
+        {"type": "external", "visibility": ["external"], "payload": "1"},
+        {"type": "internal", "visibility": ["internal"], "payload": "2"},
+        {"type": "both", "visibility": ["external", "internal"], "payload": "3"},
+        {"type": "external", "visibility": ["external"], "payload": "1"},
     ]
     validate_publication_metadata(prepared, stage="preparation")
 
-    public = _finalized(prepared)
-    private = _finalized(prepared, audience="private", destination_id="private-display")
+    external = _finalized(prepared)
+    internal = _finalized(prepared, audience="internal", destination_id="internal-display")
 
-    assert [action["type"] for action in public["actions"]] == ["public", "both", "public"]
-    assert [action["type"] for action in private["actions"]] == ["private", "both"]
-    assert public["actions"][0] == public["actions"][2]
-    assert public["actions"][1]["visibility"] == ["public", "private"]
-    assert private["actions"][1]["visibility"] == ["public", "private"]
-    with pytest.raises(PublicationMetadataError, match="not visible to the public"):
+    assert [action["type"] for action in external["actions"]] == ["external", "both", "external"]
+    assert [action["type"] for action in internal["actions"]] == ["internal", "both"]
+    assert external["actions"][0] == external["actions"][2]
+    assert external["actions"][1]["visibility"] == ["external", "internal"]
+    assert internal["actions"][1]["visibility"] == ["external", "internal"]
+    with pytest.raises(PublicationMetadataError, match="not visible to the external"):
         validate_publication_metadata(
-            {**public, "actions": [prepared["actions"][1]]},
+            {**external, "actions": [prepared["actions"][1]]},
             stage="completed",
-            audience="public",
+            audience="external",
         )
-    with pytest.raises(PublicationMetadataError, match="not visible to the public"):
+    with pytest.raises(PublicationMetadataError, match="not visible to the external"):
         serialize_publication_metadata(
-            {**public, "actions": [prepared["actions"][1]]},
+            {**external, "actions": [prepared["actions"][1]]},
             stage="completed",
-            audience="public",
+            audience="external",
         )
 
 
 def test_reconstruction_content_cannot_leak_unfiltered_actions() -> None:
     prepared = _document()
     prepared["reconstruction"]["content_entry"]["actions"] = [
-        {"type": "private", "visibility": ["private"], "payload": "secret"}
+        {"type": "internal", "visibility": ["internal"], "payload": "secret"}
     ]
 
     with pytest.raises(PublicationMetadataError):
@@ -315,16 +315,16 @@ def test_reconstruction_content_cannot_leak_unfiltered_actions() -> None:
 def test_destinations_finalize_independently_without_mutating_shared_preparation() -> None:
     prepared = _document()
     prepared["actions"] = [
-        {"type": "public", "visibility": ["public"], "payload": ""},
-        {"type": "private", "visibility": ["private"], "payload": ""},
+        {"type": "external", "visibility": ["external"], "payload": ""},
+        {"type": "internal", "visibility": ["internal"], "payload": ""},
     ]
     original = copy.deepcopy(prepared)
-    left = _finalized(prepared, destination_id="public-display")
-    right = _finalized(prepared, audience="private", destination_id="private-display")
+    left = _finalized(prepared, destination_id="external-display")
+    right = _finalized(prepared, audience="internal", destination_id="internal-display")
 
     assert left["destination_id"] != right["destination_id"]
-    assert [action["type"] for action in left["actions"]] == ["public"]
-    assert [action["type"] for action in right["actions"]] == ["private"]
+    assert [action["type"] for action in left["actions"]] == ["external"]
+    assert [action["type"] for action in right["actions"]] == ["internal"]
     assert prepared == original
 
 
@@ -359,7 +359,7 @@ def test_transient_publication_uses_minimal_metadata_without_preparation(origin)
     [
         lambda value: value.update(presentation={"display_date": "2026-10-26"}),
         lambda value: value.update(reconstruction={}),
-        lambda value: value.update(actions=[{"type": "private", "visibility": ["private"], "payload": ""}]),
+        lambda value: value.update(actions=[{"type": "internal", "visibility": ["internal"], "payload": ""}]),
     ],
 )
 def test_transient_validation_rejects_scheduled_payload(change) -> None:
@@ -388,7 +388,7 @@ def test_finalization_rejects_prepared_metadata_for_completed_serialization_and_
             published_at="2026-10-26T06:00:00Z",
             destination_id="default",
             output_specification=ResolvedOutputSpecification("4:3", (1600, 1200)),
-            audience="public",
+            audience="external",
             reveal_stage_index=0,
         )
 
@@ -404,11 +404,11 @@ def test_scheduled_serialization_requires_audience_and_metadata_never_contains_i
     for location in ("top-level", "reconstruction"):
         document = copy.deepcopy(completed)
         if location == "top-level":
-            document["audience"] = "public"
+            document["audience"] = "external"
         else:
-            document["reconstruction"]["content_entry"]["audience"] = "public"
+            document["reconstruction"]["content_entry"]["audience"] = "external"
         with pytest.raises(PublicationMetadataError):
-            validate_publication_metadata(document, stage="completed", audience="public")
+            validate_publication_metadata(document, stage="completed", audience="external")
 
 
 @pytest.mark.parametrize("publication_id", ["", " ", "\t\n"])
@@ -421,24 +421,24 @@ def test_completed_publication_id_must_be_nonblank_everywhere(publication_id: st
     with pytest.raises(PublicationMetadataError, match="publication_id"):
         validate_publication_metadata(document, stage="completed")
     with pytest.raises(PublicationMetadataError, match="publication_id"):
-        parse_publication_metadata(json.dumps(document), stage="completed", audience="public")
+        parse_publication_metadata(json.dumps(document), stage="completed", audience="external")
     with pytest.raises(PublicationMetadataError, match="publication_id"):
-        serialize_publication_metadata(document, stage="completed", audience="public")
+        serialize_publication_metadata(document, stage="completed", audience="external")
 
 
 def test_unicode_metadata_round_trips_as_deterministic_json() -> None:
     prepared = _document()
     prepared["reconstruction"]["content_entry"]["quotations"] = ["雪と café — “thought”"]
     prepared["presentation"]["quotation_identity"] = "雪と café — “thought”"
-    prepared["actions"] = [{"type": "note", "visibility": ["public"], "payload": "こんにちは 🌿"}]
+    prepared["actions"] = [{"type": "note", "visibility": ["external"], "payload": "こんにちは 🌿"}]
     completed = _finalized(prepared)
 
-    encoded = serialize_publication_metadata(completed, stage="completed", audience="public")
-    parsed = parse_publication_metadata(encoded.encode("utf-8"), stage="completed", audience="public")
+    encoded = serialize_publication_metadata(completed, stage="completed", audience="external")
+    parsed = parse_publication_metadata(encoded.encode("utf-8"), stage="completed", audience="external")
 
     assert "こんにちは 🌿" in encoded
     assert parsed == completed
-    assert serialize_publication_metadata(parsed, stage="completed", audience="public") == encoded
+    assert serialize_publication_metadata(parsed, stage="completed", audience="external") == encoded
 
 
 @pytest.mark.parametrize(
@@ -447,7 +447,7 @@ def test_unicode_metadata_round_trips_as_deterministic_json() -> None:
         lambda value: value.update(schema_version=99),
         lambda value: value.pop("destination_id"),
         lambda value: value.update(publication_id=None),
-        lambda value: value.update(audience="public"),
+        lambda value: value.update(audience="external"),
         lambda value: value.update(published_at="2026-10-26T06:00:00"),
         lambda value: value["presentation"].update(quotation_identity=None),
         lambda value: value["presentation"].update(reveal_schedule={"quotation": None}),
@@ -472,10 +472,10 @@ def test_parser_rejects_duplicate_fields_and_invalid_json_values() -> None:
 
 def test_parser_rejects_invalid_unicode_strings() -> None:
     document = _finalized()
-    document["actions"] = [{"type": "note", "visibility": ["public"], "payload": "\ud800"}]
+    document["actions"] = [{"type": "note", "visibility": ["external"], "payload": "\ud800"}]
 
     with pytest.raises(PublicationMetadataError, match="valid Unicode"):
-        parse_publication_metadata(json.dumps(document, ensure_ascii=True), stage="completed", audience="public")
+        parse_publication_metadata(json.dumps(document, ensure_ascii=True), stage="completed", audience="external")
 
 
 def test_parser_rejects_json_bytes_encoded_outside_utf8() -> None:

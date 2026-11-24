@@ -40,7 +40,7 @@ _CONFIG = """\
 destinations:
   - id: configured-output
     type: image-server
-    audience: private
+    audience: internal
 scheduling:
   day_start: "06:00"
 presentation:
@@ -152,12 +152,12 @@ def _completed_publication(
         published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
         destination_id="test-destination",
         output_specification=output,
-        audience="private",
+        audience="internal",
         reveal_stage_index=prepared["presentation"]["reveal_stage_index"],
     )
     publication_path = root / "publication.json"
     publication_path.write_text(
-        serialize_publication_metadata(completed, stage="completed", audience="private"),
+        serialize_publication_metadata(completed, stage="completed", audience="internal"),
         encoding="utf-8",
     )
     return config_path, content_directory, publication_path, completed
@@ -518,7 +518,7 @@ def test_publication_reconstructs_only_available_literary_fields(
             lambda document: document["reconstruction"]["content_entry"].update(quotations=["", "extra"]),
             "exactly one quotation",
         ),
-        (lambda document: document.update(audience="private"), "every supported publication field"),
+        (lambda document: document.update(audience="internal"), "every supported publication field"),
     ],
 )
 def test_publication_input_rejects_invalid_completed_documents(
@@ -970,7 +970,7 @@ def test_publication_actions_remain_opaque_and_are_never_executed(tmp_path: Path
     payload = json.dumps(str(action_target))
     entry_text = _ENTRY.replace(
         "priority: 100",
-        f"actions:\n  - type: file-operation\n    visibility: [private]\n    payload: {payload}\npriority: 100",
+        f"actions:\n  - type: file-operation\n    visibility: [internal]\n    payload: {payload}\npriority: 100",
     )
     config_path, _content, publication_path, completed = _completed_publication(tmp_path, entry_text=entry_text)
 
@@ -1101,8 +1101,8 @@ def test_render_as_uses_configured_geometry_and_exports_without_backend_or_runti
         path.write_bytes(content)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n    audience: private\n",
-            "  - id: window\n    type: window\n    audience: private\n"
+            "  - id: configured-output\n    type: image-server\n    audience: internal\n",
+            "  - id: window\n    type: window\n    audience: internal\n"
             '    aspect_ratio: "4:3"\n    resolution: [320, 240]\n',
         ),
         encoding="utf-8",
@@ -1157,8 +1157,8 @@ def test_render_as_waveshare_exports_processed_pixels_without_hardware(
     config, _ = _workspace(tmp_path, with_entry=False)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n    audience: private\n",
-            "  - id: configured-output\n    type: waveshare-13in3-e\n    audience: private\n",
+            "  - id: configured-output\n    type: image-server\n    audience: internal\n",
+            "  - id: configured-output\n    type: waveshare-13in3-e\n    audience: internal\n",
         ),
         encoding="utf-8",
     )
@@ -1766,7 +1766,7 @@ def test_presentation_snapshots_capture_shared_entry_actions(tmp_path: Path) -> 
 id: action-entry
 actions:
   - type: opaque-action
-    visibility: [private]
+    visibility: [internal]
     payload: |
       first line
         indented line

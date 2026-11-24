@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
-from typing import Mapping
 
 from . import local_time
 from .config import ApplicationConfiguration
 from .persistence import DailySnapshot, PersistentState
 from .renderer import CompositionVisibility
-
-_TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 
 
 class SchedulingEvaluationError(ValueError):
@@ -53,51 +49,6 @@ def _local_display_date(current_time: datetime, day_start: time) -> date:
         raise SchedulingEvaluationError("cannot calculate the initial display date") from error
 
 
-def _schedule_time(schedule: Mapping[str, object], field: str) -> time:
-    value = schedule.get(field)
-    if not isinstance(value, str) or not _TIME.fullmatch(value):
-        raise SchedulingEvaluationError(f"snapshot reveal schedule.{field} must be a valid HH:MM time")
-    return time.fromisoformat(value)
-
-
-def _resolve_reveal_stages(
-    snapshot: DailySnapshot,
-) -> tuple[tuple[time, ...], tuple[CompositionVisibility, ...]]:
-    if not isinstance(snapshot, DailySnapshot):
-        raise SchedulingEvaluationError("snapshot must be a DailySnapshot")
-    schedule = snapshot.reveal_schedule
-    if not isinstance(schedule, Mapping):
-        raise SchedulingEvaluationError("snapshot reveal schedule must be a mapping")
-
-    quotation_time = _schedule_time(schedule, "quotation")
-    day_start = _schedule_time({"day_start": snapshot.scheduling.day_start}, "day_start")
-    if quotation_time != day_start:
-        raise SchedulingEvaluationError("snapshot reveal schedule.quotation must match snapshot scheduling.day_start")
-
-    field_times = {"quotation": quotation_time}
-    for field in ("source", "attribution"):
-        value = getattr(snapshot, field)
-        if value is None:
-            continue
-        if not isinstance(value, str) or not value.strip():
-            raise SchedulingEvaluationError(f"snapshot.{field} must be a nonempty string")
-        event_time = _schedule_time(schedule, field)
-        if event_time < quotation_time:
-            raise SchedulingEvaluationError(f"snapshot reveal schedule.{field} must not precede quotation")
-        field_times[field] = event_time
-
-    event_times = tuple(sorted(set(field_times.values())))
-    stages = tuple(
-        CompositionVisibility(
-            quotation=True,
-            source="source" in field_times and field_times["source"] <= event_time,
-            attribution="attribution" in field_times and field_times["attribution"] <= event_time,
-        )
-        for event_time in event_times
-    )
-    return event_times, stages
-
-
 def resolve_reveal_stages(snapshot: DailySnapshot) -> tuple[CompositionVisibility, ...]:
     """Return the complete ordered cumulative reveal stages for a snapshot.
 
@@ -105,33 +56,22 @@ def resolve_reveal_stages(snapshot: DailySnapshot) -> tuple[CompositionVisibilit
     preparation/recovery. Fields revealed together share a stage, and fields
     scheduled at the quotation time appear in the initial stage.
     """
-    return _resolve_reveal_stages(snapshot)[1]
+    if not isinstance(snapshot, DailySnapshot):
+        raise SchedulingEvaluationError("snapshot must be a DailySnapshot")
+    return tuple(stage.visibility for stage in snapshot.resolved_reveal_stages)
 
 
 def _required_stage(state: PersistentState, current_time: datetime) -> int:
     snapshot = state.snapshot
-    event_times, stages = _resolve_reveal_stages(snapshot)
+    stages = resolve_reveal_stages(snapshot)
     try:
         current_utc = current_time.astimezone(timezone.utc)
-        wall_time = local_time.local_wall_time(current_utc)
     except (OverflowError, OSError, ValueError) as error:
-        raise SchedulingEvaluationError("current_time cannot be converted to operating-system local time") from error
-    if wall_time.date() > snapshot.display_date:
-        clock_stage = len(stages) - 1
-    elif wall_time.date() < snapshot.display_date:
-        clock_stage = 0
-    else:
-        try:
-            clock_stage = max(
-                (
-                    index
-                    for index, event_time in enumerate(event_times)
-                    if local_time.resolve_local_time(snapshot.display_date, event_time) <= current_utc
-                ),
-                default=0,
-            )
-        except (OverflowError, OSError, ValueError) as error:
-            raise SchedulingEvaluationError("cannot resolve a local reveal deadline") from error
+        raise SchedulingEvaluationError("current_time cannot be converted to UTC") from error
+    clock_stage = max(
+        (index for index, stage in enumerate(snapshot.resolved_reveal_stages) if stage.instant <= current_utc),
+        default=0,
+    )
 
     highest_stage = state.highest_reveal_stage
     if type(highest_stage) is not int or highest_stage < 0:

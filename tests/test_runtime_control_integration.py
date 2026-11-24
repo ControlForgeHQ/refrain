@@ -74,13 +74,13 @@ def resident(tmp_path, monkeypatch):
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text().replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "private"',
+            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
             '  - id: one\n    type: "image-server"\n'
-            '    audience: "private"\n'
+            '    audience: "internal"\n'
             '    aspect_ratio: "16:9"\n'
             "    resolution: [800, 450]\n"
             '  - id: two\n    type: "image-server"\n'
-            '    audience: "private"\n'
+            '    audience: "internal"\n'
             '    aspect_ratio: "16:9"\n'
             "    resolution: [800, 450]",
         )
@@ -207,8 +207,8 @@ def test_slow_refresh_preparation_does_not_block_scheduled_reveal(tmp_path, monk
     ordinary(workspace)
     workspace.config.write_text(
         workspace.config.read_text().replace(
-            '- type: "waveshare-13in3-e"\n    audience: "private"',
-            '- type: "window"\n    audience: "private"\n      aspect_ratio: "16:9"\n      resolution: [800, 450]',
+            '- type: "waveshare-13in3-e"\n    audience: "internal"',
+            '- type: "window"\n    audience: "internal"\n      aspect_ratio: "16:9"\n      resolution: [800, 450]',
         )
     )
     shutdown, wake, preparing, release = Event(), Event(), Event(), Event()

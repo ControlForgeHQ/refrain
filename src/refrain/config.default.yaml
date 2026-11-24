@@ -2,7 +2,7 @@
 destinations:
   - id: "default"
     type: "image-server"
-    audience: "private"
+    audience: "internal"
 
 # Enable the image-server HTTP service with default settings.
 image-server:

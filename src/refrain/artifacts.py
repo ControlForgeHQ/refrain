@@ -377,9 +377,15 @@ class PreparedImageArtifactStore:
         stages: Sequence[CompositionVisibility],
         variants: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Sequence[Image.Image]],
         metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Sequence[dict[str, object]]],
+        *,
+        snapshot: DailySnapshot | None = None,
     ) -> PreparedImageArtifactSet:
         """Publish complete stage collections per compatible preparation group."""
         _inputs(revision, stages)
+        if snapshot is not None and tuple(stages) != tuple(
+            stage.visibility for stage in snapshot.resolved_reveal_stages
+        ):
+            raise ValueError("stages do not match the committed reveal sequence")
         if not isinstance(variants, Mapping) or not variants:
             raise ValueError("variants must be a nonempty mapping of prepared-image keys to image sequences")
         if not isinstance(metadata, Mapping) or set(metadata) != set(variants):
@@ -403,7 +409,7 @@ class PreparedImageArtifactStore:
                 group_variants,
                 grouped_metadata[presentation],
             )
-        result, missing = self.load_groups(revision, stages, tuple(variants))
+        result, missing = self.load_groups(revision, stages, tuple(variants), snapshot)
         if missing:
             raise ArtifactValidationError("stored preparation groups are not complete")
         return result
@@ -653,6 +659,10 @@ class PreparedImageArtifactStore:
     ) -> PreparedImageArtifactSet | None:
         """Validate one complete group, retaining no decoded images."""
         expected_stages = _inputs(revision, stages)
+        if snapshot is not None and tuple(stages) != tuple(
+            stage.visibility for stage in snapshot.resolved_reveal_stages
+        ):
+            raise ArtifactValidationError("requested stages do not match the committed reveal sequence")
         expected_specifications = _output_specifications(output_specifications)
         stage_count = len(expected_stages)
         directory = _group_directory(self.root, revision, presentation)

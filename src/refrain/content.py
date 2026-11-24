@@ -42,7 +42,7 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _POOL_REFERENCE = re.compile(r"@[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _PRESENTATION_STYLES = {"centered", "left-aligned"}
-_ACTION_VISIBILITIES = {"public", "private"}
+_ACTION_VISIBILITIES = {"external", "internal"}
 _MAX_ACTIONS = 100
 _MAX_ACTION_PAYLOAD_BYTES = 10_240
 _LOGGER = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class ContentAction:
             raise ValueError("visibility must be a nonempty sequence")
         visibility = tuple(self.visibility)
         if any(not isinstance(item, str) or item not in _ACTION_VISIBILITIES for item in visibility):
-            raise ValueError("visibility values must be 'public' or 'private'")
+            raise ValueError("visibility values must be 'external' or 'internal'")
         if len(set(visibility)) != len(visibility):
             raise ValueError("visibility values must not contain duplicates")
         object.__setattr__(self, "visibility", visibility)
@@ -472,12 +472,18 @@ def _validate_entry(data: object, file: Path, diagnostics: list[ContentDiagnosti
         optional_strings["font"] = font
 
     background = data.get("background")
-    if "background" in data and (not isinstance(background, str) or not background.strip()):
-        _diagnose(diagnostics, file, "background", "must be a nonempty, nonblank string when supplied")
+    if "background" in data and (
+        not isinstance(background, str)
+        or not (_IDENTIFIER.fullmatch(background) or _POOL_REFERENCE.fullmatch(background))
+    ):
+        _diagnose(diagnostics, file, "background", "must be a resource identifier or pool reference")
 
     decoration = data.get("decoration")
-    if "decoration" in data and (not isinstance(decoration, str) or not decoration.strip()):
-        _diagnose(diagnostics, file, "decoration", "must be a nonempty, nonblank string when supplied")
+    if "decoration" in data and (
+        not isinstance(decoration, str)
+        or not (_IDENTIFIER.fullmatch(decoration) or _POOL_REFERENCE.fullmatch(decoration))
+    ):
+        _diagnose(diagnostics, file, "decoration", "must be a resource identifier or pool reference")
 
     text_color = (
         _validate_color_preference(data["text_color"], "text_color", file, diagnostics)

@@ -504,7 +504,7 @@ def test_close_before_coordinator_registration_is_not_lost(monkeypatch: pytest.M
     roots, presented = install_fake_gui(monkeypatch)
     specification = ResolvedOutputSpecification("16:9", (16, 9))
     configuration = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="private"),)
+        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="internal"),)
     )
 
     def factory(_configuration):
@@ -531,7 +531,7 @@ def test_window_close_during_publication_preserves_availability(
     entered, release = threading.Event(), threading.Event()
     specification = ResolvedOutputSpecification("16:9", (16, 9))
     configuration = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="private"),)
+        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="internal"),)
     )
 
     class BlockingWindow(WindowDisplayBackend):
@@ -576,7 +576,7 @@ def test_user_close_immediately_withdraws_window_and_restart_restores_it(monkeyp
     roots, _ = install_fake_gui(monkeypatch)
     specification = ResolvedOutputSpecification("16:9", (16, 9))
     configuration = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="private"),)
+        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="internal"),)
     )
 
     def start() -> DisplayPublicationCoordinator:
@@ -611,7 +611,7 @@ def test_unexpected_gui_exit_remains_backend_failure(monkeypatch: pytest.MonkeyP
     roots, _ = install_fake_gui(monkeypatch)
     specification = ResolvedOutputSpecification("16:9", (16, 9))
     configuration = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="private"),)
+        "window", outputs=(DisplayOutputConfiguration("default", specification, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((configuration,), retry=False)
     try:

@@ -63,7 +63,7 @@ _CONFIGURATION = ApplicationConfiguration(
     display_backends=(
         DisplayBackendConfiguration(
             "window",
-            outputs=(DisplayOutputConfiguration("window", _OUTPUT_SPECIFICATION, audience="private"),),
+            outputs=(DisplayOutputConfiguration("window", _OUTPUT_SPECIFICATION, audience="internal"),),
         ),
     ),
     day_start=time(6),
@@ -139,6 +139,33 @@ def committed_state(tmp_path: Path):
 @pytest.fixture
 def artifact_store(tmp_path: Path) -> PreparedImageArtifactStore:
     return PreparedImageArtifactStore(tmp_path / "prepared")
+
+
+def test_recovery_rejects_mismatched_frozen_stages_before_preparation(
+    committed_state, artifact_store, monkeypatch
+) -> None:
+    state, _ = committed_state
+    wrong = (
+        CompositionVisibility(),
+        CompositionVisibility(attribution=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+    monkeypatch.setattr(recovery, "prepare_daily_images", lambda *args, **kwargs: pytest.fail("must not prepare"))
+    with pytest.raises(DailyImagePreparationError, match="committed reveal sequence"):
+        _recover(state, artifact_store, wrong)
+    assert not artifact_store.root.exists()
+
+
+def test_artifact_write_rejects_mismatched_frozen_stages(committed_state, artifact_store) -> None:
+    state, _ = committed_state
+    wrong = (
+        CompositionVisibility(),
+        CompositionVisibility(attribution=True),
+        CompositionVisibility(source=True, attribution=True),
+    )
+    with pytest.raises(ValueError, match="committed reveal sequence"):
+        artifact_store.store(state.revision, wrong, {}, {}, snapshot=state.snapshot)
+    assert not artifact_store.root.exists()
 
 
 def _store_images(store: PreparedImageArtifactStore, state, stages=_STAGES):
@@ -326,7 +353,7 @@ def test_output_specification_change_requires_a_new_artifact_variant(committed_s
         display_backends=(
             DisplayBackendConfiguration(
                 "window",
-                outputs=(DisplayOutputConfiguration("window", changed_specification, audience="private"),),
+                outputs=(DisplayOutputConfiguration("window", changed_specification, audience="internal"),),
             ),
         ),
     )
@@ -356,9 +383,9 @@ def test_changed_override_regenerates_only_its_incompatible_group(
                 DisplayBackendConfiguration(
                     "image-server",
                     outputs=(
-                        DisplayOutputConfiguration("shared", specification, shared, audience="private"),
-                        DisplayOutputConfiguration("shared-wide", other_specification, shared, audience="private"),
-                        DisplayOutputConfiguration("other", specification, second_presentation, audience="private"),
+                        DisplayOutputConfiguration("shared", specification, shared, audience="internal"),
+                        DisplayOutputConfiguration("shared-wide", other_specification, shared, audience="internal"),
+                        DisplayOutputConfiguration("other", specification, second_presentation, audience="internal"),
                     ),
                 ),
             ),
@@ -608,10 +635,11 @@ def test_rejects_reveals_for_fields_absent_from_snapshot(committed_state, artifa
         snapshot=replace(
             state.snapshot,
             source=None,
+            resolved_reveal_stages=None,
         ),
     )
 
-    with pytest.raises(DailyImagePreparationError, match="absent"):
+    with pytest.raises(DailyImagePreparationError, match="committed reveal sequence"):
         _recover(
             state_without_source,
             artifact_store,

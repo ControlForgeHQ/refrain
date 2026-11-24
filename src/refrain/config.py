@@ -227,8 +227,8 @@ class DisplayOutputConfiguration:
     audience: str = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.audience, str) or self.audience not in {"public", "private"}:
-            raise ValueError("audience must be 'public' or 'private'")
+        if not isinstance(self.audience, str) or self.audience not in {"external", "internal"}:
+            raise ValueError("audience must be 'external' or 'internal'")
 
     @property
     def prepared_image_key(self) -> ResolvedOutputSpecification | PreparedImageVariantKey:
@@ -834,8 +834,8 @@ def _parse_destinations(
                 continue
             _known_fields(value, {"id", "type", "aspect_ratio", "resolution", "overrides", "audience"}, field, report)
             audience = value.get("audience")
-            if not isinstance(audience, str) or audience not in {"public", "private"}:
-                report(f"{field}.audience", "is required and must be 'public' or 'private'", logging.ERROR)
+            if not isinstance(audience, str) or audience not in {"external", "internal"}:
+                report(f"{field}.audience", "is required and must be 'external' or 'internal'", logging.ERROR)
                 continue
             presentation = (
                 _parse_destination_overrides(value["overrides"], f"{field}.overrides", report)

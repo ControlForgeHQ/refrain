@@ -53,8 +53,8 @@ def runtime(tmp_path):
     config = DisplayBackendConfiguration(
         "image-server",
         outputs=(
-            DisplayOutputConfiguration("one", SPEC, audience="private"),
-            DisplayOutputConfiguration("two", SPEC, audience="private"),
+            DisplayOutputConfiguration("one", SPEC, audience="internal"),
+            DisplayOutputConfiguration("two", SPEC, audience="internal"),
         ),
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
@@ -333,16 +333,16 @@ def test_staged_three_backend_publication_survives_disconnect_and_cleans_up(tmp_
     server_spec = ResolvedOutputSpecification("16:10", (3840, 2400))
     configurations = (
         DisplayBackendConfiguration(
-            "window", outputs=(DisplayOutputConfiguration("window", window, audience="private"),)
+            "window", outputs=(DisplayOutputConfiguration("window", window, audience="internal"),)
         ),
         DisplayBackendConfiguration(
-            "waveshare-13in3-e", outputs=(DisplayOutputConfiguration("waveshare", waveshare, audience="private"),)
+            "waveshare-13in3-e", outputs=(DisplayOutputConfiguration("waveshare", waveshare, audience="internal"),)
         ),
         DisplayBackendConfiguration(
             "image-server",
             outputs=(
-                DisplayOutputConfiguration("one", server_spec, audience="private"),
-                DisplayOutputConfiguration("two", server_spec, audience="private"),
+                DisplayOutputConfiguration("one", server_spec, audience="internal"),
+                DisplayOutputConfiguration("two", server_spec, audience="internal"),
             ),
         ),
     )
@@ -448,7 +448,7 @@ def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_pat
         def close(self):
             pass
 
-    outputs = tuple(DisplayOutputConfiguration(f"output-{i}", SPEC, audience="private") for i in range(130))
+    outputs = tuple(DisplayOutputConfiguration(f"output-{i}", SPEC, audience="internal") for i in range(130))
     config = DisplayBackendConfiguration("image-server", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
@@ -486,7 +486,7 @@ def test_discovery_destination_identifier_at_limit(tmp_path):
             pass
 
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
@@ -523,7 +523,7 @@ def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, ide
             pass
 
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
@@ -573,7 +573,7 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
     large = ResolvedOutputSpecification("16:9", (3840, 1))
     stale = ResolvedOutputSpecification("16:9", (512, 256))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("large", large, audience="private"),)
+        "image-server", outputs=(DisplayOutputConfiguration("large", large, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     path = tmp_path / "runtime.json"
@@ -784,7 +784,7 @@ def test_metadata_cannot_redirect_client_to_arbitrary_endpoint(runtime, monkeypa
 def test_client_refuses_insecure_or_symlink_metadata(runtime):
     path, _, _, _, _, _ = runtime
     path.chmod(0o644)
-    with pytest.raises(RuntimeProtocolError, match="not private"):
+    with pytest.raises(RuntimeProtocolError, match="not internal"):
         RuntimeControlClient(path).discover()
     path.chmod(0o600)
     link = path.parent / "link"
