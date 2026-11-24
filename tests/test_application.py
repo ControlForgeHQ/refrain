@@ -1497,6 +1497,7 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         state.revision,
         application.resolve_reveal_stages(state.snapshot),
         configuration.required_output_specifications,
+        snapshot=state.snapshot,
     )
     assert artifacts is not None
     assert set(artifacts.output_specifications) == set(expected_specifications.values())
