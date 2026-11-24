@@ -17,7 +17,7 @@ import yaml
 from PIL import Image
 
 from ._yaml import load_yaml, yaml_error_location
-from .assets import parse_font_faces, valid_identifier
+from .assets import _validate_source_image, parse_font_faces, valid_identifier
 from .geometry import (
     DEFAULT_PRESENTATION_INSETS,
     SUPPORTED_PRESENTATION_ASPECTS,
@@ -1108,12 +1108,7 @@ def _load_layer_image(path: Union[Path, Traversable], category: str) -> Image.Im
     with path.open("rb") as image_file:
         image = Image.open(image_file)
         try:
-            if image.format != "PNG":
-                raise ValueError(f"{category} must be a PNG image")
-            if getattr(image, "n_frames", 1) != 1:
-                raise ValueError(f"{category} must be a single-frame PNG image")
-            if image.mode not in {"RGB", "RGBA"}:
-                raise ValueError(f"{category} mode must be RGB or RGBA")
+            _validate_source_image(image, category)
             image.load()
         except Exception:
             image.close()

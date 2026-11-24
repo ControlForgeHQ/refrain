@@ -18,6 +18,7 @@ from ._yaml import load_yaml
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z", re.ASCII)
 _FONT_ROLES = {"quotation", "source", "attribution"}
+_MAX_SOURCE_IMAGE_PIXELS = 36_864_000
 _T = TypeVar("_T")
 AssetPath = Path | Traversable
 Report = Callable[[str, str, int], None]
@@ -200,20 +201,24 @@ def _font_validation_error(path: AssetPath) -> str | None:
     return None
 
 
-def _validate_image_metadata(path: AssetPath, category: str) -> tuple[int, int]:
+def _validate_source_image(image: Image.Image, category: str) -> None:
     image_kind = category.removesuffix("s")
+    if image.format != "PNG":
+        raise ValueError(f"{image_kind} must be a PNG image")
+    if image.width <= 0 or image.height <= 0:
+        raise ValueError(f"{image_kind} dimensions must be positive")
+    if image.width * image.height > _MAX_SOURCE_IMAGE_PIXELS:
+        raise ValueError(f"{image_kind} exceeds the {_MAX_SOURCE_IMAGE_PIXELS:,} source image pixel limit")
+    if getattr(image, "n_frames", 1) != 1:
+        raise ValueError(f"{image_kind} must be a single-frame PNG image")
+    if image.mode not in {"RGB", "RGBA"}:
+        raise ValueError(f"{image_kind} mode must be RGB or RGBA")
+
+
+def _validate_image_metadata(path: AssetPath, category: str) -> tuple[int, int]:
     with path.open("rb") as stream:
         with Image.open(stream) as image:
-            if image.format != "PNG":
-                raise ValueError(f"{image_kind} must be a PNG image")
-            if getattr(image, "n_frames", 1) != 1:
-                raise ValueError(f"{image_kind} must be a single-frame PNG image")
-            if image_kind == "background" and image.mode not in {"RGB", "RGBA"}:
-                raise ValueError("background mode must be RGB or RGBA")
-            if image_kind == "decoration" and image.mode not in {"RGB", "RGBA"}:
-                raise ValueError("decoration mode must be RGB or RGBA")
-            if image.width <= 0 or image.height <= 0:
-                raise ValueError(f"{image_kind} dimensions must be positive")
+            _validate_source_image(image, category)
             size = image.size
             image.verify()
     return size

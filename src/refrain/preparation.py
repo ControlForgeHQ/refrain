@@ -655,6 +655,7 @@ def _apply_daily_decoration(
     qr_available: bool = True,
     eligible_layers: Sequence[DecorationLayerResource] | None = None,
     on_nine_slice_guide: Callable[[DecorationLayerResource, tuple[int, ...], tuple[int, ...]], None] | None = None,
+    on_fallback: Callable[[], None] | None = None,
 ) -> Image.Image:
     if identifier == "none":
         return background
@@ -662,7 +663,9 @@ def _apply_daily_decoration(
     if resource is None:
         if strict:
             raise DailyImagePreparationError(f"decoration {identifier!r} is unavailable")
-        _LOGGER.warning("Committed decoration %r is unavailable; omitting the overlay", identifier)
+        _LOGGER.warning("Committed decoration %r is unavailable; discarding the decoration", identifier)
+        if on_fallback is not None:
+            on_fallback()
         return background
     layers = _eligible_decoration_layers(resource, qr_available) if eligible_layers is None else tuple(eligible_layers)
     layer_indexes = {id(layer): index for index, layer in enumerate(resource.layers)}
@@ -696,7 +699,10 @@ def _apply_daily_decoration(
             )
             if strict:
                 raise DailyImagePreparationError(message) from error
-            _LOGGER.warning("%s; omitting this layer", message)
+            _LOGGER.warning("%s; discarding the decoration", message)
+            if on_fallback is not None:
+                on_fallback()
+            return background
     return background
 
 
@@ -1303,47 +1309,48 @@ def _prepare_daily_images_for_specification(
         raise DailyImagePreparationError("output_specification must be a ResolvedOutputSpecification")
     decoration_identifier = choices.decoration_identifier
     decoration = choices.decoration
-    composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
-        snapshot,
-        configuration,
-        decoration,
-        output_specification,
-        choices.presentation_style,
-        overrides,
-        resolved_presentation,
-    )
+    geometry = resolve_presentation_geometry(output_specification, PresentationInsets(0, 0, 0, 0))
     presentation_canvas_size = geometry.presentation_canvas_size
-    qr_placement: QRCodePlacement | None = None
-    qr_unavailable_reason: str | None = None
-    if choices.qr_enabled and (decoration is None or decoration.qr_ready):
+
+    def resolve_effective_qr(
+        effective_decoration: DecorationResource | None,
+    ) -> tuple[QRCodePlacement | None, str | None]:
+        if not choices.qr_enabled:
+            return None, qr_disabled_reason or (
+                "QR generation is disabled by viewer override"
+                if choices.qr_policy_overridden
+                else "QR generation is disabled by configuration"
+            )
+        if effective_decoration is not None and not effective_decoration.qr_ready:
+            return None, f"decoration {effective_decoration.identifier!r} is not marked qr_ready"
         try:
-            qr_placement = resolve_qr_placement(
-                output_specification,
-                None if decoration is None else decoration.qr_positioning,
+            return (
+                resolve_qr_placement(
+                    output_specification,
+                    None if effective_decoration is None else effective_decoration.qr_positioning,
+                ),
+                None,
             )
         except QRCodePlacementError as error:
-            qr_unavailable_reason = str(error)
             _LOGGER.warning("QR generation is disabled for this preparation: %s", error)
-    elif not choices.qr_enabled:
-        qr_unavailable_reason = qr_disabled_reason or (
-            "QR generation is disabled by viewer override"
-            if choices.qr_policy_overridden
-            else "QR generation is disabled by configuration"
-        )
-    else:
-        qr_unavailable_reason = f"decoration {decoration.identifier!r} is not marked qr_ready"
+            return None, str(error)
+
+    qr_placement, qr_unavailable_reason = resolve_effective_qr(decoration)
     decoration_layers = _eligible_decoration_layers(decoration, qr_placement is not None)
-    if on_resolved_bounds is not None:
-        on_resolved_bounds(variant_key, geometry.presentation_literary_bounds)
     text_color = choices.text_color
     qr_parameters = PRODUCTION_QR_PARAMETERS
     decoration_tint = choices.decoration_tint
     nine_slice_guides: list[NineSliceGuide] = []
     effective_background_identifier = choices.background_identifier
+    decoration_failed = False
 
     def remember_background_fallback() -> None:
         nonlocal effective_background_identifier
         effective_background_identifier = "none"
+
+    def remember_decoration_fallback() -> None:
+        nonlocal decoration_failed
+        decoration_failed = True
 
     def collect_nine_slice_guide(
         layer: DecorationLayerResource, x_bounds: tuple[int, ...], y_bounds: tuple[int, ...]
@@ -1377,7 +1384,32 @@ def _prepare_daily_images_for_specification(
                     if on_diagnostics is not None or on_presentation_image is not None
                     else None
                 ),
+                on_fallback=remember_decoration_fallback,
             )
+            if decoration_failed:
+                background.close()
+                background = _generate_daily_background(
+                    geometry.design_canvas_size,
+                    effective_background_identifier,
+                    configuration.backgrounds,
+                    strict=choices.strict_background,
+                    on_fallback=remember_background_fallback,
+                )
+                decoration_identifier, decoration = "none", None
+                decoration_layers = ()
+                nine_slice_guides.clear()
+                qr_placement, qr_unavailable_reason = resolve_effective_qr(None)
+            composition, geometry, min_font_size, max_font_size, style = _resolve_presentation(
+                snapshot,
+                configuration,
+                decoration,
+                output_specification,
+                choices.presentation_style,
+                overrides,
+                resolved_presentation,
+            )
+            if on_resolved_bounds is not None:
+                on_resolved_bounds(variant_key, geometry.presentation_literary_bounds)
             background = _scale_design_composition_to_presentation(background, presentation_canvas_size)
             layout = layout_composition(
                 composition,
@@ -1422,7 +1454,11 @@ def _prepare_daily_images_for_specification(
                 if on_metadata is not None:
                     if selection_revision is None:
                         raise DailyImagePreparationError("selection_revision is required when capturing metadata")
-                    if choices.decoration_tint is not None and choices.decoration_color_identifier is None:
+                    if (
+                        decoration is not None
+                        and choices.decoration_tint is not None
+                        and choices.decoration_color_identifier is None
+                    ):
                         raise DailyImagePreparationError(
                             "cannot capture publication metadata for an RGB tint without a palette identifier"
                         )
@@ -1446,7 +1482,7 @@ def _prepare_daily_images_for_specification(
                         },
                         "colors": {
                             "text": choices.text_color_identifier,
-                            "decoration": choices.decoration_color_identifier,
+                            "decoration": choices.decoration_color_identifier if decoration is not None else None,
                         },
                         "qr": {"enabled": choices.qr_enabled, "available": qr_placement is not None},
                         "font_size_range": {
