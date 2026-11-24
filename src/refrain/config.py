@@ -254,7 +254,6 @@ class StorageConfiguration:
     """Optional configuration-relative runtime storage paths."""
 
     state: Path | None = None
-    history: Path | None = None
     artifacts: Path | None = None
     publish: Path | None = None
 
@@ -611,7 +610,7 @@ def _parse_storage(
             report("storage", "must be a mapping", logging.ERROR)
         else:
             storage_data = data["storage"]
-            _known_fields(storage_data, {"content", "state", "history", "artifacts", "publish"}, "storage", report)
+            _known_fields(storage_data, {"content", "state", "artifacts", "publish"}, "storage", report)
 
     content_value = storage_data.get("content", "content")
     if not isinstance(content_value, str) or not content_value:
@@ -622,7 +621,7 @@ def _parse_storage(
         content_directory = file.parent / content_directory
 
     storage_values: dict[str, Path] = {}
-    for storage_field in ("state", "history", "artifacts", "publish"):
+    for storage_field in ("state", "artifacts", "publish"):
         if storage_field not in storage_data:
             continue
         value = storage_data[storage_field]

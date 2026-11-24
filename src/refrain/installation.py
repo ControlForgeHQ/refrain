@@ -235,6 +235,7 @@ def initialize_installation(
         configuration_exists = _inspect_file(Path(paths.config_file))
         _inspect_file(Path(paths.state_file))
         _inspect_file(Path(paths.history_file))
+        _inspect_file(Path(paths.state_directory) / "publication.json")
         content_directory = Path(paths.content_directory)
         resume_samples = (
             _resume_sample_installation(content_directory, content_entries)
@@ -429,7 +430,7 @@ def reset_installation(paths: ApplicationPaths) -> None:
 
     state_files: list[Path] = []
     if state_exists:
-        state_files.extend((Path(paths.state_file), Path(paths.history_file)))
+        state_files.extend((Path(paths.state_file), Path(paths.history_file), state_directory / "publication.json"))
         try:
             for candidate in state_directory.iterdir():
                 if re.fullmatch(r"global-history\.\d+\.jsonl", candidate.name):

@@ -218,6 +218,7 @@ def publication_protected_paths(
         *(Path(path) for path in paths.asset_directories),
         Path(paths.state_file),
         Path(paths.history_file),
+        Path(paths.state_directory) / "publication.json",
         Path(paths.cache_directory),
         Path(paths.artifacts_directory),
         Path(paths.ownership_file),
@@ -235,12 +236,14 @@ def publication_protected_paths(
             path
             for path in (
                 configuration.content_directory,
-                configuration.storage.state,
-                configuration.storage.history,
                 configuration.storage.artifacts,
             )
             if path is not None
         )
+        if configuration.storage.state is not None:
+            protected.update(
+                configuration.storage.state / name for name in ("state.json", "global-history.jsonl", "publication.json")
+            )
         protected.add(config_directory / "assets")
         protected.update(config_directory / "assets" / category for category in ("fonts", "backgrounds", "decorations"))
     return tuple(sorted(protected, key=os.fspath))

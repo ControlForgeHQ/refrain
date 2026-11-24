@@ -1084,8 +1084,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
             "image-server": None,
             "storage": {
                 "content": "entries",
-                "state": "state/current.json",
-                "history": "state/history.json",
+                "state": "state",
                 "artifacts": "cache/artifacts",
             },
             "scheduling": {
@@ -1133,7 +1132,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
     assert config.font_faces == {"source": "italic"}
     assert config.palette["black"] == "#101010"
     assert config.content_directory == tmp_path / "entries"
-    assert config.storage.state == tmp_path / "state" / "current.json"
+    assert config.storage.state == tmp_path / "state"
     assert config.information_view_duration == 30
     assert config.qr_enabled is False
     assert config.display_backends[1].service_enabled is True
@@ -1529,7 +1528,6 @@ def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
     config = load_application_config(write_config(tmp_path / "config.yaml", data))
 
     assert config.storage.state is None
-    assert config.storage.history is None
     assert config.storage.artifacts is None
     assert config.storage.publish is None
 
@@ -1537,8 +1535,7 @@ def test_storage_paths_are_optional(tmp_path: Path, storage: object) -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("state", "runtime/state.json"),
-        ("history", "runtime/global-history.jsonl"),
+        ("state", "runtime/state"),
         ("artifacts", "runtime/artifacts"),
         ("publish", "runtime/publish"),
     ],
@@ -1548,14 +1545,13 @@ def test_each_configured_storage_path_resolves_relative_to_config_file(tmp_path:
     config = load_application_config(write_config(config_path, configuration_data(storage={field: value})))
 
     assert getattr(config.storage, field) == config_path.parent / value
-    assert all(getattr(config.storage, other) is None for other in {"state", "history", "artifacts"} - {field})
+    assert all(getattr(config.storage, other) is None for other in {"state", "artifacts", "publish"} - {field})
 
 
 def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: Path) -> None:
     configured = {
         "content": tmp_path / "content",
-        "state": tmp_path / "state.json",
-        "history": tmp_path / "global-history.jsonl",
+        "state": tmp_path / "state",
         "artifacts": tmp_path / "artifacts",
         "publish": tmp_path / "publish",
     }
@@ -1569,11 +1565,10 @@ def test_storage_paths_accept_absolute_values_and_all_fields_together(tmp_path: 
 
     assert config.content_directory == configured["content"]
     assert config.storage.state == configured["state"]
-    assert config.storage.history == configured["history"]
     assert config.storage.artifacts == configured["artifacts"]
 
 
-@pytest.mark.parametrize("field", ["state", "history", "artifacts", "publish"])
+@pytest.mark.parametrize("field", ["state", "artifacts", "publish"])
 @pytest.mark.parametrize("value", [None, 1, True, "", []])
 def test_invalid_storage_path_values_are_errors(tmp_path: Path, field: str, value: object) -> None:
     data = configuration_data(storage={field: value})
@@ -1596,6 +1591,15 @@ def test_unknown_storage_fields_follow_configuration_warning_policy(tmp_path: Pa
     assert config.storage.state == tmp_path / "state.json"
     assert "storage.other" in caplog.text
     assert "is not a supported configuration field; it is ignored" in caplog.text
+
+
+def test_history_override_is_ignored_as_an_unknown_field(tmp_path: Path, caplog) -> None:
+    config = load_application_config(
+        write_config(tmp_path / "config.yaml", configuration_data(storage={"history": "elsewhere.jsonl"}))
+    )
+
+    assert not hasattr(config.storage, "history")
+    assert "storage.history" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -1623,7 +1627,7 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
     assert config.max_font_size == 200
     assert config.presentation_insets == PresentationInsets(384, 384, 324, 324)
     assert config.qr_enabled is True
-    assert config.storage.state is config.storage.history is config.storage.artifacts is None
+    assert config.storage.state is config.storage.artifacts is None
     assert config.storage.publish is None
 
     snapshot = DailySnapshot(
