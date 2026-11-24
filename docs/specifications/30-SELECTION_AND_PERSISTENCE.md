@@ -438,7 +438,7 @@ Before appending or rotating an existing active history file, inspect its traili
 
 If an interrupted append left an incomplete trailing record, truncate only the incomplete tail to the last complete record boundary and emit a warning. Preserve all preceding complete records.
 
-A complete valid JSON record lacking its terminating newline must be preserved; restore the record delimiter before appending another event.
+A complete, syntactically valid UTF-8 JSON object lacking its terminating newline must be preserved; restore the record delimiter before appending another event. Tail recovery does not validate historical record fields or types against the current global-history schema.
 
 Do not interpret an incomplete trailing record as a committed history event. Do not silently discard complete records or attempt to reconstruct missing history from operational state.
 
