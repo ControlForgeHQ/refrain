@@ -22,7 +22,7 @@ The file `state.json` contains one JSON object with exactly these fields:
 | `state` | Object | Complete operational-state payload defined below. |
 | `sha256` | String | Lowercase hexadecimal SHA-256 digest of the canonical serialized `state` payload. |
 
-Unsupported format versions, missing or invalid fields, and checksum failures invalidate operational-state recovery.
+Unsupported format versions, invalid document envelopes, and checksum failures prevent operational-state recovery. Recovery from an invalid committed selection snapshot or persisted reveal progression is governed by [Recovery and state compatibility](../specifications/30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility).
 
 ### Canonical serialization and integrity
 

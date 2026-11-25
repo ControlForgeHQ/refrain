@@ -465,6 +465,8 @@ A consumer reading a destination:
 7. Validates the complete image representation and dimensions before accepting it.
 8. Confirms that the current stable manifest still identifies the verified dataset before reporting it as current.
 
+The viewer's finished-image input restriction to 8-bit RGB PNG does not apply to filesystem publication readers. No additional PNG colour-mode or bit-depth restrictions are imposed by the publication contract.
+
 If the manifest changes during verification, discard the inconsistent attempt and retry from a newly read current manifest.
 
 Do not combine a manifest from one publication generation with image or metadata bytes from another.

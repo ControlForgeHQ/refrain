@@ -314,7 +314,7 @@ Each new selection is committed to `state.json` before either publication checkp
 
 `PersistentStateStore.advance_reveal_progress(expected_revision, stage)` requires the current committed selection revision and a nonnegative integer stage ordinal within the committed selection's valid reveal-stage sequence. Boolean values and stage ordinals beyond the final stage are invalid. Validate the requested stage before writing either persistent document.
 
-Missing operational state, stale revisions, and invalid stage values must be rejected without modifying persistent state. An invalid reveal-stage value must produce an actionable warning and suspend further reveal progression for the affected selection until the condition is corrected; unrelated application functionality must remain available.
+Missing operational state, stale revisions, and invalid stage values must be rejected without modifying persistent state. Report an invalid requested reveal stage with an actionable warning and continue normal resident operation.
 
 A successful reveal advancement atomically replaces `state.json`, changing only `highest_reveal_stage`. The committed selection record, selection revision, and repetition history remain unchanged. Requests for the current or an earlier stage do not advance progress or rewrite operational state.
 
@@ -336,7 +336,19 @@ Automated tests must cover:
 
 On startup, Refrain must recover and validate authoritative operational state before examining the publication checkpoint or prepared images.
 
-A missing `state.json` represents an uninitialized installation. An incomplete, incompatible, corrupt, or integrity-check-failing operational-state document must not be accepted, modified, or silently replaced with another selection. The publication checkpoint, global history, and prepared images must not be used to reconstruct authoritative operational state.
+A missing `state.json` represents an uninitialized installation.
+
+An operational-state document with an invalid document envelope, unsupported format version, failed integrity check, invalid selection revision, or invalid repetition history cannot be recovered. Report an actionable error, preserve the existing file, and terminate resident operation.
+
+When the document envelope, format version, integrity check, selection revision, and repetition history are valid, but the committed selection snapshot or persisted reveal progression is invalid, recover the selection revision and repetition history independently of the invalid selection. Report an actionable error identifying the invalid selection and attempt a new selection for the current logical display date using the recovered revision and repetition history.
+
+The replacement selection follows ordinary selection and commitment rules, increments the recovered selection revision, and establishes a new committed snapshot, reveal progression, publication checkpoint, and global-history event. Do not modify the existing operational-state document until the complete replacement state can be successfully committed.
+
+Do not use the invalid selection, its publication checkpoint, or its prepared images for scheduled presentation. Existing completed filesystem publication datasets remain unaffected until replaced through ordinary publication.
+
+If replacement selection is unsuccessful, retain the existing operational-state document and follow the ordinary unavailable-library or no-eligible-content behavior for an initialized installation.
+
+The publication checkpoint, global history, and prepared images must not be used to reconstruct authoritative operational state.
 
 Before committing an initial revision 1 when `state.json` is missing, remove any surviving `publication.json` checkpoint and invalidate the installation's existing prepared-image sets. Complete this invalidation before committing the new operational state. If invalidation fails, report an actionable diagnostic and do not commit the new selection.
 
@@ -363,9 +375,11 @@ Recovery must preserve the committed selection revision, repetition history, sel
 
 Checkpoint recovery uses the same state-first ordering and atomic replacement requirements as ordinary processing. Destination-specific preparation must not proceed from newly resolved artistic choices until the completed checkpoint has been durably persisted. A checkpoint persistence failure leaves operational state authoritative and must be reported without triggering literary reselection.
 
+During continuous operation, automatic retry of failed publication checkpoint persistence is permitted but not required. Retry timing and backoff are implementation decisions.
+
 Prepared-image recovery uses the valid completed presentation checkpoint and current applicable destination overrides, output specifications, configuration, and available resources. Missing, damaged, incompatible, or incomplete prepared-image sets are regenerated as complete compatible sets. Healthy compatible cached sets remain reusable. Existing resource fallback and diagnostic policies apply without changing the checkpoint's persisted artistic choices.
 
-If operational state is invalid or incompatible, report an actionable diagnostic identifying the effective `state.json` path. For a platform-standard state directory, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state directory outside the standard location, direct the operator to stop Refrain and manually back up and quarantine or remove only the affected `state.json` file. Standard-path reset does not manage custom state directories.
+If operational state cannot be recovered, report an actionable diagnostic identifying the effective `state.json` path. For a platform-standard state directory, the diagnostic may direct the operator to stop Refrain and run `refrain --reset`. For a configured state directory outside the standard location, direct the operator to stop Refrain and manually back up and quarantine or remove only the affected `state.json` file. Standard-path reset does not manage custom state directories.
 
 Missing, damaged, or inaccessible global history must not prevent operational recovery. Global history must not determine selection revisions, repetition eligibility, or reveal progress.
 
@@ -373,6 +387,10 @@ When recovery cannot safely complete, preserve the existing physical e-paper ima
 
 Automated tests must cover:
 
+- replacement selection following an integrity-valid but invalid committed snapshot or persisted reveal progression, retaining repetition history and incrementing the recovered selection revision;
+- rejection of partial operational-state recovery when document integrity, format version, selection revision, or repetition history is invalid;
+- preservation of the existing operational-state document when replacement selection is unsuccessful;
+- rejection of invalid requested reveal stages without persistent modification or interruption of normal resident operation.
 - recovery of a valid committed selection independently of the original content library;
 - interrupted operational-state commits and ambiguous replacement outcomes;
 - missing-state initialization with an orphan checkpoint whose selection fields match revision 1 but whose QR payloads differ, including restart immediately after commitment without reusing the orphan checkpoint or old prepared images;

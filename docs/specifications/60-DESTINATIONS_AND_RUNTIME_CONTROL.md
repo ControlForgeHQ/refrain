@@ -536,6 +536,8 @@ Holds require no new persistent document, publication metadata shape, public des
 
 When no scheduled presentation is available for the current logical display date because a required new selection has not succeeded, reject refresh before publication as `stale-presentation`. Do not republish a retained selection from another logical display date.
 
+The no-eligible-content fallback is not a scheduled presentation and is not a valid refresh target. Reject refresh as `stale-presentation` while this fallback applies, leaving existing all-day holds unchanged.
+
 It applies to every configured destination still participating in scheduled publication, excluding intentionally withdrawn destinations.
 
 Refresh is not historical restoration. It uses the currently required reveal stage and presentation, including changes occurring after a transient preview.
