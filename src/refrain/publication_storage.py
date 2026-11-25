@@ -373,7 +373,7 @@ def _create_directory(path: Path) -> None:
         raise PublicationStorageError(f"publication path is not a directory: {path}")
 
 
-def _read_regular_file(path: Path, *, limit: int | None = None) -> bytes:
+def _read_regular_file(path: Path, *, limit: int) -> bytes:
     _check_path_components(path)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
@@ -386,10 +386,12 @@ def _read_regular_file(path: Path, *, limit: int | None = None) -> bytes:
                 raise PublicationStorageError(f"publication file is not a regular file: {path}")
             with os.fdopen(fd, "rb") as source:
                 fd = -1
-                contents = source.read() if limit is None else source.read(limit + 1)
-            if limit is not None and len(contents) > limit:
-                raise PublicationStorageError(f"publication file exceeds the supported size limit: {path}")
-            return contents
+                contents = bytearray()
+                while chunk := source.read(min(1024 * 1024, limit + 1 - len(contents))):
+                    contents.extend(chunk)
+                    if len(contents) > limit:
+                        raise PublicationStorageError(f"publication file exceeds the supported size limit: {path}")
+            return bytes(contents)
         finally:
             if fd >= 0:
                 os.close(fd)
@@ -459,6 +461,19 @@ def _sync_directory(path: Path) -> None:
 
 def _matches_image(image: bytes, expected_size: tuple[int, int]) -> None:
     try:
+        offset = 8
+        while offset + 12 <= len(image):
+            length = int.from_bytes(image[offset : offset + 4], "big")
+            end = offset + length + 12
+            if end > len(image):
+                break
+            if image[offset + 4 : offset + 8] == b"IEND":
+                break
+            offset = end
+        else:
+            raise PublicationStorageError("published image has no complete PNG end chunk")
+        if offset + 12 != len(image) or image[offset:] != b"\x00\x00\x00\x00IEND\xaeB`\x82":
+            raise PublicationStorageError("published image has no complete PNG end chunk")
         with Image.open(BytesIO(image), formats=["PNG"]) as decoded:
             if decoded.size != expected_size:
                 raise PublicationStorageError("published image dimensions do not match completed metadata")

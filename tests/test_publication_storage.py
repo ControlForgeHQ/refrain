@@ -470,7 +470,8 @@ def test_regular_file_read_enforces_limit_during_read(tmp_path: Path, monkeypatc
     path.write_bytes(b"x" * 129)
     with pytest.raises(PublicationStorageError, match="size limit"):
         publication_storage_module._read_regular_file(path, limit=128)
-    assert reads == [129, 129]
+    assert publication_storage_module._read_regular_file(path, limit=64 * 1024 * 1024) == b"x" * 129
+    assert reads == [129, 1, 129, 1024 * 1024, 1024 * 1024]
 
 
 @pytest.mark.parametrize("operation", ["fstat", "fdopen"])
@@ -507,7 +508,7 @@ def test_oversized_image_is_rejected_by_reader_and_before_writer_commit(
     assert store.read_current("screen").manifest.publication_id == "old"
 
 
-@pytest.mark.parametrize("damage", ["jpeg", "dimensions", "truncated", "animated"])
+@pytest.mark.parametrize("damage", ["jpeg", "dimensions", "truncated", "iend-crc", "trailing", "animated"])
 def test_reader_rejects_invalid_image_even_with_matching_hash(tmp_path: Path, damage: str) -> None:
     store = _store(tmp_path / "publish")
     with _image() as image:
@@ -515,7 +516,11 @@ def test_reader_rejects_invalid_image_even_with_matching_hash(tmp_path: Path, da
     destination = store.root / "screen"
     image_path = destination / "pub.png"
     if damage == "truncated":
-        image_bytes = image_path.read_bytes()[:-12]
+        image_bytes = image_path.read_bytes()[:-4]
+    elif damage == "iend-crc":
+        image_bytes = image_path.read_bytes()[:-1] + b"\x00"
+    elif damage == "trailing":
+        image_bytes = image_path.read_bytes() + b"extra"
     else:
         buffer = BytesIO()
         size = (9, 16) if damage == "dimensions" else _OUTPUT.requested_output_size
