@@ -344,6 +344,61 @@ def test_reveal_stage_uses_current_logical_date_and_entry_schedule(
     assert stages == (CompositionVisibility(source=True, attribution=True),)
 
 
+def test_reveal_stage_captures_invocation_time_before_loading_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _workspace(tmp_path)
+    clock = [datetime(2026, 11, 25, 5, 59, tzinfo=timezone.utc)]
+    calls = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            calls.append(clock[0])
+            return clock[0].astimezone(tz)
+
+    monkeypatch.setattr(viewer, "datetime", FixedDateTime)
+    monkeypatch.setattr(local_time, "local_wall_time", lambda instant: instant.replace(tzinfo=None))
+    monkeypatch.setattr(
+        local_time, "resolve_local_time", lambda day, wall: datetime.combine(day, wall, tzinfo=timezone.utc)
+    )
+    load = viewer.load_application_config
+
+    def load_after_boundary(path):
+        clock[0] = datetime(2026, 11, 25, 6, 1, tzinfo=timezone.utc)
+        return load(path)
+
+    monkeypatch.setattr(viewer, "load_application_config", load_after_boundary)
+    captured = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, *args, **kwargs):
+        captured.append(snapshot.display_date)
+        return prepare(snapshot, *args, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config),
+                "--entry",
+                "@preview",
+                "--reveal-stage",
+                "0",
+                "--resolution",
+                "320",
+                "200",
+                "--output",
+                str(tmp_path / "output.png"),
+            ]
+        )
+        == 0
+    )
+    assert calls == [datetime(2026, 11, 25, 5, 59, tzinfo=timezone.utc)]
+    assert captured == [date(2026, 11, 24)]
+
+
 def test_reveal_stage_coalesces_distinct_wall_times_at_same_instant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
 ) -> None:

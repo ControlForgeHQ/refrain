@@ -208,6 +208,7 @@ def render_preview(
     audience: str = "internal",
     qr_overrides: Mapping[str, str | None] | None = None,
     reveal_stage: int | None = None,
+    current_time: datetime | None = None,
 ) -> Image.Image:
     """Render one output image without runtime persistence or backends."""
     specification = output_specification or _output_specification("16:10", None)
@@ -220,6 +221,7 @@ def render_preview(
         audience=audience,
         qr_overrides=qr_overrides,
         reveal_stage=reveal_stage,
+        current_time=current_time,
     )[specification]
     if destination_type is not None:
         try:
@@ -334,16 +336,19 @@ def render_preview_variants(
     audience: str = "internal",
     qr_overrides: Mapping[str, str | None] | None = None,
     reveal_stage: int | None = None,
+    current_time: datetime | None = None,
 ) -> Mapping[ResolvedOutputSpecification, Image.Image]:
     """Render one coherent presentation across output specifications."""
     if reveal_stage is not None and (type(reveal_stage) is not int or not 0 <= reveal_stage <= 2):
         raise ViewerError("reveal stage must be an integer from 0 through 2")
+    if reveal_stage is not None and current_time is None:
+        current_time = datetime.now(timezone.utc)
     entry, quotation = _select_entry(configuration, selector)
     try:
         display_date = (
             date.today()
             if reveal_stage is None
-            else evaluate_scheduling(datetime.now(timezone.utc), configuration, None).display_date
+            else evaluate_scheduling(current_time, configuration, None).display_date
         )
         snapshot = build_presentation_snapshot(configuration, entry, quotation, display_date)
         stages = resolve_reveal_stages(snapshot)
@@ -569,6 +574,7 @@ def run_viewer(
     reveal_stage: int | None = None,
 ) -> None:
     """Load one configuration and render/export a single presentation."""
+    current_time = datetime.now(timezone.utc) if reveal_stage is not None else None
     if config_file is None:
         try:
             config_file = resolve_application_paths().config_file
@@ -604,6 +610,7 @@ def run_viewer(
         audience=audience or "internal",
         qr_overrides=qr_overrides,
         reveal_stage=reveal_stage,
+        current_time=current_time,
     )
     try:
         if output is not None:
