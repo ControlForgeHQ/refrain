@@ -16,6 +16,7 @@ from typing import Optional, Union
 
 import yaml
 
+from ._filesystem import is_redirected
 from ._yaml import load_yaml, yaml_error_location
 
 _ENTRY_FIELDS = {
@@ -716,10 +717,24 @@ def _load_content_library(
         _diagnose(discovery_diagnostics, affected_path, "$", f"cannot enumerate content directory: {error}")
 
     try:
-        for root, _, filenames in os.walk(directory, onerror=report_walk_error):
-            files.extend(
-                Path(root) / filename for filename in filenames if Path(filename).suffix.lower() in {".yaml", ".yml"}
-            )
+        for root, directories, filenames in os.walk(directory, onerror=report_walk_error):
+            for name in directories[:]:
+                try:
+                    if is_redirected(Path(root) / name):
+                        directories.remove(name)
+                except OSError as error:
+                    directories.remove(name)
+                    report_walk_error(error)
+            for filename in filenames:
+                if Path(filename).suffix.lower() not in {".yaml", ".yml"}:
+                    continue
+                file = Path(root) / filename
+                try:
+                    if is_redirected(file):
+                        continue
+                except OSError:
+                    pass
+                files.append(file)
     except OSError as error:
         report_walk_error(error)
     if discovery_diagnostics:

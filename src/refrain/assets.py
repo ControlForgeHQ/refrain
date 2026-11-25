@@ -14,6 +14,7 @@ from typing import TypeVar
 import yaml
 from PIL import Image, ImageFont
 
+from ._filesystem import is_redirected
 from ._yaml import load_yaml
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z", re.ASCII)
@@ -78,7 +79,14 @@ def _parse_palette_preference(value: object, field: str, report: Report) -> tupl
 
 
 def _is_link(path: AssetPath) -> bool:
-    return isinstance(path, Path) and path.is_symlink()
+    if not isinstance(path, Path):
+        return False
+    try:
+        return is_redirected(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
 
 
 def _children(path: AssetPath, report: Report | None = None, category: str = "assets") -> list[AssetPath]:
@@ -427,7 +435,8 @@ def discover_backgrounds(
             visit(root)
 
     scan(bundled_root, True)
-    scan(custom_root, False)
+    if not _is_link(custom_root.parent):
+        scan(custom_root, False)
     return _register_candidates(candidates, bundled_claims, "backgrounds", report)
 
 
@@ -598,6 +607,8 @@ def discover_decorations(
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
     bundled_claims: dict[str, list[str]] = defaultdict(list)
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
+        if not is_bundled and _is_link(custom_root.parent):
+            continue
         for package, manifest in _walk_packages(root, "decoration.yaml", report, "decorations"):
             field = str(manifest)
             try:
@@ -828,6 +839,8 @@ def discover_fonts(
     candidates: list[tuple[str, FontResource, bool, str]] = []
     bundled_claims: dict[str, list[str]] = defaultdict(list)
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
+        if not is_bundled and _is_link(custom_root.parent):
+            continue
         for package, manifest in _walk_packages(root, "font.yaml", report, "fonts"):
             field = str(manifest)
             try:
