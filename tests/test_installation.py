@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import io
+import os
 import signal
+import socket
+import stat
+import sys
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
 
 import pytest
 import yaml
+from PIL import Image
 from resource_helpers import write_configuration
 
 import refrain.__main__ as cli
 import refrain.installation as installation
 from refrain.config import load_application_config
 from refrain.content import load_content_library
+from refrain.geometry import ResolvedOutputSpecification
 from refrain.installation import (
     InitializationError,
     InstallationOperationError,
@@ -21,7 +30,8 @@ from refrain.installation import (
     reset_installation,
 )
 from refrain.paths import ApplicationPathError, ApplicationPaths, resolve_application_paths, resolve_publication_root
-from refrain.publication_storage import validate_publication_root
+from refrain.publication_metadata import finalize_publication_metadata
+from refrain.publication_storage import PublicationStore, validate_publication_root
 
 
 def _paths(root: Path) -> ApplicationPaths:
@@ -738,6 +748,7 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     external.mkdir()
     (external / "keep").write_text("outside", encoding="utf-8")
     symlink_or_skip(paths.config_directory / "linked", external, directory=True)
+    symlink_or_skip(paths.assets_directory / "fonts" / "linked", external, directory=True)
 
     removed = purge_installation(paths)
 
@@ -757,7 +768,7 @@ def test_purge_removes_owned_roots_but_preserves_shared_parents_and_external_lin
     assert purge_installation(paths) == removed
 
 
-def test_purge_rejects_linked_publication_contents_without_following_them(tmp_path: Path, symlink_or_skip) -> None:
+def test_purge_removes_linked_publication_contents_without_following_them(tmp_path: Path, symlink_or_skip) -> None:
     paths = _paths(tmp_path)
     paths.publish_directory.mkdir(parents=True)
     external = tmp_path / "external"
@@ -765,24 +776,181 @@ def test_purge_rejects_linked_publication_contents_without_following_them(tmp_pa
     sentinel = external / "keep"
     sentinel.write_text("outside")
     symlink_or_skip(paths.publish_directory / "linked", external, directory=True)
+    symlink_or_skip(paths.publish_directory / "linked-file", sentinel)
 
-    with pytest.raises(InstallationOperationError, match="publication storage"):
-        purge_installation(paths)
+    purge_installation(paths)
 
     assert sentinel.read_text() == "outside"
-    assert paths.publish_directory.is_dir()
+    assert not paths.publish_directory.exists()
 
 
-def test_purge_rejects_unrecognized_publication_contents_before_deletion(tmp_path: Path) -> None:
+def test_purge_removes_unrecognized_publication_contents(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     paths.publish_directory.mkdir(parents=True)
     unexpected = paths.publish_directory / "notes.txt"
     unexpected.write_text("not publication data", encoding="utf-8")
+    nested = paths.publish_directory / "unfamiliar" / "nested" / "data.bin"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"unfamiliar")
 
-    with pytest.raises(InstallationOperationError, match="unexpected publication object"):
+    purge_installation(paths)
+
+    assert not paths.publish_directory.exists()
+
+
+def test_purge_removes_writer_produced_publication_dataset(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    output = ResolvedOutputSpecification("16:9", (16, 9))
+    metadata = finalize_publication_metadata(
+        publication_type="transient",
+        publication_id="event",
+        published_at=datetime(2026, 11, 18, tzinfo=timezone.utc),
+        destination_id="screen",
+        output_specification=output,
+    )
+    store = PublicationStore(paths.publish_directory, application_paths=paths)
+    with Image.new("RGB", output.requested_output_size) as image:
+        store.publish("screen", image, metadata)
+    assert store.read_current("screen").metadata == metadata
+    assert (paths.publish_directory / "screen" / ".refrain-owned").is_file()
+
+    purge_installation(paths)
+
+    assert not paths.publish_directory.exists()
+
+
+def test_purge_preserves_files_beside_windows_style_standard_roots(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    operational = tmp_path / "local" / "Refrain"
+    state = operational / "State"
+    cache = operational / "Cache"
+    publish = operational / "Publish"
+    paths = replace(
+        paths,
+        operational_directory=operational,
+        state_directory=state,
+        state_file=state / "state.json",
+        history_file=state / "global-history.jsonl",
+        cache_directory=cache,
+        artifacts_directory=cache / "artifacts",
+        publish_directory=publish,
+    )
+    for root in (paths.config_directory, state, cache, publish):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "unfamiliar").write_text("remove", encoding="utf-8")
+    outside = operational / "unrelated" / "keep"
+    outside.parent.mkdir()
+    outside.write_text("keep", encoding="utf-8")
+
+    removed = purge_installation(paths)
+
+    assert set(removed) == {paths.config_directory, state, cache, publish}
+    assert all(not root.exists() for root in removed)
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_purge_refuses_linked_publication_root_before_any_deletion(tmp_path: Path, symlink_or_skip) -> None:
+    paths = _paths(tmp_path)
+    paths.config_directory.mkdir(parents=True)
+    paths.config_file.write_text("keep", encoding="utf-8")
+    paths.publish_directory.parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep"
+    sentinel.write_text("keep", encoding="utf-8")
+    symlink_or_skip(paths.publish_directory, outside, directory=True)
+
+    with pytest.raises(InstallationOperationError, match="filesystem link"):
         purge_installation(paths)
 
-    assert unexpected.read_text(encoding="utf-8") == "not publication data"
+    assert paths.config_file.read_text(encoding="utf-8") == "keep"
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_purge_removes_publication_junction_without_following_target(tmp_path: Path, junction_or_skip) -> None:
+    paths = _paths(tmp_path)
+    paths.publish_directory.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep"
+    sentinel.write_text("keep", encoding="utf-8")
+    junction_or_skip(paths.publish_directory / "linked", outside)
+
+    purge_installation(paths)
+
+    assert not paths.publish_directory.exists()
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_purge_refuses_publication_junction_root(tmp_path: Path, junction_or_skip) -> None:
+    paths = _paths(tmp_path)
+    paths.publish_directory.parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    junction_or_skip(paths.publish_directory, outside)
+
+    with pytest.raises(InstallationOperationError, match="filesystem link"):
+        purge_installation(paths)
+
+    assert paths.publish_directory.is_junction()
+    assert outside.is_dir()
+
+
+@pytest.mark.parametrize("operation", [purge_installation, reset_installation])
+def test_destructive_operations_reject_unexpected_object_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation
+) -> None:
+    paths = _paths(tmp_path)
+    unexpected = paths.cache_directory / "unexpected"
+    unexpected.parent.mkdir(parents=True)
+    unexpected.write_text("keep", encoding="utf-8")
+    original_lstat = Path.lstat
+
+    def lstat(path: Path, *args, **kwargs):
+        if path == unexpected:
+            return SimpleNamespace(st_mode=stat.S_IFIFO)
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+
+    with pytest.raises(InstallationOperationError, match="unexpected filesystem object") as error:
+        operation(paths)
+
+    assert str(unexpected) in str(error.value)
+    assert unexpected.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Unix domain sockets are Linux-specific here")
+def test_purge_reports_unexpected_socket_without_removing_it(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.publish_directory.mkdir(parents=True)
+    unexpected = paths.publish_directory / "unexpected.sock"
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(str(unexpected))
+        with pytest.raises(InstallationOperationError, match="unexpected filesystem object") as error:
+            purge_installation(paths)
+        assert str(unexpected) in str(error.value)
+        assert unexpected.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="named pipes are Linux-specific here")
+def test_purge_cli_reports_named_pipe_and_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _paths(tmp_path)
+    paths.publish_directory.mkdir(parents=True)
+    unexpected = paths.publish_directory / "unexpected.fifo"
+    os.mkfifo(unexpected)
+    output = _TerminalOutput()
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
+    monkeypatch.setattr(sys, "stdin", _TerminalInput("PURGE REFRAIN\n"))
+    monkeypatch.setattr(sys, "stdout", output)
+
+    assert cli.main(["--purge"]) == 1
+
+    assert str(unexpected) in capsys.readouterr().err
+    assert "Purge complete." not in output.getvalue()
+    assert unexpected.exists()
 
 
 def test_purge_refuses_linked_installation_root(tmp_path: Path, symlink_or_skip) -> None:

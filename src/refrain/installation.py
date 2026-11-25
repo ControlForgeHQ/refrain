@@ -16,7 +16,7 @@ from typing import Callable, TextIO
 from .config import ApplicationConfigurationError, load_application_config
 from .content import ContentLibraryError, load_content_library
 from .paths import ApplicationPaths
-from .publication_storage import PublicationStorageError, validate_publication_root, validate_publication_tree
+from .publication_storage import PublicationStorageError, validate_publication_root
 
 
 class InitializationError(Exception):
@@ -398,6 +398,8 @@ def _remove_tree(path: Path, *, root: bool = False) -> None:
         return
     if root:
         raise InstallationOperationError(f"expected an installation directory at {path}")
+    if not stat.S_ISREG(status.st_mode):
+        raise InstallationOperationError(f"cannot remove unexpected filesystem object at {path}; inspect it manually")
     try:
         path.unlink()
     except OSError as error:
@@ -466,13 +468,10 @@ def reset_installation(paths: ApplicationPaths) -> None:
 
 def purge_installation(paths: ApplicationPaths) -> tuple[Path, ...]:
     """Remove the complete standard Refrain installation without crossing linked paths."""
-    try:
-        validate_publication_tree(paths.publish_directory, application_paths=paths)
-    except PublicationStorageError as error:
-        raise InstallationOperationError(f"cannot safely purge publication storage: {error}") from error
     candidates = tuple(
         dict.fromkeys(
-            Path(path) for path in (paths.config_directory, paths.operational_directory, paths.cache_directory)
+            Path(path)
+            for path in (paths.config_directory, paths.state_directory, paths.cache_directory, paths.publish_directory)
         )
     )
     roots = tuple(
@@ -480,11 +479,8 @@ def purge_installation(paths: ApplicationPaths) -> tuple[Path, ...]:
         for candidate in candidates
         if not any(candidate != other and candidate.is_relative_to(other) for other in candidates)
     )
-    for root in roots:
-        try:
-            _inspect_directory(root)
-        except InstallationOperationError:
-            raise
+    for root in candidates:
+        _inspect_directory(root)
     for root in roots:
         _remove_tree(root, root=True)
     return roots

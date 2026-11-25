@@ -281,7 +281,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 paths.content_directory,
                                 paths.assets_directory,
                                 *paths.asset_directories,
-                                paths.operational_directory,
                                 paths.state_directory,
                                 paths.cache_directory,
                                 paths.artifacts_directory,
