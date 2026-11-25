@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from PIL import Image
 
 from ..config import DisplayOutputConfiguration
-from ..publication_metadata import finalize_publication_metadata
 from ..publication_storage import PublicationStorageError
 from . import DisplayBackendUpdateError
 
@@ -27,65 +24,26 @@ class FilesystemPublicationDisplayBackend:
         self._store = store
 
     def publish(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
-        """Treat a context-free complete image as a transient publication."""
-        self.publish_transient(destination, image)
+        """Reject image-only calls that omit required completed publication metadata."""
+        raise DisplayBackendUpdateError("filesystem publication requires application-finalized metadata")
 
     def publish_scheduled(
         self,
         destination: DisplayOutputConfiguration,
         image: Image.Image,
-        prepared_metadata: dict[str, object],
+        completed_metadata: dict[str, object],
     ) -> None:
-        """Finalize a checkpoint and its cached image associations for this destination."""
-        try:
-            checkpoint = prepared_metadata["checkpoint"]
-            rendered_qr = prepared_metadata["rendered_qr"]
-            if rendered_qr is not None:
-                declarations = checkpoint["content"]["qr"]
-                if rendered_qr not in declarations:
-                    raise ValueError("rendered QR declaration does not match the checkpoint")
-                rendered_qr = next(
-                    (
-                        declaration
-                        for declaration in declarations
-                        if declaration["payload"] == rendered_qr["payload"]
-                        and declaration["visibility"] == [destination.audience]
-                    ),
-                    None,
-                )
-                if rendered_qr is None:
-                    raise ValueError("rendered QR payload does not match the destination audience")
-            metadata = finalize_publication_metadata(
-                checkpoint,
-                publication_type="scheduled",
-                publication_id=uuid.uuid4().hex,
-                published_at=datetime.now(timezone.utc),
-                destination_id=destination.identifier,
-                output_specification=destination.output_specification,
-                audience=destination.audience,
-                selection_revision=prepared_metadata["selection_revision"],
-                visibility=prepared_metadata["visibility"],
-                effective_presentation=prepared_metadata["effective_presentation"],
-                rendered_qr=rendered_qr,
-                prepared_output_specification=prepared_metadata["output_specification"],
-            )
-        except (KeyError, TypeError, ValueError) as error:
-            raise DisplayBackendUpdateError(f"cannot finalize scheduled publication: {error}") from error
-        self._commit(destination, image, metadata, audience=destination.audience)
+        """Commit a scheduled image with already-finalized metadata."""
+        self._commit(destination, image, completed_metadata, audience=destination.audience)
 
-    def publish_transient(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
-        """Commit a complete image with minimal transient metadata."""
-        try:
-            metadata = finalize_publication_metadata(
-                publication_type="transient",
-                publication_id=uuid.uuid4().hex,
-                published_at=datetime.now(timezone.utc),
-                destination_id=destination.identifier,
-                output_specification=destination.output_specification,
-            )
-        except (TypeError, ValueError) as error:
-            raise DisplayBackendUpdateError(f"cannot finalize transient publication: {error}") from error
-        self._commit(destination, image, metadata)
+    def publish_transient(
+        self,
+        destination: DisplayOutputConfiguration,
+        image: Image.Image,
+        completed_metadata: dict[str, object],
+    ) -> None:
+        """Commit a transient image with already-finalized metadata."""
+        self._commit(destination, image, completed_metadata)
 
     def _commit(
         self,

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import pytest
 from PIL import Image
 
+from refrain.application import _finalize_publication_event
 from refrain.config import DisplayOutputConfiguration
 from refrain.display import DisplayBackendUpdateError
 from refrain.display.publication import FilesystemPublicationDisplayBackend
@@ -84,7 +85,7 @@ def test_reserved_manifest_id_is_rejected_before_publication(tmp_path, identifie
     assert not store.root.exists()
 
 
-def test_backend_finalizes_checkpoint_and_image_association(tmp_path) -> None:
+def test_backend_commits_application_finalized_checkpoint_and_image_association(tmp_path) -> None:
     store = PublicationStore(tmp_path / "publish")
     backend = FilesystemPublicationDisplayBackend(store)
     destination = DisplayOutputConfiguration("screen", OUTPUT, audience="internal")
@@ -98,7 +99,7 @@ def test_backend_finalizes_checkpoint_and_image_association(tmp_path) -> None:
     }
     original = copy.deepcopy(association)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
-        backend.publish_scheduled(destination, image, association)
+        backend.publish_scheduled(destination, image, _finalize_publication_event(destination, association))
     dataset = store.read_current("screen")
     assert dataset.metadata["publication"]["type"] == "scheduled"
     assert [action["type"] for action in dataset.metadata["content"]["actions"]] == ["private"]
@@ -106,7 +107,7 @@ def test_backend_finalizes_checkpoint_and_image_association(tmp_path) -> None:
     assert association == original
 
 
-def test_backend_reassociates_shared_qr_with_each_destination_audience(tmp_path) -> None:
+def test_application_finalizer_associates_shared_qr_with_each_destination_audience(tmp_path) -> None:
     store = PublicationStore(tmp_path / "publish")
     backend = FilesystemPublicationDisplayBackend(store)
     checkpoint = copy.deepcopy(CHECKPOINT)
@@ -125,9 +126,8 @@ def test_backend_reassociates_shared_qr_with_each_destination_audience(tmp_path)
     original = copy.deepcopy(association)
     with Image.new("RGB", OUTPUT.requested_output_size) as image:
         for audience in ("external", "internal"):
-            backend.publish_scheduled(
-                DisplayOutputConfiguration(audience, OUTPUT, audience=audience), image, association
-            )
+            destination = DisplayOutputConfiguration(audience, OUTPUT, audience=audience)
+            backend.publish_scheduled(destination, image, _finalize_publication_event(destination, association))
     assert store.read_current("external").metadata["content"]["qr"] == [
         {"payload": "shared", "visibility": ["external"]}
     ]
@@ -137,9 +137,7 @@ def test_backend_reassociates_shared_qr_with_each_destination_audience(tmp_path)
     assert association == original
 
 
-def test_backend_rejects_qr_missing_for_destination_audience(tmp_path) -> None:
-    store = PublicationStore(tmp_path / "publish")
-    backend = FilesystemPublicationDisplayBackend(store)
+def test_application_finalizer_rejects_qr_missing_for_destination_audience() -> None:
     association = {
         "checkpoint": copy.deepcopy(CHECKPOINT),
         "selection_revision": 1,
@@ -148,12 +146,8 @@ def test_backend_rejects_qr_missing_for_destination_audience(tmp_path) -> None:
         "rendered_qr": {"payload": "private", "visibility": ["internal"]},
         "output_specification": {"aspect_ratio": "16:9", "requested_output_size": [16, 9]},
     }
-    with Image.new("RGB", OUTPUT.requested_output_size) as image:
-        with pytest.raises(DisplayBackendUpdateError, match="destination audience"):
-            backend.publish_scheduled(
-                DisplayOutputConfiguration("external", OUTPUT, audience="external"), image, association
-            )
-    assert not store.root.exists()
+    with pytest.raises(DisplayBackendUpdateError, match="destination audience"):
+        _finalize_publication_event(DisplayOutputConfiguration("external", OUTPUT, audience="external"), association)
 
 
 def test_manifest_replacement_is_verified_before_acknowledgement(tmp_path, monkeypatch) -> None:

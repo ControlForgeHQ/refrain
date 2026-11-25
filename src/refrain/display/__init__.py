@@ -30,13 +30,18 @@ class PublicationDisplayBackend(Protocol):
         self,
         destination: DisplayOutputConfiguration,
         image: Image.Image,
-        prepared_metadata: dict[str, object],
+        completed_metadata: dict[str, object],
     ) -> None:
-        """Finalize and publish one scheduled image using its associated preparation metadata."""
+        """Publish one scheduled image with its completed application-finalized metadata."""
         ...
 
-    def publish_transient(self, destination: DisplayOutputConfiguration, image: Image.Image) -> None:
-        """Publish one complete transient image without deriving presentation metadata."""
+    def publish_transient(
+        self,
+        destination: DisplayOutputConfiguration,
+        image: Image.Image,
+        completed_metadata: dict[str, object],
+    ) -> None:
+        """Publish one complete transient image with its completed application-finalized metadata."""
         ...
 
 

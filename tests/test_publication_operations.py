@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from refrain import DisplayBackendConfiguration, DisplayOutputConfiguration, ResolvedOutputSpecification
+from refrain.application import _finalize_publication_event
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 from refrain.publication_storage import PublicationStorageError, PublicationStore
@@ -156,7 +157,7 @@ def test_backend_withdrawal_discards_pending_and_skips_future_publications() -> 
         coordinator.close()
 
 
-def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(tmp_path) -> None:
+def test_application_finalizes_each_destination_and_backend_preserves_transient_pixels(tmp_path) -> None:
     from refrain.display.publication import FilesystemPublicationDisplayBackend
 
     outputs = (
@@ -169,6 +170,7 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
     coordinator = DisplayPublicationCoordinator(
         (configuration,),
         lambda _configuration: backend,
+        publication_finalizer=_finalize_publication_event,
     )
     prepared = _prepared_metadata()
     image = Image.new("RGB", _WIDE.requested_output_size, (12, 34, 56))
@@ -193,7 +195,10 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         )
         assert operation.wait(2).status is PublicationStatus.SUCCEEDED
         transient = store.read_current("web-external")
+        transient_internal = store.read_current("web-internal")
         assert transient.metadata["publication"]["type"] == "transient"
+        assert transient_internal.metadata["publication"]["type"] == "transient"
+        assert transient.manifest.publication_id != transient_internal.manifest.publication_id
         assert set(transient.metadata) == {"schema_version", "publication"}
         with Image.open(BytesIO(transient.image)) as published_image:
             assert published_image.getpixel((0, 0)) == (200, 100, 50)
@@ -214,6 +219,79 @@ def test_publish_backend_finalizes_each_destination_and_keeps_transient_pixels(t
         coordinator.close()
 
 
+def test_metadata_finalization_failure_is_recoverable_and_isolated_from_other_destinations(
+    tmp_path, monkeypatch
+) -> None:
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+
+    monkeypatch.setattr("refrain.display.coordinator._MAX_RETRY_ATTEMPTS", 1)
+    publish_configuration = DisplayBackendConfiguration(
+        "publish",
+        outputs=(
+            DisplayOutputConfiguration("web-external", _WIDE, audience="external"),
+            DisplayOutputConfiguration("web-internal", _WIDE, audience="internal"),
+        ),
+    )
+    window_configuration = DisplayBackendConfiguration(
+        "window", outputs=(DisplayOutputConfiguration("window", _WIDE, audience="internal"),)
+    )
+    store = PublicationStore(tmp_path / "publications")
+    publication_backend = FilesystemPublicationDisplayBackend(store)
+    direct_pixels = []
+
+    class DirectBackend:
+        def publish(self, _destination, image):
+            direct_pixels.append(image.getpixel((0, 0)))
+
+        def close(self):
+            pass
+
+    def backend_factory(configuration):
+        return publication_backend if configuration.type == "publish" else DirectBackend()
+
+    coordinator = DisplayPublicationCoordinator(
+        (publish_configuration, window_configuration),
+        backend_factory,
+        publication_finalizer=_finalize_publication_event,
+    )
+    prepared = _prepared_metadata()
+    prepared["checkpoint"]["content"]["actions"] = [
+        {"type": f"external-{index}", "visibility": ["external"], "payload": str(index)} for index in range(17)
+    ] + [{"type": "internal", "visibility": ["internal"], "payload": "internal"}]
+    identity = (6, 0)
+    try:
+        coordinator.publish_with_metadata(identity, _images(_WIDE, value=9), {_WIDE: prepared})
+        assert coordinator.wait_for_publication(identity, timeout=2)
+
+        assert coordinator.acknowledgements == {
+            "web-external": None,
+            "web-internal": identity,
+            "window": identity,
+        }
+        assert "count limit" in coordinator.publication_results(identity)["web-external"][1]
+        internal = store.read_current("web-internal")
+        assert [action["type"] for action in internal.metadata["content"]["actions"]] == ["internal"]
+        with pytest.raises(PublicationStorageError):
+            store.read_current("web-external")
+        failed_external = coordinator._states["web-external"]
+        assert failed_external.recoverable_failure
+        assert failed_external.retry_attempts == 1
+
+        valid_identity = (6, 1)
+        coordinator.publish_with_metadata(valid_identity, _images(_WIDE, value=10), {_WIDE: _prepared_metadata()})
+        assert coordinator.wait_for_publication(valid_identity, timeout=2)
+        assert coordinator.acknowledgements == {
+            "web-external": valid_identity,
+            "web-internal": valid_identity,
+            "window": valid_identity,
+        }
+        assert store.read_current("web-external").metadata["content"]["quotation"] == "A publication-ready quotation."
+        assert direct_pixels == [(9, 0, 0), (10, 0, 0)]
+        assert coordinator._states["web-external"].retry_attempts == 0
+    finally:
+        coordinator.close()
+
+
 @pytest.mark.parametrize("outcome", ["replacement-error", "cleanup-error", "unconfirmed"])
 def test_publish_backend_acknowledges_only_verified_commits(tmp_path, monkeypatch, caplog, outcome: str) -> None:
     from refrain.display.publication import FilesystemPublicationDisplayBackend
@@ -221,7 +299,10 @@ def test_publish_backend_acknowledges_only_verified_commits(tmp_path, monkeypatc
     configuration = _configuration("publish", (("screen", _WIDE),))
     store = PublicationStore(tmp_path / "publications")
     coordinator = DisplayPublicationCoordinator(
-        (configuration,), lambda _configuration: FilesystemPublicationDisplayBackend(store), retry=False
+        (configuration,),
+        lambda _configuration: FilesystemPublicationDisplayBackend(store),
+        retry=False,
+        publication_finalizer=_finalize_publication_event,
     )
     prepared = _prepared_metadata()
     try:
@@ -286,6 +367,7 @@ def test_scheduled_publish_without_prepared_metadata_fails_without_acknowledgeme
         (configuration,),
         lambda _configuration: FilesystemPublicationDisplayBackend(store),
         retry=False,
+        publication_finalizer=_finalize_publication_event,
     )
     try:
         identity = (5, 2)
@@ -311,6 +393,7 @@ def test_information_view_can_be_explicitly_published_as_transient(tmp_path) -> 
         (configuration,),
         lambda _configuration: FilesystemPublicationDisplayBackend(store),
         retry=False,
+        publication_finalizer=_finalize_publication_event,
     )
     try:
         coordinator.publish_transient_presentation(
@@ -356,6 +439,7 @@ def test_filesystem_failure_isolated_and_retried_per_destination(tmp_path, monke
     coordinator = DisplayPublicationCoordinator(
         (configuration,),
         lambda _configuration: backend,
+        publication_finalizer=_finalize_publication_event,
     )
     identity = (4, 2)
     prepared = _prepared_metadata()

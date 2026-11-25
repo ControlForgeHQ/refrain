@@ -8,7 +8,8 @@ import pytest
 from PIL import Image
 
 from refrain import runtime_control as control
-from refrain.config import DisplayBackendConfiguration, DisplayOutputConfiguration
+from refrain.application import _finalize_publication_event
+from refrain.config import DestinationPresentation, DisplayBackendConfiguration, DisplayOutputConfiguration
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus, StagedTransientImages
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.runtime_control import RuntimeControlClient, RuntimeControlServer, RuntimeProtocolError
@@ -17,13 +18,15 @@ SPEC = ResolvedOutputSpecification("16:9", (16, 9))
 OUTPUTS = (
     DisplayOutputConfiguration("external", SPEC, audience="external"),
     DisplayOutputConfiguration("internal", SPEC, audience="internal"),
-    DisplayOutputConfiguration("different", SPEC, audience="internal"),
+    DisplayOutputConfiguration(
+        "different", SPEC, presentation=DestinationPresentation(qr_enabled=False), audience="internal"
+    ),
 )
 CONFIG = DisplayBackendConfiguration("publish", outputs=OUTPUTS)
 KEYS = {
     "external": OUTPUTS[0].prepared_image_key_for_qr("shared"),
     "internal": OUTPUTS[1].prepared_image_key_for_qr("shared"),
-    "different": OUTPUTS[2].prepared_image_key_for_qr("different"),
+    "different": OUTPUTS[2].prepared_image_key_for_qr("shared"),
 }
 
 
@@ -36,21 +39,54 @@ def _images():
 
 def _metadata():
     shared = {"payload": "shared", "visibility": ["external"]}
-    declarations = [
-        shared,
-        {"payload": "shared", "visibility": ["internal"]},
-        {"payload": "different", "visibility": ["internal"]},
-    ]
+    declarations = [shared, {"payload": "shared", "visibility": ["internal"]}]
     base = {
-        "checkpoint": {"content": {"qr": declarations}},
+        "checkpoint": {
+            "schema_version": 1,
+            "content": {
+                "display_date": "2026-11-18",
+                "selection_revision": 1,
+                "reveal_schedule": {"quotation": "06:00", "source": "12:00", "attribution": "18:00"},
+                "reveal_stage": {"quotation": True, "source": False, "attribution": False},
+                "quotation": "A routed publication.",
+                "actions": [],
+                "qr": declarations,
+            },
+            "presentation": {
+                "style": "centered",
+                "background": "none",
+                "decoration": "none",
+                "fonts": {
+                    "bundle": "example",
+                    "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
+                },
+                "colors": {"text": "black", "decoration": None},
+                "font_size_range": {"minimum": 12, "maximum": 32},
+                "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+            },
+        },
         "selection_revision": 1,
-        "visibility": object(),
-        "effective_presentation": {},
-        "output_specification": SPEC,
+        "visibility": {"quotation": True, "source": False, "attribution": False},
+        "effective_presentation": {
+            "style": "centered",
+            "background": "none",
+            "decoration": "none",
+            "fonts": {
+                "bundle": "example",
+                "faces": {"quotation": "regular", "source": "regular", "attribution": "regular"},
+            },
+            "colors": {"text": "black", "decoration": None},
+            "font_size_range": {"minimum": 12, "maximum": 32},
+            "insets": {"left": 0, "right": 0, "top": 0, "bottom": 0},
+        },
     }
     return {
-        KEYS["external"]: {**base, "rendered_qr": shared},
-        KEYS["different"]: {**base, "rendered_qr": declarations[2]},
+        KEYS["external"]: {**base, "output_specification": SPEC, "rendered_qr": shared},
+        KEYS["different"]: {
+            **base,
+            "output_specification": SPEC,
+            "rendered_qr": None,
+        },
     }
 
 
@@ -61,20 +97,24 @@ def _wait_for_transient_cleanup(server):
     assert not server._transient_slot.locked()
 
 
-def test_scheduled_and_refresh_route_shared_pixels_and_prepared_metadata():
+def test_scheduled_and_refresh_route_shared_pixels_and_completed_metadata():
     seen = []
 
     class Backend:
         def publish_scheduled(self, destination, image, metadata):
-            seen.append((destination.identifier, image.getpixel((0, 0))[0], metadata["rendered_qr"]["payload"]))
+            declarations = metadata["content"]["qr"]
+            payload = None if not declarations else declarations[0]["payload"]
+            seen.append((destination.identifier, image.getpixel((0, 0))[0], payload))
 
-        def publish_transient(self, destination, image):
+        def publish_transient(self, destination, image, metadata):
             raise AssertionError("scheduled publication must not use transient routing")
 
         def close(self):
             pass
 
-    coordinator = DisplayPublicationCoordinator((CONFIG,), lambda _: Backend(), retry=False)
+    coordinator = DisplayPublicationCoordinator(
+        (CONFIG,), lambda _: Backend(), retry=False, publication_finalizer=_finalize_publication_event
+    )
     try:
         coordinator.publish_with_metadata((1, 0), _images(), _metadata(), destination_keys=KEYS)
         assert coordinator.wait_for_publication((1, 0), 5)
@@ -86,7 +126,7 @@ def test_scheduled_and_refresh_route_shared_pixels_and_prepared_metadata():
         expected = [
             ("external", 1, "shared"),
             ("internal", 1, "shared"),
-            ("different", 2, "different"),
+            ("different", 2, None),
         ]
         assert seen == expected * 2
     finally:
@@ -113,15 +153,17 @@ def test_key_map_is_copied_and_changed_key_cannot_acknowledge_old_work():
     try:
         coordinator.publish((1, 0), _images(), destination_keys=mapping)
         assert entered.wait(5)
-        mapping["internal"] = KEYS["different"]
+        mapping["internal"] = OUTPUTS[1].prepared_image_key_for_qr("unrelated")
         changed = dict(KEYS)
-        changed["external"] = KEYS["different"]
-        coordinator.publish((1, 0), _images(), destination_keys=changed)
+        changed["external"] = OUTPUTS[0].prepared_image_key_for_qr("unrelated")
+        changed_images = _images()
+        changed_images[changed["external"]] = Image.new("RGB", SPEC.requested_output_size, (3, 0, 0))
+        coordinator.publish((1, 0), changed_images, destination_keys=changed)
         stale = coordinator.force_scheduled_publication((1, 0), _images(), destination_keys=KEYS)
         assert stale.result.status is PublicationStatus.INVALID
         release.set()
         assert coordinator.wait_for_publication((1, 0), 5)
-        assert seen == [("external", 1), ("external", 2), ("internal", 1), ("different", 2)]
+        assert seen == [("external", 1), ("external", 3), ("internal", 1), ("different", 2)]
         assert coordinator.acknowledgements == {output.identifier: (1, 0) for output in OUTPUTS}
     finally:
         release.set()
