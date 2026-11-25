@@ -39,6 +39,7 @@ _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _TEMPORARY = re.compile(r"\.refrain-[0-9a-f]{32}\.manifest\.tmp\Z")
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_METADATA_BYTES = 16 * 1024 * 1024
+_MAX_IMAGE_BYTES = 64 * 1024 * 1024
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -380,17 +381,20 @@ def _read_regular_file(path: Path, *, limit: int | None = None) -> bytes:
     except OSError as error:
         raise PublicationStorageError(f"cannot read publication file {path}: {error}") from error
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise PublicationStorageError(f"publication file is not a regular file: {path}")
-        with os.fdopen(fd, "rb") as source:
-            fd = -1
-            contents = source.read() if limit is None else source.read(limit + 1)
-        if limit is not None and len(contents) > limit:
-            raise PublicationStorageError(f"publication file exceeds the supported size limit: {path}")
-        return contents
-    finally:
-        if fd >= 0:
-            os.close(fd)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise PublicationStorageError(f"publication file is not a regular file: {path}")
+            with os.fdopen(fd, "rb") as source:
+                fd = -1
+                contents = source.read() if limit is None else source.read(limit + 1)
+            if limit is not None and len(contents) > limit:
+                raise PublicationStorageError(f"publication file exceeds the supported size limit: {path}")
+            return contents
+        finally:
+            if fd >= 0:
+                os.close(fd)
+    except OSError as error:
+        raise PublicationStorageError(f"cannot read publication file {path}: {error}") from error
 
 
 def _manifest_snapshot(path: Path) -> tuple[int, str] | None:
@@ -455,11 +459,13 @@ def _sync_directory(path: Path) -> None:
 
 def _matches_image(image: bytes, expected_size: tuple[int, int]) -> None:
     try:
-        with Image.open(BytesIO(image)) as decoded:
-            if decoded.format != "PNG" or getattr(decoded, "n_frames", 1) != 1:
-                raise PublicationStorageError("published image must be a single-frame PNG")
+        with Image.open(BytesIO(image), formats=["PNG"]) as decoded:
             if decoded.size != expected_size:
                 raise PublicationStorageError("published image dimensions do not match completed metadata")
+            if getattr(decoded, "n_frames", 1) != 1:
+                raise PublicationStorageError("published image must be a single-frame PNG")
+            decoded.verify()
+        with Image.open(BytesIO(image), formats=["PNG"]) as decoded:
             decoded.load()
     except PublicationStorageError:
         raise
@@ -610,7 +616,7 @@ class PublicationStore:
     def _read_dataset(self, destination: Path, manifest: PublicationManifest) -> PublicationDataset:
         image_path = destination / manifest.image_filename
         metadata_path = destination / manifest.metadata_filename
-        image = _read_regular_file(image_path)
+        image = _read_regular_file(image_path, limit=_MAX_IMAGE_BYTES)
         metadata_bytes = _read_regular_file(metadata_path, limit=_MAX_METADATA_BYTES)
         if hashlib.sha256(image).hexdigest() != manifest.image_sha256:
             raise PublicationStorageError(f"publication image hash does not match the manifest: {image_path}")
@@ -642,10 +648,10 @@ class PublicationStore:
     def read_current(self, destination_id: str) -> PublicationDataset:
         """Read and verify the current publication using only its manifest and files."""
         destination_id = self._destination_id(destination_id)
-        destination = self._destination(destination_id, create=False)
         last_error: PublicationStorageError | None = None
         for _attempt in range(2):
             try:
+                destination = self._destination(destination_id, create=False)
                 dataset = self._load_current(destination)
             except PublicationStorageError as error:
                 last_error = error
@@ -654,7 +660,8 @@ class PublicationStore:
                 return dataset
         if last_error is not None:
             raise last_error
-        raise PublicationStorageError(f"publication manifest is missing: {self._manifest_path(destination)}")
+        manifest_path = self._manifest_path(self.root / destination_id)
+        raise PublicationStorageError(f"publication manifest is missing: {manifest_path}")
 
     def _write_bytes(self, path: Path, contents: bytes) -> None:
         with _open_exclusive(path) as output:
@@ -831,7 +838,7 @@ class PublicationStore:
         try:
             self._write_image(image_path, image)
             self._write_bytes(metadata_path, metadata_bytes)
-            image_bytes = _read_regular_file(image_path)
+            image_bytes = _read_regular_file(image_path, limit=_MAX_IMAGE_BYTES)
             _matches_image(image_bytes, expected_size)
             manifest = PublicationManifest(
                 publication_id,
