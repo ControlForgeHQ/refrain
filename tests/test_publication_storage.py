@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -408,6 +409,238 @@ def test_reader_retries_when_initial_manifest_appears_after_first_check(
     dataset = store.read_current("screen")
 
     assert dataset.manifest.publication_id == "initial"
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])
+def test_writer_images_in_supported_png_modes_remain_readable(tmp_path: Path, mode: str) -> None:
+    store = _store(tmp_path / "publish")
+    with Image.new(mode, _OUTPUT.requested_output_size) as image:
+        manifest = store.publish("screen", image, _metadata("pub"), audience="internal")
+    dataset = store.read_current("screen")
+    assert dataset.manifest == manifest
+    with Image.open(BytesIO(dataset.image)) as image:
+        assert image.size == _OUTPUT.requested_output_size
+        image.load()
+
+
+def test_image_reads_are_bounded_for_writer_and_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _store(tmp_path / "publish")
+    read_file = publication_storage_module._read_regular_file
+    limits = []
+
+    def observe_read(path: Path, *, limit: int | None = None) -> bytes:
+        if path.suffix == ".png":
+            limits.append(limit)
+        return read_file(path, limit=limit)
+
+    monkeypatch.setattr(publication_storage_module, "_read_regular_file", observe_read)
+    with _image() as image:
+        store.publish("screen", image, _metadata("pub"), audience="internal")
+    store.read_current("screen")
+    assert len(limits) >= 3
+    assert all(limit == publication_storage_module._MAX_IMAGE_BYTES for limit in limits)
+
+
+def test_regular_file_read_enforces_limit_during_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "image.png"
+    original_fdopen = publication_storage_module.os.fdopen
+    reads = []
+
+    class ObservedRead:
+        def __init__(self, source):
+            self.source = source
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.source.__exit__(*args)
+
+        def read(self, size=-1):
+            reads.append(size)
+            return self.source.read(size)
+
+    monkeypatch.setattr(
+        publication_storage_module.os,
+        "fdopen",
+        lambda fd, *args, **kwargs: ObservedRead(original_fdopen(fd, *args, **kwargs)),
+    )
+    path.write_bytes(b"x" * 128)
+    assert publication_storage_module._read_regular_file(path, limit=128) == b"x" * 128
+    path.write_bytes(b"x" * 129)
+    with pytest.raises(PublicationStorageError, match="size limit"):
+        publication_storage_module._read_regular_file(path, limit=128)
+    assert publication_storage_module._read_regular_file(path, limit=64 * 1024 * 1024) == b"x" * 129
+    assert reads == [129, 1, 129, 1024 * 1024, 1024 * 1024]
+
+
+@pytest.mark.parametrize("operation", ["fstat", "fdopen"])
+def test_regular_file_descriptor_errors_are_verification_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    path = tmp_path / "image.png"
+    path.write_bytes(b"image")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("injected descriptor failure")
+
+    monkeypatch.setattr(publication_storage_module.os, operation, fail)
+    with pytest.raises(PublicationStorageError, match="cannot read publication file"):
+        publication_storage_module._read_regular_file(path, limit=128)
+
+
+def test_oversized_image_is_rejected_by_reader_and_before_writer_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path / "publish")
+    with _image() as image:
+        store.publish("screen", image, _metadata("old"), audience="internal")
+    destination = store.root / "screen"
+    original_manifest = (destination / "manifest.json").read_bytes()
+    monkeypatch.setattr(publication_storage_module, "_MAX_IMAGE_BYTES", 32)
+    with pytest.raises(PublicationStorageError, match="size limit"):
+        store.read_current("screen")
+    with _image(1) as image, pytest.raises(PublicationStorageError, match="size limit"):
+        store.publish("screen", image, _metadata("new"), audience="internal")
+    assert (destination / "manifest.json").read_bytes() == original_manifest
+    assert not (destination / "new.png").exists()
+    monkeypatch.undo()
+    assert store.read_current("screen").manifest.publication_id == "old"
+
+
+@pytest.mark.parametrize("damage", ["jpeg", "dimensions", "truncated", "iend-crc", "trailing", "animated"])
+def test_reader_rejects_invalid_image_even_with_matching_hash(tmp_path: Path, damage: str) -> None:
+    store = _store(tmp_path / "publish")
+    with _image() as image:
+        store.publish("screen", image, _metadata("pub"), audience="internal")
+    destination = store.root / "screen"
+    image_path = destination / "pub.png"
+    if damage == "truncated":
+        image_bytes = image_path.read_bytes()[:-4]
+    elif damage == "iend-crc":
+        image_bytes = image_path.read_bytes()[:-1] + b"\x00"
+    elif damage == "trailing":
+        image_bytes = image_path.read_bytes() + b"extra"
+    else:
+        buffer = BytesIO()
+        size = (9, 16) if damage == "dimensions" else _OUTPUT.requested_output_size
+        with Image.new("RGB", size) as image:
+            if damage == "animated":
+                with Image.new("RGB", size, "red") as second:
+                    image.save(buffer, format="PNG", save_all=True, append_images=[second])
+            else:
+                image.save(buffer, format="JPEG" if damage == "jpeg" else "PNG")
+        image_bytes = buffer.getvalue()
+    image_path.write_bytes(image_bytes)
+    manifest_path = destination / "manifest.json"
+    manifest = parse_publication_manifest(manifest_path.read_bytes())
+    manifest_path.write_bytes(
+        serialize_publication_manifest(replace(manifest, image_sha256=hashlib.sha256(image_bytes).hexdigest()))
+    )
+    with pytest.raises(PublicationStorageError):
+        store.read_current("screen")
+
+
+def test_image_dimensions_are_checked_before_full_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+    buffer = BytesIO()
+    with Image.new("RGB", (20, 20)) as image:
+        image.save(buffer, format="PNG")
+
+    def fail_load(*_args, **_kwargs):
+        pytest.fail("mismatched image must not be decoded")
+
+    monkeypatch.setattr(Image.Image, "load", fail_load)
+    with pytest.raises(PublicationStorageError, match="dimensions"):
+        publication_storage_module._matches_image(buffer.getvalue(), _OUTPUT.requested_output_size)
+
+
+@pytest.mark.parametrize("filename", ["manifest.json", "old.png", "old.json"])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_read_errors_retry_from_current_manifest_and_exhaust_explicitly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str, persistent: bool
+) -> None:
+    store = _store(tmp_path / "publish")
+    with _image() as image:
+        store.publish("screen", image, _metadata("old"), audience="internal")
+    original_open = publication_storage_module.os.open
+    original_fdopen = publication_storage_module.os.fdopen
+    opened = {}
+    failures = 0
+    failed_sources = []
+    load_current = store._load_current
+    attempts = 0
+
+    def track_open(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        opened[fd] = Path(path).name
+        return fd
+
+    class FailingRead:
+        def __init__(self, source):
+            self.source = source
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.source.__exit__(*args)
+
+        def read(self, size=-1):
+            nonlocal failures
+            failures += 1
+            failed_sources.append(self.source)
+            raise OSError("injected read failure")
+
+    def replace_after_failed_read(destination: Path):
+        nonlocal attempts
+        attempts += 1
+        try:
+            return load_current(destination)
+        except PublicationStorageError as error:
+            assert isinstance(error.__cause__, OSError)
+            assert str(error.__cause__) == "injected read failure"
+            assert failed_sources[-1].closed
+            if not persistent:
+                with _image(1) as image:
+                    _store(store.root).publish("screen", image, _metadata("new"), audience="internal")
+            raise
+
+    def failing_fdopen(fd, *args, **kwargs):
+        source = original_fdopen(fd, *args, **kwargs)
+        if opened.get(fd) == filename and (persistent or not failures):
+            return FailingRead(source)
+        return source
+
+    monkeypatch.setattr(publication_storage_module.os, "open", track_open)
+    monkeypatch.setattr(publication_storage_module.os, "fdopen", failing_fdopen)
+    monkeypatch.setattr(store, "_load_current", replace_after_failed_read)
+    if persistent:
+        with pytest.raises(PublicationStorageError, match="cannot read publication file"):
+            store.read_current("screen")
+        assert failures == 2
+    else:
+        assert store.read_current("screen").manifest.publication_id == "new"
+        assert failures == 1
+    assert attempts == 2
+
+
+def test_missing_destination_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _store(tmp_path / "publish")
+    destination = store._destination
+    attempts = 0
+
+    def publish_after_missing(destination_id: str, *, create: bool) -> Path:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            with _image() as image:
+                _store(store.root).publish("screen", image, _metadata("pub"), audience="internal")
+            raise PublicationStorageError("temporarily unavailable")
+        return destination(destination_id, create=create)
+
+    monkeypatch.setattr(store, "_destination", publish_after_missing)
+    assert store.read_current("screen").manifest.publication_id == "pub"
+    assert attempts == 2
 
 
 def test_unverifiable_manifest_replacement_retains_old_and_new_files(
