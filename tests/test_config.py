@@ -226,6 +226,18 @@ def test_publish_destination_rejects_windows_reserved_directory_ids(tmp_path: Pa
     assert "destinations[0].id" in diagnostic_fields(config_path)
 
 
+@pytest.mark.parametrize(("length", "valid"), [(255, True), (256, False)])
+def test_publish_destination_id_component_length(tmp_path: Path, length: int, valid: bool) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(destinations=[{"id": "a" * length, "type": "publish"}]),
+    )
+    if valid:
+        assert load_application_config(config_path).display_backends[0].outputs[0].identifier == "a" * length
+    else:
+        assert "destinations[0].id" in diagnostic_fields(config_path)
+
+
 def test_builtin_palette_custom_colors_and_black_text_default(tmp_path: Path) -> None:
     data = configuration_data()
     data["palette"] = {"red": "#C82F32", "burnt-orange": "#C65A20"}
@@ -1804,8 +1816,8 @@ def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
         tmp_path / "config.yaml",
         configuration_data(
             destinations=[
-                {"id": identifier, "type": "publish"},
-                {"id": "all", "type": "window"},
+                {"id": identifier, "type": "window"},
+                {"id": "all", "type": "waveshare-13in3-e"},
             ]
         ),
     )
@@ -1818,7 +1830,7 @@ def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
 
     write_config(
         config_path,
-        configuration_data(destinations=[{"id": identifier + "a", "type": "publish"}]),
+        configuration_data(destinations=[{"id": identifier + "a", "type": "window"}]),
     )
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)

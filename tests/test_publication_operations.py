@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 import time
 from io import BytesIO
 from threading import Event, Lock
@@ -250,6 +252,43 @@ def test_filesystem_publication_progresses_while_window_is_blocked(tmp_path) -> 
         with Image.open(BytesIO(dataset.image)) as image:
             assert image.getpixel((0, 0)) == (17, 0, 0)
         assert coordinator.acknowledgements["window"] is None
+        release.set()
+        assert coordinator.wait_for_publication((4, 2), timeout=2)
+    finally:
+        release.set()
+        coordinator.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32" and not os.environ.get("DISPLAY"), reason="requires a graphical display")
+def test_real_window_and_filesystem_publication_progress_independently(tmp_path) -> None:
+    pytest.importorskip("tkinter", reason="requires Tk support")
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+    from refrain.display.window import WindowDisplayBackend
+
+    entered, release = Event(), Event()
+    store = PublicationStore(tmp_path / "publications")
+    publication_backend = FilesystemPublicationDisplayBackend(store)
+    window = WindowDisplayBackend()
+    original_publish = window.publish
+
+    def blocked_publish(destination, image):
+        entered.set()
+        assert release.wait(5)
+        original_publish(destination, image)
+
+    window.publish = blocked_publish
+    coordinator = DisplayPublicationCoordinator(
+        (_configuration("window"), _configuration("publish")),
+        lambda config: publication_backend if config.type == "publish" else window,
+        publication_finalizer=_finalize_publication_event,
+    )
+    try:
+        coordinator.publish_with_metadata((4, 2), _images(_WIDE, value=17), {_WIDE: _prepared_metadata()})
+        assert entered.wait(2)
+        assert _wait_until(lambda: coordinator.acknowledgements["publish"] == (4, 2))
+        dataset = store.read_current("publish")
+        with Image.open(BytesIO(dataset.image)) as image:
+            assert image.getpixel((0, 0)) == (17, 0, 0)
         release.set()
         assert coordinator.wait_for_publication((4, 2), timeout=2)
     finally:

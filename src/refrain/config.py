@@ -832,6 +832,9 @@ def _parse_destinations(
                 )
                 continue
             if backend_type == "publish":
+                if len(identifier) > 255:
+                    report(f"{field}.id", "publish destination IDs must be at most 255 characters", logging.ERROR)
+                    continue
                 if identifier.upper() in _WINDOWS_RESERVED_DESTINATION_IDS:
                     report(
                         f"{field}.id",
