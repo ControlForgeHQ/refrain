@@ -211,13 +211,7 @@ class DisplayPublicationCoordinator:
 
     @staticmethod
     def _default_factory(configuration: DisplayBackendConfiguration) -> DisplayBackend:
-        return create_display_backend(
-            configuration.type,
-            image_server_host=configuration.host,
-            image_server_port=configuration.port,
-            image_server_output_ids=tuple(output.identifier for output in configuration.outputs),
-            image_server_enabled=configuration.service_enabled,
-        )
+        return create_display_backend(configuration.type)
 
     @property
     def desired_identity(self) -> tuple[int, int] | None:

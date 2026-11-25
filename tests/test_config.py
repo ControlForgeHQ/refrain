@@ -1078,7 +1078,7 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
     data = configuration_data(
         destinations=[
             {"id": "test-font", "type": "window", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
-            {"id": "service", "type": "image-server"},
+            {"id": "service", "type": "publish"},
         ],
         **{
             "image-server": None,
@@ -1135,7 +1135,6 @@ def test_complete_revised_schema_and_independent_pool_namespaces(tmp_path: Path)
     assert config.storage.state == tmp_path / "state"
     assert config.information_view_duration == 30
     assert config.qr_defaults == {"external": "https://example.test/external", "internal": None}
-    assert config.display_backends[1].service_enabled is True
 
 
 def test_color_pool_list_shorthand_is_unsupported(tmp_path: Path, caplog) -> None:
@@ -1168,8 +1167,8 @@ def test_window_destination_defaults_to_16_9_full_hd(tmp_path: Path) -> None:
         ("window", "internal"),
         ("waveshare-13in3-e", "external"),
         ("waveshare-13in3-e", "internal"),
-        ("image-server", "external"),
-        ("image-server", "internal"),
+        ("publish", "external"),
+        ("publish", "internal"),
     ],
 )
 def test_each_destination_type_preserves_explicit_audience(tmp_path: Path, backend_type: str, audience: str) -> None:
@@ -1617,7 +1616,11 @@ def test_shipped_configurations_have_usable_pools_and_prepare_images(config_path
     installed.write_bytes(config_path.read_bytes())
     config = load_application_config(installed)
 
-    assert config.display_backends
+    assert len(config.display_backends) == 1
+    assert config.display_backends[0].type == "publish"
+    assert [(output.identifier, output.audience) for output in config.display_backends[0].outputs] == [
+        ("default", "internal")
+    ]
     assert config.default_fonts
     assert set(config.default_fonts) <= config.fonts.keys()
     assert set(config.default_backgrounds) <= config.backgrounds.keys() | {"none"}
@@ -1737,73 +1740,56 @@ def test_single_destination_backend_capacity_is_checked_during_configuration_val
     assert any("supports at most 1 destination" in item.message for item in error.value.diagnostics)
 
 
-def test_image_server_destinations_are_registered_without_enabling_the_service(tmp_path: Path) -> None:
-    config = load_application_config(
-        write_config(
-            tmp_path / "config.yaml",
-            configuration_data(destinations=[{"id": "kitchen", "type": "image-server"}]),
-        )
+@pytest.mark.parametrize("section", [None, {}, {"host": [], "port": -1, "destinations": False}, ["invalid"]])
+def test_unconsumed_top_level_fields_are_silently_ignored(tmp_path: Path, caplog, section: object) -> None:
+    path = tmp_path / "config.yaml"
+    baseline = configuration_data()
+    expected = load_application_config(write_config(path, baseline))
+    caplog.clear()
+    actual = load_application_config(
+        write_config(path, {**baseline, "image-server": section, "arbitrary-future-field": {"invalid": [1, None]}})
     )
-
-    backend = config.display_backends[0]
-    assert backend.type == "image-server"
-    assert not backend.service_enabled
-    assert backend.host == "127.0.0.1"
-    assert backend.port == 8080
-    assert backend.outputs[0].identifier == "kitchen"
-    assert backend.outputs[0].output_specification == ResolvedOutputSpecification("16:10", (3840, 2400))
+    assert actual == expected
+    assert not caplog.records
 
 
-@pytest.mark.parametrize("section", [None, {}, {"host": "127.0.0.1", "port": 8080}])
-def test_present_image_server_section_enables_service_with_defaults(
-    tmp_path: Path, caplog, section: dict[str, object]
-) -> None:
-    with caplog.at_level("INFO"):
-        config = load_application_config(
-            write_config(
-                tmp_path / "config.yaml",
-                configuration_data(
-                    destinations=[{"id": "kitchen", "type": "image-server"}],
-                    **{"image-server": section},
-                ),
-            )
-        )
-
-    assert config.display_backends[0].service_enabled
-    assert config.display_backends[0].host == "127.0.0.1"
-    assert config.display_backends[0].port == 8080
-    assert "image-server:" not in caplog.text
+@pytest.mark.parametrize(
+    "unconsumed",
+    [
+        "future:\n  duplicate: 1\n  duplicate: 2\n",
+        "future:\n  value: &anchor 1\n  other: *anchor\n",
+        "future:\n  value: !unsupported test\n",
+        "future:\n  nested: [unterminated\n",
+        "future: {}\n---\nother: {}\n",
+    ],
+)
+def test_unconsumed_sections_still_require_valid_yaml(tmp_path: Path, unconsumed: str) -> None:
+    path = write_config(tmp_path / "config.yaml", configuration_data())
+    with path.open("a", encoding="utf-8") as file:
+        file.write(unconsumed)
+    with pytest.raises(ApplicationConfigurationError):
+        load_application_config(path)
 
 
-def test_image_server_service_settings_are_independent_of_destinations(tmp_path: Path) -> None:
-    config = load_application_config(
-        write_config(
-            tmp_path / "config.yaml",
-            configuration_data(
-                destinations=[
-                    {"id": "kitchen", "type": "image-server"},
-                    {"id": "hallway", "type": "image-server", "aspect_ratio": "4:3", "resolution": [1600, 1200]},
-                ],
-                **{"image-server": {"host": "0.0.0.0", "port": 8123}},
-            ),
-        )
+@pytest.mark.parametrize("backend_type", ["image-server", "arbitrary-unsupported"])
+def test_unsupported_destination_types_use_the_same_validation(tmp_path: Path, backend_type: str) -> None:
+    path = write_config(
+        tmp_path / "config.yaml", configuration_data(destinations=[{"id": "test", "type": backend_type}])
     )
-
-    assert len(config.display_backends) == 1
-    backend = config.display_backends[0]
-    assert backend.service_enabled
-    assert backend.host == "0.0.0.0"
-    assert backend.port == 8123
-    assert [output.identifier for output in backend.outputs] == ["kitchen", "hallway"]
-    assert backend.outputs[1].output_specification == ResolvedOutputSpecification("4:3", (1600, 1200))
-    assert len(config.required_output_specifications) == 2
+    with pytest.raises(ApplicationConfigurationError) as error:
+        load_application_config(path)
+    assert any(
+        item.field == "destinations[0].type"
+        and item.message == ("must be one of the supported backends: 'window', 'waveshare-13in3-e', 'publish'")
+        for item in error.value.diagnostics
+    )
 
 
 @pytest.mark.parametrize("identifier", ["", " ", None, 1, "-bad", "_bad", "bad name", "é", "id:part"])
 def test_destination_ids_require_url_safe_ascii_identifier_syntax(tmp_path: Path, identifier: object) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(destinations=[{"id": identifier, "type": "image-server"}]),
+        configuration_data(destinations=[{"id": identifier, "type": "publish"}]),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
@@ -1818,7 +1804,7 @@ def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
         tmp_path / "config.yaml",
         configuration_data(
             destinations=[
-                {"id": identifier, "type": "image-server"},
+                {"id": identifier, "type": "publish"},
                 {"id": "all", "type": "window"},
             ]
         ),
@@ -1832,7 +1818,7 @@ def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
 
     write_config(
         config_path,
-        configuration_data(destinations=[{"id": identifier + "a", "type": "image-server"}]),
+        configuration_data(destinations=[{"id": identifier + "a", "type": "publish"}]),
     )
     with pytest.raises(ApplicationConfigurationError) as error:
         load_application_config(config_path)
@@ -1848,7 +1834,7 @@ def test_destination_ids_must_be_unique_across_backend_types(tmp_path: Path) -> 
         tmp_path / "config.yaml",
         configuration_data(
             destinations=[
-                {"id": "room", "type": "image-server"},
+                {"id": "room", "type": "publish"},
                 {"id": "room", "type": "window"},
             ]
         ),
@@ -1910,10 +1896,10 @@ def test_destination_ids_are_isolated_from_resource_identifier_namespaces(tmp_pa
     "fields",
     [{"aspect_ratio": "4:3"}, {"resolution": [1600, 1200]}],
 )
-def test_image_server_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
+def test_publish_output_overrides_must_be_paired(tmp_path: Path, fields: dict[str, object]) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(destinations=[{"id": "kitchen", "type": "image-server", **fields}]),
+        configuration_data(destinations=[{"id": "kitchen", "type": "publish", **fields}]),
     )
 
     with pytest.raises(ApplicationConfigurationError) as error:
@@ -1922,18 +1908,18 @@ def test_image_server_output_overrides_must_be_paired(tmp_path: Path, fields: di
     assert any(item.field == "destinations[0]" for item in error.value.diagnostics)
 
 
-def test_image_server_outputs_resolve_independently_and_share_duplicate_specifications(tmp_path: Path) -> None:
+def test_publish_outputs_resolve_independently_and_share_duplicate_specifications(tmp_path: Path) -> None:
     config = load_application_config(
         write_config(
             tmp_path / "config.yaml",
             configuration_data(
                 destinations=[
                     {"id": "desktop", "type": "window"},
-                    {"id": "default", "type": "image-server"},
-                    {"id": "wide", "type": "image-server", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
+                    {"id": "default", "type": "publish"},
+                    {"id": "wide", "type": "publish", "aspect_ratio": "16:9", "resolution": [1920, 1080]},
                     {
                         "id": "portrait-ish",
-                        "type": "image-server",
+                        "type": "publish",
                         "aspect_ratio": "4:3",
                         "resolution": [1600, 1200],
                     },
@@ -1947,37 +1933,6 @@ def test_image_server_outputs_resolve_independently_and_share_duplicate_specific
         for specification in config.required_output_specifications
     } == {("16:9", (1920, 1080)), ("16:10", (3840, 2400)), ("4:3", (1600, 1200))}
     assert len(config.required_output_specifications) == 3
-
-
-@pytest.mark.parametrize(
-    ("image_server", "expected_field"),
-    [
-        ({"unknown": 1}, "image-server.unknown"),
-        ({"host": ""}, "image-server.host"),
-        ({"host": "not a hostname"}, "image-server.host"),
-        ({"host": True}, "image-server.host"),
-        ({"port": True}, "image-server.port"),
-        ({"port": "8080"}, "image-server.port"),
-        ({"port": 0}, "image-server.port"),
-        ({"port": 65536}, "image-server.port"),
-    ],
-)
-def test_invalid_image_server_settings_are_recoverable(
-    tmp_path: Path, image_server: object, expected_field: str, caplog
-) -> None:
-    config = load_application_config(
-        write_config(
-            tmp_path / "config.yaml",
-            configuration_data(
-                destinations=[{"id": "desktop", "type": "window"}],
-                **{"image-server": image_server},
-            ),
-        )
-    )
-
-    assert expected_field in caplog.text
-    assert config.display_backends[0].host == "127.0.0.1"
-    assert config.display_backends[0].port == 8080
 
 
 @pytest.mark.parametrize(
@@ -2368,7 +2323,7 @@ def test_invalid_optional_values_are_reported_without_default_announcements(tmp_
     assert "scheduling.reveal.quotation" in caplog.text
     assert "is not a supported configuration field; it is ignored" in caplog.text
     assert "scheduling.reveal.source" in caplog.text
-    assert "unexpected" in caplog.text
+    assert "unexpected" not in caplog.text
     assert "using" in caplog.text and "ignored" in caplog.text
 
 

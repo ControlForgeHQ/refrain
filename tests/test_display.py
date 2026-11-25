@@ -355,9 +355,10 @@ def test_factory_constructs_the_explicit_window_backend(monkeypatch: pytest.Monk
     backend.close()
 
 
-def test_factory_reports_unknown_backends() -> None:
+@pytest.mark.parametrize("backend_type", ["image-server", "unexpected"])
+def test_factory_reports_unknown_backends(backend_type: str) -> None:
     with pytest.raises(DisplayBackendError, match="unsupported display backend"):
-        create_display_backend("unexpected")
+        create_display_backend(backend_type)
 
 
 def test_window_updates_replace_image_and_preserve_caller_image(monkeypatch: pytest.MonkeyPatch) -> None:

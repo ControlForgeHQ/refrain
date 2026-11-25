@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
-import socket
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
-from io import BytesIO
 from pathlib import Path
 from random import Random
 from threading import Event, Lock
 from time import monotonic, sleep
-from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -38,12 +34,10 @@ from refrain import (
     run_startup,
 )
 from refrain.__main__ import main
-from refrain.config import DisplayBackendConfiguration
 from refrain.display import (
     DisplayBackendCloseError,
     DisplayBackendInitializationError,
     DisplayBackendUpdateError,
-    create_display_backend,
 )
 from refrain.display.coordinator import (
     DisplayPublicationCoordinator,
@@ -994,11 +988,11 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
         workspace.config.read_text(encoding="utf-8").replace(
             '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
             '  - id: desktop\n    type: "window"\n    audience: internal\n'
-            '  - id: default\n    type: "image-server"\n    audience: internal',
+            '  - id: default\n    type: "publish"\n    audience: internal',
         ),
         encoding="utf-8",
     )
-    displays = {"window": FakeDisplay(), "image-server": FakeDisplay()}
+    displays = {"window": FakeDisplay(), "publish": FakeDisplay()}
 
     def factory(configuration):
         return displays[configuration.type]
@@ -1015,9 +1009,9 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
 
     assert result.state.revision == 1
     assert displays["window"].sizes == [(1920, 1080)] and displays["window"].closed == 1
-    assert displays["image-server"].sizes == [(3840, 2400)] and displays["image-server"].closed == 1
+    assert displays["publish"].sizes == [(3840, 2400)] and displays["publish"].closed == 1
     assert displays["window"].images[0].getpixel((192, 162)) == (255, 255, 255)
-    assert displays["image-server"].images[0].getpixel((384, 324)) == (255, 255, 255)
+    assert displays["publish"].images[0].getpixel((384, 324)) == (255, 255, 255)
     for display in displays.values():
         for image in display.images:
             image.close()
@@ -1440,7 +1434,7 @@ def test_default_timestamp_is_used_when_omitted(workspace: Workspace) -> None:
     assert workspace.load().revision == 1
 
 
-def test_startup_reconciles_changed_and_added_image_server_outputs_without_reselection(
+def test_startup_reconciles_changed_and_added_publish_outputs_without_reselection(
     workspace: Workspace,
 ) -> None:
     ordinary(workspace)
@@ -1448,7 +1442,7 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
         _CONFIG.replace(
             '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
             "  - id: default\n"
-            "    type: image-server\n"
+            "    type: publish\n"
             "    audience: internal\n"
             '    aspect_ratio: "16:10"\n'
             "    resolution: [800, 500]",
@@ -1468,7 +1462,7 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
             self.update_output(destination.identifier, image)
 
         def update(self, image: Image.Image) -> None:
-            raise AssertionError("image-server destinations require named output updates")
+            raise AssertionError("publish destinations require named output updates")
 
         def close(self) -> None:
             pass
@@ -1491,11 +1485,11 @@ def test_startup_reconciles_changed_and_added_image_server_outputs_without_resel
     workspace.config.write_text(
         _CONFIG.replace(
             '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
-            "  - id: default\n    type: image-server\n    audience: internal\n"
+            "  - id: default\n    type: publish\n    audience: internal\n"
             '    aspect_ratio: "16:9"\n    resolution: [800, 450]\n'
-            "  - id: kitchen\n    type: image-server\n    audience: external\n"
+            "  - id: kitchen\n    type: publish\n    audience: external\n"
             '    aspect_ratio: "4:3"\n    resolution: [640, 480]\n'
-            "  - id: hallway\n    type: image-server\n    audience: internal\n"
+            "  - id: hallway\n    type: publish\n    audience: internal\n"
             '    aspect_ratio: "16:10"\n    resolution: [800, 500]',
         ),
         encoding="utf-8",
@@ -1931,7 +1925,7 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
         .replace(
             '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
             '  - id: desktop\n    type: "window"\n    audience: internal\n'
-            '  - id: default\n    type: "image-server"\n    audience: internal',
+            '  - id: default\n    type: "publish"\n    audience: internal',
         ),
         encoding="utf-8",
     )
@@ -1956,7 +1950,7 @@ def test_information_view_timer_starts_on_first_backend_ack_and_transitions_late
                 slow_daily.set()
 
     slow = SlowDisplay()
-    displays = {"window": fast, "image-server": slow}
+    displays = {"window": fast, "publish": slow}
     wait_count = 0
 
     def scheduling_wait(_deadline, wake_event, **_kwargs):
@@ -2202,169 +2196,6 @@ def test_continuous_reports_pending_backend_shutdown(workspace, monkeypatch) -> 
     assert len(callbacks) == 1
     assert callbacks[0][0] == workers
     assert isinstance(callbacks[0][1].__self__, Coordinator)
-
-
-def test_continuous_http_publication_progresses_while_another_backend_is_busy(workspace) -> None:
-    ordinary(workspace)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    workspace.config.write_text(
-        workspace.config.read_text(encoding="utf-8").replace(
-            '  - id: epaper\n    type: "waveshare-13in3-e"\n    audience: "internal"',
-            '  - id: desktop\n    type: "window"\n    audience: internal\n'
-            '  - id: default\n    type: "image-server"\n    audience: internal\n'
-            f'image-server:\n  host: "127.0.0.1"\n  port: {port}',
-        ),
-        encoding="utf-8",
-    )
-    clock = RuntimeClock(at(10, 7))
-    slow_started, release_slow, slow_updated, slow_closed = Event(), Event(), Event(), Event()
-    slow_updates = []
-
-    class SlowBackend:
-        def update(self, image):
-            slow_updates.append(image.copy())
-            if len(slow_updates) == 1:
-                slow_started.set()
-                assert release_slow.wait(5)
-            elif len(slow_updates) == 2:
-                slow_updated.set()
-
-        def publish(self, destination, image):
-            del destination
-            self.update(image)
-
-        def close(self):
-            slow_closed.set()
-
-    def backend_factory(configuration):
-        if configuration.type == "window":
-            return SlowBackend()
-        return create_display_backend(
-            configuration.type,
-            image_server_host=configuration.host,
-            image_server_port=configuration.port,
-        )
-
-    def read_until(expected: bytes) -> None:
-        deadline = monotonic() + 4
-        while monotonic() < deadline:
-            try:
-                with urlopen(f"http://127.0.0.1:{port}/display/default/current", timeout=0.25) as response:
-                    if response.status == 200:
-                        with Image.open(BytesIO(response.read())) as published, Image.open(BytesIO(expected)) as image:
-                            if published.size == image.size and published.tobytes() == image.tobytes():
-                                return
-            except OSError:
-                pass
-            sleep(0.02)
-        pytest.fail("image-server did not publish the expected prepared stage")
-
-    wait_count = 0
-
-    def scheduling_wait(_deadline, _shutdown, **_kwargs):
-        nonlocal wait_count
-        wait_count += 1
-        assert slow_started.wait(2)
-        stage = wait_count - 1
-        expected = next(
-            path.read_bytes()
-            for path in workspace.artifacts.rglob(f"stage-{stage}.png")
-            if "variant-16-10-3840x2400" in path.parts
-        )
-        read_until(expected)
-        if wait_count == 1:
-            clock.move(at(10, 12))
-            return False
-        assert not release_slow.is_set()
-        release_slow.set()
-        assert slow_updated.wait(2)
-        clock.set()
-        return True
-
-    try:
-        run_application(
-            workspace.config,
-            workspace.state,
-            workspace.artifacts,
-            history_path=workspace.history,
-            shutdown_event=clock,
-            random_source=Random(1),
-            backend_factory=backend_factory,
-            wall_clock=lambda: clock.now,
-            monotonic_clock=lambda: clock.elapsed,
-            scheduling_wait=scheduling_wait,
-        )
-    finally:
-        release_slow.set()
-
-    assert wait_count == 2
-    assert workspace.load().highest_reveal_stage == 1
-    assert len(slow_updates) == 2 and slow_closed.is_set()
-    assert all(update.size == (1920, 1080) for update in slow_updates)
-
-
-@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="requires a graphical display")
-def test_window_and_image_server_publish_independently() -> None:
-    pytest.importorskip("tkinter", reason="requires Tk support")
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    configurations = (
-        DisplayBackendConfiguration("window"),
-        DisplayBackendConfiguration("image-server", host="127.0.0.1", port=port),
-    )
-    window = create_display_backend("window")
-    window_update = window.update
-    update_started, release_update = Event(), Event()
-
-    def blocked_window_update(image):
-        update_started.set()
-        assert release_update.wait(5)
-        window_update(image)
-
-    window.update = blocked_window_update
-
-    def backend_factory(configuration):
-        if configuration.type == "window":
-            return window
-        return create_display_backend(
-            configuration.type,
-            image_server_host=configuration.host,
-            image_server_port=configuration.port,
-        )
-
-    coordinator = DisplayPublicationCoordinator(configurations, backend_factory)
-    expected = Image.new("RGB", (16, 12), (31, 47, 59))
-    identity = (1, 0)
-    try:
-        window_specification = ResolvedOutputSpecification("16:9", (1920, 1080))
-        server_specification = ResolvedOutputSpecification("16:10", (3840, 2400))
-        coordinator.publish(
-            identity,
-            {
-                window_specification: Image.new("RGB", window_specification.requested_output_size, (31, 47, 59)),
-                server_specification: Image.new("RGB", server_specification.requested_output_size, (31, 47, 59)),
-            },
-        )
-        assert update_started.wait(2)
-        deadline = monotonic() + 4
-        while monotonic() < deadline:
-            if coordinator.acknowledgements["default"] == identity:
-                with urlopen(f"http://127.0.0.1:{port}/display/default/current", timeout=1) as response:
-                    published = Image.open(BytesIO(response.read()))
-                    assert published.size == server_specification.requested_output_size
-                    assert published.getpixel((0, 0)) == expected.getpixel((0, 0))
-                break
-            sleep(0.02)
-        else:
-            pytest.fail("image-server did not publish while the window update was blocked")
-        release_update.set()
-        assert coordinator.wait_for_publication(identity, timeout=2)
-    finally:
-        release_update.set()
-        coordinator.close()
 
 
 @pytest.mark.parametrize(

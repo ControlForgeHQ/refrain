@@ -196,7 +196,7 @@ def test_omits_unavailable_optional_runtime_details(configuration, monkeypatch) 
         assert "DISPLAY BACKENDS" in fitted_text
 
         assert not any(
-            "Python " in text or "Windows" in text or "Linux" in text or "IMAGE-SERVER" in text for text in fitted_text
+            "Python " in text or "Windows" in text or "Linux" in text or "PUBLISH" in text for text in fitted_text
         )
 
         assert "NETWORK" not in fitted_text

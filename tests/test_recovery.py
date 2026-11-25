@@ -483,7 +483,7 @@ def test_changed_override_regenerates_only_its_incompatible_group(
             _CONFIGURATION,
             display_backends=(
                 DisplayBackendConfiguration(
-                    "image-server",
+                    "publish",
                     outputs=(
                         DisplayOutputConfiguration("shared", specification, shared, audience="internal"),
                         DisplayOutputConfiguration("shared-wide", other_specification, shared, audience="internal"),

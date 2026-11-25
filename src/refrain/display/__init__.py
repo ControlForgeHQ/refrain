@@ -81,10 +81,6 @@ class DisplayBackendCloseError(DisplayBackendError):
 def create_display_backend(
     backend: str,
     *,
-    image_server_host: str = "127.0.0.1",
-    image_server_port: int = 8080,
-    image_server_output_ids: tuple[str, ...] = ("default",),
-    image_server_enabled: bool = True,
     publication_store: object | None = None,
 ) -> DisplayBackend:
     """Construct an explicitly selected built-in display backend."""
@@ -96,15 +92,6 @@ def create_display_backend(
         from .waveshare import WaveshareDisplayBackend
 
         return WaveshareDisplayBackend()
-    if backend == "image-server":
-        from .image_server import ImageServerDisplayBackend
-
-        return ImageServerDisplayBackend(
-            host=image_server_host,
-            port=image_server_port,
-            output_ids=image_server_output_ids,
-            service_enabled=image_server_enabled,
-        )
     if backend == "publish":
         from .publication import FilesystemPublicationDisplayBackend
 
@@ -112,8 +99,7 @@ def create_display_backend(
             raise DisplayBackendInitializationError("publish backend requires a configured publication store")
         return FilesystemPublicationDisplayBackend(publication_store)
     raise DisplayBackendError(
-        f"unsupported display backend {backend!r}; choose "
-        "'window', 'waveshare-13in3-e', 'image-server', or 'publish'"
+        f"unsupported display backend {backend!r}; choose " "'window', 'waveshare-13in3-e', or 'publish'"
     )
 
 

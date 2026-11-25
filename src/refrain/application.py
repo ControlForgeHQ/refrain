@@ -126,10 +126,6 @@ def _default_backend_factory(
 ) -> DisplayBackend:
     return create_display_backend(
         configuration.type,
-        image_server_host=configuration.host,
-        image_server_port=configuration.port,
-        image_server_output_ids=tuple(output.identifier for output in configuration.outputs),
-        image_server_enabled=configuration.service_enabled,
         publication_store=publication_store,
     )
 

@@ -14,7 +14,7 @@ from refrain.display.waveshare_palette import WAVESHARE_ACTIVE_PALETTE, quantize
 def test_non_transforming_destinations_preserve_pixels_and_caller_image() -> None:
     image = Image.new("RGB", (3, 2), (25, 50, 75))
 
-    for destination_type in ("window", "image-server"):
+    for destination_type in ("window", "publish"):
         processed = post_process_destination_image(destination_type, image)
         assert processed.size == image.size
         assert processed.mode == image.mode

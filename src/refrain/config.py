@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import re
 from dataclasses import dataclass, field
@@ -30,19 +29,7 @@ from .geometry import (
     validate_requested_size,
 )
 
-_TOP_LEVEL_FIELDS = {
-    "destinations",
-    "image-server",
-    "storage",
-    "scheduling",
-    "presentation",
-    "palette",
-    "fonts",
-    "text",
-    "backgrounds",
-    "decorations",
-}
-_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "image-server", "publish"}
+_DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "publish"}
 _MAX_DESTINATION_IDENTIFIER_LENGTH = 256
 _DESTINATION_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _WINDOWS_RESERVED_DESTINATION_IDS = {
@@ -53,7 +40,6 @@ _WINDOWS_RESERVED_DESTINATION_IDS = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
-_HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 _LOGGER = logging.getLogger(__name__)
@@ -255,10 +241,7 @@ class DisplayBackendConfiguration:
     """Validated settings for one configured built-in display backend."""
 
     type: str
-    host: str = "127.0.0.1"
-    port: int = 8080
     outputs: tuple[DisplayOutputConfiguration, ...] = ()
-    service_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -581,24 +564,6 @@ def _resolve_configured_pools(
     return MappingProxyType(resolved), resolved["default"]
 
 
-def _valid_image_server_host(value: object) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    try:
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        hostname = value[:-1] if value.endswith(".") else value
-        try:
-            ascii_hostname = hostname.encode("idna").decode("ascii")
-        except UnicodeError:
-            return False
-        labels = ascii_hostname.split(".")
-        return 0 < len(ascii_hostname) <= 253 and all(
-            0 < len(label) <= 63 and _HOSTNAME_LABEL.fullmatch(label) for label in labels
-        )
-
-
 def _parse_palette(data: dict[str, object], report: Callable[..., None]) -> dict[str, str]:
     palette = dict(_BUILTIN_PALETTE)
     if "palette" not in data:
@@ -818,28 +783,6 @@ def _parse_destinations(
 ) -> tuple[DisplayBackendConfiguration, ...]:
     from .display.capabilities import DESTINATION_CAPACITIES
 
-    image_server_enabled = "image-server" in data
-    image_server_value = data.get("image-server", {})
-    if image_server_value is None:
-        image_server_value = {}
-    image_server = _mapping(image_server_value, "image-server", report)
-    _known_fields(image_server, {"host", "port"}, "image-server", report)
-    image_server_host = "127.0.0.1"
-    image_server_port = 8080
-    if image_server_enabled:
-        if "host" in image_server and _valid_image_server_host(image_server["host"]):
-            image_server_host = image_server["host"]
-        elif "host" in image_server:
-            report(
-                "image-server.host",
-                "must be a nonempty local bind address or hostname; using the documented default '127.0.0.1'",
-            )
-        port_value = image_server.get("port", image_server_port)
-        if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
-            report("image-server.port", "must be an integer between 1 and 65535; using the documented default 8080")
-        else:
-            image_server_port = port_value
-
     configured_destinations = data.get("destinations")
     destination_groups: dict[str, list[DisplayOutputConfiguration]] = {}
     destination_counts: dict[str, int] = {}
@@ -884,8 +827,7 @@ def _parse_destinations(
             if not isinstance(backend_type, str) or backend_type not in _DISPLAY_BACKENDS:
                 report(
                     f"{field}.type",
-                    "must be one of the supported backends: "
-                    "'window', 'waveshare-13in3-e', 'image-server', 'publish'",
+                    "must be one of the supported backends: " "'window', 'waveshare-13in3-e', 'publish'",
                     logging.ERROR,
                 )
                 continue
@@ -916,16 +858,13 @@ def _parse_destinations(
                 )
                 continue
 
-            if backend_type in {"window", "image-server"}:
-                default_aspect, default_size = (
-                    ("16:9", (1920, 1080)) if backend_type == "window" else ("16:10", (3840, 2400))
-                )
+            if backend_type == "window":
                 specification = _resolve_output_specification(
                     value,
                     field,
                     report,
-                    default_aspect=default_aspect,
-                    default_size=default_size,
+                    default_aspect="16:9",
+                    default_size=(1920, 1080),
                 )
             elif backend_type == "publish":
                 specification = _resolve_output_specification(
@@ -949,13 +888,7 @@ def _parse_destinations(
             )
 
     return tuple(
-        DisplayBackendConfiguration(
-            backend_type,
-            image_server_host,
-            image_server_port,
-            tuple(outputs),
-            image_server_enabled,
-        )
+        DisplayBackendConfiguration(backend_type, tuple(outputs))
         for backend_type, outputs in destination_groups.items()
     )
 
@@ -1171,7 +1104,6 @@ def load_application_config(config_file: Union[str, Path]) -> ApplicationConfigu
         report("$", "must contain one top-level mapping", logging.ERROR)
         finish_diagnostics()
         raise ApplicationConfigurationError(tuple(fatal_diagnostics))
-    _known_fields(data, _TOP_LEVEL_FIELDS, "", report)
 
     palette = _parse_palette(data, report)
 
