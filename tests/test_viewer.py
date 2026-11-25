@@ -42,7 +42,7 @@ from refrain.scheduling import resolve_reveal_stages
 _CONFIG = """\
 destinations:
   - id: configured-output
-    type: image-server
+    type: publish
     audience: internal
 scheduling:
   day_start: "06:00"
@@ -443,7 +443,7 @@ def test_reveal_stage_export_and_window_are_isolated(
     config, _ = _workspace(tmp_path)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n    audience: internal\n",
+            "  - id: configured-output\n    type: publish\n    audience: internal\n",
             '  - id: window\n    type: window\n    audience: internal\n    aspect_ratio: "4:3"\n'
             "    resolution: [320, 240]\n",
         ),
@@ -1442,7 +1442,7 @@ def test_render_as_uses_configured_geometry_and_exports_without_backend_or_runti
         path.write_bytes(content)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n    audience: internal\n",
+            "  - id: configured-output\n    type: publish\n    audience: internal\n",
             "  - id: window\n    type: window\n    audience: internal\n"
             '    aspect_ratio: "4:3"\n    resolution: [320, 240]\n',
         ),
@@ -1488,7 +1488,7 @@ def test_render_destination_lookup_uses_configured_destination_identifier(tmp_pa
 
     backend_type, specification, audience = viewer._resolve_render_destination(configuration, "configured-output")
 
-    assert backend_type == "image-server"
+    assert backend_type == "publish"
     assert specification == ResolvedOutputSpecification("16:10", (3840, 2400))
     assert audience == "internal"
 
@@ -1499,7 +1499,7 @@ def test_render_as_waveshare_exports_processed_pixels_without_hardware(
     config, _ = _workspace(tmp_path, with_entry=False)
     config.write_text(
         _CONFIG.replace(
-            "  - id: configured-output\n    type: image-server\n    audience: internal\n",
+            "  - id: configured-output\n    type: publish\n    audience: internal\n",
             "  - id: configured-output\n    type: waveshare-13in3-e\n    audience: internal\n",
         ),
         encoding="utf-8",

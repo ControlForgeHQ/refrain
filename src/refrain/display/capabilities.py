@@ -3,6 +3,5 @@
 DESTINATION_CAPACITIES = {
     "window": 1,
     "waveshare-13in3-e": 1,
-    "image-server": None,
     "publish": None,
 }

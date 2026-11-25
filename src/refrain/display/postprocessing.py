@@ -7,7 +7,7 @@ from PIL import Image
 from .waveshare_palette import quantize_waveshare_palette
 
 _WAVESHARE_SIZE = (1600, 1200)
-_IDENTITY_DESTINATIONS = {"window", "image-server"}
+_IDENTITY_DESTINATIONS = {"window", "publish"}
 
 
 def post_process_destination_image(destination_type: str, image: Image.Image) -> Image.Image:

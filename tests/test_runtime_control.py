@@ -52,7 +52,7 @@ def runtime(tmp_path):
             pass
 
     config = DisplayBackendConfiguration(
-        "image-server",
+        "publish",
         outputs=(
             DisplayOutputConfiguration("one", SPEC, audience="internal"),
             DisplayOutputConfiguration("two", SPEC, audience="internal"),
@@ -369,14 +369,14 @@ def test_staged_three_backend_publication_survives_disconnect_and_cleans_up(tmp_
             "waveshare-13in3-e", outputs=(DisplayOutputConfiguration("waveshare", waveshare, audience="internal"),)
         ),
         DisplayBackendConfiguration(
-            "image-server",
+            "publish",
             outputs=(
                 DisplayOutputConfiguration("one", server_spec, audience="internal"),
                 DisplayOutputConfiguration("two", server_spec, audience="internal"),
             ),
         ),
     )
-    entered = {name: Event() for name in ("window", "waveshare-13in3-e", "image-server")}
+    entered = {name: Event() for name in ("window", "waveshare-13in3-e", "publish")}
     release = {name: Event() for name in entered}
     seen = []
     decoded = []
@@ -431,7 +431,7 @@ def test_staged_three_backend_publication_survives_disconnect_and_cleans_up(tmp_
         release["waveshare-13in3-e"].set()
         _wait_until(lambda: len(seen) >= 2)
         assert server._staging_path.is_dir()
-        release["image-server"].set()
+        release["publish"].set()
         _wait_until(lambda: not server._staging_path.exists())
         assert len(seen) == 4
         assert len(decoded) == 4
@@ -484,7 +484,7 @@ def test_transient_distinct_images_with_identical_specifications(tmp_path):
             pass
 
     config = DisplayBackendConfiguration(
-        "image-server",
+        "publish",
         outputs=(
             DisplayOutputConfiguration("one", SPEC, audience="external"),
             DisplayOutputConfiguration("two", SPEC, audience="internal"),
@@ -592,7 +592,7 @@ def test_discovery_accepts_unknown_external_availability(runtime, monkeypatch):
     records = RuntimeControlClient(path).discover()
     assert records[0]["available"] == "unknown"
     assert records[0]["publication_accepted"] is True
-    assert records[1]["available"] is True
+    assert records[1]["available"] == "unknown"
 
 
 def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_path, monkeypatch):
@@ -606,7 +606,7 @@ def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_pat
             pass
 
     outputs = tuple(DisplayOutputConfiguration(f"output-{i}", SPEC, audience="internal") for i in range(130))
-    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    config = DisplayBackendConfiguration("publish", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
     assert coordinator.wait_for_publication((1, 0), 5)
@@ -643,7 +643,7 @@ def test_discovery_destination_identifier_at_limit(tmp_path):
             pass
 
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
@@ -680,7 +680,7 @@ def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, ide
             pass
 
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration(identifier, SPEC, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size)})
@@ -730,7 +730,7 @@ def test_unsupported_preflight_returns_before_sending_stale_image(tmp_path, monk
     large = ResolvedOutputSpecification("16:9", (3840, 1))
     stale = ResolvedOutputSpecification("16:9", (512, 256))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("large", large, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration("large", large, audience="internal"),)
     )
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
     path = tmp_path / "runtime.json"

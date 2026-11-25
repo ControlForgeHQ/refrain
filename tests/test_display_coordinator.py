@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import errno
 import logging
-import socket
 import time
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -18,7 +16,6 @@ from refrain import (
 )
 from refrain.display import DisplayBackendInitializationError, DisplayBackendUpdateError
 from refrain.display import coordinator as coordinator_module
-from refrain.display import image_server as image_server_module
 from refrain.display.coordinator import DisplayPublicationCoordinator, PublicationStatus
 
 _SPECIFICATION = ResolvedOutputSpecification("16:9", (1920, 1080))
@@ -119,9 +116,9 @@ def test_scheduled_group_routing_is_destination_specific_but_transients_remain_s
     second = DisplayOutputConfiguration(
         "second", specification, DestinationPresentation(qr_enabled=False), audience="internal"
     )
-    configuration_with_groups = DisplayBackendConfiguration("image-server", outputs=(first, second))
-    updates = {"image-server": []}
-    backend = SimulatedBackend("image-server", updates)
+    configuration_with_groups = DisplayBackendConfiguration("publish", outputs=(first, second))
+    updates = {"publish": []}
+    backend = SimulatedBackend("publish", updates)
     coordinator = DisplayPublicationCoordinator((configuration_with_groups,), lambda _config: backend, retry=False)
     scheduled = {
         first.prepared_image_key: Image.new("RGB", (8, 4), (21, 0, 0)),
@@ -149,7 +146,7 @@ def test_withdrawal_signals_when_remaining_destinations_are_terminal() -> None:
     all_unavailable, failed = Event(), Event()
 
     def factory(config):
-        if config.type == "image-server":
+        if config.type == "publish":
             failed.set()
             raise DisplayBackendInitializationError("unavailable", recoverable=False)
         return SimulatedBackend(config.type, {"window": []})
@@ -157,14 +154,15 @@ def test_withdrawal_signals_when_remaining_destinations_are_terminal() -> None:
     window = DisplayBackendConfiguration(
         "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
     )
-    image_server = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("image-server", _SPECIFICATION, audience="internal"),)
+    publish = DisplayBackendConfiguration(
+        "publish", outputs=(DisplayOutputConfiguration("publish", _SPECIFICATION, audience="internal"),)
     )
-    coordinator = DisplayPublicationCoordinator((window, image_server), factory, all_unavailable_event=all_unavailable)
+    coordinator = DisplayPublicationCoordinator((window, publish), factory, all_unavailable_event=all_unavailable)
     try:
         coordinator.publish((1, 0), publication(1))
         assert failed.wait(2)
-        assert wait_until(lambda: not coordinator.destination_statuses[1]["available"])
+        assert wait_until(lambda: coordinator._states["publish"].terminal)
+        assert coordinator.destination_statuses[1]["available"] == "unknown"
         assert not all_unavailable.is_set()
         assert coordinator.withdraw_destination("window")
         assert all_unavailable.is_set()
@@ -179,14 +177,14 @@ def test_backend_withdraws_all_its_destinations_atomically() -> None:
         DisplayOutputConfiguration("one", _SPECIFICATION, audience="internal"),
         DisplayOutputConfiguration("two", _SPECIFICATION, audience="internal"),
     )
-    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    config = DisplayBackendConfiguration("publish", outputs=outputs)
 
     class Backend(SimulatedBackend):
         def set_withdrawal_callback(self, callback):
             callbacks.append(callback)
 
     coordinator = DisplayPublicationCoordinator(
-        (config,), lambda config: Backend(config.type, {"image-server": []}), all_unavailable_event=all_unavailable
+        (config,), lambda config: Backend(config.type, {"publish": []}), all_unavailable_event=all_unavailable
     )
     try:
         coordinator.publish((1, 0), publication(1))
@@ -206,7 +204,7 @@ def test_withdrawal_logs_each_transition_once(caplog: pytest.LogCaptureFixture) 
         DisplayOutputConfiguration("one", _SPECIFICATION, audience="internal"),
         DisplayOutputConfiguration("two", _SPECIFICATION, audience="internal"),
     )
-    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    config = DisplayBackendConfiguration("publish", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,))
     try:
         assert coordinator._withdraw_destinations(("one", "two"))
@@ -225,11 +223,11 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
     configurations = (
         configuration("window"),
         DisplayBackendConfiguration(
-            "image-server",
+            "publish",
             outputs=(DisplayOutputConfiguration("server", _SPECIFICATION, audience="internal"),),
         ),
     )
-    updates = {"window": [], "image-server": []}
+    updates = {"window": [], "publish": []}
     first_entered, release_first = Event(), Event()
     latest_entered, release_latest = Event(), Event()
     backends = {}
@@ -247,7 +245,7 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
         assert wait_until(lambda: coordinator.acknowledgements["server"] == (7, 0))
 
         coordinator.publish((7, 1), publication(2))
-        assert wait_until(lambda: updates["image-server"][-1:] == [2])
+        assert wait_until(lambda: updates["publish"][-1:] == [2])
         coordinator.publish((7, 2), publication(3))
         assert wait_until(lambda: coordinator.acknowledgements["server"] == (7, 2))
         assert updates["window"] == [1]
@@ -268,56 +266,6 @@ def test_slow_backend_does_not_block_another_and_obsolete_work_is_coalesced() ->
         coordinator.close()
 
     assert all(backend.closed for backend in backends.values())
-
-
-def test_unavailable_image_server_retries_without_blocking_local_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    available = Event()
-    attempts: list[object] = []
-    original_bind = image_server_module._ImageHTTPServer.server_bind
-
-    def bind(server):
-        attempts.append(server.server_address)
-        if not available.is_set():
-            raise OSError(errno.EADDRNOTAVAIL, "address unavailable")
-        original_bind(server)
-
-    monkeypatch.setattr(image_server_module._ImageHTTPServer, "server_bind", bind)
-    updates = {"window": []}
-    local = SimulatedBackend("window", updates)
-    network = DisplayBackendConfiguration("image-server", host="127.0.0.1", port=port, outputs=(_OUTPUT,))
-
-    def factory(config):
-        if config.type == "window":
-            return local
-        return DisplayPublicationCoordinator._default_factory(config)
-
-    window = DisplayBackendConfiguration(
-        "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
-    )
-    coordinator = DisplayPublicationCoordinator((window, network), factory)
-    try:
-        coordinator.publish((1, 0), publication(1))
-        assert wait_until(lambda: bool(attempts))
-        assert wait_until(lambda: updates["window"] == [1])
-        assert wait_until(lambda: not coordinator.destination_statuses[1]["available"])
-        coordinator.publish((1, 1), publication(2))
-        assert wait_until(lambda: updates["window"] == [1, 2])
-        assert coordinator.wait_for_publication((1, 1), timeout=1)
-        assert coordinator.destination_statuses[1]["publication_accepted"]
-        assert not coordinator.destination_statuses[1]["available"]
-        available.set()
-        coordinator.publish((1, 2), publication(3))
-        assert coordinator.wait_for_publication((1, 2), timeout=4)
-        assert coordinator.acknowledgements["default"] == (1, 2)
-        assert coordinator.destination_statuses[1]["available"]
-        assert updates["window"] == [1, 2, 3]
-        assert len(attempts) >= 2
-        assert all(address == ("127.0.0.1", port) for address in attempts)
-    finally:
-        coordinator.close()
 
 
 def test_identical_desired_presentation_is_not_published_twice() -> None:
@@ -343,10 +291,10 @@ def test_destinations_receive_images_matching_their_output_specification() -> No
             "window", outputs=(DisplayOutputConfiguration("window", wide, audience="internal"),)
         ),
         DisplayBackendConfiguration(
-            "image-server", outputs=(DisplayOutputConfiguration("default", portrait, audience="internal"),)
+            "publish", outputs=(DisplayOutputConfiguration("default", portrait, audience="internal"),)
         ),
     )
-    updates = {"window": [], "image-server": []}
+    updates = {"window": [], "publish": []}
     backends = {}
 
     def factory(backend_configuration):
@@ -359,7 +307,7 @@ def test_destinations_receive_images_matching_their_output_specification() -> No
     try:
         coordinator.publish((4, 2), images)
         assert coordinator.wait_for_publication((4, 2), timeout=1)
-        assert updates == {"window": [21], "image-server": [42]}
+        assert updates == {"window": [21], "publish": [42]}
     finally:
         coordinator.close()
 
@@ -370,10 +318,10 @@ def test_terminal_backend_failure_does_not_stop_an_operational_destination(failu
         DisplayBackendConfiguration(
             "window", outputs=(DisplayOutputConfiguration("window", _SPECIFICATION, audience="internal"),)
         ),
-        configuration("image-server"),
+        configuration("publish"),
     )
-    updates = {"image-server": []}
-    healthy = SimulatedBackend("image-server", updates)
+    updates = {"publish": []}
+    healthy = SimulatedBackend("publish", updates)
     closed = Event()
 
     def factory(configuration):
@@ -504,7 +452,7 @@ def test_one_shot_retries_each_failed_attempt_once(
         def close(self):
             pass
 
-    coordinator = DisplayPublicationCoordinator((configuration("image-server"),), lambda _config: Backend())
+    coordinator = DisplayPublicationCoordinator((configuration("publish"),), lambda _config: Backend())
     try:
         transient_image = Image.new("RGB", _SPECIFICATION.requested_output_size, (1, 0, 0))
         operation = coordinator.publish_transient(
@@ -616,7 +564,7 @@ def test_drain_finishes_admitted_destinations_and_rejects_new_work() -> None:
         def close(self):
             closed.set()
 
-    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    config = DisplayBackendConfiguration("publish", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend())
     image = Image.new("RGB", (8, 4), (7, 8, 9))
     specs = {name: specification for name in ("one", "two")}
@@ -660,7 +608,7 @@ def test_literal_all_destination_is_distinct_from_all_selector() -> None:
             pass
 
     coordinator = DisplayPublicationCoordinator(
-        (DisplayBackendConfiguration("image-server", outputs=outputs),),
+        (DisplayBackendConfiguration("publish", outputs=outputs),),
         lambda _configuration: Backend(),
     )
     try:
@@ -699,7 +647,7 @@ def test_drain_finishes_other_destinations_after_active_recoverable_failure() ->
         def close(self):
             pass
 
-    config = DisplayBackendConfiguration("image-server", outputs=outputs)
+    config = DisplayBackendConfiguration("publish", outputs=outputs)
     coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend())
     specs = {name: specification for name in ("one", "two")}
     operation = coordinator.publish_transient("@all", specs, {specification: Image.new("RGB", (8, 4))})
@@ -724,7 +672,7 @@ def test_drain_finishes_other_destinations_after_active_recoverable_failure() ->
 def test_drain_stops_recoverable_one_shot_retries(failure_point) -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     attempts = []
 
@@ -764,7 +712,7 @@ def test_drain_stops_recoverable_one_shot_retries(failure_point) -> None:
 def test_drain_stops_retries_when_factory_fails_after_shutdown() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     entered, release = Event(), Event()
     attempts = []
@@ -794,7 +742,7 @@ def test_drain_stops_retries_when_factory_fails_after_shutdown() -> None:
 def test_drain_completes_withdrawn_one_shot_after_factory_failure() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     entered, release = Event(), Event()
     attempts = []
@@ -824,7 +772,7 @@ def test_drain_completes_withdrawn_one_shot_after_factory_failure() -> None:
 def test_drain_bypasses_earlier_scheduled_factory_backoff(monkeypatch) -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     config = DisplayBackendConfiguration(
-        "image-server", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
+        "publish", outputs=(DisplayOutputConfiguration("one", specification, audience="internal"),)
     )
     attempts = []
     initial_time = time.monotonic()
@@ -846,8 +794,8 @@ def test_drain_bypasses_earlier_scheduled_factory_backoff(monkeypatch) -> None:
     coordinator = DisplayPublicationCoordinator((config,), factory)
     try:
         coordinator.publish((1, 0), {specification: Image.new("RGB", (8, 4))})
-        assert wait_until(lambda: coordinator.destination_statuses[0]["available"] is False)
         assert wait_until(lambda: coordinator._states["one"].recoverable_failure)
+        assert coordinator.destination_statuses[0]["available"] == "unknown"
         coordinator.clear_desired()
         operation = coordinator.publish_transient(
             "one", {"one": specification}, {specification: Image.new("RGB", (8, 4))}
@@ -963,7 +911,7 @@ def test_configured_destination_identifiers_are_unique_and_keep_output_mapping()
             outputs=(DisplayOutputConfiguration("epaper", portrait, audience="internal"),),
         ),
         DisplayBackendConfiguration(
-            "image-server",
+            "publish",
             outputs=(
                 DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
                 DisplayOutputConfiguration("hallway", portrait, audience="internal"),
@@ -990,14 +938,14 @@ def test_configured_destination_identifiers_are_unique_and_keep_output_mapping()
 
 
 def test_destinations_on_one_backend_are_serialized_while_other_backend_progresses() -> None:
-    image_server_configuration = DisplayBackendConfiguration(
-        "image-server",
+    publish_configuration = DisplayBackendConfiguration(
+        "publish",
         outputs=(
             DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
             DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="internal"),
         ),
     )
-    configurations = (image_server_configuration, configuration("window"))
+    configurations = (publish_configuration, configuration("window"))
     entered, release = Event(), Event()
     window_published = Event()
     active: dict[str, int] = {}
@@ -1019,7 +967,7 @@ def test_destinations_on_one_backend_are_serialized_while_other_backend_progress
                 )
             try:
                 destinations.append(f"{self.backend_type}:{destination.identifier}")
-                if self.backend_type == "image-server" and destination.identifier == "kitchen":
+                if self.backend_type == "publish" and destination.identifier == "kitchen":
                     entered.set()
                     assert release.wait(2)
                 if self.backend_type == "window":
@@ -1041,13 +989,13 @@ def test_destinations_on_one_backend_are_serialized_while_other_backend_progress
         assert entered.wait(1)
         assert window_published.wait(1)
         assert "hallway" not in destinations
-        assert maximum_active["image-server"] == 1
+        assert maximum_active["publish"] == 1
         release.set()
         assert coordinator.wait_for_publication((12, 0), timeout=1)
         assert wait_until(lambda: coordinator.acknowledgements["hallway"] == (12, 0))
-        assert destinations.count("image-server:kitchen") == 1
-        assert destinations.count("image-server:hallway") == 1
-        assert construction_counts == {"image-server": 1, "window": 1}
+        assert destinations.count("publish:kitchen") == 1
+        assert destinations.count("publish:hallway") == 1
+        assert construction_counts == {"publish": 1, "window": 1}
         assert len(coordinator._threads) == 2
     finally:
         release.set()
@@ -1056,14 +1004,14 @@ def test_destinations_on_one_backend_are_serialized_while_other_backend_progress
 
 def test_same_spec_destinations_have_independent_acknowledgements_and_route() -> None:
     server_configuration = DisplayBackendConfiguration(
-        "image-server",
+        "publish",
         outputs=(
             DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
             DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="internal"),
         ),
     )
-    updates = {"image-server": []}
-    backend = SimulatedBackend("image-server", updates)
+    updates = {"publish": []}
+    backend = SimulatedBackend("publish", updates)
     coordinator = DisplayPublicationCoordinator((server_configuration,), lambda _configuration: backend)
     try:
         images = publication(28)
@@ -1086,7 +1034,7 @@ def test_same_spec_destinations_have_independent_acknowledgements_and_route() ->
 
 def test_failure_of_one_named_destination_does_not_fail_its_sibling() -> None:
     server_configuration = DisplayBackendConfiguration(
-        "image-server",
+        "publish",
         outputs=(
             DisplayOutputConfiguration("kitchen", _SPECIFICATION, audience="internal"),
             DisplayOutputConfiguration("hallway", _SPECIFICATION, audience="internal"),
