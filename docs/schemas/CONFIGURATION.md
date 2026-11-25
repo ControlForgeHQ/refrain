@@ -13,9 +13,11 @@ Application configuration is conventionally named `config.yaml`.
 - Quote values resembling dates, times, numbers, or booleans when a string is required. Unquoted scalars are accepted only when the parser produces the required type.
 - Boolean values do not satisfy integer fields. YAML null does not satisfy a string, integer, boolean, sequence, or mapping field unless expressly permitted below.
 
-The supported top-level fields are `destinations`, `image-server`, `storage`, `scheduling`, `presentation`, `palette`, `fonts`, `text`, `backgrounds`, and `decorations`.
+Each executable interprets and validates only the top-level configuration fields relevant to its operation. All other top-level fields are ignored without diagnostics. Executables must not require knowledge of configuration fields owned by other executables.
 
-Mappings contain the documented fields only. Unknown configuration fields are warned about and ignored, except within destination `overrides`, where unknown fields are errors.
+Within consumed configuration mappings, unknown fields are warned about and ignored unless a stricter validation rule is explicitly defined.
+
+Shared YAML document parsing requirements apply to the entire configuration document.
 
 ## Complete example
 
@@ -204,9 +206,7 @@ Overrides affect scheduled image preparation. They do not define independent art
 
 ## Independent image-server settings
 
-Only `refrain-image-server` interprets and validates the `image-server` mapping and its members. Resident Refrain and other executables that do not consume this section must treat it as opaque configuration data: do not validate its type, fields, values, destination references, or resource availability, and do not emit diagnostics about its contents.
-
-Shared YAML document parsing requirements still apply. Invalid YAML syntax, invalid UTF-8, or an invalid top-level document prevents configuration loading regardless of which section contains the error.
+Only `refrain-image-server` interprets and validates the `image-server` section.
 
 The standalone image server validates the required `image-server` settings, applicable publication destination definitions, and storage paths needed for its own operation. It does not require content-library loading, font-resource resolution, artistic preparation, or other resident-only services merely to consume verified publication datasets.
 
@@ -466,7 +466,7 @@ These are automatic primary-quotation sizing limits, not a fixed size and not au
 
 ## Validation and compatibility
 
-The following validation rules apply to fields relevant to the requested operation. Executables that do not consume `image-server` ignore its contents as specified under [Independent image-server settings](#independent-image-server-settings); shared YAML document parsing requirements still apply.
+The following validation rules apply according to the configuration ownership and document parsing requirements defined under [YAML document](#yaml-document).
 
 Configuration is accepted as an effective configuration of valid supplied values, documented defaults, and usable resources. Do not reinterpret invalid values as different accepted meanings or invent fallback values.
 
@@ -475,7 +475,8 @@ Configuration is accepted as an effective configuration of valid supplied values
 | Optional value omitted with a documented default | Use that default silently. |
 | Optional value explicitly invalid with a documented default | Warn and use that default, subject to field-specific constraints. |
 | Optional value invalid without a documented default | Warn and ignore it, subject to field-specific constraints. |
-| Unknown field | Warn and ignore, except strict destination `overrides`. |
+| Unconsumed top-level field | Ignore without diagnostics. |
+| Unknown field within a consumed mapping | Warn and ignore, except where stricter validation is defined. |
 | Missing or invalid required value without a usable fallback | Error. |
 | Unreadable file, invalid UTF-8, invalid YAML, unsupported YAML constructs, or a non-mapping document | Error; no usable configuration document. |
 | Invalid discovered resource or unavailable pool member | Warn and exclude the affected resource or member; retain unrelated valid data. |

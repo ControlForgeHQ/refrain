@@ -229,7 +229,7 @@ Do not invent defaults or reinterpret explicitly invalid values to bypass a requ
 
 Missing required values without a supported fallback are fatal.
 
-Unknown configuration fields are diagnosed and handled according to the schema.
+Configuration ownership and unknown-field handling follow [Application Configuration](../schemas/CONFIGURATION.md#yaml-document).
 
 Destination `overrides` are strict. Unknown keys, unsupported values, wrong types, or invalid resource identifiers are errors rather than ordinary warning-and-ignore cases.
 
