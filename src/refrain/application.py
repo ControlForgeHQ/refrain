@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import random
 import re
 import time
@@ -12,7 +11,6 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from types import MappingProxyType
 
@@ -1153,186 +1151,6 @@ def run_application(
             _LOGGER.info("Continuous presentation stopped")
 
 
-def run_demo(
-    config_file: str | Path,
-    interval: float,
-    *,
-    shutdown_event: Event | None = None,
-    random_source: random.Random | None = None,
-    backend_factory: BackendFactory = _default_backend_factory,
-    wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    monotonic_clock: Callable[[], float] = time.monotonic,
-    wait: Callable[[float], bool] | None = None,
-    pending_shutdown: Callable[[tuple[Thread, ...], Callable[[], object]], None] | None = None,
-) -> None:
-    """Cycle canonical stages using fresh session storage and a fixed eligibility date.
-
-    Viewing durations start at the coordinator's first successful acknowledgement,
-    or at the publication attempt when no destination can accept the image.
-    Tests may supply clocks and an interruptible wait.
-    """
-    if not math.isfinite(interval) or interval <= 0:
-        raise ApplicationError("demo interval must be a positive finite number of seconds")
-    configuration = _load_configuration(config_file)
-    backend_factory = _configured_backend_factory(configuration, backend_factory)
-    try:
-        session = TemporaryDirectory(prefix="refrain-demo-")
-    except OSError as error:
-        raise ApplicationError(f"cannot create temporary demo storage: {error}") from error
-    shutdown = shutdown_event if shutdown_event is not None else Event()
-    pause = shutdown.wait if wait is None else wait
-    chooser = random_source if random_source is not None else random.Random()
-    coordinator: DisplayPublicationCoordinator | None = None
-    _LOGGER.info("Starting demo presentation with a %s-second stage interval", interval)
-    try:
-        root = Path(session.name)
-        store = PersistentStateStore(root / "state.json")
-        history_store = _create_history_store(store.path, root / "global-history.jsonl")
-        artifact_store = PreparedImageArtifactStore(root / "artifacts")
-        try:
-            display_date = evaluate_scheduling(wall_clock(), configuration, None).display_date
-        except SchedulingEvaluationError as error:
-            raise ApplicationError(f"cannot determine demo display date: {error}") from error
-        assert display_date is not None
-        coordinator = DisplayPublicationCoordinator(
-            configuration.display_backends,
-            backend_factory,
-            monotonic_clock=monotonic_clock,
-            publication_finalizer=_finalize_publication_event,
-        )
-        state: PersistentState | None = None
-        pending_selection: tuple[SelectionProposal, DailySnapshot] | None = None
-        selecting = True
-        artifacts: PreparedImageArtifactSet | None = None
-        stage = 0
-        stage_requested_at: float | None = None
-        retry_delay = 1.0
-        last_failure: str | None = None
-        while not shutdown.is_set():
-            try:
-                if selecting:
-                    if pending_selection is None:
-                        state = _reload(store)
-                        pending_selection = _select_snapshot(configuration, display_date, chooser, state)
-                    else:
-                        proposal, snapshot = pending_selection
-                        recovered = _reload(store)
-                        if (
-                            recovered is not None
-                            and recovered.revision == proposal.base_revision + 1
-                            and recovered.snapshot == snapshot
-                            and recovered.repetition_history == proposal.proposed_repetition_history
-                        ):
-                            state = recovered
-                            pending_selection = None
-                            selecting = False
-                            stage = 0
-                            artifacts = None
-                            _record_selection_history(history_store, state)
-                            continue
-                    state = _commit_selection_with_checkpoint(store, artifact_store, configuration, *pending_selection)
-                    pending_selection = None
-                    selecting = False
-                    stage = 0
-                    artifacts = None
-                    _record_selection_history(history_store, state)
-                    _LOGGER.info("Committed demo selection %s for %s", state.revision, display_date)
-                    continue
-                assert state is not None
-                checkpoint = _complete_checkpoint(store, state, configuration, chooser)
-                if artifacts is not None and not artifacts.association_matches(checkpoint):
-                    artifacts = None
-                    coordinator.clear_desired()
-                if artifacts is None:
-                    artifacts = _recover_images(
-                        state,
-                        artifact_store,
-                        configuration,
-                        chooser,
-                        checkpoint,
-                    )
-                    try:
-                        artifact_store.cleanup(state.revision, artifacts.variant_keys, checkpoint=checkpoint)
-                    except ArtifactStoreError as error:
-                        _LOGGER.warning("Cannot clean obsolete demo images: %s", error)
-                    continue
-                if stage > state.highest_reveal_stage:
-                    state = _persist_reveal_progress(store, state, stage)
-                    checkpoint = _complete_checkpoint(store, state, configuration, chooser)
-                identity = (state.revision, stage)
-                if coordinator.desired_identity != identity:
-                    images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
-                    try:
-                        images = _load_stage_variants(
-                            artifacts,
-                            artifacts.variant_keys,
-                            stage,
-                        )
-                        metadata = _load_stage_metadata(
-                            artifacts,
-                            artifacts.variant_keys,
-                            stage,
-                            checkpoint,
-                        )
-                    except ArtifactStoreError as error:
-                        if images is not None:
-                            for image in images.values():
-                                image.close()
-                        artifacts = None
-                        raise _RetryableApplicationError(
-                            f"cannot load prepared demo image for stage {stage}: {error}"
-                        ) from error
-                    assert images is not None
-                    _publish_scheduled(
-                        coordinator, identity, images, metadata, _destination_keys(configuration, checkpoint)
-                    )
-                    stage_requested_at = monotonic_clock()
-                coordinator.wait_for_any_publication(identity, cancellation_event=shutdown)
-                acknowledged_at = coordinator.first_successful_publication_time(identity)
-                if acknowledged_at is None:
-                    acknowledged_at = stage_requested_at if stage_requested_at is not None else monotonic_clock()
-                if last_failure is not None:
-                    _LOGGER.info("Demo operation recovered")
-                    last_failure = None
-                retry_delay = 1.0
-                while not shutdown.is_set():
-                    remaining = interval - (monotonic_clock() - acknowledged_at)
-                    if remaining <= 0:
-                        break
-                    pause(min(remaining, 60.0))
-                if shutdown.is_set():
-                    break
-                if stage + 1 < len(resolve_reveal_stages(state.snapshot)):
-                    stage += 1
-                else:
-                    selecting = True
-            except (_RetryableApplicationError, NoEligibleQuotationError, StateRecoveryError) as error:
-                if isinstance(error, StateRecoveryError) and not isinstance(error.__cause__, OSError):
-                    raise ApplicationError(f"cannot recover demo state: {error}") from error
-                message = str(error)
-                if message != last_failure:
-                    _LOGGER.warning("Demo operation failed; retrying: %s", message)
-                    last_failure = message
-                retry_at = monotonic_clock() + retry_delay
-                while not shutdown.is_set():
-                    remaining = retry_at - monotonic_clock()
-                    if remaining <= 0 or pause(remaining):
-                        break
-                retry_delay = min(60.0, retry_delay * 2)
-    finally:
-        try:
-            if coordinator is not None:
-                workers = coordinator.close()
-                if workers and pending_shutdown is not None:
-                    pending_shutdown(workers, coordinator.close)
-        finally:
-            try:
-                session.cleanup()
-            except OSError as error:
-                _LOGGER.warning("Cannot remove temporary demo storage: %s", error)
-            _LOGGER.info("Demo presentation stopped")
-
-
 __all__ = [
     "ApplicationError",
     "NoEligibleQuotationError",
@@ -1340,5 +1158,4 @@ __all__ = [
     "present_prepared_stage",
     "run_startup",
     "run_application",
-    "run_demo",
 ]

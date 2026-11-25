@@ -33,7 +33,7 @@ def user_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[st
     return os.environ.copy()
 
 
-def _start_holder(environment: dict[str, str], mode: str, config: Path) -> subprocess.Popen:
+def _start_holder(environment: dict[str, str], config: Path) -> subprocess.Popen:
     program = """
 import sys
 import refrain.__main__ as cli
@@ -41,12 +41,9 @@ def hold(*args, **kwargs):
     print("READY", flush=True)
     sys.stdin.readline()
 cli.run_application = hold
-cli.run_demo = hold
 raise SystemExit(cli.main(sys.argv[1:]))
 """
     arguments = ["--config", str(config)]
-    if mode == "demo":
-        arguments += ["--demo", "1"]
     process = subprocess.Popen(
         [sys.executable, "-u", "-c", program, *arguments],
         stdin=subprocess.PIPE,
@@ -123,11 +120,7 @@ def test_cross_process_exclusion_and_crash_recovery(user_environment: dict[str, 
         assert path.exists()
 
 
-@pytest.mark.parametrize("holder", ["normal", "demo"])
-@pytest.mark.parametrize("contender", ["normal", "demo"])
-def test_runtime_and_demo_contend_across_processes(
-    holder: str,
-    contender: str,
+def test_runtimes_contend_across_processes(
     user_environment: dict[str, str],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -138,12 +131,11 @@ def test_runtime_and_demo_contend_across_processes(
     holder_environment = user_environment.copy()
     holder_environment["HOME"] = str(tmp_path / "other-home")
     holder_environment["USERPROFILE"] = str(tmp_path / "other-profile")
-    process = _start_holder(holder_environment, holder, first)
+    process = _start_holder(holder_environment, first)
     calls = []
     monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: calls.append("normal"))
-    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: calls.append("demo"))
-    arguments = ["--config", str(second)] + (["--demo", "1"] if contender == "demo" else [])
+    arguments = ["--config", str(second)]
     try:
         with monkeypatch.context() as patch:
             patch.setattr(cli, "load_application_config", lambda *args: pytest.fail("configuration opened"))
@@ -157,7 +149,7 @@ def test_runtime_and_demo_contend_across_processes(
     finally:
         _stop_holder(process)
     assert cli.main(arguments) == 0
-    assert calls == [contender]
+    assert calls == ["normal"]
 
 
 @pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
@@ -178,7 +170,7 @@ def test_installation_commands_fail_without_mutation_until_owner_exits(
             Path(paths.publish_directory).mkdir(parents=True, exist_ok=True)
             (Path(paths.publish_directory) / "publication").write_text("preserve", encoding="utf-8")
     monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: True)
-    process = _start_holder(user_environment, "normal", config)
+    process = _start_holder(user_environment, config)
     try:
         assert cli.main([operation]) == 1
         assert "Refrain is already running" in capsys.readouterr().err
@@ -277,9 +269,8 @@ def test_conflicting_standard_paths_are_rejected_before_lock_creation(
     assert not config.exists()
 
 
-@pytest.mark.parametrize("mode", ["normal", "demo"])
 def test_failed_runtime_releases_ownership(
-    mode: str, user_environment: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    user_environment: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path / "config.yaml", tmp_path / "custom")
     monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
@@ -288,8 +279,7 @@ def test_failed_runtime_releases_ownership(
         raise cli.ApplicationError("injected failure")
 
     monkeypatch.setattr(cli, "run_application", fail)
-    monkeypatch.setattr(cli, "run_demo", fail)
-    arguments = ["--config", str(config)] + (["--demo", "1"] if mode == "demo" else [])
+    arguments = ["--config", str(config)]
     assert cli.main(arguments) == 1
     with InstallationOwnership(Path(resolve_application_paths().ownership_file)):
         pass
@@ -339,9 +329,7 @@ def test_release_failure_is_actionable_and_closes_the_lock(tmp_path: Path, monke
         pass
 
 
-@pytest.mark.parametrize("mode", ["normal", "demo"])
 def test_real_lifecycle_holds_lock_until_fake_backend_is_closed(
-    mode: str,
     user_environment: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -371,10 +359,9 @@ def wrap(run):
     return start
 
 cli.run_application = wrap(cli.run_application)
-cli.run_demo = wrap(cli.run_demo)
 raise SystemExit(cli.main(sys.argv[1:]))
 """
-    arguments = ["--config", str(config)] + (["--demo", "1"] if mode == "demo" else [])
+    arguments = ["--config", str(config)]
     process = subprocess.Popen(
         [sys.executable, "-u", "-c", program, *arguments],
         stdin=subprocess.PIPE,
@@ -388,7 +375,6 @@ raise SystemExit(cli.main(sys.argv[1:]))
         assert process.stdout.readline().strip() == "READY"
         monkeypatch.setattr(cli.signal, "signal", lambda *args: signal.SIG_DFL)
         monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("backend opened"))
-        monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("backend opened"))
         assert cli.main(arguments) == 1
         assert "Refrain is already running" in capsys.readouterr().err
         assert process.stdin is not None
