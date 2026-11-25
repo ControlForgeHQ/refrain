@@ -219,6 +219,44 @@ def test_application_finalizes_each_destination_and_backend_preserves_transient_
         coordinator.close()
 
 
+def test_filesystem_publication_progresses_while_window_is_blocked(tmp_path) -> None:
+    from refrain.display.publication import FilesystemPublicationDisplayBackend
+
+    entered, release = Event(), Event()
+    store = PublicationStore(tmp_path / "publications")
+    publication_backend = FilesystemPublicationDisplayBackend(store)
+
+    class Window:
+        def publish(self, _destination, image):
+            entered.set()
+            assert release.wait(5)
+            assert image.getpixel((0, 0)) == (17, 0, 0)
+
+        def close(self):
+            pass
+
+    window = Window()
+    coordinator = DisplayPublicationCoordinator(
+        (_configuration("window"), _configuration("publish")),
+        lambda config: publication_backend if config.type == "publish" else window,
+        publication_finalizer=_finalize_publication_event,
+    )
+    try:
+        coordinator.publish_with_metadata((4, 2), _images(_WIDE, value=17), {_WIDE: _prepared_metadata()})
+        assert entered.wait(2)
+        assert _wait_until(lambda: coordinator.acknowledgements["publish"] == (4, 2))
+        dataset = store.read_current("publish")
+        assert dataset.metadata["publication"]["type"] == "scheduled"
+        with Image.open(BytesIO(dataset.image)) as image:
+            assert image.getpixel((0, 0)) == (17, 0, 0)
+        assert coordinator.acknowledgements["window"] is None
+        release.set()
+        assert coordinator.wait_for_publication((4, 2), timeout=2)
+    finally:
+        release.set()
+        coordinator.close()
+
+
 def test_metadata_finalization_failure_is_recoverable_and_isolated_from_other_destinations(
     tmp_path, monkeypatch
 ) -> None:
