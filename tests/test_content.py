@@ -874,6 +874,24 @@ def test_discovery_excludes_reparse_points_and_preserves_enumeration_failures(
     assert any("cannot enumerate content directory" in diagnostic for diagnostic in diagnostics_for(tmp_path))
 
 
+def test_uninspectable_content_file_is_excluded_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    write_entry(tmp_path / "ordinary.yaml", entry_data(id="ordinary"))
+    uninspectable = write_entry(tmp_path / "uninspectable.yaml", entry_data(id="uninspectable"))
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == uninspectable:
+            raise PermissionError(13, "cannot inspect", str(path))
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    assert [entry.id for entry in load_content_library(tmp_path)] == ["ordinary"]
+    assert "cannot read UTF-8 YAML file" in caplog.text
+    assert "cannot inspect" in caplog.text
+
+
 def test_directory_enumeration_exception_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     blocked_directory = tmp_path / "blocked"
 

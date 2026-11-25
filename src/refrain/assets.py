@@ -112,7 +112,9 @@ def _walk_packages(
         if _is_link(directory):
             return
         manifest_path = directory.joinpath(manifest)
-        if not _is_link(manifest_path) and _exists(manifest_path):
+        if _is_link(manifest_path):
+            return
+        if _exists(manifest_path):
             yield directory, manifest_path
             return
         for child in _children(directory, report, category):
@@ -300,7 +302,9 @@ def discover_backgrounds(
             if _is_link(directory):
                 return
             manifest = directory.joinpath("background.yaml")
-            if not _is_link(manifest) and _exists(manifest):
+            if _is_link(manifest):
+                return
+            if _exists(manifest):
                 field = str(manifest)
                 try:
                     data = _read_manifest(manifest)

@@ -1184,6 +1184,7 @@ def test_resource_discovery_excludes_redirected_manifests(tmp_path: Path, catego
     root = tmp_path / "assets" / category
     _write_discovery_package(root / "ordinary", category, "ordinary-resource")
     manifest = _write_discovery_package(root / "redirected", category, "redirected-resource")
+    _write_discovery_package(root / "redirected" / "nested", category, "nested-resource")
     target = tmp_path / f"{category}-manifest.yaml"
     manifest.replace(target)
     try:
@@ -1194,6 +1195,9 @@ def test_resource_discovery_excludes_redirected_manifests(tmp_path: Path, catego
     registry = getattr(load_application_config(config_path), category)
     assert "ordinary-resource" in registry
     assert "redirected-resource" not in registry
+    assert "nested-resource" not in registry
+    if category == "backgrounds":
+        assert "image" not in registry
 
 
 def test_resource_discovery_excludes_reparse_points(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1203,6 +1207,7 @@ def test_resource_discovery_excludes_reparse_points(tmp_path: Path, monkeypatch:
         root = tmp_path / "assets" / category
         _write_discovery_package(root / "ordinary", category, f"ordinary-{category}")
         paths.append(_write_discovery_package(root / "manifest", category, f"manifest-{category}"))
+        _write_discovery_package(root / "manifest" / "nested", category, f"nested-{category}")
         directory = root / "directory"
         _write_discovery_package(directory, category, f"directory-{category}")
         paths.append(directory)
@@ -1223,8 +1228,10 @@ def test_resource_discovery_excludes_reparse_points(tmp_path: Path, monkeypatch:
         assert f"ordinary-{category}" in registry
         assert f"manifest-{category}" not in registry
         assert f"directory-{category}" not in registry
+        assert f"nested-{category}" not in registry
     assert "ordinary" in config.backgrounds
     assert "redirected" not in config.backgrounds
+    assert "image" not in config.backgrounds
 
 
 def test_redirected_assets_root_is_not_traversed(tmp_path: Path) -> None:

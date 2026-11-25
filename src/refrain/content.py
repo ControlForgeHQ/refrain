@@ -711,6 +711,7 @@ def _load_content_library(
 
     discovery_diagnostics: list[ContentDiagnostic] = []
     files: list[Path] = []
+    inspection_errors: dict[Path, OSError] = {}
 
     def report_walk_error(error: OSError) -> None:
         affected_path = Path(error.filename) if error.filename else directory
@@ -732,8 +733,8 @@ def _load_content_library(
                 try:
                     if is_redirected(file):
                         continue
-                except OSError:
-                    pass
+                except OSError as error:
+                    inspection_errors[file] = error
                 files.append(file)
     except OSError as error:
         report_walk_error(error)
@@ -756,6 +757,8 @@ def _load_content_library(
     for file in sorted(files):
         file_diagnostics: list[ContentDiagnostic] = []
         try:
+            if file in inspection_errors:
+                raise inspection_errors[file]
             contents = file.read_text(encoding="utf-8")
             data = load_yaml(contents)
         except (OSError, UnicodeError) as error:
