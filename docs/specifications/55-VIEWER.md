@@ -235,6 +235,8 @@ Explicit viewer overrides remain available and replace only their corresponding 
 
 Unspecified properties retain the published values.
 
+When no explicit decoration override is supplied, retain the published insets. When an explicit decoration override is supplied, resolve insets from the effective decoration using the ordinary presentation inset rules, including global insets when decoration is suppressed or provides no insets.
+
 When an explicit decoration override introduces effectively tintable layers and the published `presentation.colors.decoration` is null, reconstruction requires an explicit usable `--tint` override. Otherwise, fail with an actionable diagnostic. Do not resolve a new tint through content, decoration, or global preference pools.
 
 When the selected decoration has no effectively tintable layers, no tint is required.

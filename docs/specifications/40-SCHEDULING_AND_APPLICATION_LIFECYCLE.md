@@ -128,7 +128,7 @@ Within one logical display date, reveal progression is monotonic. A new committe
 
 Operational state owns the highest reached reveal stage. Successful advancement must be committed to `state.json` before updating the shared publication checkpoint's reveal visibility. A failed checkpoint update does not reverse the committed progression. Recovery reconciles visibility from operational state without discarding otherwise valid resolved presentation choices.
 
-An invalid persisted or requested reveal stage must not be accepted as valid progression. Reject invalid stage values before persistent writes. Report the condition with an actionable warning and suspend further progression for the affected selection until corrected, while leaving unrelated application functionality available.
+Reject invalid requested reveal stages before persistent writes. Report the invalid request with an actionable warning and continue normal resident operation. Invalid persisted reveal progression follows the operational-state recovery rules defined under [Recovery and state compatibility](30-SELECTION_AND_PERSISTENCE.md#recovery-and-state-compatibility).
 
 Stage persistence and checkpoint synchronization follow [Selection revisions and atomic writes](30-SELECTION_AND_PERSISTENCE.md#selection-revisions-and-atomic-writes).
 
@@ -156,7 +156,7 @@ The required scheduling contract does not include `DisplayDayBoundary`, `Display
 
 The application coordinator executes returned decisions through the selection, persistence, preparation, and display components. For a committed selection whose logical date is unchanged, the required reveal stage is the later of the stage implied by its frozen resolved reveal-stage sequence at the current instant and the persisted highest stage. A new selection starts its own reveal progression. The scheduling context contains the display date and day-start time. Missing optional fields do not add reveal stages, and missed reveal times can advance directly to the latest applicable stage.
 
-A persisted stage beyond the sequence's final index is invalid, and evaluation raises `SchedulingEvaluationError`. The application coordinator must report the failure and suspend reveal progression for the affected selection without treating the invalid value as a valid stage, terminating unrelated destination operations, or replacing committed literary content.
+A persisted stage beyond the sequence's final index is invalid, and evaluation raises `SchedulingEvaluationError` when supplied such a value. The application coordinator must apply the operational-state recovery rules for invalid persisted reveal progression rather than treating the invalid value as a valid stage.
 
 When a reveal advancement is required, the coordinator commits operational progression and synchronizes checkpoint visibility independently of backend acknowledgement. It then requests the corresponding prepared variant from each participating destination. Scheduling evaluation does not determine whether an image was successfully presented.
 
@@ -208,17 +208,19 @@ Recoverable configuration problems and individual invalid content files or entri
 
 A valid committed selection does not require its original content entry or a currently usable content library to remain available.
 
-If no committed selection exists and a usable effective content library cannot be constructed, startup cannot establish a daily presentation and must report an actionable error.
+If the installation is uninitialized and a usable effective content library cannot be constructed, startup cannot establish a daily presentation and must report an actionable error.
 
-When a new selection is required, including during startup with a valid committed selection for another logical display date, an unavailable content library must not clear repetition history, commit an empty selection, or replace previously committed operational state. Preserve existing prepared images where practical, report the failure, and do not republish the outdated selection as the current daily presentation.
+When a new selection is required, including during startup with a committed selection for another logical display date or recovery from an invalid committed selection, an unavailable content library must not clear repetition history, commit an empty selection, or replace previously committed operational state. Preserve existing prepared images where practical, report the failure, and do not republish the outdated selection as the current daily presentation.
 
-During continuous operation, or startup with an existing valid committed selection, the application coordinator attempts the required selection immediately when no retry delay applies. If no usable effective content library can be constructed, continue resident operation and retry after a five-minute monotonic delay. While the same logical display date remains current, scheduling reevaluation or an external wake event must not bypass this delay.
+During continuous operation, or startup with a valid recovered selection revision and repetition history, the application coordinator attempts the required selection immediately when no retry delay applies. If no usable effective content library can be constructed, continue resident operation and retry after a five-minute monotonic delay. While the same logical display date remains current, scheduling reevaluation or an external wake event must not bypass this delay.
 
 A change to a different logical display date permits an immediate new selection attempt. Successful content recovery resumes normal selection and scheduling.
 
 The retry deadline is process-local coordinator state. Do not persist it or incorporate retry policy into the pure scheduling evaluator. Restarting permits an immediate attempt.
 
 This retry behavior does not apply to a healthy effective library with no quotation eligible for the current logical display date. That condition continues to use the no-eligible-content fallback without repeated same-date selection attempts.
+
+While replacement of an invalid committed selection is pending, unrelated resident functionality, including transient publication and destination discovery, remains available. Reject forced scheduled refresh as `stale-presentation` until a valid current scheduled presentation is established.
 
 ### No-eligible-content fallback
 
