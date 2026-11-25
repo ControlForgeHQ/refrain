@@ -14,6 +14,7 @@ from resource_helpers import write_font_bundle
 
 import refrain.application as application
 import refrain.display
+import refrain.local_time as local_time
 import refrain.preparation as preparation
 import refrain.viewer as viewer
 from refrain.checkpoint import build_content_checkpoint
@@ -195,6 +196,287 @@ def _capture_rendered_bounds(
     image.close()
     assert len(bounds) == 1
     return bounds[0]
+
+
+@pytest.mark.parametrize("value", ["-1", "3", "true", "1.0", "abc", ""])
+def test_reveal_stage_rejects_invalid_indexes(value: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        viewer.main(["--entry", "@preview", "--reveal-stage", value])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("value", [True, -1, 3, 1.0, "1"])
+def test_render_preview_rejects_invalid_reveal_stage_types(tmp_path: Path, value: object) -> None:
+    config, _ = _workspace(tmp_path)
+    with pytest.raises(viewer.ViewerError, match="integer from 0 through 2"):
+        viewer.render_preview(load_application_config(config), reveal_stage=value)
+
+
+@pytest.mark.parametrize(
+    "mode", [("--publication", "publication.json"), ("--image", "image.png"), ("--push", "x"), ("--list-destinations",)]
+)
+@pytest.mark.parametrize("stage", ["0", "2"])
+def test_reveal_stage_rejects_incompatible_modes(mode: tuple[str, ...], stage: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        viewer.main(["--entry", "@preview", "--reveal-stage", stage, *mode])
+    assert error.value.code == 2
+
+
+def test_reveal_stage_requires_explicit_entry() -> None:
+    with pytest.raises(SystemExit) as error:
+        viewer.main(["--reveal-stage", "0"])
+    assert error.value.code == 2
+
+
+def test_reveal_stage_cumulative_visibility_and_stable_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _workspace(tmp_path)
+    configuration = load_application_config(config)
+    specification = ResolvedOutputSpecification("16:10", (320, 200))
+    layouts = []
+    stages = []
+    render = preparation.render_reveal_stages
+
+    def capture(background, font, layout, visibility, **kwargs):
+        layouts.append(layout)
+        stages.append(visibility)
+        return render(background, font, layout, visibility, **kwargs)
+
+    monkeypatch.setattr(preparation, "render_reveal_stages", capture)
+    images = [
+        viewer.render_preview(configuration, ("requested-entry", 1), specification, reveal_stage=stage)
+        for stage in (0, 1, 2, None)
+    ]
+    try:
+        assert stages == [
+            (CompositionVisibility(),),
+            (CompositionVisibility(source=True),),
+            (CompositionVisibility(source=True, attribution=True),),
+            (CompositionVisibility(source=True, attribution=True),),
+        ]
+        assert layouts.count(layouts[0]) == len(layouts)
+        assert images[0].tobytes() != images[1].tobytes() != images[2].tobytes()
+        assert images[2].tobytes() == images[3].tobytes()
+    finally:
+        for image in images:
+            image.close()
+
+
+@pytest.mark.parametrize(
+    ("entry_changes", "expected"),
+    [
+        ('reveal:\n  source: "09:00"\n  attribution: "09:00"\n', CompositionVisibility(source=True, attribution=True)),
+        ('reveal:\n  source: "06:00"\n  attribution: "06:00"\n', CompositionVisibility(source=True, attribution=True)),
+        ("", CompositionVisibility(source=True)),
+        ("no-fields", CompositionVisibility()),
+    ],
+)
+def test_reveal_stage_falls_back_for_coincident_or_absent_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, entry_changes: str, expected: CompositionVisibility
+) -> None:
+    config, content = _workspace(tmp_path)
+    entry = _ENTRY
+    if not entry_changes or entry_changes == "no-fields":
+        entry = entry.replace('attribution: "An author"\n', "")
+    if entry_changes == "no-fields":
+        entry = entry.replace('source: "A source"\n', "")
+    else:
+        entry += entry_changes
+    (content / "entry.yaml").write_text(entry, encoding="utf-8")
+    captured = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, stages, *args, **kwargs):
+        captured.append(stages)
+        return prepare(snapshot, stages, *args, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    image = viewer.render_preview(
+        load_application_config(config),
+        ("requested-entry", 1),
+        ResolvedOutputSpecification("16:10", (320, 200)),
+        reveal_stage=2,
+    )
+    image.close()
+    assert captured == [(expected,)]
+    final = 0 if entry_changes == "no-fields" or 'source: "06:00"' in entry_changes else 1
+    assert f"requested reveal stage 2 exceeds final available stage {final}" in caplog.text
+
+
+def test_reveal_stage_uses_current_logical_date_and_entry_schedule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, content = _workspace(tmp_path)
+    (content / "entry.yaml").write_text(
+        _ENTRY + 'reveal:\n  source: "09:00"\n  attribution: "09:00"\n', encoding="utf-8"
+    )
+    current = datetime(2026, 11, 25, 5, 59, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current.astimezone(tz)
+
+    monkeypatch.setattr(viewer, "datetime", FixedDateTime)
+    monkeypatch.setattr(local_time, "local_wall_time", lambda instant: instant.replace(tzinfo=None))
+    monkeypatch.setattr(
+        local_time, "resolve_local_time", lambda day, wall: datetime.combine(day, wall, tzinfo=timezone.utc)
+    )
+    captured = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, stages, *args, **kwargs):
+        captured.append((snapshot, stages))
+        return prepare(snapshot, stages, *args, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    image = viewer.render_preview(
+        load_application_config(config),
+        ("requested-entry", 1),
+        ResolvedOutputSpecification("16:10", (320, 200)),
+        reveal_stage=1,
+    )
+    image.close()
+    snapshot, stages = captured[0]
+    assert snapshot.display_date == date(2026, 11, 24)
+    assert snapshot.reveal_schedule["source"] == snapshot.reveal_schedule["attribution"] == "09:00"
+    assert stages == (CompositionVisibility(source=True, attribution=True),)
+
+
+def test_reveal_stage_captures_invocation_time_before_loading_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _ = _workspace(tmp_path)
+    clock = [datetime(2026, 11, 25, 5, 59, tzinfo=timezone.utc)]
+    calls = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            calls.append(clock[0])
+            return clock[0].astimezone(tz)
+
+    monkeypatch.setattr(viewer, "datetime", FixedDateTime)
+    monkeypatch.setattr(local_time, "local_wall_time", lambda instant: instant.replace(tzinfo=None))
+    monkeypatch.setattr(
+        local_time, "resolve_local_time", lambda day, wall: datetime.combine(day, wall, tzinfo=timezone.utc)
+    )
+    load = viewer.load_application_config
+
+    def load_after_boundary(path):
+        clock[0] = datetime(2026, 11, 25, 6, 1, tzinfo=timezone.utc)
+        return load(path)
+
+    monkeypatch.setattr(viewer, "load_application_config", load_after_boundary)
+    captured = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, *args, **kwargs):
+        captured.append(snapshot.display_date)
+        return prepare(snapshot, *args, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    assert (
+        viewer.main(
+            [
+                "--config",
+                str(config),
+                "--entry",
+                "@preview",
+                "--reveal-stage",
+                "0",
+                "--resolution",
+                "320",
+                "200",
+                "--output",
+                str(tmp_path / "output.png"),
+            ]
+        )
+        == 0
+    )
+    assert calls == [datetime(2026, 11, 25, 5, 59, tzinfo=timezone.utc)]
+    assert captured == [date(2026, 11, 24)]
+
+
+def test_reveal_stage_coalesces_distinct_wall_times_at_same_instant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    config, content = _workspace(tmp_path)
+    (content / "entry.yaml").write_text(
+        _ENTRY + 'reveal:\n  source: "09:00"\n  attribution: "10:00"\n', encoding="utf-8"
+    )
+    resolved = []
+
+    def resolve(day, wall):
+        resolved.append((day, wall))
+        if wall.hour == 9:
+            wall = wall.replace(hour=10)
+        return datetime.combine(day, wall, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(local_time, "local_wall_time", lambda instant: instant.replace(tzinfo=None))
+    monkeypatch.setattr(local_time, "resolve_local_time", resolve)
+    captured = []
+    prepare = viewer.prepare_daily_images
+
+    def capture(snapshot, stages, *args, **kwargs):
+        captured.append(stages)
+        return prepare(snapshot, stages, *args, **kwargs)
+
+    monkeypatch.setattr(viewer, "prepare_daily_images", capture)
+    image = viewer.render_preview(
+        load_application_config(config),
+        ("requested-entry", 1),
+        ResolvedOutputSpecification("16:10", (320, 200)),
+        reveal_stage=2,
+    )
+    image.close()
+    assert {wall.hour for _, wall in resolved} >= {6, 9, 10}
+    assert captured == [(CompositionVisibility(source=True, attribution=True),)]
+    assert "requested reveal stage 2 exceeds final available stage 1" in caplog.text
+
+
+@pytest.mark.parametrize("render_as", [False, True])
+def test_reveal_stage_export_and_window_are_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, render_as: bool
+) -> None:
+    config, _ = _workspace(tmp_path)
+    config.write_text(
+        _CONFIG.replace(
+            "  - id: configured-output\n    type: image-server\n    audience: internal\n",
+            '  - id: window\n    type: window\n    audience: internal\n    aspect_ratio: "4:3"\n'
+            "    resolution: [320, 240]\n",
+        ),
+        encoding="utf-8",
+    )
+    sentinels = {
+        tmp_path / "state.json" / "state.json": b"state",
+        tmp_path / "state.json" / "publication.json": b"checkpoint",
+        tmp_path / "state.json" / "global-history.jsonl": b"history",
+        tmp_path / "artifacts" / "sentinel": b"artifact",
+    }
+    for path, contents in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    monkeypatch.setattr(viewer, "RuntimeControlClient", lambda *_args, **_kwargs: pytest.fail("runtime was accessed"))
+    monkeypatch.setattr(
+        refrain.display, "create_display_backend", lambda *_args, **_kwargs: pytest.fail("backend was accessed")
+    )
+    windows = []
+    monkeypatch.setattr(viewer, "show_preview_window", lambda image: windows.append(image.size))
+    output = tmp_path / "stage.png"
+    geometry = ["--render-as", "window"] if render_as else ["--resolution", "320", "200"]
+    assert (
+        viewer.main(
+            ["--config", str(config), "--entry", "@preview", "--reveal-stage", "0", "--output", str(output), "--window"]
+            + geometry
+        )
+        == 0
+    )
+    with Image.open(output) as image:
+        assert image.size == ((320, 240) if render_as else (320, 200))
+        assert windows == [image.size]
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
 
 
 @pytest.mark.parametrize(
