@@ -174,6 +174,9 @@ def test_installation_commands_fail_without_mutation_until_owner_exits(
         for path in (paths.config_file, paths.state_file, paths.history_file, paths.artifacts_directory / "image"):
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text("preserve", encoding="utf-8")
+        if operation == "--purge":
+            Path(paths.publish_directory).mkdir(parents=True, exist_ok=True)
+            (Path(paths.publish_directory) / "publication").write_text("preserve", encoding="utf-8")
     monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: True)
     process = _start_holder(user_environment, "normal", config)
     try:
@@ -186,6 +189,8 @@ def test_installation_commands_fail_without_mutation_until_owner_exits(
         else:
             for path in (paths.config_file, paths.state_file, paths.history_file, paths.artifacts_directory / "image"):
                 assert Path(path).read_text(encoding="utf-8") == "preserve"
+            if operation == "--purge":
+                assert (Path(paths.publish_directory) / "publication").read_text(encoding="utf-8") == "preserve"
     finally:
         _stop_holder(process)
     assert cli.main([operation]) == 0
@@ -198,8 +203,9 @@ def test_installation_commands_fail_without_mutation_until_owner_exits(
         assert not Path(paths.artifacts_directory / "image").exists()
     else:
         assert not Path(paths.config_directory).exists()
-        assert not Path(paths.operational_directory).exists()
+        assert not Path(paths.state_directory).exists()
         assert not Path(paths.cache_directory).exists()
+        assert not Path(paths.publish_directory).exists()
     assert Path(paths.ownership_file).exists()
 
 
