@@ -8,7 +8,6 @@ from threading import Event, Lock
 import pytest
 import yaml
 from test_application import FakeDisplay, RuntimeClock, Workspace, at
-from test_demo import DemoClock, DemoWorkspace
 
 import refrain.application as application
 from refrain import ApplicationError, PersistentStateStore, PreparedImageArtifactStore
@@ -213,32 +212,3 @@ def test_continuous_checkpoint_loss_replaces_same_stage_in_memory_artifacts(work
     assert records[0][1] != records[1][1]
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
-
-
-def test_demo_post_commit_checkpoint_failure_starts_next_selection_at_stage_zero(tmp_path, monkeypatch) -> None:
-    demo = DemoWorkspace(tmp_path, monkeypatch)
-    demo.entry()
-    demo.clock = DemoClock(waits=5)
-    original = CheckpointStore.initialize
-    coordinator_factory = application.DisplayPublicationCoordinator
-    attempts = []
-
-    def create_coordinator(*args, **kwargs):
-        coordinator = coordinator_factory(*args, **kwargs)
-        coordinator.clear_desired = lambda: setattr(coordinator, "desired_identity", None)
-        return coordinator
-
-    def fail_second_selection(self, state, qr):
-        attempts.append(state.revision)
-        if state.revision == 2:
-            raise CheckpointError("disk full")
-        return original(self, state, qr)
-
-    monkeypatch.setattr(application, "DisplayPublicationCoordinator", create_coordinator)
-    monkeypatch.setattr(CheckpointStore, "initialize", fail_second_selection)
-    demo.run()
-    assert [publication[0] for publication in demo.publications] == [(1, 0), (1, 1), (1, 2), (2, 0)]
-    assert demo.publications[-1][2].highest_reveal_stage == 0
-    assert attempts == [1, 2]
-    assert len(demo.selected) == 2
-    demo.assert_clean()

@@ -1107,19 +1107,6 @@ def test_storage_configuration_overrides_each_runtime_path(tmp_path: Path, monke
     assert artifacts_path == config_path.parent / "runtime/artifacts"
 
 
-def test_demo_uses_default_configuration_and_never_receives_production_persistence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    paths = _paths(tmp_path)
-    _install_cli_paths(monkeypatch, paths)
-    calls = []
-    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: calls.append((args, kwargs)))
-
-    assert cli.main(["--demo", "5"]) == 0
-    assert calls[0][0] == (paths.config_file, 5.0)
-    assert set(calls[0][1]) == {"shutdown_event", "pending_shutdown"}
-
-
 def test_missing_configuration_is_actionable_and_does_not_fall_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1163,6 +1150,8 @@ def test_removed_storage_options_are_rejected(option: str, capsys: pytest.Captur
 @pytest.mark.parametrize(
     "arguments",
     [
+        ["--demo"],
+        ["--demo", "5"],
         ["--show-entry", "entry"],
         ["--test-decoration", "all"],
         ["--test-output", "preview.png"],
@@ -1191,8 +1180,8 @@ def test_main_help_omits_legacy_presentation_options(capsys: pytest.CaptureFixtu
 
     assert error.value.code == 0
     output = capsys.readouterr().out
-    assert "--demo" in output
     for option in (
+        "--demo",
         "--show-entry",
         "--test-decoration",
         "--test-output",
@@ -1251,24 +1240,12 @@ def test_administrative_operations_reject_alternate_configuration(
     assert "cannot be combined with --config" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("mode", [["--demo", "5"]])
-@pytest.mark.parametrize("operation", ["--initialize", "--reset", "--purge"])
-def test_administrative_operations_are_mutually_exclusive_with_runtime_modes(
-    operation: str, mode: list[str], capsys: pytest.CaptureFixture[str]
-) -> None:
-    with pytest.raises(SystemExit) as error:
-        cli.main([operation, *mode])
-    assert error.value.code == 2
-    assert "not allowed with argument" in capsys.readouterr().err
-
-
 def test_initialize_cli_exits_without_starting_application(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     paths = _paths(tmp_path)
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
-    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
 
     assert cli.main(["--initialize"]) == 0
     output = capsys.readouterr().out
@@ -1295,7 +1272,6 @@ def test_destructive_cli_operations_require_confirmation_before_work(
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: paths)
     monkeypatch.setattr(cli, "confirm_operation", lambda *args, **kwargs: False)
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
-    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
     monkeypatch.setattr(cli, "reset_installation", lambda *args: pytest.fail("reset ran before confirmation"))
     monkeypatch.setattr(cli, "purge_installation", lambda *args: pytest.fail("purge ran before confirmation"))
 
@@ -1348,7 +1324,6 @@ def test_destructive_cli_operations_exit_without_starting_application(
         lambda *args: calls.append(args) or (() if method == "purge_installation" else None),
     )
     monkeypatch.setattr(cli, "run_application", lambda *args, **kwargs: pytest.fail("normal lifecycle started"))
-    monkeypatch.setattr(cli, "run_demo", lambda *args, **kwargs: pytest.fail("demo lifecycle started"))
 
     assert cli.main([operation]) == 0
     assert calls == [(paths,)]

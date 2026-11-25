@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import signal
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from threading import Event
 
-from .application import ApplicationError, run_application, run_demo
+from .application import ApplicationError, run_application
 from .config import ApplicationConfigurationError, load_application_config
 from .display.coordinator import PublicationResult, PublicationStatus
 from .installation import (
@@ -57,16 +56,6 @@ def _installation_ownership(paths: ApplicationPaths) -> InstallationOwnership:
     return ownership
 
 
-def _demo_interval(value: str) -> float:
-    try:
-        seconds = float(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError("demo interval must be a positive finite number of seconds") from None
-    if not math.isfinite(seconds) or seconds <= 0:
-        raise argparse.ArgumentTypeError("demo interval must be a positive finite number of seconds")
-    return seconds
-
-
 def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownership: InstallationOwnership) -> int:
     config_path = arguments.config if arguments.config is not None else paths.config_file
     config_absolute = Path(config_path).absolute()
@@ -79,28 +68,21 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
             file=sys.stderr,
         )
         return 1
-    if arguments.demo is None:
-        try:
-            configuration = load_application_config(config_absolute)
-        except ApplicationConfigurationError as error:
-            raise ApplicationError(f"application configuration is invalid: {error}") from error
-        state_directory = Path(configuration.storage.state or paths.state_directory).absolute()
-        state_path = state_directory / "state.json"
-        artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
-        history_path = state_directory / "global-history.jsonl"
-        publish_path = Path(resolve_publication_root(configuration.storage.publish, paths)).absolute()
-        ownership.ensure_outside((state_directory, artifacts_path, publish_path))
-        _LOGGER.info("Effective configuration path: %s", configuration.file)
-        _LOGGER.info("Effective state path: %s", state_path)
-        _LOGGER.info("Effective artifacts path: %s", artifacts_path)
-        _LOGGER.info("Effective history path: %s", history_path)
-        _LOGGER.info("Effective publication root: %s", publish_path)
-    else:
-        _LOGGER.info(
-            "Effective configuration path: %s; %s",
-            config_absolute,
-            "demo persistence uses isolated temporary storage",
-        )
+    try:
+        configuration = load_application_config(config_absolute)
+    except ApplicationConfigurationError as error:
+        raise ApplicationError(f"application configuration is invalid: {error}") from error
+    state_directory = Path(configuration.storage.state or paths.state_directory).absolute()
+    state_path = state_directory / "state.json"
+    artifacts_path = Path(configuration.storage.artifacts or paths.artifacts_directory).absolute()
+    history_path = state_directory / "global-history.jsonl"
+    publish_path = Path(resolve_publication_root(configuration.storage.publish, paths)).absolute()
+    ownership.ensure_outside((state_directory, artifacts_path, publish_path))
+    _LOGGER.info("Effective configuration path: %s", configuration.file)
+    _LOGGER.info("Effective state path: %s", state_path)
+    _LOGGER.info("Effective artifacts path: %s", artifacts_path)
+    _LOGGER.info("Effective history path: %s", history_path)
+    _LOGGER.info("Effective publication root: %s", publish_path)
 
     shutdown = Event()
     previous_handlers = {}
@@ -109,23 +91,15 @@ def _run_runtime(arguments: argparse.Namespace, paths: ApplicationPaths, ownersh
             previous_handlers[termination_signal] = signal.signal(
                 termination_signal, lambda signum, frame: shutdown.set()
             )
-        if arguments.demo is not None:
-            run_demo(
-                config_path,
-                arguments.demo,
-                shutdown_event=shutdown,
-                pending_shutdown=ownership.defer_release_until,
-            )
-        else:
-            run_application(
-                configuration,
-                state_path,
-                artifacts_path,
-                shutdown_event=shutdown,
-                history_path=history_path,
-                pending_shutdown=ownership.defer_release_until,
-                control_metadata_path=Path(paths.control_metadata_file),
-            )
+        run_application(
+            configuration,
+            state_path,
+            artifacts_path,
+            shutdown_event=shutdown,
+            history_path=history_path,
+            pending_shutdown=ownership.defer_release_until,
+            control_metadata_path=Path(paths.control_metadata_file),
+        )
     finally:
         for termination_signal, handler in previous_handlers.items():
             signal.signal(termination_signal, handler)
@@ -207,12 +181,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--config", help="application configuration YAML file")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument(
-        "--demo",
-        type=_demo_interval,
-        metavar="SECONDS",
-        help="cycle canonical reveal stages at a positive finite interval using temporary session storage",
-    )
     modes.add_argument(
         "--initialize",
         action="store_true",

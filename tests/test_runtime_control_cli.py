@@ -112,7 +112,6 @@ def test_refresh_control_errors_are_actionable(
     "arguments",
     [
         ["--refresh", "--config", "custom.yaml"],
-        ["--refresh", "--demo", "5"],
         ["--refresh", "--initialize"],
         ["--refresh", "--reset"],
         ["--refresh", "--purge"],
