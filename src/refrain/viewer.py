@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import sys
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -56,8 +57,9 @@ from .runtime_control import (
     RuntimeUnconfirmed,
     RuntimeUnsupportedProtocol,
 )
-from .scheduling import resolve_reveal_stages
+from .scheduling import evaluate_scheduling, resolve_reveal_stages
 
+_LOGGER = logging.getLogger(__name__)
 _ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _MAX_PUBLICATION_METADATA_BYTES = 16 * 1024 * 1024
@@ -122,6 +124,12 @@ def _resource_preference(value: str) -> str:
 def _positive_font_size(value: str) -> int:
     if not value.isascii() or not value.isdecimal() or int(value) < 1:
         raise argparse.ArgumentTypeError("font size must be a positive integer number of design-canvas pixels")
+    return int(value)
+
+
+def _reveal_stage(value: str) -> int:
+    if not value.isascii() or not value.isdecimal() or int(value) > 2:
+        raise argparse.ArgumentTypeError("reveal stage must be an integer from 0 through 2")
     return int(value)
 
 
@@ -199,8 +207,9 @@ def render_preview(
     destination_type: str | None = None,
     audience: str = "internal",
     qr_overrides: Mapping[str, str | None] | None = None,
+    reveal_stage: int | None = None,
 ) -> Image.Image:
-    """Render one fully revealed output image without runtime persistence or backends."""
+    """Render one output image without runtime persistence or backends."""
     specification = output_specification or _output_specification("16:10", None)
     image = render_preview_variants(
         configuration,
@@ -210,6 +219,7 @@ def render_preview(
         debug_layout=debug_layout,
         audience=audience,
         qr_overrides=qr_overrides,
+        reveal_stage=reveal_stage,
     )[specification]
     if destination_type is not None:
         try:
@@ -323,12 +333,28 @@ def render_preview_variants(
     debug_layout: bool = False,
     audience: str = "internal",
     qr_overrides: Mapping[str, str | None] | None = None,
+    reveal_stage: int | None = None,
 ) -> Mapping[ResolvedOutputSpecification, Image.Image]:
-    """Render one coherent, fully revealed presentation across output specifications."""
+    """Render one coherent presentation across output specifications."""
+    if reveal_stage is not None and (type(reveal_stage) is not int or not 0 <= reveal_stage <= 2):
+        raise ViewerError("reveal stage must be an integer from 0 through 2")
     entry, quotation = _select_entry(configuration, selector)
     try:
-        snapshot = build_presentation_snapshot(configuration, entry, quotation, date.today())
+        display_date = (
+            date.today()
+            if reveal_stage is None
+            else evaluate_scheduling(datetime.now(timezone.utc), configuration, None).display_date
+        )
+        snapshot = build_presentation_snapshot(configuration, entry, quotation, display_date)
         stages = resolve_reveal_stages(snapshot)
+        index = len(stages) - 1 if reveal_stage is None else reveal_stage
+        if index >= len(stages):
+            _LOGGER.warning(
+                "requested reveal stage %d exceeds final available stage %d; rendering the final stage",
+                index,
+                len(stages) - 1,
+            )
+            index = len(stages) - 1
 
         def annotate_diagnostics(_specification, image, diagnostics) -> None:
             annotated = overlay_presentation_diagnostics(image, diagnostics)
@@ -338,7 +364,7 @@ def render_preview_variants(
 
         prepared = prepare_daily_images(
             snapshot,
-            (stages[-1],),
+            (stages[index],),
             configuration,
             output_specifications,
             overrides=overrides,
@@ -540,6 +566,7 @@ def run_viewer(
     debug_layout: bool = False,
     audience: str | None = None,
     qr_overrides: Mapping[str, str | None] | None = None,
+    reveal_stage: int | None = None,
 ) -> None:
     """Load one configuration and render/export a single presentation."""
     if config_file is None:
@@ -576,6 +603,7 @@ def run_viewer(
         destination_type=destination_type,
         audience=audience or "internal",
         qr_overrides=qr_overrides,
+        reveal_stage=reveal_stage,
     )
     try:
         if output is not None:
@@ -934,6 +962,7 @@ def _validate_discovery_arguments(parser: argparse.ArgumentParser, arguments: ar
     for option, value in (
         ("--config", arguments.config),
         ("--entry", arguments.entry),
+        ("--reveal-stage", arguments.reveal_stage),
         ("--font", arguments.font),
         ("--quotation-face", arguments.quotation_face),
         ("--source-face", arguments.source_face),
@@ -975,6 +1004,7 @@ def _validate_push_arguments(parser: argparse.ArgumentParser, arguments: argpars
         ("--render-as", arguments.render_as),
         ("--list-destinations", arguments.list_destinations),
         ("--audience", arguments.audience),
+        ("--reveal-stage", arguments.reveal_stage),
     ):
         if value is not None and value is not False:
             conflicts.append(option)
@@ -987,6 +1017,7 @@ def _validate_publication_arguments(parser: argparse.ArgumentParser, arguments: 
         option
         for option, value in (
             ("--entry", arguments.entry),
+            ("--reveal-stage", arguments.reveal_stage),
             ("--image", arguments.image),
             ("--push", arguments.push),
             ("--render-as", arguments.render_as),
@@ -1020,6 +1051,7 @@ def _validate_image_arguments(parser: argparse.ArgumentParser, arguments: argpar
     for option, value in (
         ("--config", arguments.config),
         ("--entry", arguments.entry),
+        ("--reveal-stage", arguments.reveal_stage),
         ("--font", arguments.font),
         ("--quotation-face", arguments.quotation_face),
         ("--source-face", arguments.source_face),
@@ -1062,6 +1094,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", help="application configuration YAML file")
     parser.add_argument("--entry", type=parse_entry_selector, metavar="ENTRY_ID[:N]")
+    parser.add_argument("--reveal-stage", type=_reveal_stage, metavar="N", help="inspect cumulative reveal stage 0–2")
     parser.add_argument("--font", type=_resource_preference, metavar="FONT_ID|@POOL")
     parser.add_argument("--quotation-face", type=_identifier, metavar="FACE_ID")
     parser.add_argument("--source-face", type=_identifier, metavar="FACE_ID")
@@ -1126,6 +1159,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _validate_push_arguments(parser, arguments)
     if arguments.render_as is not None:
         _validate_render_as_arguments(parser, arguments)
+    if arguments.reveal_stage is not None and arguments.entry is None:
+        parser.error("--reveal-stage requires an explicit --entry")
 
     if arguments.image is not None:
         if arguments.push is not None:
@@ -1208,6 +1243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             debug_layout=arguments.debug_layout,
             audience=arguments.audience,
             qr_overrides=qr_overrides,
+            reveal_stage=arguments.reveal_stage,
         )
     except (ApplicationPathError, ViewerError, DailyImagePreparationError) as error:
         print(f"refrain-viewer: {error}", file=sys.stderr)
