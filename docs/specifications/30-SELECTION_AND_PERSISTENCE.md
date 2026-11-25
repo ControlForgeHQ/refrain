@@ -371,7 +371,7 @@ A valid matching checkpoint preserves its QR declarations across restart and sub
 
 A checkpoint associated with another selection revision must never override the current committed selection. An invalid checkpoint must not be treated as a valid source of artistic choices or partially repaired by accepting unvalidated presentation data.
 
-Recovery must preserve the committed selection revision, repetition history, selected literary content, effective reveal schedule, frozen resolved reveal-stage sequence, and highest committed reveal stage. Reconstructing or completing publication checkpoints must not modify those authoritative values.
+Publication checkpoint recovery must preserve the committed selection revision, repetition history, selected literary content, effective reveal schedule, frozen resolved reveal-stage sequence, and highest committed reveal stage. Reconstructing or completing publication checkpoints must not modify those authoritative values.
 
 Checkpoint recovery uses the same state-first ordering and atomic replacement requirements as ordinary processing. Destination-specific preparation must not proceed from newly resolved artistic choices until the completed checkpoint has been durably persisted. A checkpoint persistence failure leaves operational state authoritative and must be reported without triggering literary reselection.
 
@@ -404,7 +404,7 @@ Automated tests must cover:
 - checkpoint visibility reconciliation without loss of valid artistic choices;
 - failure to persist a recovered checkpoint;
 - prepared-image loss, corruption, and regeneration using compatible persisted presentation choices;
-- rejection of invalid operational state without modifying it, including correct standard and custom path diagnostics;
+- rejection of unrecoverable operational state without modifying it, including correct standard and custom path diagnostics;
 - current-schema state round trips, rejection of missing actions or resolved reveal stages, and rejection of invalid persisted actions;
 - recovery using newly initialized application instances after controlled interruptions at meaningful persistence boundaries.
 
