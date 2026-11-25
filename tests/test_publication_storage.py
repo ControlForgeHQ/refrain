@@ -566,6 +566,9 @@ def test_read_errors_retry_from_current_manifest_and_exhaust_explicitly(
     original_fdopen = publication_storage_module.os.fdopen
     opened = {}
     failures = 0
+    failed_sources = []
+    load_current = store._load_current
+    attempts = 0
 
     def track_open(path, flags, *args, **kwargs):
         fd = original_open(path, flags, *args, **kwargs)
@@ -585,10 +588,22 @@ def test_read_errors_retry_from_current_manifest_and_exhaust_explicitly(
         def read(self, size=-1):
             nonlocal failures
             failures += 1
+            failed_sources.append(self.source)
+            raise OSError("injected read failure")
+
+    def replace_after_failed_read(destination: Path):
+        nonlocal attempts
+        attempts += 1
+        try:
+            return load_current(destination)
+        except PublicationStorageError as error:
+            assert isinstance(error.__cause__, OSError)
+            assert str(error.__cause__) == "injected read failure"
+            assert failed_sources[-1].closed
             if not persistent:
                 with _image(1) as image:
                     _store(store.root).publish("screen", image, _metadata("new"), audience="internal")
-            raise OSError("injected read failure")
+            raise
 
     def failing_fdopen(fd, *args, **kwargs):
         source = original_fdopen(fd, *args, **kwargs)
@@ -598,6 +613,7 @@ def test_read_errors_retry_from_current_manifest_and_exhaust_explicitly(
 
     monkeypatch.setattr(publication_storage_module.os, "open", track_open)
     monkeypatch.setattr(publication_storage_module.os, "fdopen", failing_fdopen)
+    monkeypatch.setattr(store, "_load_current", replace_after_failed_read)
     if persistent:
         with pytest.raises(PublicationStorageError, match="cannot read publication file"):
             store.read_current("screen")
@@ -605,6 +621,7 @@ def test_read_errors_retry_from_current_manifest_and_exhaust_explicitly(
     else:
         assert store.read_current("screen").manifest.publication_id == "new"
         assert failures == 1
+    assert attempts == 2
 
 
 def test_missing_destination_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
