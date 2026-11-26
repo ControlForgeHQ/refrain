@@ -180,16 +180,24 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
     state_before = workspace.state.read_bytes()
     history_before = workspace.history.read_bytes()
     configuration = application.load_application_config(workspace.config)
+    now = [at(10, 13)]
 
     class Coordinator:
         desired_identity = (1, 1)
         has_participating_destinations = True
 
-        def force_scheduled_publication(self, identity, images, metadata, destination_keys):
+        def force_scheduled_publication(
+            self, identity, images, metadata, destination_keys, *, expected_date, admission_check
+        ):
             assert identity == self.desired_identity
             assert set(images) == set(configuration.required_output_specifications)
             assert set(metadata) == set(configuration.required_prepared_image_keys)
             assert set(destination_keys) == {"epaper"}
+            assert expected_date == at(10, 13).date()
+            assert admission_check()
+            now[0] = at(10, 18)
+            assert not admission_check()
+            now[0] = at(10, 13)
             for specification, image in images.items():
                 assert image.size == specification.requested_output_size
                 image.close()
@@ -201,7 +209,7 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
         PreparedImageArtifactStore(workspace.artifacts),
         configuration,
         Random(1),
-        lambda: at(10, 13),
+        lambda: now[0],
         Event(),
         Lock(),
         Coordinator().force_scheduled_publication,
