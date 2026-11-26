@@ -48,8 +48,8 @@ body:
     attributes:
       label: Constraints and references
       description: |
-        Include constraints specific to this issue and links to relevant
-        architecture, engineering, content-format, or roadmap sections.
+        Identify applicable constraints and reference the relevant
+        authoritative documentation.
         Do not duplicate project-wide requirements.
     validations:
       required: false
@@ -72,7 +72,8 @@ body:
       label: Additional validation
       description: |
         Specify tests or manual validation unique to this issue.
-        Standard project validation remains governed by docs/ENGINEERING.md.
+        Follow the validation requirements established in docs/AI_WORKFLOW.md
+        and its referenced authoritative documentation.
         Identify required hardware validation when applicable.
     validations:
       required: false
@@ -83,7 +84,8 @@ body:
       label: Documentation
       description: |
         Identify documentation that must be created or updated.
-        Follow the ownership boundaries established in AGENTS.md.
+        Follow the editing restrictions in AGENTS.md and the documentation
+        ownership requirements in docs/AI_WORKFLOW.md.
         State "None" if no documentation changes are required.
     validations:
       required: false
