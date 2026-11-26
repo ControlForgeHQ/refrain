@@ -596,8 +596,15 @@ class PreparedImageArtifactStore:
         if key != _variant_key(specification, presentation, qr_declaration):
             raise ValueError("variant key does not match the selected QR payload")
         self._store_group(
-            revision, stages, presentation, {specification: ()}, {specification: ()},
-            snapshot, checkpoint, qr_declaration, produce=produce,
+            revision,
+            stages,
+            presentation,
+            {specification: ()},
+            {specification: ()},
+            snapshot,
+            checkpoint,
+            qr_declaration,
+            produce=produce,
         )
         result, missing = self.load_groups(
             revision, stages, (key,), snapshot=snapshot, checkpoint=checkpoint, qr_declaration=qr_declaration
@@ -702,8 +709,13 @@ class PreparedImageArtifactStore:
                     if index >= len(expected_stages):
                         raise ValueError("too many prepared stages")
                     _validate_association(
-                        metadata_document, revision, expected_stages[index], specification, checkpoint,
-                        qr_declaration, presentation
+                        metadata_document,
+                        revision,
+                        expected_stages[index],
+                        specification,
+                        checkpoint,
+                        qr_declaration,
+                        presentation,
                     )
                     if first_metadata is None:
                         first_metadata = copy.deepcopy(metadata_document)
@@ -743,6 +755,7 @@ class PreparedImageArtifactStore:
                     ):
                         write_stage(image, metadata_document)
                 else:
+
                     def persist_stage(image: Image.Image, document: dict[str, object]) -> None:
                         try:
                             write_stage(image, document)

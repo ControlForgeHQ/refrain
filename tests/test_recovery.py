@@ -891,14 +891,23 @@ def test_partial_group_failure_preserves_healthy_set_and_releases_images(
     monkeypatch.setattr(Image.Image, "save", fail_write)
     with pytest.raises(DailyImagePreparationError if failure == "render" else ArtifactWriteError):
         _recover_daily_images(
-            state, artifact_store, _STAGES, _CONFIGURATION, (shared, other),
-            checkpoint=checkpoint, qr_declaration=None,
+            state,
+            artifact_store,
+            _STAGES,
+            _CONFIGURATION,
+            (shared, other),
+            checkpoint=checkpoint,
+            qr_declaration=None,
         )
 
     _assert_images_closed(tuple(images))
     healthy, missing = artifact_store.load_groups(
-        state.revision, _STAGES, (shared, other), snapshot=state.snapshot,
-        checkpoint=checkpoint, qr_declaration=None,
+        state.revision,
+        _STAGES,
+        (shared, other),
+        snapshot=state.snapshot,
+        checkpoint=checkpoint,
+        qr_declaration=None,
     )
     assert missing == (other,)
     assert len(healthy.variant_for(shared).stage_paths) == len(_STAGES)
@@ -924,8 +933,13 @@ def test_streamed_store_rejects_incomplete_or_misordered_stages(committed_state,
 
     with pytest.raises(ArtifactWriteError):
         artifact_store.store_generated(
-            state.revision, _STAGES, _OUTPUT_SPECIFICATION, produce,
-            snapshot=state.snapshot, checkpoint=checkpoint, qr_declaration=None,
+            state.revision,
+            _STAGES,
+            _OUTPUT_SPECIFICATION,
+            produce,
+            snapshot=state.snapshot,
+            checkpoint=checkpoint,
+            qr_declaration=None,
         )
     assert not list(artifact_store.root.glob("revision-*/group-*/manifest.json"))
     assert not list(artifact_store.root.glob(".tmp-revision-*"))
@@ -954,8 +968,13 @@ def test_streamed_store_rejects_mutated_metadata_without_replacing_healthy_set(c
 
     with pytest.raises(ArtifactWriteError, match="effective presentation"):
         artifact_store.store_generated(
-            state.revision, _STAGES, _OUTPUT_SPECIFICATION, produce,
-            snapshot=state.snapshot, checkpoint=checkpoint, qr_declaration=None,
+            state.revision,
+            _STAGES,
+            _OUTPUT_SPECIFICATION,
+            produce,
+            snapshot=state.snapshot,
+            checkpoint=checkpoint,
+            qr_declaration=None,
         )
     recovered = _load(artifact_store, state, _STAGES)
     assert _variant(recovered).stage_paths == original_paths

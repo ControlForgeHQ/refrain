@@ -92,6 +92,7 @@ def recover_prepared_daily_images(
     new_artifacts = existing
     choices_cache = {}
     for key in missing:
+
         def produce(write_stage):
             index = 0
 

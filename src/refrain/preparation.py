@@ -1812,7 +1812,9 @@ def prepare_daily_images(
         Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
     ) = None,
     _on_stage: Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image], None] | None = None,
-    _choices_cache: dict[DestinationPresentation, tuple[_PresentationChoices, ResolvedPresentation | None]] | None = None,
+    _choices_cache: (
+        dict[DestinationPresentation, tuple[_PresentationChoices, ResolvedPresentation | None]] | None
+    ) = None,
 ) -> Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]]:
     """Prepare complete reveal-stage image variants for all required destination groups."""
     if not isinstance(snapshot, (DailySnapshot, _UncommittedLiteraryContent)):
