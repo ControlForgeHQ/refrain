@@ -1374,33 +1374,20 @@ def run_application(
                 raise ApplicationError(f"scheduling evaluation failed: {error}") from error
     finally:
         control_workers: tuple[Thread, ...] = ()
+        deadline = time.monotonic() + _CONTROL_SHUTDOWN_TIMEOUT
         try:
+            if coordinator is not None:
+                coordinator.begin_draining(deadline=deadline)
             if control is not None:
-                control_workers = control.close()
+                control_workers = control.close(deadline=deadline)
         finally:
             if coordinator is not None:
-                if control_workers:
-                    coordinator.begin_draining()
-
-                    def finish_control_shutdown() -> None:
-                        coordinator.wait_for_drain()
-                        workers = coordinator.close()
-                        for worker in workers:
-                            worker.join()
-                        if workers:
-                            coordinator.close()
-                        for worker in control_workers:
-                            worker.join()
-
-                    cleanup = Thread(target=finish_control_shutdown, name="refrain-control-cleanup", daemon=True)
-                    cleanup.start()
-                    cleanup.join(_CONTROL_SHUTDOWN_TIMEOUT)
-                    if cleanup.is_alive() and pending_shutdown is not None:
-                        pending_shutdown((cleanup,), lambda: None)
-                else:
-                    workers = coordinator.close()
-                    if workers and pending_shutdown is not None:
-                        pending_shutdown(workers, coordinator.close)
+                workers = coordinator.close(deadline=deadline)
+                for worker in control_workers:
+                    worker.join(max(0.0, deadline - time.monotonic()))
+                pending = workers + tuple(worker for worker in control_workers if worker.is_alive())
+                if pending and pending_shutdown is not None:
+                    pending_shutdown(pending, coordinator.close)
             if information_view_images is not None:
                 for image in information_view_images.values():
                     image.close()

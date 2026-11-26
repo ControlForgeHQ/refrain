@@ -831,8 +831,7 @@ class RuntimeControlServer:
                 # Even a lost acknowledgement must not release files needed by workers.
                 pending = admitted if admitted is not None else publication
                 if pending is not None:
-                    while pending.wait(0.1).status is PublicationStatus.ACCEPTED:
-                        pass
+                    pending.wait_for_release()
                 cleanup_reported = False
                 while True:
                     try:
@@ -1029,7 +1028,7 @@ class RuntimeControlServer:
         images.audiences = {key: value["audience"] for key, value in associations.items()}
         return target, specifications
 
-    def close(self) -> tuple[Thread, ...]:
+    def close(self, *, deadline: float | None = None) -> tuple[Thread, ...]:
         with self._lock:
             self._stop.set()
             deadlines = tuple(self._deadlines)
@@ -1049,7 +1048,8 @@ class RuntimeControlServer:
                 _LOG.exception("Cannot close runtime-control listener")
             self._listener = None
         if self._thread is not None and self._thread.ident is not None:
-            self._thread.join(timeout=2)
+            timeout = 2.0 if deadline is None else max(0.0, min(2.0, deadline - time.monotonic()))
+            self._thread.join(timeout=timeout)
         if self._metadata is not None:
             try:
                 with self._metadata_path.open("rb") as file:

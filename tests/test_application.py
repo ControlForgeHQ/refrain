@@ -726,7 +726,7 @@ def test_runtime_control_lifecycle_is_required(
             if fail:
                 raise OSError("endpoint unavailable")
 
-        def close(self):
+        def close(self, *, deadline=None):
             events.append("closed")
             return ()
 
@@ -1999,8 +1999,12 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
         def expire_all_day_holds(self, expected_date):
             return True
 
-        def close(self):
+        def begin_draining(self, *, deadline=None):
+            pass
+
+        def close(self, *, deadline=None):
             self.closed = True
+            return ()
 
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", RecordingCoordinator)
     return instances
@@ -2410,8 +2414,8 @@ def test_continuous_reports_pending_backend_shutdown(workspace, monkeypatch) -> 
     original_coordinator = application.DisplayPublicationCoordinator
 
     class Coordinator(original_coordinator):
-        def close(self):
-            super().close()
+        def close(self, *, deadline=None):
+            super().close(deadline=deadline)
             return workers
 
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", Coordinator)

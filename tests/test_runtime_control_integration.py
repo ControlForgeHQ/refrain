@@ -400,6 +400,32 @@ def test_real_shutdown_defers_coordinator_until_admitted_refresh_completes(resid
         for worker in workers:
             worker.join(5)
             assert not worker.is_alive()
+        assert published == ["one", "two", "one"]
+    finally:
+        release.set()
+        connection.close()
+
+
+def test_real_shutdown_allows_admitted_refresh_to_finish_within_deadline(resident, monkeypatch):
+    metadata, shutdown, published, closed, hold, entered, release, thread, _, errors, _, coordinator, *_ = resident
+    monkeypatch.setattr(application, "_CONTROL_SHUTDOWN_TIMEOUT", 2.0)
+    hold.set()
+    connection = _connection(metadata)
+    try:
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
+        assert json.loads(connection.recv_bytes())["status"] == "accepted"
+        assert entered.wait(5)
+        shutdown.set()
+        deadline = time.monotonic() + 2
+        while not coordinator._draining and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert coordinator._draining
+        release.set()
+        assert json.loads(connection.recv_bytes())["status"] == "succeeded"
+        thread.join(5)
+        assert not thread.is_alive()
+        assert not errors
+        assert closed.is_set()
         assert published == ["one", "two", "one", "two"]
     finally:
         release.set()

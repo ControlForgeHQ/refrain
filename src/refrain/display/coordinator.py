@@ -94,8 +94,10 @@ class PublicationOperation:
     def __init__(self, result: PublicationResult, *, done: bool = False) -> None:
         self._result = result
         self._done = Event()
+        self._released = Event()
         if done:
             self._done.set()
+            self._released.set()
 
     @property
     def result(self) -> PublicationResult:
@@ -107,11 +109,17 @@ class PublicationOperation:
         return self._result
 
     def _complete(self, result: PublicationResult) -> None:
-        self._result = result
-        self._done.set()
+        if not self._done.is_set():
+            self._result = result
+            self._done.set()
 
     def _update(self, result: PublicationResult) -> None:
-        self._result = result
+        if not self._done.is_set():
+            self._result = result
+
+    def wait_for_release(self) -> None:
+        """Wait until workers no longer require this operation's resources."""
+        self._released.wait()
 
 
 @dataclass
@@ -185,6 +193,7 @@ class DisplayPublicationCoordinator:
         self._publication_finalizer = publication_finalizer
         self._stopping = False
         self._draining = False
+        self._shutdown_deadline: float | None = None
         self._active_transient: _OneShotPublication | None = None
         self._states = {
             destination.identifier: _DestinationState(configuration, destination, destination.identifier)
@@ -803,6 +812,7 @@ class DisplayPublicationCoordinator:
         except Exception:
             _LOGGER.exception("Failed to release one-shot publication images")
         operation.operation._complete(PublicationResult(status, destinations))
+        operation.operation._released.set()
         self._condition.notify_all()
 
     def _record_one_shot_result(
@@ -831,6 +841,7 @@ class DisplayPublicationCoordinator:
                     state.hold_date = operation.hold_date
             if (
                 operation.forced
+                and not operation.operation._done.is_set()
                 and state.desired_identity == operation.identity
                 and state.desired_key == self._destination_key(state.destination, operation.destination_keys)
             ):
@@ -971,10 +982,15 @@ class DisplayPublicationCoordinator:
                 self._condition.wait(remaining)
             return any(state.successful_identity == identity for state in participating)
 
-    def begin_draining(self) -> None:
+    def begin_draining(self, *, deadline: float | None = None) -> None:
         """Stop retries and new work while admitted, unattempted destinations finish."""
         with self._condition:
             self._draining = True
+            if deadline is not None:
+                self._shutdown_deadline = (
+                    deadline if self._shutdown_deadline is None else min(deadline, self._shutdown_deadline)
+                )
+            self._expire_shutdown_locked()
             for state in self._states.values():
                 state.hold_date = None
                 self._release(state.pending)
@@ -997,37 +1013,21 @@ class DisplayPublicationCoordinator:
             while any(state.one_shot is not None for state in self._states.values()):
                 self._condition.wait()
 
-    def close(self) -> tuple[Thread, ...]:
+    def close(self, *, deadline: float | None = None) -> tuple[Thread, ...]:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
+        if deadline is None:
+            deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
+        self.begin_draining(deadline=deadline)
         with self._condition:
-            self._stopping = True
-            operations: set[int] = set()
-            for state in self._states.values():
-                state.hold_date = None
-                self._release(state.pending)
-                state.pending = None
-                state.desired_identity = None
-                state.desired_key = None
-                operation = state.one_shot
-                if operation is None or id(operation) in operations:
-                    continue
-                operations.add(id(operation))
-                for key in operation.destinations:
-                    destination_state = self._states[key]
-                    if key not in operation.outcomes and not destination_state.one_shot_active:
-                        self._record_one_shot_result(
-                            destination_state,
-                            operation,
-                            success=False,
-                            error="coordinator is stopping",
-                        )
-            self._condition.notify_all()
-        deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
+            assert self._shutdown_deadline is not None
+            deadline = self._shutdown_deadline
         for thread in self._threads:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(remaining)
+        with self._condition:
+            self._expire_shutdown_locked(force=True)
         active_threads = tuple(thread for thread in self._threads if thread.is_alive())
         active_backend_types = {
             configuration.type
@@ -1046,6 +1046,40 @@ class DisplayPublicationCoordinator:
                 _SHUTDOWN_TIMEOUT,
             )
         return active_threads
+
+    def _expire_shutdown_locked(self, *, force: bool = False) -> None:
+        if self._stopping or (
+            not force and (self._shutdown_deadline is None or time.monotonic() < self._shutdown_deadline)
+        ):
+            return
+        self._stopping = True
+        operations: set[int] = set()
+        for state in self._states.values():
+            state.hold_date = None
+            self._release(state.pending)
+            state.pending = None
+            state.desired_identity = None
+            state.desired_key = None
+            operation = state.one_shot
+            if operation is None or id(operation) in operations:
+                continue
+            operations.add(id(operation))
+            outcomes = {
+                key: operation.outcomes.get(key, (None, "shutdown deadline expired")) for key in operation.destinations
+            }
+            status = (
+                PublicationStatus.FAILED
+                if any(success is False for success, _ in outcomes.values())
+                else PublicationStatus.UNCONFIRMED
+            )
+            operation.operation._complete(PublicationResult(status, MappingProxyType(outcomes)))
+            for key in operation.destinations:
+                destination_state = self._states[key]
+                if key not in operation.outcomes and not destination_state.one_shot_active:
+                    self._record_one_shot_result(
+                        destination_state, operation, success=None, error="shutdown deadline expired"
+                    )
+        self._condition.notify_all()
 
     @staticmethod
     def _close_images(
@@ -1094,7 +1128,10 @@ class DisplayPublicationCoordinator:
                 initialize_backend = False
                 with self._condition:
                     while True:
+                        self._expire_shutdown_locked()
                         if self._stopping:
+                            return
+                        if self._draining and not any(state.one_shot is not None for state in states):
                             return
                         now = time.monotonic()
                         one_shot_ready = next(
@@ -1192,6 +1229,7 @@ class DisplayPublicationCoordinator:
                     except Exception as error:
                         recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                         with self._condition:
+                            self._expire_shutdown_locked()
                             retry = (
                                 recoverable
                                 and backend_retry_attempts < _MAX_RETRY_ATTEMPTS
@@ -1248,6 +1286,7 @@ class DisplayPublicationCoordinator:
                         continue
 
                     with self._condition:
+                        self._expire_shutdown_locked()
                         self._backends[configuration.type] = backend
                         for state in states:
                             if not state.terminal:
@@ -1327,6 +1366,7 @@ class DisplayPublicationCoordinator:
                     uncertain = one_shot is not None and isinstance(cause, PublicationStorageError) and cause.published
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
+                        self._expire_shutdown_locked()
                         if one_shot is not None:
                             one_shot.retry_attempts[ready.key] += 1
                             ready.retry_attempts = one_shot.retry_attempts[ready.key]
@@ -1399,6 +1439,7 @@ class DisplayPublicationCoordinator:
                     continue
 
                 with self._condition:
+                    self._expire_shutdown_locked()
                     if one_shot is not None:
                         ready.one_shot_active = False
                         one_shot.retry_at[ready.key] = 0.0
