@@ -18,6 +18,7 @@ import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import closing
+from datetime import date
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from threading import BoundedSemaphore, Event, Lock, Thread
@@ -36,7 +37,7 @@ from .display.coordinator import (
 from .geometry import PresentationGeometryError, ResolvedOutputSpecification
 
 _LOG = logging.getLogger(__name__)
-_VERSION = 2
+_VERSION = 1
 _MAX_METADATA = 65536
 _MAX_IMAGE_BYTES = 32 * 1024 * 1024
 _MAX_TOTAL_BYTES = 192 * 1024 * 1024
@@ -100,6 +101,9 @@ class AdmissionGuard(Protocol):
         images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
         metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None,
         destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+        *,
+        expected_date: date | None = None,
+        admission_check: Callable[[], bool] | None = None,
     ) -> PublicationOperation: ...
 
 
@@ -654,6 +658,9 @@ class RuntimeControlServer:
                         Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None
                     ) = None,
                     destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+                    *,
+                    expected_date: date | None = None,
+                    admission_check: Callable[[], bool] | None = None,
                 ) -> PublicationOperation:
                     with self._lock:
                         if self._stop.is_set() or self._shutdown_event.is_set() or guard.is_set():
@@ -669,14 +676,37 @@ class RuntimeControlServer:
                             "force_scheduled_publication_with_metadata",
                             None,
                         )
+                        admission_kwargs = {}
+                        if expected_date is not None:
+                            admission_kwargs["expected_date"] = expected_date
+                        if admission_check is not None:
+                            admission_kwargs["admission_check"] = admission_check
                         if metadata is not None and callable(publish_with_metadata):
                             if destination_keys is None:
-                                return publish_with_metadata(identity, images, metadata)
-                            return publish_with_metadata(identity, images, metadata, destination_keys=destination_keys)
+                                return publish_with_metadata(
+                                    identity,
+                                    images,
+                                    metadata,
+                                    **admission_kwargs,
+                                )
+                            return publish_with_metadata(
+                                identity,
+                                images,
+                                metadata,
+                                destination_keys=destination_keys,
+                                **admission_kwargs,
+                            )
                         if destination_keys is None:
-                            return self._coordinator.force_scheduled_publication(identity, images)
+                            return self._coordinator.force_scheduled_publication(
+                                identity,
+                                images,
+                                **admission_kwargs,
+                            )
                         return self._coordinator.force_scheduled_publication(
-                            identity, images, destination_keys=destination_keys
+                            identity,
+                            images,
+                            destination_keys=destination_keys,
+                            **admission_kwargs,
                         )
 
                 publication = self._refresh(admit_refresh)
@@ -709,7 +739,14 @@ class RuntimeControlServer:
                         except (OSError, EOFError, RuntimeProtocolError) as error:
                             DisplayPublicationCoordinator._close_images(supplied_images)
                             raise RuntimeAdmissionRejected("control client disconnected before admission") from error
-                        admitted = self._coordinator.publish_transient(selected, output_specifications, supplied_images)
+                        if request.get("all_day", False):
+                            admitted = self._coordinator.publish_transient(
+                                selected, output_specifications, supplied_images, all_day=True
+                            )
+                        else:
+                            admitted = self._coordinator.publish_transient(
+                                selected, output_specifications, supplied_images
+                            )
                         return admitted
 
                 if self._transient_admission is None:
@@ -722,6 +759,7 @@ class RuntimeControlServer:
                             PublicationStatus.ACCEPTED,
                             PublicationStatus.SUCCEEDED,
                             PublicationStatus.FAILED,
+                            PublicationStatus.UNCONFIRMED,
                         ):
                             raise
                         _LOG.exception("Transient admission callback failed after publication was admitted")
@@ -862,7 +900,11 @@ class RuntimeControlServer:
         preflight = request.get("preflight", False)
         if "associations" not in request:
             raise _TransientInvalid()
-        if set(request) - {"preflight"} != fields or ("preflight" in request and preflight is not True):
+        if (
+            set(request) - {"preflight", "all_day"} != fields
+            or ("preflight" in request and preflight is not True)
+            or ("all_day" in request and type(request["all_day"]) is not bool)
+        ):
             raise RuntimeProtocolError("invalid publication request")
         target = request["target"]
         if target != "@all" and (
@@ -1143,7 +1185,10 @@ class RuntimeControlClient:
         on_accepted: Callable[[], object] | None = None,
         *,
         audiences: Mapping[str, str] | None = None,
+        all_day: bool = False,
     ) -> PublicationResult:
+        if type(all_day) is not bool:
+            raise RuntimeProtocolError("all_day must be a boolean")
         target = (
             destinations
             if destinations == "@all"
@@ -1197,6 +1242,7 @@ class RuntimeControlClient:
             "specifications": {key: _spec_to_wire(spec) for key, spec in specifications.items()},
             "images": descriptors,
             "associations": associations,
+            "all_day": all_day,
         }
         return self._publish(request, payloads, on_accepted)
 

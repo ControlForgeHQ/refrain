@@ -2355,8 +2355,26 @@ def test_push_rejects_invalid_discovered_destinations_before_loading_or_renderin
     assert diagnostic in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("arguments", [[], ["--image", "input.png"], ["--list-destinations"]])
+def test_all_day_requires_push(arguments):
+    with pytest.raises(SystemExit) as error:
+        viewer.main([*arguments, "--all-day"])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("arguments", [[], ["--image", "input.png"]])
+def test_all_day_is_forwarded_for_generated_and_finished_pushes(monkeypatch, arguments):
+    calls = []
+    monkeypatch.setattr(viewer, "_run_push", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
+    assert viewer.main([*arguments, "--push", "screen", "--all-day"]) == 0
+    assert calls[0][0] == ("screen",)
+    assert calls[0][1]["all_day"] is True
+    assert calls[0][1].get("image_path") == (Path("input.png") if arguments else None)
+
+
+@pytest.mark.parametrize("all_day", [False, True])
 def test_image_push_discovers_before_loading_and_publishes_exact_pixels(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], all_day: bool
 ) -> None:
     image_path = tmp_path / "finished.png"
     source = Image.new("RGB", (320, 240), (10, 20, 30))
@@ -2383,8 +2401,9 @@ def test_image_push_discovers_before_loading_and_publishes_exact_pixels(
             calls.append("discover")
             return (destination,)
 
-        def publish_transient(self, target, specifications, images, *, audiences, on_accepted):
+        def publish_transient(self, target, specifications, images, *, audiences, on_accepted, all_day=False):
             calls.append("publish")
+            assert all_day is expected_all_day
             assert target == "screen"
             assert specifications == {"screen": specification}
             assert audiences == {"screen": "internal"}
@@ -2402,7 +2421,8 @@ def test_image_push_discovers_before_loading_and_publishes_exact_pixels(
     monkeypatch.setattr(viewer, "load_application_config", lambda *_: pytest.fail("configuration loaded"))
     monkeypatch.setattr(viewer, "_render_push_variants", lambda *_args, **_kwargs: pytest.fail("renderer invoked"))
 
-    assert viewer.main(["--image", str(image_path), "--push", "screen"]) == 0
+    expected_all_day = all_day
+    assert viewer.main(["--image", str(image_path), "--push", "screen", *(["--all-day"] if all_day else [])]) == 0
     assert calls == ["discover", "load-image", "publish"]
     output = capsys.readouterr().out
     assert "Push accepted; publication has begun." in output
@@ -2684,10 +2704,12 @@ def test_image_push_closes_image_after_terminal_runtime_outcomes(
     _assert_image_closed(loaded_images[0])
 
 
+@pytest.mark.parametrize("all_day", [False, True])
 def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    all_day: bool,
 ) -> None:
     config_path, _ = _workspace(tmp_path, with_entry=False)
     configuration = load_application_config(config_path)
@@ -2722,8 +2744,9 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
             calls.append("discover")
             return destinations
 
-        def publish_transient(self, target, specifications, images, *, audiences, on_accepted):
+        def publish_transient(self, target, specifications, images, *, audiences, on_accepted, all_day=False):
             calls.append("publish")
+            assert all_day is expected_all_day
             captured.update(target=target, specifications=specifications, images=images)
             assert target == "@all"
             assert specifications == {
@@ -2769,7 +2792,11 @@ def test_push_all_uses_discovery_geometry_deduplicates_images_and_reports_admiss
     monkeypatch.setattr(viewer, "load_application_config", load_configuration)
     monkeypatch.setattr(viewer, "_render_push_variants", render)
 
-    assert viewer.main(["--config", str(config_path), "--no-qr", "--push", "@all"]) == 0
+    expected_all_day = all_day
+    assert (
+        viewer.main(["--config", str(config_path), "--no-qr", "--push", "@all", *(["--all-day"] if all_day else [])])
+        == 0
+    )
     assert calls == ["discover", "load", "render", "publish"]
     output = capsys.readouterr().out
     assert "Push accepted; publication has begun." in captured["accepted_output"]

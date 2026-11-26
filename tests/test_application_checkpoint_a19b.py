@@ -205,6 +205,9 @@ def test_continuous_checkpoint_loss_replaces_same_stage_in_memory_artifacts(work
         def clear_desired(self):
             self.desired_identity = None
 
+        def expire_all_day_holds(self, expected_date):
+            return True
+
         def close(self):
             pass
 

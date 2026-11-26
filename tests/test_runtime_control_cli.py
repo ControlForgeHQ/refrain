@@ -23,6 +23,21 @@ def paths(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(control_metadata_file=tmp_path / ".refrain-control" / "endpoint.json")
 
 
+@pytest.mark.parametrize("status", [PublicationStatus.UNCONFIRMED, PublicationStatus.FAILED])
+@pytest.mark.parametrize("operation", ["push", "refresh"])
+def test_uncertain_destination_is_not_reported_as_definite_failure(status, operation, capsys):
+    result = PublicationResult(status, {"one": (None, "verification unavailable"), "two": (False, "failed")})
+    if operation == "push":
+        exit_code = viewer._report_push_result(result, [{"identifier": "one"}, {"identifier": "two"}])
+    else:
+        exit_code = cli._report_refresh_result(result)
+    assert exit_code == 1
+    diagnostic = capsys.readouterr().err
+    assert "one: outcome unconfirmed: verification unavailable" in diagnostic
+    assert "two: failed" in diagnostic
+    assert "do not retry automatically" in diagnostic
+
+
 def test_refresh_is_a_lock_free_runtime_control_client(
     paths: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

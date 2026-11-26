@@ -369,7 +369,7 @@ def test_disconnect_during_real_refresh_preparation_does_not_publish(resident, m
     monkeypatch.setattr(control_module, "_ensure_connected", observe_check)
     connection = _connection(metadata)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert entered.wait(5)
         connection.close()
         release.set()
@@ -386,7 +386,7 @@ def test_real_shutdown_defers_coordinator_until_admitted_refresh_completes(resid
     hold.set()
     connection = _connection(metadata)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert json.loads(connection.recv_bytes())["status"] == "accepted"
         assert entered.wait(5)
         connection.close()
@@ -419,7 +419,7 @@ def test_shutdown_closes_backend_before_stuck_unadmitted_handler_exits(resident,
     monkeypatch.setattr(application, "_refresh_scheduled", blocked_refresh)
     connection = _connection(metadata)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert entered.wait(5)
         shutdown.set()
         thread.join(5)
