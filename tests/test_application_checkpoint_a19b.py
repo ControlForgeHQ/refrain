@@ -208,8 +208,11 @@ def test_continuous_checkpoint_loss_replaces_same_stage_in_memory_artifacts(work
         def expire_all_day_holds(self, expected_date):
             return True
 
-        def close(self):
+        def begin_draining(self, *, deadline=None):
             pass
+
+        def close(self, *, deadline=None):
+            return ()
 
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", Coordinator)
 

@@ -663,6 +663,56 @@ def test_blocked_workers_share_one_shutdown_deadline(monkeypatch) -> None:
         coordinator.close()
 
 
+def test_worker_enforces_deadline_when_shutdown_thread_is_delayed(monkeypatch) -> None:
+    spec = ResolvedOutputSpecification("16:9", (8, 4))
+    config = DisplayBackendConfiguration(
+        "publish",
+        outputs=tuple(DisplayOutputConfiguration(key, spec, audience="internal") for key in ("first", "second")),
+    )
+    entered, release, joining, resume_join = Event(), Event(), Event(), Event()
+    published = []
+
+    class Backend:
+        def publish(self, destination, image):
+            published.append(destination.identifier)
+            entered.set()
+            assert release.wait(5)
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend())
+    operation = coordinator.publish_transient("@all", {"first": spec, "second": spec}, {spec: Image.new("RGB", (8, 4))})
+    worker = coordinator._threads[0]
+    original_join = worker.join
+
+    def delayed_join(timeout=None):
+        joining.set()
+        assert resume_join.wait(5)
+        original_join(timeout)
+
+    monkeypatch.setattr(worker, "join", delayed_join)
+    shutdown = Thread(target=lambda: coordinator.close(deadline=time.monotonic() + 0.05))
+    try:
+        assert entered.wait(2)
+        shutdown.start()
+        assert joining.wait(2)
+        assert not Event().wait(0.1)
+        release.set()
+        result = operation.wait(2)
+        assert result.status is PublicationStatus.UNCONFIRMED
+        assert all(success is None for success, _ in result.destinations.values())
+        assert published == ["first"]
+        resume_join.set()
+        shutdown.join(2)
+        assert not shutdown.is_alive()
+    finally:
+        release.set()
+        resume_join.set()
+        shutdown.join(2)
+        coordinator.close()
+
+
 def test_drain_finishes_admitted_destinations_and_rejects_new_work() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     outputs = tuple(DisplayOutputConfiguration(name, specification, audience="internal") for name in ("one", "two"))

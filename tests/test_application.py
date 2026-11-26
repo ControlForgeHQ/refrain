@@ -1999,7 +1999,7 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
         def expire_all_day_holds(self, expected_date):
             return True
 
-        def begin_draining(self):
+        def begin_draining(self, *, deadline=None):
             pass
 
         def close(self, *, deadline=None):

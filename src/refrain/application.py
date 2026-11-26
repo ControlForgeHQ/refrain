@@ -1377,7 +1377,7 @@ def run_application(
         deadline = time.monotonic() + _CONTROL_SHUTDOWN_TIMEOUT
         try:
             if coordinator is not None:
-                coordinator.begin_draining()
+                coordinator.begin_draining(deadline=deadline)
             if control is not None:
                 control_workers = control.close(deadline=deadline)
         finally:
