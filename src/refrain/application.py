@@ -37,11 +37,12 @@ from .display.coordinator import (
 )
 from .eligibility import build_eligible_quotation_pool
 from .geometry import ResolvedOutputSpecification
-from .information_view import InformationViewPreparationError, prepare_information_view
+from .information_view import InformationViewPreparationError, prepare_information_view, prepare_no_eligible_fallback
 from .persistence import (
     DailySnapshot,
     GlobalHistoryStore,
     GlobalHistoryWriteError,
+    InvalidSelectionStateError,
     PersistentState,
     PersistentStateStore,
     StateCommitError,
@@ -55,17 +56,19 @@ from .recovery import recover_prepared_daily_images
 from .runtime_control import RuntimeControlServer, TransientAdmissionGuard
 from .scheduling import (
     SchedulingAction,
+    SchedulingDecision,
     SchedulingEvaluationError,
     evaluate_scheduling,
     resolve_reveal_stages,
 )
 from .selection import SelectionProposal, select_quotation
-from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
+from .timekeeping import _local_datetime, next_scheduling_deadline, wait_for_scheduling_event
 
 _LOGGER = logging.getLogger(__name__)
 _INFORMATION_VIEW_IDENTITY = (0, -1)
 _INFORMATION_VIEW_PUBLICATION_TIMEOUT = 60.0
 _CONTROL_SHUTDOWN_TIMEOUT = 60.0
+_LIBRARY_RETRY_SECONDS = 300.0
 
 
 class ApplicationError(Exception):
@@ -76,16 +79,20 @@ class _RetryableApplicationError(ApplicationError):
     """An operation that can be retried without replacing committed state."""
 
 
+class _UnavailableLibraryError(_RetryableApplicationError):
+    """Content discovery cannot currently supply a usable library."""
+
+
 class NoEligibleQuotationError(ApplicationError):
     """Raised when no quotation is eligible for the requested display date."""
 
 
 @dataclass(frozen=True)
 class StartupResult:
-    """The committed state and reveal stage presented by one startup cycle."""
+    """Startup outcome; the stage is absent when no scheduled presentation was published."""
 
-    state: PersistentState
-    presented_stage: int
+    state: PersistentState | None
+    presented_stage: int | None
     selected_initial_quotation: bool
 
 
@@ -143,7 +150,7 @@ def _select_snapshot(
     configuration: ApplicationConfiguration,
     display_date: date,
     chooser: random.Random,
-    state: PersistentState | None = None,
+    state: PersistentState | InvalidSelectionStateError | None = None,
 ) -> tuple[SelectionProposal, DailySnapshot]:
     try:
         entries = _load_effective_content_library(
@@ -155,7 +162,7 @@ def _select_snapshot(
             },
         )
     except ContentLibraryError as error:
-        raise _RetryableApplicationError(f"content library is invalid: {error}") from error
+        raise _UnavailableLibraryError(f"content library is invalid: {error}") from error
 
     pool = build_eligible_quotation_pool(entries, display_date)
     history = set() if state is None else set(state.repetition_history)
@@ -217,7 +224,10 @@ def _commit_selection_with_checkpoint(
     snapshot: DailySnapshot,
 ) -> PersistentState:
     checkpoint_store = CheckpointStore(store.path.parent / "publication.json")
-    previous = _reload(store)
+    try:
+        previous = _reload(store)
+    except InvalidSelectionStateError:
+        previous = None
     if previous is None and proposal.base_revision == 0:
         try:
             checkpoint_store.invalidate()
@@ -254,6 +264,8 @@ def _complete_checkpoint(
 def _reload(store: PersistentStateStore) -> PersistentState | None:
     try:
         return store.load()
+    except InvalidSelectionStateError:
+        raise
     except StateRecoveryError as error:
         if isinstance(error.__cause__, OSError):
             raise _RetryableApplicationError(f"cannot recover persistent state: {error}") from error
@@ -270,6 +282,9 @@ def _persist_reveal_progress(store: PersistentStateStore, state: PersistentState
                 _LOGGER.warning("Reveal progress was published but durability was not confirmed: %s", error)
                 return reloaded
         raise _RetryableApplicationError(f"cannot persist reveal progress: {error}") from error
+    except ValueError as error:
+        _LOGGER.warning("Invalid requested reveal stage %s; retaining committed progression: %s", stage, error)
+        return state
 
 
 def present_prepared_stage(
@@ -410,6 +425,20 @@ def _publish_information_view(
         coordinator.publish(identity, images)
 
 
+def _publish_transient_fallback(
+    coordinator: DisplayPublicationCoordinator,
+    identity: tuple[int, int],
+    images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+) -> None:
+    coordinator.publish_transient_presentation(identity, images, allow_missing=True)
+
+
+def _fallback_variant_failure(
+    key: ResolvedOutputSpecification | PreparedImageVariantKey, error: DailyImagePreparationError
+) -> None:
+    _LOGGER.warning("Cannot prepare no-eligible-content fallback for %s: %s", key, error)
+
+
 def _destination_variant_images(
     configuration: ApplicationConfiguration,
     images: Mapping[ResolvedOutputSpecification, Image.Image],
@@ -507,10 +536,13 @@ def _refresh_scheduled(
     with state_lock:
         if shutdown.is_set():
             return rejected(PublicationStatus.STOPPING)
-        state = _reload(store)
+        try:
+            state = _reload(store)
+        except InvalidSelectionStateError:
+            return rejected(PublicationStatus.STALE_PRESENTATION)
         decision = evaluate_scheduling(wall_clock(), configuration, state)
         if state is None or decision.required_reveal_stage is None:
-            return rejected(PublicationStatus.INVALID)
+            return rejected(PublicationStatus.STALE_PRESENTATION)
         identity = (state.revision, decision.required_reveal_stage)
         if coordinator.desired_identity != identity:
             return rejected(PublicationStatus.INVALID)
@@ -523,11 +555,19 @@ def _refresh_scheduled(
         try:
             metadata = _load_stage_metadata(artifacts, artifacts.variant_keys, identity[1], checkpoint)
             with state_lock:
-                current = _reload(store)
+                try:
+                    current = _reload(store)
+                except InvalidSelectionStateError:
+                    for image in images.values():
+                        image.close()
+                    return rejected(PublicationStatus.STALE_PRESENTATION)
                 decision = evaluate_scheduling(wall_clock(), configuration, current)
+                if current is None or decision.required_reveal_stage is None:
+                    for image in images.values():
+                        image.close()
+                    return rejected(PublicationStatus.STALE_PRESENTATION)
                 if (
                     shutdown.is_set()
-                    or current is None
                     or current.revision != identity[0]
                     or decision.required_reveal_stage != identity[1]
                     or coordinator.desired_identity != identity
@@ -570,12 +610,15 @@ def _admit_transient(
         with state_lock:
             if shutdown.is_set():
                 return PublicationOperation(PublicationResult(PublicationStatus.STOPPING, {}), done=True)
-            state = _reload(store)
+            try:
+                state = _reload(store)
+            except InvalidSelectionStateError:
+                state = None
             decision = evaluate_scheduling(wall_clock(), configuration, state)
             if (
-                state is None
-                or decision.required_reveal_stage is None
-                or coordinator.desired_identity != (state.revision, decision.required_reveal_stage)
+                state is not None
+                and decision.required_reveal_stage is not None
+                and coordinator.desired_identity != (state.revision, decision.required_reveal_stage)
             ):
                 return PublicationOperation(PublicationResult(PublicationStatus.BUSY, {}), done=True)
             transferred = True
@@ -617,15 +660,20 @@ def _commit_startup_selection(
 ) -> PersistentState:
     try:
         state = _commit_selection_with_checkpoint(store, artifact_store, configuration, proposal, snapshot)
-    except _RetryableApplicationError:
-        state = _reload(store)
+    except _RetryableApplicationError as commit_error:
+        try:
+            state = _reload(store)
+        except InvalidSelectionStateError:
+            raise commit_error
         if (
             state is not None
             and state.revision == proposal.base_revision + 1
             and state.snapshot == snapshot
             and state.repetition_history == proposal.proposed_repetition_history
         ):
+            _LOGGER.warning("Selection was committed, but a subsequent operation failed: %s", commit_error)
             _record_selection_history(history_store, state)
+            return state
         raise
     _record_selection_history(history_store, state)
     return state
@@ -664,17 +712,48 @@ def run_startup(
             return now
         return datetime.now(timezone.utc)
 
-    state = _reload(store)
-    chooser = random_source if random_source is not None else random.Random()
+    recovered_invalid: InvalidSelectionStateError | None = None
     try:
-        decision = evaluate_scheduling(current_time, configuration, state)
-        initial = decision.action is SchedulingAction.INITIAL_SELECTION
+        state = _reload(store)
+    except InvalidSelectionStateError as error:
+        _LOGGER.error("%s", error)
+        recovered_invalid = error
+        state = None
+    chooser = random_source if random_source is not None else random.Random()
+    fallback_date: date | None = None
+
+    def select_if_required(current: datetime) -> tuple[PersistentState | None, SchedulingDecision]:
+        nonlocal state, recovered_invalid, fallback_date
+        decision = evaluate_scheduling(current, configuration, state)
         while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
             assert decision.display_date is not None
-            proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
+            if fallback_date == decision.display_date:
+                return state, decision
+            try:
+                proposal, snapshot = _select_snapshot(
+                    configuration, decision.display_date, chooser, recovered_invalid or state
+                )
+            except NoEligibleQuotationError as error:
+                _LOGGER.warning("%s; presenting the no-eligible-content fallback", error)
+                fallback_date = decision.display_date
+                return state, decision
+            except _UnavailableLibraryError as error:
+                if state is None and recovered_invalid is None:
+                    raise ApplicationError(f"cannot establish an initial presentation: {error}") from error
+                raise
             state = _commit_startup_selection(store, artifact_store, history_store, configuration, proposal, snapshot)
-            current_time = read_current_time()
-            decision = evaluate_scheduling(current_time, configuration, state)
+            recovered_invalid = None
+            fallback_date = None
+            decision = evaluate_scheduling(read_current_time(), configuration, state)
+        return state, decision
+
+    try:
+        initial = state is None and recovered_invalid is None
+        try:
+            state, decision = select_if_required(current_time)
+        except _UnavailableLibraryError as error:
+            _LOGGER.warning("Cannot establish current presentation: %s", error)
+            return StartupResult(state, None, False)
     except SchedulingEvaluationError as error:
         raise ApplicationError(f"scheduling evaluation failed: {error}") from error
 
@@ -724,21 +803,47 @@ def run_startup(
         while True:
             current_time = read_current_time()
             try:
-                decision = evaluate_scheduling(current_time, configuration, state)
-                while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
-                    assert decision.display_date is not None
-                    proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
-                    state = _commit_startup_selection(
-                        store, artifact_store, history_store, configuration, proposal, snapshot
-                    )
-                    current_time = read_current_time()
-                    decision = evaluate_scheduling(current_time, configuration, state)
+                try:
+                    state, decision = select_if_required(current_time)
+                except _UnavailableLibraryError as error:
+                    _LOGGER.warning("Cannot establish current presentation: %s", error)
+                    return StartupResult(state, None, initial)
             except SchedulingEvaluationError as error:
                 raise ApplicationError(f"scheduling evaluation failed before daily presentation: {error}") from error
+            if fallback_date is not None and decision.display_date == fallback_date:
+                try:
+                    prepared = prepare_no_eligible_fallback(
+                        configuration,
+                        configuration.required_prepared_image_keys,
+                        on_variant_error=_fallback_variant_failure,
+                    )
+                except DailyImagePreparationError as error:
+                    raise ApplicationError(f"cannot prepare no-eligible-content fallback: {error}") from error
+                if not prepared:
+                    raise ApplicationError("cannot prepare the no-eligible-content fallback for any destination")
+                images = {key: variants[-1] for key, variants in prepared.items()}
+                if evaluate_scheduling(read_current_time(), configuration, None).display_date != fallback_date:
+                    for image in images.values():
+                        image.close()
+                    continue
+                if coordinator is None:
+                    coordinator = DisplayPublicationCoordinator(
+                        configuration.display_backends,
+                        backend_factory,
+                        retry=False,
+                        monotonic_clock=monotonic_clock,
+                        publication_finalizer=_finalize_publication_event,
+                    )
+                identity = (-1, fallback_date.toordinal())
+                _publish_transient_fallback(coordinator, identity, images)
+                coordinator.wait_for_publication(identity)
+                return StartupResult(state, None, False)
             assert state is not None and decision.required_reveal_stage is not None
-            stage = decision.required_reveal_stage
+            requested_stage = stage = decision.required_reveal_stage
             if stage > state.highest_reveal_stage:
                 state = _persist_reveal_progress(store, state, stage)
+                if stage > state.highest_reveal_stage:
+                    stage = state.highest_reveal_stage
             checkpoint = _complete_checkpoint(store, state, configuration, chooser)
             artifacts = _recover_images(
                 state,
@@ -768,7 +873,7 @@ def run_startup(
                     image.close()
                 raise ApplicationError(f"scheduling evaluation failed before daily publication: {error}") from error
             if final_decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION) or (
-                final_decision.required_reveal_stage != stage
+                final_decision.required_reveal_stage != requested_stage
             ):
                 for image in images.values():
                     image.close()
@@ -830,6 +935,16 @@ def run_application(
     pending_history: tuple[int, DailySnapshot, frozenset[str]] | None = None
     last_failure: str | None = None
     retry_delay = 1.0
+    library_retry_date: date | None = None
+    library_retry_at = 0.0
+    fallback_date: date | None = None
+    fallback_pending: tuple[ResolvedOutputSpecification | PreparedImageVariantKey, ...] = ()
+    fallback_canonical: dict[str, object] = {}
+    fallback_errors: dict[ResolvedOutputSpecification | PreparedImageVariantKey, str] = {}
+    fallback_retry_at = 0.0
+    fallback_retry_delay = 1.0
+    pending_selection_date: date | None = None
+    resident_started = False
     information_view_done = configuration.information_view_duration == 0
     information_view_images: dict[ResolvedOutputSpecification, Image.Image] | None = None
     information_view_requested = False
@@ -844,6 +959,76 @@ def run_application(
         nonlocal artifact_revision, artifacts
         artifact_revision = revision
         artifacts = recovered
+
+    def show_information(now: datetime, deadline: datetime) -> bool:
+        nonlocal information_view_done, information_view_images, information_view_requested
+        nonlocal information_view_started, information_view_attempt_started, information_view_acknowledgement_logged
+        assert coordinator is not None
+        if information_view_done:
+            return False
+        current_monotonic = monotonic_clock()
+        if information_view_requested:
+            if information_view_started is None and not coordinator.has_participating_destinations:
+                information_view_done = True
+                _LOGGER.info("Information view skipped: no participating display destinations")
+                return True
+            if information_view_started is None:
+                information_view_started = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
+            if information_view_started is not None and not information_view_acknowledgement_logged:
+                _LOGGER.info("Information view publication acknowledged")
+                information_view_acknowledgement_logged = True
+            if (
+                information_view_started is not None
+                and current_monotonic - information_view_started >= configuration.information_view_duration
+            ):
+                information_view_done = True
+                _LOGGER.info("Information view duration expired")
+                return True
+            if (
+                information_view_started is None
+                and information_view_attempt_started is not None
+                and current_monotonic - information_view_attempt_started >= _INFORMATION_VIEW_PUBLICATION_TIMEOUT
+            ):
+                information_view_done = True
+                _LOGGER.warning("Information view was not published within the initial attempt period")
+        if not information_view_done and information_view_images is None and not information_view_requested:
+            try:
+                prepared_information = prepare_information_view(
+                    configuration, configuration.required_output_specifications
+                )
+                information_view_images = {
+                    specification: images[-1] for specification, images in prepared_information.items()
+                }
+            except InformationViewPreparationError as error:
+                _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
+                information_view_done = True
+        if not information_view_done and not information_view_requested:
+            assert information_view_images is not None
+            with state_lock:
+                _publish_information_view(
+                    coordinator, _destination_variant_images(configuration, information_view_images)
+                )
+            information_view_images = None
+            information_view_requested = True
+            information_view_attempt_started = monotonic_clock()
+            _LOGGER.info("Requested startup information view")
+            return True
+        if not information_view_done:
+            if information_view_started is None:
+                assert information_view_attempt_started is not None
+                remaining = _INFORMATION_VIEW_PUBLICATION_TIMEOUT - (
+                    current_monotonic - information_view_attempt_started
+                )
+                wake_event = _InformationPublicationWakeEvent(coordinator, _INFORMATION_VIEW_IDENTITY, shutdown)
+            else:
+                remaining = configuration.information_view_duration - (current_monotonic - information_view_started)
+                wake_event = shutdown
+            information_deadline = now + timedelta(seconds=max(0.0, remaining))
+            if information_deadline.astimezone(timezone.utc) < deadline.astimezone(timezone.utc):
+                deadline = information_deadline
+            scheduling_wait(deadline, wake_event, wall_clock=wall_clock, monotonic_clock=monotonic_clock)
+            return True
+        return False
 
     _LOGGER.info("Starting continuous presentation")
     try:
@@ -893,7 +1078,17 @@ def run_application(
                 if coordinator is not None and information_view_requested and information_view_started is None:
                     information_view_started = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
                 # Reload before scheduling, including after uncertain publication.
-                state = _reload(store)
+                recovered_invalid: InvalidSelectionStateError | None = None
+                try:
+                    state = _reload(store)
+                except InvalidSelectionStateError as error:
+                    recovered_invalid = error
+                    state = None
+                    if str(error) != last_failure:
+                        _LOGGER.error("%s", error)
+                        last_failure = str(error)
+                if state is not None or recovered_invalid is not None:
+                    resident_started = True
                 if pending_history is not None and state is not None:
                     revision, snapshot, repetition_history = pending_history
                     if (
@@ -907,7 +1102,111 @@ def run_application(
                 decision = evaluate_scheduling(now, configuration, state)
                 if decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
                     assert decision.display_date is not None
-                    proposal, snapshot = _select_snapshot(configuration, decision.display_date, chooser, state)
+                    display_date = decision.display_date
+                    if pending_selection_date != display_date:
+                        with state_lock:
+                            if coordinator is not None:
+                                coordinator.clear_desired()
+                        pending_selection_date = display_date
+                        latest_desired = None
+                        fallback_date = None
+                        fallback_pending = ()
+                        fallback_canonical = {}
+                        fallback_errors = {}
+                        fallback_retry_at = 0.0
+                        fallback_retry_delay = 1.0
+                        library_retry_date = None
+                    if fallback_date == display_date:
+                        if coordinator is None:
+                            coordinator = DisplayPublicationCoordinator(
+                                configuration.display_backends,
+                                backend_factory,
+                                monotonic_clock=monotonic_clock,
+                                publication_finalizer=_finalize_publication_event,
+                            )
+                        identity = (-1, display_date.toordinal())
+                        deadline = _local_datetime(display_date + timedelta(days=1), configuration.day_start)
+                        if show_information(now, deadline):
+                            continue
+                        if fallback_pending and monotonic_clock() >= fallback_retry_at:
+
+                            def report_fallback_failure(key, error):
+                                message = str(error)
+                                if fallback_errors.get(key) != message:
+                                    _fallback_variant_failure(key, error)
+                                fallback_errors[key] = message
+
+                            try:
+                                prepared = prepare_no_eligible_fallback(
+                                    configuration,
+                                    fallback_pending,
+                                    on_variant_error=report_fallback_failure,
+                                    canonical_cache=fallback_canonical,
+                                )
+                            except DailyImagePreparationError as error:
+                                raise _RetryableApplicationError(
+                                    f"cannot prepare no-eligible-content fallback: {error}"
+                                ) from error
+                            images = {key: variants[-1] for key, variants in prepared.items()}
+                            for key in images:
+                                fallback_errors.pop(key, None)
+                            fallback_pending = tuple(key for key in fallback_pending if key not in images)
+                            with state_lock:
+                                if evaluate_scheduling(wall_clock(), configuration, None).display_date != display_date:
+                                    for image in images.values():
+                                        image.close()
+                                    continue
+                                if images:
+                                    _publish_transient_fallback(
+                                        coordinator,
+                                        identity,
+                                        images,
+                                    )
+                            if fallback_pending:
+                                fallback_retry_at = monotonic_clock() + fallback_retry_delay
+                                fallback_retry_delay = min(60.0, fallback_retry_delay * 2)
+                            else:
+                                fallback_retry_delay = 1.0
+                        if fallback_pending:
+                            remaining = max(0.0, fallback_retry_at - monotonic_clock())
+                            deadline = min(now.astimezone(timezone.utc) + timedelta(seconds=remaining), deadline)
+                        scheduling_wait(deadline, shutdown, wall_clock=wall_clock, monotonic_clock=monotonic_clock)
+                        continue
+                    if library_retry_date == display_date and monotonic_clock() < library_retry_at:
+                        remaining = library_retry_at - monotonic_clock()
+                        boundary = _local_datetime(display_date + timedelta(days=1), configuration.day_start)
+                        deadline = min(now.astimezone(timezone.utc) + timedelta(seconds=remaining), boundary)
+                        if coordinator is not None and show_information(now, deadline):
+                            continue
+                        scheduling_wait(deadline, shutdown, wall_clock=wall_clock, monotonic_clock=monotonic_clock)
+                        continue
+                    try:
+                        proposal, snapshot = _select_snapshot(
+                            configuration, display_date, chooser, recovered_invalid or state
+                        )
+                    except NoEligibleQuotationError as error:
+                        _LOGGER.warning("%s; presenting the no-eligible-content fallback", error)
+                        fallback_date = display_date
+                        fallback_pending = tuple(configuration.required_prepared_image_keys)
+                        library_retry_date = None
+                        resident_started = True
+                        continue
+                    except _UnavailableLibraryError as error:
+                        if not resident_started:
+                            raise ApplicationError(f"cannot establish an initial presentation: {error}") from error
+                        if str(error) != last_failure:
+                            _LOGGER.warning("Content library unavailable; retrying in five minutes: %s", error)
+                            last_failure = str(error)
+                        if coordinator is None:
+                            coordinator = DisplayPublicationCoordinator(
+                                configuration.display_backends,
+                                backend_factory,
+                                monotonic_clock=monotonic_clock,
+                                publication_finalizer=_finalize_publication_event,
+                            )
+                        library_retry_date = display_date
+                        library_retry_at = monotonic_clock() + _LIBRARY_RETRY_SECONDS
+                        continue
                     pending_history = (
                         proposal.base_revision + 1,
                         snapshot,
@@ -920,8 +1219,14 @@ def run_application(
                     _record_selection_history(history_store, state)
                     pending_history = None
                     _LOGGER.info("Committed selection %s for %s", state.revision, state.snapshot.display_date)
+                    pending_selection_date = None
+                    library_retry_date = None
+                    fallback_date = None
                     # Reevaluate after potentially slow I/O; never present an obsolete daily image.
                     continue
+                pending_selection_date = None
+                fallback_date = None
+                library_retry_date = None
                 assert state is not None and decision.required_reveal_stage is not None
                 stage = decision.required_reveal_stage
                 if latest_desired is not None and latest_desired[0] == state.revision:
@@ -930,6 +1235,9 @@ def run_application(
                 if stage > state.highest_reveal_stage:
                     with state_lock:
                         state = _persist_reveal_progress(store, state, stage)
+                    if stage > state.highest_reveal_stage:
+                        stage = state.highest_reveal_stage
+                        latest_desired = (state.revision, stage)
                 with state_lock:
                     checkpoint = _complete_checkpoint(store, state, configuration, chooser)
                 with state_lock:
@@ -976,87 +1284,8 @@ def run_application(
                         monotonic_clock=monotonic_clock,
                         publication_finalizer=_finalize_publication_event,
                     )
-                if not information_view_done:
-                    current_monotonic = monotonic_clock()
-                    if information_view_requested:
-                        if information_view_started is None and not coordinator.has_participating_destinations:
-                            information_view_done = True
-                            _LOGGER.info("Information view skipped: no participating display destinations")
-                            continue
-                        if information_view_started is None:
-                            information_view_started = coordinator.first_successful_publication_time(
-                                _INFORMATION_VIEW_IDENTITY
-                            )
-                        if information_view_started is not None and not information_view_acknowledgement_logged:
-                            _LOGGER.info("Information view publication acknowledged")
-                            information_view_acknowledgement_logged = True
-                        if (
-                            information_view_started is not None
-                            and current_monotonic - information_view_started >= configuration.information_view_duration
-                        ):
-                            information_view_done = True
-                            _LOGGER.info("Information view duration expired")
-                            continue
-                        elif (
-                            information_view_started is None
-                            and information_view_attempt_started is not None
-                            and current_monotonic - information_view_attempt_started
-                            >= _INFORMATION_VIEW_PUBLICATION_TIMEOUT
-                        ):
-                            information_view_done = True
-                            _LOGGER.warning("Information view was not published within the initial attempt period")
-                    if not information_view_done and information_view_images is None:
-                        try:
-                            prepared_information = prepare_information_view(
-                                configuration,
-                                configuration.required_output_specifications,
-                            )
-                            information_view_images = {
-                                specification: images[-1] for specification, images in prepared_information.items()
-                            }
-                        except InformationViewPreparationError as error:
-                            _LOGGER.warning(
-                                "Cannot prepare information view; proceeding to daily presentation: %s",
-                                error,
-                            )
-                            information_view_done = True
-                    if not information_view_done and not information_view_requested:
-                        assert information_view_images is not None
-                        with state_lock:
-                            _publish_information_view(
-                                coordinator,
-                                _destination_variant_images(configuration, information_view_images),
-                            )
-                        information_view_images = None
-                        information_view_requested = True
-                        information_view_attempt_started = monotonic_clock()
-                        _LOGGER.info("Requested startup information view")
-                        continue
-                    if not information_view_done:
-                        deadline = next_scheduling_deadline(now, configuration, state)
-                        if information_view_started is None:
-                            assert information_view_attempt_started is not None
-                            remaining = _INFORMATION_VIEW_PUBLICATION_TIMEOUT - (
-                                current_monotonic - information_view_attempt_started
-                            )
-                            wake_event = _InformationPublicationWakeEvent(
-                                coordinator, _INFORMATION_VIEW_IDENTITY, shutdown
-                            )
-                        else:
-                            remaining = configuration.information_view_duration - (
-                                current_monotonic - information_view_started
-                            )
-                            wake_event = shutdown
-                        information_deadline = now + timedelta(seconds=max(0.0, remaining))
-                        if information_deadline.astimezone(timezone.utc) < deadline.astimezone(timezone.utc):
-                            deadline = information_deadline
-                        scheduling_wait(
-                            deadline,
-                            wake_event,
-                            wall_clock=wall_clock,
-                            monotonic_clock=monotonic_clock,
-                        )
-                        continue
+                if show_information(now, next_scheduling_deadline(now, configuration, state)):
+                    continue
                 if coordinator.desired_identity != identity:
                     images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
                     try:

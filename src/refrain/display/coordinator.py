@@ -56,6 +56,7 @@ class _Presentation:
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image]
     metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None
     transient: bool = False
+    allow_missing: bool = False
     references: int = 1
     destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None
 
@@ -67,6 +68,7 @@ class PublicationStatus(str, Enum):
     SUCCEEDED = "succeeded"
     BUSY = "busy"
     INVALID = "invalid"
+    STALE_PRESENTATION = "stale-presentation"
     DESTINATION_NOT_FOUND = "destination-not-found"
     UNSUPPORTED = "unsupported"
     WITHDRAWN = "withdrawn"
@@ -132,6 +134,7 @@ class _DestinationState:
     desired_key: ResolvedOutputSpecification | PreparedImageVariantKey | None = None
     pending: _Presentation | None = None
     active_identity: tuple[int, int] | None = None
+    preparation_error: str | None = None
     successful_identity: tuple[int, int] | None = None
     successful_at: float | None = None
     retry_at: float = 0.0
@@ -281,6 +284,7 @@ class DisplayPublicationCoordinator:
         images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
         *,
         destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+        _allow_missing: bool = False,
     ) -> None:
         """Replace pending scheduled work; ownership transfers to the coordinator."""
         with self._condition:
@@ -298,30 +302,62 @@ class DisplayPublicationCoordinator:
             if self._states and all(
                 state.desired_identity == identity
                 and state.desired_key == self._destination_key(state.destination, destination_keys)
+                and (
+                    state.preparation_error is None
+                    or self._scheduled_image(images, state.destination, destination_keys) is None
+                )
                 for state in self._states.values()
             ):
                 self._close_images(images)
                 return
-            self._renew_recovery(self._states.values())
+            if _allow_missing:
+                self._renew_recovery(
+                    state
+                    for state in self._states.values()
+                    if self._scheduled_image(images, state.destination, destination_keys) is not None
+                    and not (
+                        state.desired_identity == identity
+                        and state.desired_key == self._destination_key(state.destination, destination_keys)
+                        and state.preparation_error is None
+                    )
+                )
+            else:
+                self._renew_recovery(self._states.values())
             missing = {
                 state.key
                 for state in self._states.values()
-                if not state.terminal
+                if (not state.terminal or _allow_missing)
                 and not state.withdrawn
                 and self._scheduled_image(images, state.destination, destination_keys) is None
             }
-            if missing:
+            if missing and not _allow_missing:
                 self._close_images(images)
                 raise ValueError(f"publication is missing output variants for destinations: {missing}")
 
-            presentation = _Presentation(identity, images, metadata, transient, destination_keys=destination_keys)
+            presentation = _Presentation(
+                identity, images, metadata, transient, allow_missing=_allow_missing, destination_keys=destination_keys
+            )
             for state in self._states.values():
                 key = self._destination_key(state.destination, destination_keys)
+                if (
+                    _allow_missing
+                    and state.desired_identity == identity
+                    and state.desired_key == key
+                    and state.preparation_error is None
+                ):
+                    continue
                 if state.desired_identity == identity and state.desired_key != key:
                     state.successful_identity = None
                     state.successful_at = None
                 state.desired_identity = identity
                 state.desired_key = key
+                state.preparation_error = (
+                    "no prepared image is available for this destination" if state.key in missing else None
+                )
+                if state.key in missing:
+                    self._release(state.pending)
+                    state.pending = None
+                    continue
                 if state.terminal or state.withdrawn:
                     continue
                 self._release(state.pending)
@@ -336,12 +372,17 @@ class DisplayPublicationCoordinator:
         self,
         identity: tuple[int, int],
         images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
+        *,
+        allow_missing: bool = False,
     ) -> None:
         """Publish a complete application-owned view through scheduled coordination."""
         with self._condition:
             self._transient_presentations.add(identity)
         try:
-            self.publish(identity, images)
+            if allow_missing:
+                self.publish(identity, images, _allow_missing=True)
+            else:
+                self.publish(identity, images)
         finally:
             with self._condition:
                 self._transient_presentations.discard(identity)
@@ -597,6 +638,7 @@ class DisplayPublicationCoordinator:
             if (
                 not state.terminal
                 and not state.withdrawn
+                and state.preparation_error is None
                 and state.desired_identity is not None
                 and state.desired_identity != state.successful_identity
             ):
@@ -721,6 +763,7 @@ class DisplayPublicationCoordinator:
                 state.pending = None
                 state.desired_identity = None
                 state.desired_key = None
+                state.preparation_error = None
             self._condition.notify_all()
 
     def wait_for_publication(self, identity: tuple[int, int], timeout: float | None = None) -> bool:
@@ -729,7 +772,10 @@ class DisplayPublicationCoordinator:
         with self._condition:
             while True:
                 participating = tuple(state for state in self._states.values() if not state.withdrawn)
-                if not any(state.successful_identity != identity and not state.terminal for state in participating):
+                if not any(
+                    state.successful_identity != identity and not state.terminal and state.preparation_error is None
+                    for state in participating
+                ):
                     break
                 if self._draining or self._stopping:
                     break
@@ -751,7 +797,9 @@ class DisplayPublicationCoordinator:
                     (
                         None
                         if state.successful_identity == identity
-                        else ("destination was withdrawn" if state.withdrawn else state.error)
+                        else (
+                            "destination was withdrawn" if state.withdrawn else state.preparation_error or state.error
+                        )
                     ),
                 )
                 for key, state in self._states.items()
@@ -1029,6 +1077,12 @@ class DisplayPublicationCoordinator:
                                 state.retry_attempts = backend_retry_attempts if recoverable else 0
                                 state.terminal = not retry
                                 if state.terminal:
+                                    if (
+                                        state.pending is not None
+                                        and state.pending.allow_missing
+                                        and state.desired_identity == state.pending.identity
+                                    ):
+                                        state.preparation_error = "fallback image lost after backend failure"
                                     self._release(state.pending)
                                     state.pending = None
                                 if pending_one_shot:
@@ -1061,8 +1115,9 @@ class DisplayPublicationCoordinator:
                     with self._condition:
                         self._backends[configuration.type] = backend
                         for state in states:
-                            state.retry_attempts = 0
-                            state.recoverable_failure = False
+                            if not state.terminal:
+                                state.retry_attempts = 0
+                                state.recoverable_failure = False
                         if self._stopping:
                             self._condition.notify_all()
                             return
@@ -1178,6 +1233,20 @@ class DisplayPublicationCoordinator:
                             else:
                                 self._release(presentation)
                         if ready.terminal:
+                            if (
+                                ready.pending is not None
+                                and ready.pending.allow_missing
+                                and ready.desired_identity == ready.pending.identity
+                            ):
+                                ready.preparation_error = "fallback image lost after backend failure"
+                            if (
+                                one_shot is None
+                                and presentation is not None
+                                and presentation.allow_missing
+                                and ready.pending is None
+                                and ready.desired_identity == presentation.identity
+                            ):
+                                ready.preparation_error = "fallback image lost after backend failure"
                             self._release(ready.pending)
                             ready.pending = None
                         self._signal_all_unavailable()

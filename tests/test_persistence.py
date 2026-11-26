@@ -19,6 +19,7 @@ from refrain import (
     EligibilityRule,
     GlobalHistoryStore,
     GlobalHistoryWriteError,
+    InvalidSelectionStateError,
     PersistentStateStore,
     Quotation,
     QuotationCandidate,
@@ -1056,3 +1057,126 @@ def test_invalid_persisted_reveal_progress_is_not_recovered(tmp_path: Path, stag
     _write_document(store.path, document)
     with pytest.raises(StateRecoveryError, match="highest_reveal_stage must be a nonnegative integer"):
         store.load()
+
+
+@pytest.mark.parametrize(
+    "invalid", ["snapshot", "progress", "progress_out_of_range", "missing_snapshot", "missing_progress"]
+)
+def test_invalid_selection_recovers_revision_and_history_without_writing(tmp_path: Path, invalid: str) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Previous.")
+    document = json.loads(store.path.read_bytes())
+    if invalid == "snapshot":
+        document["state"]["snapshot"]["actions"] = None
+    elif invalid == "progress":
+        document["state"]["highest_reveal_stage"] = True
+    elif invalid == "progress_out_of_range":
+        document["state"]["highest_reveal_stage"] = 3
+    elif invalid == "missing_snapshot":
+        del document["state"]["snapshot"]
+    else:
+        del document["state"]["highest_reveal_stage"]
+    _write_document(store.path, document)
+    original = store.path.read_bytes()
+
+    with pytest.raises(InvalidSelectionStateError) as raised:
+        store.load()
+
+    assert raised.value.revision == committed.revision
+    assert raised.value.repetition_history == committed.repetition_history
+    assert str(store.path) in str(raised.value)
+    assert "replacement selection" in str(raised.value)
+    assert store.path.read_bytes() == original
+
+    proposal = make_proposal("Replacement.", raised.value.repetition_history, base_revision=raised.value.revision)
+    result = store.commit(proposal, make_snapshot("Replacement."))
+    assert result.revision == committed.revision + 1
+    assert result.repetition_history == {"Previous.", "Replacement."}
+    assert PersistentStateStore(store.path).load() == result
+
+
+@pytest.mark.parametrize(
+    "invalid", ["envelope", "version", "checksum", "revision", "history", "missing_identity", "identity_and_progress"]
+)
+def test_invalid_recovery_prerequisites_are_fatal_even_with_invalid_selection(tmp_path: Path, invalid: str) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    commit(store, "Previous.")
+    document = json.loads(store.path.read_bytes())
+    if invalid not in {"missing_identity", "identity_and_progress"}:
+        document["state"]["snapshot"]["actions"] = None
+    if invalid == "envelope":
+        document["extra"] = True
+    elif invalid == "version":
+        document["format_version"] = 2
+    elif invalid == "revision":
+        document["state"]["revision"] = True
+    elif invalid == "history":
+        document["state"]["repetition_history"] = ["not normalized  "]
+    elif invalid in {"missing_identity", "identity_and_progress"}:
+        document["state"]["repetition_history"] = []
+        if invalid == "identity_and_progress":
+            document["state"]["highest_reveal_stage"] = True
+    _write_document(store.path, document)
+    if invalid == "checksum":
+        document["sha256"] = "0" * 64
+        store.path.write_text(json.dumps(document), encoding="utf-8")
+    original = store.path.read_bytes()
+
+    with pytest.raises(StateRecoveryError) as raised:
+        store.load()
+    assert not isinstance(raised.value, InvalidSelectionStateError)
+    assert store.path.read_bytes() == original
+
+
+@pytest.mark.parametrize("failure_point", ["replace", "directory_sync"])
+def test_replacement_after_partial_recovery_preserves_atomicity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Previous.")
+    document = json.loads(store.path.read_bytes())
+    document["state"]["snapshot"]["actions"] = None
+    _write_document(store.path, document)
+    original = store.path.read_bytes()
+    proposal = make_proposal("Replacement.", committed.repetition_history, base_revision=committed.revision)
+    snapshot = make_snapshot("Replacement.")
+
+    def fail(*_: object) -> None:
+        raise OSError("injected failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            persistence.os if failure_point == "replace" else persistence,
+            ("replace" if failure_point == "replace" else "_sync_directory"),
+            fail,
+        )
+        with pytest.raises(StateCommitError) as raised:
+            store.commit(proposal, snapshot)
+        assert raised.value.published is (failure_point == "directory_sync")
+        if failure_point == "replace":
+            assert store.path.read_bytes() == original
+            with pytest.raises(InvalidSelectionStateError):
+                PersistentStateStore(store.path).load()
+        else:
+            recovered = PersistentStateStore(store.path).load()
+            assert recovered.revision == committed.revision + 1
+            assert recovered.snapshot == snapshot
+
+    result = store.commit(proposal, snapshot)
+    assert PersistentStateStore(store.path).load() == result
+    assert result.revision == committed.revision + 1
+
+
+def test_stale_replacement_cannot_overwrite_partially_recovered_state(tmp_path: Path) -> None:
+    store = PersistentStateStore(tmp_path / "state.json")
+    committed = commit(store, "Previous.")
+    document = json.loads(store.path.read_bytes())
+    document["state"]["snapshot"]["actions"] = None
+    _write_document(store.path, document)
+    original = store.path.read_bytes()
+    proposal = make_proposal("Replacement.", committed.repetition_history, base_revision=0)
+
+    with pytest.raises(StateCommitError, match="stale selection proposal"):
+        store.commit(proposal, make_snapshot("Replacement."))
+
+    assert store.path.read_bytes() == original

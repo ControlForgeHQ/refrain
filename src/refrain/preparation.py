@@ -64,6 +64,22 @@ class DailyImagePreparationError(ValueError):
 
 
 @dataclass(frozen=True)
+class _UncommittedLiteraryContent:
+    """Literary rendering inputs without selection identity or persistent state."""
+
+    quotation_text: str
+    source: str | None
+    attribution: str | None
+    presentation_style: str = "centered"
+    font: str | None = None
+    font_faces: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    background: str | None = None
+    decoration: str | None = None
+    text_color: tuple[str, ...] | None = None
+    decoration_color: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class NineSliceGuide:
     """Resolved nine-slice boundaries used by the decoration compositor."""
 
@@ -144,7 +160,7 @@ class _PresentationChoices:
 
 
 def _resolve_presentation_choices(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
     *,
@@ -294,14 +310,16 @@ def _presentation_document(
 
 
 def resolve_canonical_presentation(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     *,
     chooser: random.Random | None = None,
     overrides: PresentationOverrides | None = None,
 ) -> dict[str, object]:
     """Resolve destination-independent artistic choices without rendering or persistence."""
-    if not isinstance(snapshot, DailySnapshot) or not isinstance(configuration, ApplicationConfiguration):
+    if not isinstance(snapshot, (DailySnapshot, _UncommittedLiteraryContent)) or not isinstance(
+        configuration, ApplicationConfiguration
+    ):
         raise DailyImagePreparationError("canonical resolution requires a snapshot and validated configuration")
     effective_overrides = overrides if overrides is not None else PresentationOverrides()
     choices = _resolve_presentation_choices(
@@ -348,7 +366,7 @@ def _resolved_from_document(document: Mapping[str, object]) -> ResolvedPresentat
 
 
 def _resolve_effective_choices(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
     canonical: ResolvedPresentation,
@@ -432,7 +450,7 @@ def _resolve_effective_choices(
 
 
 def _resolve_published_presentation_choices(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
     overrides: PresentationOverrides,
@@ -551,7 +569,7 @@ def _resolve_published_presentation_choices(
 
 
 def _resolve_presentation(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     decoration: DecorationResource | None,
     output_specification: ResolvedOutputSpecification,
@@ -682,7 +700,7 @@ def _resolve_palette_preference(
 
 def _resolve_text_color(
     configuration: ApplicationConfiguration,
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     decoration: DecorationResource | None,
     background: BackgroundResource | None,
     chooser: random.Random,
@@ -731,7 +749,7 @@ def _resolve_text_color(
 
 def _resolve_decoration_tint(
     configuration: ApplicationConfiguration,
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     decoration: DecorationResource | None,
     chooser: random.Random,
     layers: Sequence[DecorationLayerResource],
@@ -1196,7 +1214,7 @@ def _read_font(resource: FontResource, face: str = "regular") -> ResolvedFont:
 
 
 def _resolve_fonts(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     decoration: DecorationResource | None,
     chooser: random.Random,
@@ -1348,7 +1366,7 @@ def _resolve_fonts(
 
 
 def _resolve_decoration(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
     override: str | None = None,
@@ -1401,7 +1419,7 @@ def _resolve_decoration(
 
 
 def _resolve_background(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     decoration: DecorationResource | None,
     configuration: ApplicationConfiguration,
     chooser: random.Random,
@@ -1449,7 +1467,7 @@ def _resolve_background(
 
 
 def _prepare_daily_images_for_specification(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
     output_specification: ResolvedOutputSpecification,
@@ -1478,7 +1496,7 @@ def _prepare_daily_images_for_specification(
     Semantic preferences from ``snapshot`` are resolved against current configuration
     and resources once for the complete stage set. Stages are never inferred from the clock.
     """
-    if not isinstance(snapshot, DailySnapshot):
+    if not isinstance(snapshot, (DailySnapshot, _UncommittedLiteraryContent)):
         raise DailyImagePreparationError("snapshot must be a DailySnapshot")
     if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
@@ -1741,7 +1759,7 @@ def _prepare_daily_images_for_specification(
 
 
 def prepare_daily_images(
-    snapshot: DailySnapshot,
+    snapshot: DailySnapshot | _UncommittedLiteraryContent,
     stages: Sequence[CompositionVisibility],
     configuration: ApplicationConfiguration,
     output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
@@ -1769,7 +1787,7 @@ def prepare_daily_images(
     ) = None,
 ) -> Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]]:
     """Prepare complete reveal-stage image variants for all required destination groups."""
-    if not isinstance(snapshot, DailySnapshot):
+    if not isinstance(snapshot, (DailySnapshot, _UncommittedLiteraryContent)):
         raise DailyImagePreparationError("snapshot must be a DailySnapshot")
     if not isinstance(stages, Sequence) or isinstance(stages, (str, bytes)) or not stages:
         raise DailyImagePreparationError("stages must be a nonempty sequence of CompositionVisibility values")
@@ -1885,6 +1903,56 @@ def prepare_daily_images(
                     on_diagnostics=on_diagnostics,
                     on_presentation_image=on_presentation_image,
                 )
+    except Exception:
+        for images in results.values():
+            for image in images:
+                image.close()
+        raise
+    return MappingProxyType(results)
+
+
+def _prepare_uncommitted_literary_images(
+    composition: LiteraryComposition,
+    configuration: ApplicationConfiguration,
+    output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
+    *,
+    on_variant_error: (
+        Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, DailyImagePreparationError], None] | None
+    ) = None,
+    canonical_cache: dict[str, object] | None = None,
+) -> Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]]:
+    content = _UncommittedLiteraryContent(composition.quotation, composition.source, composition.attribution)
+    chooser = random.Random()
+    if canonical_cache is not None and canonical_cache:
+        canonical = canonical_cache
+    else:
+        canonical = resolve_canonical_presentation(content, configuration, chooser=chooser)
+        if canonical_cache is not None:
+            canonical_cache.update(canonical)
+    stages = (
+        CompositionVisibility(
+            quotation=True,
+            source=composition.source is not None,
+            attribution=composition.attribution is not None,
+        ),
+    )
+    if on_variant_error is None:
+        return prepare_daily_images(
+            content, stages, configuration, output_specifications, chooser=chooser, canonical_presentation=canonical
+        )
+    if not output_specifications:
+        raise DailyImagePreparationError("output_specifications must be a nonempty sequence")
+    results = {}
+    try:
+        for key in dict.fromkeys(output_specifications):
+            try:
+                results.update(
+                    prepare_daily_images(
+                        content, stages, configuration, (key,), chooser=chooser, canonical_presentation=canonical
+                    )
+                )
+            except DailyImagePreparationError as error:
+                on_variant_error(key, error)
     except Exception:
         for images in results.values():
             for image in images:
