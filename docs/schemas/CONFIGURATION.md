@@ -134,7 +134,7 @@ The installed distribution supplies `config.default.yaml` as an editable startin
 
 | Field | Type | Required | Constraint |
 |---|---|---|---|
-| `id` | String | Yes | Globally unique; matches `[A-Za-z0-9][A-Za-z0-9_-]*`; at most 256 characters. |
+| `id` | String | Yes | Globally unique; matches `[A-Za-z0-9][A-Za-z0-9_-]*`; at most 255 ASCII characters. |
 | `type` | String | Yes | Exactly `window`, `waveshare-13in3-e`, or `publish`. |
 | `audience` | String | Yes | Exactly `external` or `internal`; no default or fallback. |
 | `aspect_ratio` | String | Paired with `resolution` where supported | Exactly `4:3`, `5:3`, `16:9`, or `16:10`. |
@@ -143,7 +143,7 @@ The installed distribution supplies `config.default.yaml` as an editable startin
 
 Identifiers and enumerated values are case-sensitive. Missing, null, empty, non-string, or unsupported audiences are errors. Invalid or duplicate destination IDs and capacity excesses are errors. `all` is an ordinary valid ID; `@all` is reserved for CLI publication selection and does not satisfy the ID syntax.
 
-For `publish` destinations, IDs must additionally contain at most 255 ASCII characters and avoid Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, and `LPT1`–`LPT9`), regardless of case. IDs of different `publish` destinations must also be unique under case-insensitive comparison, ensuring their publication directories remain distinct on case-insensitive filesystems.
+For `publish` destinations, IDs must additionally avoid Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, and `LPT1`–`LPT9`), regardless of case. IDs of different `publish` destinations must also be unique under case-insensitive comparison, ensuring their publication directories remain distinct on case-insensitive filesystems.
 
 | Destination type | Maximum configured destinations | Default aspect ratio | Default resolution | Explicit geometry |
 |---|---:|---|---|---|
