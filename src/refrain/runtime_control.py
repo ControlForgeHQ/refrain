@@ -412,7 +412,7 @@ def _result_from_wire(value: dict) -> PublicationResult:
         for key, pair in outcomes.items():
             if (
                 not isinstance(key, str)
-                or not 1 <= len(key) <= 256
+                or not 1 <= len(key) <= 255
                 or not isinstance(pair, list)
                 or len(pair) != 2
                 or (pair[0] is not None and type(pair[0]) is not bool)
@@ -458,7 +458,7 @@ def _receive_result(
         ):
             raise RuntimeProtocolError("invalid publication response")
         identifier = record["identifier"]
-        if not isinstance(identifier, str) or not 1 <= len(identifier) <= 256 or identifier in outcomes:
+        if not isinstance(identifier, str) or not 1 <= len(identifier) <= 255 or identifier in outcomes:
             raise RuntimeProtocolError("invalid publication response")
         part = _result_from_wire(
             {"version": _VERSION, "status": status.value, "destinations": {identifier: record["outcome"]}}
@@ -868,7 +868,7 @@ class RuntimeControlServer:
         if target != "@all" and (
             not isinstance(target, list)
             or not 1 <= len(target) <= _MAX_DESTINATIONS
-            or any(not isinstance(item, str) or not item or len(item) > 256 for item in target)
+            or any(not isinstance(item, str) or not item or len(item) > 255 for item in target)
             or len(set(target)) != len(target)
         ):
             raise RuntimeProtocolError("invalid target")
@@ -876,7 +876,7 @@ class RuntimeControlServer:
         if (
             not isinstance(specifications, dict)
             or len(specifications) > _MAX_DESTINATIONS
-            or any(not isinstance(k, str) or not k or len(k) > 256 for k in specifications)
+            or any(not isinstance(k, str) or not k or len(k) > 255 for k in specifications)
         ):
             raise RuntimeProtocolError("invalid destination specifications")
         specifications = {key: _spec_from_wire(value) for key, value in specifications.items()}
@@ -1113,7 +1113,7 @@ class RuntimeControlClient:
                             "publication_accepted",
                         }
                         or not isinstance(record["identifier"], str)
-                        or not 1 <= len(record["identifier"]) <= 256
+                        or not 1 <= len(record["identifier"]) <= 255
                         or record["audience"] not in ("external", "internal")
                         or not (type(record["available"]) is bool or record["available"] == "unknown")
                         or any(

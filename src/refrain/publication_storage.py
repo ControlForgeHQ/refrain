@@ -33,7 +33,7 @@ _MANIFEST_FIELDS = {
     "image_sha256",
     "metadata_sha256",
 }
-_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,255}\Z")
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,254}\Z")
 _PUBLICATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,239}\Z")
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _TEMPORARY = re.compile(r"\.refrain-[0-9a-f]{32}\.manifest\.tmp\Z")
@@ -49,9 +49,7 @@ def _generated_publication_name(name: str) -> bool:
 
 
 def _valid_destination_identifier(value: str) -> bool:
-    return bool(_IDENTIFIER.fullmatch(value)) and not (
-        os.name == "nt" and value.upper() in _WINDOWS_RESERVED_DESTINATION_IDS
-    )
+    return bool(_IDENTIFIER.fullmatch(value)) and value.upper() not in _WINDOWS_RESERVED_DESTINATION_IDS
 
 
 class PublicationStorageError(Exception):
@@ -234,8 +232,7 @@ def publication_protected_paths(
         protected.add(Path(paths.state_directory))
     if configuration is not None:
         config_directory = Path(configuration.file.parent)
-        if config_directory not in {Path(paths.config_directory), Path(paths.operational_directory)}:
-            protected.add(config_directory)
+        protected.add(Path(configuration.file))
         protected.update(
             path
             for path in (
@@ -275,6 +272,11 @@ def validate_publication_root(
     protected = set(publication_protected_paths(paths, configuration))
     protected.update(Path(path) for path in protected_paths)
     _check_path_components(root_path)
+    if configuration is not None and root_path == _absolute(configuration.file.parent):
+        raise PublicationStorageError(
+            f"publication root {root_path} overlaps protected Refrain configuration directory; "
+            "choose a separate directory"
+        )
     history_paths = [Path(paths.history_file)]
     if configuration is not None and configuration.storage.state is not None:
         history_paths.append(configuration.storage.state / "global-history.jsonl")
@@ -542,7 +544,8 @@ class PublicationStore:
     def _destination_id(value: object) -> str:
         if not isinstance(value, str) or not _valid_destination_identifier(value):
             raise PublicationStorageError(
-                "destination_id must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most 256 characters"
+                "destination_id must match [A-Za-z0-9][A-Za-z0-9_-]*, be at most 255 ASCII characters, "
+                "and not be a Windows-reserved device name (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9)"
             )
         return value
 

@@ -633,7 +633,7 @@ def test_discovery_and_refresh_are_not_limited_by_transient_destinations(tmp_pat
 
 
 def test_discovery_destination_identifier_at_limit(tmp_path):
-    identifier = "a" * 256
+    identifier = "a" * 255
 
     class Backend:
         def publish(self, destination, image):
@@ -664,7 +664,32 @@ def test_discovery_destination_identifier_at_limit(tmp_path):
         coordinator.close()
 
 
-@pytest.mark.parametrize("identifier", ["normal", "a" * 256], ids=["normal", "identifier-limit"])
+def test_result_rejects_overlong_destination_identifier():
+    response = {
+        "version": control_module._VERSION,
+        "status": "succeeded",
+        "destinations": {"a" * 256: [True, None]},
+    }
+    with pytest.raises(RuntimeProtocolError, match="invalid publication response"):
+        control_module._result_from_wire(response)
+
+
+@pytest.mark.parametrize("field", ["target", "specifications"])
+def test_transient_preflight_rejects_overlong_destination_identifier(runtime, field):
+    path, _, seen, _, _, _ = runtime
+    identifier = "a" * 256
+    request = _request({"one": SPEC}, {SPEC: _png(SPEC)})
+    if field == "target":
+        request["target"] = [identifier]
+    else:
+        request["specifications"] = {identifier: control_module._spec_to_wire(SPEC)}
+    with _raw(path) as connection:
+        connection.send_bytes(json.dumps(request).encode())
+        assert json.loads(connection.recv_bytes())["status"] == "invalid"
+    assert seen == []
+
+
+@pytest.mark.parametrize("identifier", ["normal", "a" * 255], ids=["normal", "identifier-limit"])
 def test_refresh_reports_large_backend_error_with_bounded_metadata(tmp_path, identifier):
     failure = Event()
     release = Event()

@@ -210,8 +210,8 @@ def _validate_publication(value: object, shape: str) -> None:
         raise PublicationMetadataError("publication.timestamp is invalid") from error
     destination = publication["destination_id"]
     _identifier(destination, "publication.destination_id")
-    if len(destination) > 256:
-        raise PublicationMetadataError("publication.destination_id exceeds 256 characters")
+    if len(destination) > 255:
+        raise PublicationMetadataError("publication.destination_id exceeds 255 ASCII characters")
     _validate_output(publication["output_specification"])
 
 

@@ -9,9 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from PIL import Image
 
 import refrain.publication_storage as publication_storage_module
+from refrain.config import load_application_config
 from refrain.geometry import ResolvedOutputSpecification
 from refrain.paths import ApplicationPaths
 from refrain.publication_metadata import finalize_publication_metadata
@@ -132,12 +134,35 @@ def test_manifest_contract_round_trips_and_rejects_unsafe_or_unknown_values() ->
         parse_publication_manifest(encoded.decode().replace("{", '{"schema_version":1,', 1))
 
 
-@pytest.mark.parametrize("destination_id", ["", ".", "..", "../escape", "a/b", "x" * 257])
+@pytest.mark.parametrize("destination_id", ["", ".", "..", "../escape", "a/b", "x" * 256])
 def test_invalid_destination_identifiers_are_rejected_before_path_creation(tmp_path: Path, destination_id: str) -> None:
     store = _store(tmp_path / "publish")
     with pytest.raises(PublicationStorageError, match="destination_id"):
         store.publish(destination_id, _image(), _metadata("pub-1"), audience="internal")
     assert not (tmp_path / "publish").exists()
+
+
+@pytest.mark.parametrize(
+    "destination_id",
+    [
+        name
+        for base in ("CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10)))
+        for name in (base, base.lower())
+    ],
+)
+def test_storage_rejects_reserved_destination_ids_on_all_platforms(tmp_path: Path, destination_id: str) -> None:
+    store = _store(tmp_path / "publish")
+    with pytest.raises(PublicationStorageError, match="Windows-reserved"):
+        store.read_current(destination_id)
+    assert not store.root.exists()
+
+
+def test_storage_destination_identifier_length_boundary(tmp_path: Path) -> None:
+    store = _store(tmp_path / "publish")
+    assert store._destination_id("a" * 255) == "a" * 255
+    with pytest.raises(PublicationStorageError, match="255 ASCII characters"):
+        store._destination_id("a" * 256)
+    assert not store.root.exists()
 
 
 def test_initial_publish_replacement_hash_verification_and_destination_isolation(tmp_path: Path) -> None:
@@ -680,6 +705,94 @@ def test_publication_root_rejects_protected_overlap_before_creation(tmp_path: Pa
                 application_paths=_paths(tmp_path / "standard"),
             )
     assert not protected.exists()
+
+
+@pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
+def test_alternate_configuration_allows_dedicated_publication_subtree(tmp_path: Path, absolute: bool) -> None:
+    paths = _paths(tmp_path / "installation")
+    config_directory = tmp_path / "alternate"
+    config_directory.mkdir()
+    root = config_directory / "publications" / "current"
+    config_file = config_directory / "settings.yaml"
+    config_file.write_text(
+        yaml.safe_dump(
+            {
+                "destinations": [{"id": "screen", "type": "publish", "audience": "internal"}],
+                "fonts": {"pools": {"default": ["@builtin"]}},
+                "storage": {"publish": str(root) if absolute else "publications/current"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    configuration = load_application_config(config_file)
+    store = PublicationStore.from_configuration(configuration, application_paths=paths)
+
+    with _image() as image:
+        store.publish("screen", image, _metadata("pub-1"), audience="internal")
+
+    assert store.root == root
+    assert store.read_current("screen").manifest.publication_id == "pub-1"
+    assert config_file.is_file()
+
+
+@pytest.mark.parametrize(
+    "relative_root",
+    [
+        ".",
+        "..",
+        "settings.yaml",
+        "settings.yaml/nested",
+        "content",
+        "content/nested",
+        "assets",
+        "assets/fonts/nested",
+        "state",
+        "state/state.json",
+        "state/publication.json",
+        "state/global-history.1.jsonl",
+        "artifacts",
+        "artifacts/nested",
+    ],
+)
+def test_alternate_configuration_rejects_protected_overlap(tmp_path: Path, relative_root: str) -> None:
+    paths = _paths(tmp_path / "installation")
+    config_directory = tmp_path / "alternate"
+    configuration = SimpleNamespace(
+        file=config_directory / "settings.yaml",
+        content_directory=config_directory / "content",
+        storage=SimpleNamespace(
+            state=config_directory / "state", artifacts=config_directory / "artifacts", publish=None
+        ),
+    )
+    root = config_directory / relative_root
+    store = PublicationStore(root, configuration=configuration, application_paths=paths)
+    with _image() as image, pytest.raises(PublicationStorageError, match="overlaps protected"):
+        store.publish("screen", image, _metadata("pub-1"), audience="internal")
+    assert not config_directory.exists()
+
+
+def test_owned_destination_cleanup_cannot_touch_nested_protected_storage(tmp_path: Path) -> None:
+    paths = _paths(tmp_path / "installation")
+    root = tmp_path / "publish"
+    destination = root / "screen"
+    destination.mkdir(parents=True)
+    (destination / ".refrain-owned").touch()
+    protected = destination / "user-content"
+    protected.mkdir()
+    sentinel = protected / "keep"
+    sentinel.write_text("protected", encoding="utf-8")
+    configuration = SimpleNamespace(
+        file=tmp_path / "configuration" / "config.yaml",
+        content_directory=protected,
+        storage=SimpleNamespace(state=None, artifacts=None, publish=root),
+    )
+    store = PublicationStore(root, configuration=configuration, application_paths=paths)
+
+    with _image() as image, pytest.raises(PublicationStorageError, match="overlaps protected"):
+        store.publish("screen", image, _metadata("pub-1"), audience="internal")
+
+    assert sentinel.read_text(encoding="utf-8") == "protected"
+    assert sorted(path.name for path in destination.iterdir()) == [".refrain-owned", "user-content"]
 
 
 @pytest.mark.parametrize(

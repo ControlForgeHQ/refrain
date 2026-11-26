@@ -226,11 +226,12 @@ def test_publish_destination_rejects_windows_reserved_directory_ids(tmp_path: Pa
     assert "destinations[0].id" in diagnostic_fields(config_path)
 
 
+@pytest.mark.parametrize("backend", ["publish", "window", "waveshare-13in3-e"])
 @pytest.mark.parametrize(("length", "valid"), [(255, True), (256, False)])
-def test_publish_destination_id_component_length(tmp_path: Path, length: int, valid: bool) -> None:
+def test_destination_id_component_length(tmp_path: Path, backend: str, length: int, valid: bool) -> None:
     config_path = write_config(
         tmp_path / "config.yaml",
-        configuration_data(destinations=[{"id": "a" * length, "type": "publish"}]),
+        configuration_data(destinations=[{"id": "a" * length, "type": backend}]),
     )
     if valid:
         assert load_application_config(config_path).display_backends[0].outputs[0].identifier == "a" * length
@@ -1811,7 +1812,7 @@ def test_destination_ids_require_url_safe_ascii_identifier_syntax(tmp_path: Path
 
 
 def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
-    identifier = "a" * 256
+    identifier = "a" * 255
     config_path = write_config(
         tmp_path / "config.yaml",
         configuration_data(
@@ -1836,9 +1837,18 @@ def test_destination_id_length_limit_and_literal_all(tmp_path: Path) -> None:
         load_application_config(config_path)
 
     assert any(
-        item.field == "destinations[0].id" and "at most 256 characters" in item.message
+        item.field == "destinations[0].id" and "at most 255 ASCII characters" in item.message
         for item in error.value.diagnostics
     )
+
+
+@pytest.mark.parametrize("backend", ["window", "waveshare-13in3-e"])
+def test_direct_destination_allows_windows_reserved_identifier(tmp_path: Path, backend: str) -> None:
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        configuration_data(destinations=[{"id": "CoN", "type": backend}]),
+    )
+    assert load_application_config(config_path).display_backends[0].outputs[0].identifier == "CoN"
 
 
 def test_destination_ids_must_be_unique_across_backend_types(tmp_path: Path) -> None:
