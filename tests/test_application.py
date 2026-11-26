@@ -23,7 +23,6 @@ from refrain import (
     ArtifactWriteError,
     DailyImagePreparationError,
     GlobalHistoryWriteError,
-    NoEligibleQuotationError,
     PersistentStateStore,
     PreparedImageArtifactStore,
     ResolvedOutputSpecification,
@@ -484,6 +483,109 @@ def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: 
         Coordinator().force_scheduled_publication,
     )
     assert result.result.status is PublicationStatus.INVALID
+
+
+def test_refresh_rejects_selection_from_another_display_date(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 11))
+    configuration = application.load_application_config(workspace.config)
+
+    class Coordinator:
+        desired_identity = (1, 0)
+
+    result = application._refresh_scheduled(
+        Coordinator(),
+        PersistentStateStore(workspace.state),
+        PreparedImageArtifactStore(workspace.artifacts),
+        configuration,
+        Random(1),
+        lambda: at(11, 11),
+        Event(),
+        Lock(),
+        lambda *args: pytest.fail("outdated selection must not be refreshed"),
+    )
+    assert result.result.status is PublicationStatus.STALE_PRESENTATION
+
+
+def test_transient_admission_continues_when_selection_is_outdated(workspace: Workspace) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 11))
+    configuration = application.load_application_config(workspace.config)
+    specification = configuration.required_output_specifications[0]
+    image = Image.new("RGB", specification.requested_output_size)
+
+    class Coordinator:
+        desired_identity = None
+
+    def admit(destinations, specifications, images):
+        for value in images.values():
+            value.close()
+        return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
+
+    result = application._admit_transient(
+        Coordinator(),
+        PersistentStateStore(workspace.state),
+        configuration,
+        lambda: at(11, 11),
+        Event(),
+        Lock(),
+        "@all",
+        {"display": specification},
+        {specification: image},
+        admit,
+    )
+    assert result.result.status is PublicationStatus.SUCCEEDED
+
+
+def test_invalid_selection_rejects_refresh_but_allows_transient(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = application.load_application_config(workspace.config)
+    specification = configuration.required_output_specifications[0]
+    store = PersistentStateStore(workspace.state)
+
+    def invalid_selection(_store):
+        raise application.InvalidSelectionStateError("invalid selection", revision=3, repetition_history=frozenset())
+
+    monkeypatch.setattr(application, "_reload", invalid_selection)
+
+    class Coordinator:
+        desired_identity = None
+
+    coordinator = Coordinator()
+    result = application._refresh_scheduled(
+        coordinator,
+        store,
+        PreparedImageArtifactStore(workspace.artifacts),
+        configuration,
+        Random(1),
+        lambda: at(10, 11),
+        Event(),
+        Lock(),
+        lambda *args: pytest.fail("invalid selection must not be refreshed"),
+    )
+    assert result.result.status is PublicationStatus.STALE_PRESENTATION
+
+    image = Image.new("RGB", specification.requested_output_size)
+
+    def admit(destinations, specifications, images):
+        for value in images.values():
+            value.close()
+        return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
+
+    result = application._admit_transient(
+        coordinator,
+        store,
+        configuration,
+        lambda: at(10, 11),
+        Event(),
+        Lock(),
+        "@all",
+        {"display": specification},
+        {specification: image},
+        admit,
+    )
+    assert result.result.status is PublicationStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize(("hour", "expected"), [(11, PublicationStatus.SUCCEEDED), (13, PublicationStatus.BUSY)])
@@ -1283,9 +1385,10 @@ def test_all_invalid_effective_schedules_preserve_committed_state_and_history(wo
     history_before = workspace.history.read_bytes()
     ordinary(workspace, extra='reveal:\n  source: "05:00"\n')
 
-    with pytest.raises(ApplicationError, match="content library is invalid"):
-        workspace.run(at(11, 8))
+    result, display = workspace.run(at(11, 8))
 
+    assert result.presented_stage is None
+    assert not display.images
     assert workspace.state.read_bytes() == state_before
     assert workspace.history.read_bytes() == history_before
 
@@ -1386,8 +1489,10 @@ def test_restart_into_previously_displayed_date_creates_new_revision(workspace: 
 
 def test_no_eligible_content_commits_nothing(workspace: Workspace) -> None:
     workspace.entry("other", 'eligibility:\n  - month: 7\nquotations:\n  - "Summer."\n')
-    with pytest.raises(NoEligibleQuotationError):
-        workspace.run(at(10, 8))
+    result, display = workspace.run(at(10, 8))
+    assert result.state is None and result.presented_stage is None
+    assert not result.selected_initial_quotation
+    assert display.sizes == [(1600, 1200)]
     assert workspace.load() is None and not workspace.artifacts.exists()
 
 
@@ -2561,10 +2666,11 @@ def test_continuous_content_failure_preserves_previous_state_for_retry(workspace
         assert workspace.load() == previous[0]
         assert tuple(item.read_bytes() for item in png_files(workspace.artifacts)) == previous_artifacts[0]
         path.write_text(original, encoding="utf-8")
+        clock.move(clock.now + timedelta(seconds=300))
 
-    clock = RuntimeClock(at(10, 7), [remove_content], retries=[restore_content])
+    clock = RuntimeClock(at(10, 7), [remove_content, restore_content])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
-    assert stages == [(1, 0), (2, 0)] and clock.retry_delays == [1]
+    assert stages == [(1, 0), (2, 0)] and clock.retry_delays == []
     assert len(workspace.history_records()) == 2
 
 
@@ -2593,12 +2699,12 @@ def test_continuous_retry_does_not_repeat_unchanged_content_warnings(workspace, 
     def add_eligible_content():
         ordinary(workspace, "Recovered quotation.")
 
-    clock = RuntimeClock(at(10, 7), retries=[add_eligible_content])
+    clock = RuntimeClock(at(10, 7), [add_eligible_content])
     with caplog.at_level(logging.WARNING):
         stages, _, _ = run_continuously(workspace, clock, monkeypatch)
 
-    assert stages == [(1, 0)]
-    assert clock.retry_delays == [1]
+    assert stages == [(-1, at(10, 7).date().toordinal())]
+    assert clock.retry_delays == []
     assert caplog.text.count(str(rejected)) == 1
 
 

@@ -8,16 +8,17 @@ import os
 import platform
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from types import MappingProxyType
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .config import ApplicationConfiguration
+from .config import ApplicationConfiguration, PreparedImageVariantKey
 from .geometry import ResolvedOutputSpecification
 from .persistence import ResolvedFont
+from .preparation import DailyImagePreparationError, _prepare_uncommitted_literary_images
 from .renderer import CompositionVisibility, LiteraryComposition, layout_composition, render_reveal_stages
 
 _LOGGER = logging.getLogger(__name__)
@@ -348,4 +349,23 @@ def prepare_information_view(
     return MappingProxyType(images)
 
 
-__all__ = ["InformationViewPreparationError", "prepare_information_view"]
+def prepare_no_eligible_fallback(
+    configuration: ApplicationConfiguration,
+    output_specifications: Sequence[ResolvedOutputSpecification | PreparedImageVariantKey],
+    *,
+    on_variant_error: (
+        Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, DailyImagePreparationError], None] | None
+    ) = None,
+    canonical_cache: dict[str, object] | None = None,
+) -> Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]]:
+    """Prepare fully revealed literary fallback images without creating a selection or cache."""
+    return _prepare_uncommitted_literary_images(
+        LiteraryComposition(quotation=_QUOTATION, attribution=_ATTRIBUTION),
+        configuration,
+        output_specifications,
+        on_variant_error=on_variant_error,
+        canonical_cache=canonical_cache,
+    )
+
+
+__all__ = ["InformationViewPreparationError", "prepare_information_view", "prepare_no_eligible_fallback"]

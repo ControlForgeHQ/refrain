@@ -40,6 +40,15 @@ class StateRecoveryError(PersistentStateError):
     """Raised when existing persistent state cannot be safely recovered."""
 
 
+class InvalidSelectionStateError(StateRecoveryError):
+    """A selection is unusable, but its revision and repetition history are recoverable."""
+
+    def __init__(self, message: str, *, revision: int, repetition_history: frozenset[str]) -> None:
+        self.revision = revision
+        self.repetition_history = repetition_history
+        super().__init__(message)
+
+
 class UnsupportedStateVersionError(StateRecoveryError):
     """Raised when a state file uses an unsupported format version."""
 
@@ -434,6 +443,13 @@ class PersistentStateStore:
         try:
             document = json.loads(contents.decode("utf-8"), object_pairs_hook=_unique_object)
             return _decode_document(document)
+        except InvalidSelectionStateError as error:
+            raise InvalidSelectionStateError(
+                f"invalid persistent state selection at {self.path}: {error}. "
+                "A replacement selection is required; the existing state remains unchanged until commitment.",
+                revision=error.revision,
+                repetition_history=error.repetition_history,
+            ) from error
         except UnsupportedStateVersionError as error:
             raise UnsupportedStateVersionError(
                 f"{error} State file: {self.path}. {_recovery_guidance(self.path)}"
@@ -493,8 +509,13 @@ class PersistentStateStore:
         _validate_state(proposed)
         _canonical_json(_state_payload(proposed))
 
-        previous = self.load()
-        current_revision = 0 if previous is None else previous.revision
+        try:
+            previous = self.load()
+        except InvalidSelectionStateError as error:
+            previous = None
+            current_revision = error.revision
+        else:
+            current_revision = 0 if previous is None else previous.revision
         if previous is not None and current_revision == proposal.base_revision + 1:
             if previous.snapshot == snapshot and previous.repetition_history == repetition_history:
                 self._confirm_durability()
@@ -738,7 +759,12 @@ def _decode_document(value: object) -> PersistentState:
     if not hmac.compare_digest(digest, expected_digest):
         raise ValueError("state document checksum does not match its contents")
 
-    data = _require_mapping(payload, "state", {"revision", "snapshot", "repetition_history", "highest_reveal_stage"})
+    data = _require_mapping(
+        payload,
+        "state",
+        {"revision", "repetition_history"},
+        {"snapshot", "highest_reveal_stage"},
+    )
     repetition_data = data["repetition_history"]
     if not isinstance(repetition_data, list) or not all(isinstance(item, str) for item in repetition_data):
         raise ValueError("state.repetition_history must be an array of normalized identities")
@@ -747,11 +773,27 @@ def _decode_document(value: object) -> PersistentState:
 
     if type(data["revision"]) is not int or data["revision"] <= 0:
         raise ValueError("state.revision must be a positive integer")
-    snapshot = _decode_snapshot(data["snapshot"])
+    repetition_history = frozenset(_valid_identity(item, "repetition-history identity") for item in repetition_data)
+    try:
+        snapshot = _decode_snapshot(data["snapshot"])
+    except (TypeError, ValueError, KeyError, UnicodeError) as error:
+        raise InvalidSelectionStateError(
+            str(error), revision=data["revision"], repetition_history=repetition_history
+        ) from error
+    if snapshot.quotation_identity not in repetition_history:
+        raise ValueError("repetition history must contain the current quotation identity")
+    try:
+        _validate_reveal_stage(data["highest_reveal_stage"])
+        if data["highest_reveal_stage"] >= len(snapshot.resolved_reveal_stages):
+            raise ValueError("highest_reveal_stage exceeds the final resolved reveal stage")
+    except (TypeError, ValueError, KeyError, UnicodeError) as error:
+        raise InvalidSelectionStateError(
+            str(error), revision=data["revision"], repetition_history=repetition_history
+        ) from error
     state = PersistentState(
         revision=data["revision"],
         snapshot=snapshot,
-        repetition_history=frozenset(_valid_identity(item, "repetition-history identity") for item in repetition_data),
+        repetition_history=repetition_history,
         highest_reveal_stage=data["highest_reveal_stage"],
     )
     _validate_state(state)
