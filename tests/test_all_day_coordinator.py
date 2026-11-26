@@ -4,6 +4,7 @@ import time
 from datetime import date, timedelta
 from threading import Event, Lock
 
+import pytest
 from PIL import Image
 
 from refrain import DisplayBackendConfiguration, DisplayOutputConfiguration, ResolvedOutputSpecification
@@ -87,6 +88,47 @@ def test_hold_suppresses_and_coalesces_until_expiry_and_never_reactivates():
         assert owner.expire_all_day_holds(clock[0])
         owner.publish((2, 0), image(5))
         assert wait_until(lambda: owner.acknowledgements["one"] == (2, 0))
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("all_day", [False, True])
+def test_failed_transient_preserves_hold_until_expiry_and_later_scheduled_recovery(monkeypatch, all_day):
+    monkeypatch.setattr(coordinator_module, "_MAX_RETRY_DELAY", 0.0)
+    clock, backend = [DAY], Backend()
+    outputs = (DisplayOutputConfiguration("one", SPEC, audience="internal"),)
+    owner = DisplayPublicationCoordinator(
+        (DisplayBackendConfiguration("publish", outputs=outputs),),
+        lambda _: backend,
+        logical_date=lambda: clock[0],
+    )
+    try:
+        owner.publish((1, 0), image(1))
+        assert wait_until(lambda: owner.acknowledgements["one"] == (1, 0))
+        assert push(owner, 2, "one", all_day=True).wait(2).status is PublicationStatus.SUCCEEDED
+        owner.publish((1, 1), image(3))
+        assert owner.acknowledgements["one"] == (1, 0)
+        assert ("one", 3) not in backend.calls
+
+        backend.failures.add(("one", 4))
+        assert push(owner, 4, "one", all_day=all_day).wait(5).status is PublicationStatus.FAILED
+        assert backend.calls.count(("one", 4)) == 5
+        assert owner._states["one"].hold_date == DAY
+        assert owner._states["one"].terminal
+        assert owner.acknowledgements["one"] == (1, 0)
+
+        clock[0] += timedelta(days=1)
+        assert owner.expire_all_day_holds(clock[0])
+        assert owner._states["one"].hold_date is None
+        assert owner._states["one"].terminal
+        assert ("one", 3) not in backend.calls
+        assert owner.acknowledgements["one"] == (1, 0)
+
+        owner.publish((2, 0), image(5))
+        assert wait_until(lambda: owner.acknowledgements["one"] == (2, 0))
+        assert backend.calls.count(("one", 4)) == 5
+        assert backend.calls.count(("one", 5)) == 1
+        assert ("one", 3) not in backend.calls
     finally:
         owner.close()
 
