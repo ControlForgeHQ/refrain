@@ -543,9 +543,11 @@ def _refresh_scheduled(
         decision = evaluate_scheduling(wall_clock(), configuration, state)
         if state is None or decision.required_reveal_stage is None:
             return rejected(PublicationStatus.STALE_PRESENTATION)
+        if not coordinator.has_participating_destinations:
+            return rejected(PublicationStatus.NO_TARGET)
         identity = (state.revision, decision.required_reveal_stage)
         if coordinator.desired_identity != identity:
-            return rejected(PublicationStatus.INVALID)
+            return rejected(PublicationStatus.STALE_PRESENTATION)
         checkpoint = _complete_checkpoint(store, state, configuration, chooser)
 
     with artifact_lock if artifact_lock is not None else Lock():
@@ -574,12 +576,14 @@ def _refresh_scheduled(
                 ):
                     for image in images.values():
                         image.close()
-                    return rejected(PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.INVALID)
+                    return rejected(
+                        PublicationStatus.STOPPING if shutdown.is_set() else PublicationStatus.STALE_PRESENTATION
+                    )
                 current_checkpoint = _complete_checkpoint(store, current, configuration, chooser)
                 if not artifacts.association_matches(current_checkpoint):
                     for image in images.values():
                         image.close()
-                    return rejected(PublicationStatus.INVALID)
+                    return rejected(PublicationStatus.STALE_PRESENTATION)
                 metadata = {key: {**value, "checkpoint": current_checkpoint} for key, value in metadata.items()}
                 if remember_artifacts is not None:
                     remember_artifacts(current.revision, artifacts)

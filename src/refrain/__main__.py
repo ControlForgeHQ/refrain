@@ -122,8 +122,12 @@ def _report_refresh_result(result: PublicationResult) -> int:
         PublicationStatus.FAILED: "refresh publication failed",
         PublicationStatus.STOPPING: "the resident Refrain runtime is stopping or rejected the refresh",
         PublicationStatus.INVALID: "the resident Refrain runtime rejected the refresh as invalid",
+        PublicationStatus.NO_TARGET: (
+            "no destinations are participating in scheduled publication; check the resident's destinations"
+        ),
         PublicationStatus.STALE_PRESENTATION: (
-            "no current scheduled presentation is available; wait for a daily selection"
+            "the scheduled presentation is unavailable or changed during refresh; "
+            "wait for the current presentation to be established, then request a new refresh"
         ),
         PublicationStatus.UNSUPPORTED: "the resident Refrain runtime does not support refresh",
         PublicationStatus.WITHDRAWN: "a destination required by the refresh is intentionally withdrawn",

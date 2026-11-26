@@ -183,6 +183,7 @@ def test_refresh_prepares_current_scheduled_stage_without_changing_state(workspa
 
     class Coordinator:
         desired_identity = (1, 1)
+        has_participating_destinations = True
 
         def force_scheduled_publication(self, identity, images, metadata, destination_keys):
             assert identity == self.desired_identity
@@ -432,6 +433,7 @@ def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace
 
     class Coordinator:
         desired_identity = (1, 1)
+        has_participating_destinations = True
 
     def admit(_identity, images, metadata, destination_keys):
         assert metadata
@@ -467,6 +469,7 @@ def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: 
 
     class Coordinator:
         desired_identity = (1, 0)
+        has_participating_destinations = True
 
         def force_scheduled_publication(self, identity, images, metadata, destination_keys):
             pytest.fail("stale refresh must not be admitted")
@@ -482,7 +485,81 @@ def test_refresh_rejects_stage_that_becomes_stale_during_preparation(workspace: 
         Lock(),
         Coordinator().force_scheduled_publication,
     )
-    assert result.result.status is PublicationStatus.INVALID
+    assert result.result.status is PublicationStatus.STALE_PRESENTATION
+
+
+@pytest.mark.parametrize("change", ["revision", "identity"])
+def test_refresh_rejects_identity_changed_during_preparation(workspace, monkeypatch, change) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 11))
+    configuration = application.load_application_config(workspace.config)
+
+    class Coordinator:
+        desired_identity = (1, 0)
+        has_participating_destinations = True
+
+    coordinator = Coordinator()
+    original_recover = application._recover_images
+    original_reload = application._reload
+    changed = False
+
+    def recover(*args, **kwargs):
+        nonlocal changed
+        artifacts = original_recover(*args, **kwargs)
+        changed = True
+        if change == "identity":
+            coordinator.desired_identity = (2, 0)
+        return artifacts
+
+    def reload(store):
+        state = original_reload(store)
+        return replace(state, revision=2) if changed and change == "revision" else state
+
+    monkeypatch.setattr(application, "_recover_images", recover)
+    monkeypatch.setattr(application, "_reload", reload)
+    result = application._refresh_scheduled(
+        coordinator,
+        PersistentStateStore(workspace.state),
+        PreparedImageArtifactStore(workspace.artifacts),
+        configuration,
+        Random(1),
+        lambda: at(10, 11),
+        Event(),
+        Lock(),
+        lambda *args: pytest.fail("stale refresh must not be admitted"),
+    )
+    assert result.result.status is PublicationStatus.STALE_PRESENTATION
+
+
+@pytest.mark.parametrize(
+    ("participating", "identity", "expected"),
+    [
+        (True, (2, 0), PublicationStatus.STALE_PRESENTATION),
+        (False, None, PublicationStatus.NO_TARGET),
+    ],
+)
+def test_refresh_rejects_before_preparation(workspace, monkeypatch, participating, identity, expected) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 11))
+    configuration = application.load_application_config(workspace.config)
+
+    class Coordinator:
+        desired_identity = identity
+        has_participating_destinations = participating
+
+    monkeypatch.setattr(application, "_recover_images", lambda *args: pytest.fail("must not prepare images"))
+    result = application._refresh_scheduled(
+        Coordinator(),
+        PersistentStateStore(workspace.state),
+        PreparedImageArtifactStore(workspace.artifacts),
+        configuration,
+        Random(1),
+        lambda: at(10, 11),
+        Event(),
+        Lock(),
+        lambda *args: pytest.fail("must not admit refresh"),
+    )
+    assert result.result.status is expected
 
 
 def test_refresh_rejects_selection_from_another_display_date(workspace: Workspace) -> None:

@@ -86,6 +86,31 @@ def _raw(path):
     return connection
 
 
+def test_refresh_outcomes_survive_control_transport(runtime, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import refrain.__main__ as cli
+
+    path, coordinator, seen, *_ = runtime
+    client = RuntimeControlClient(path)
+    coordinator.clear_desired()
+    assert client.refresh().status is PublicationStatus.STALE_PRESENTATION
+    assert seen == []
+
+    monkeypatch.setattr(cli, "resolve_application_paths", lambda: SimpleNamespace(control_metadata_file=path))
+    assert cli.main(["--refresh"]) == 1
+    assert "unavailable or changed during refresh" in capsys.readouterr().err
+    assert seen == []
+
+    assert coordinator.withdraw_destination("one")
+    assert coordinator.withdraw_destination("two")
+    assert client.refresh().status is PublicationStatus.NO_TARGET
+    assert cli.main(["--refresh"]) == 1
+    assert "no destinations are participating" in capsys.readouterr().err
+    assert seen == []
+    assert all(record["withdrawn"] for record in client.discover())
+
+
 def _wait_until(predicate):
     deadline = time.monotonic() + 5
     while not predicate() and time.monotonic() < deadline:
