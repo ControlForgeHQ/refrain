@@ -28,6 +28,7 @@ from refrain import (
     prepare_daily_images,
     resolve_reveal_stages,
 )
+from refrain._yaml import load_yaml, yaml_error_location
 from refrain.geometry import ResolvedOutputSpecification
 
 
@@ -1782,6 +1783,34 @@ def test_unconsumed_sections_still_require_valid_yaml(tmp_path: Path, unconsumed
         file.write(unconsumed)
     with pytest.raises(ApplicationConfigurationError):
         load_application_config(path)
+
+
+@pytest.mark.parametrize("key", ["[one, two]", "{one: two}"])
+@pytest.mark.parametrize("prefix", ["", "storage:\n  nested:\n    ", "future:\n  nested:\n    "])
+def test_unhashable_yaml_mapping_keys_are_document_errors(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, key: str, prefix: str
+) -> None:
+    document = f"{prefix}? {key}\n{' ' * (4 if prefix else 0)}: value\n"
+    line = prefix.count("\n") + 1
+    column = 7 if prefix else 3
+
+    with pytest.raises(yaml.YAMLError) as parser_error:
+        load_yaml(document, allow_non_string_keys=True)
+    assert yaml_error_location(parser_error.value) == f"line {line}, column {column}"
+
+    path = write_config(tmp_path / "config.yaml", configuration_data())
+    base = path.read_text(encoding="utf-8")
+    path.write_text(base + document, encoding="utf-8")
+    config_line = base.count("\n") + line
+    with pytest.raises(ApplicationConfigurationError) as config_error:
+        load_application_config(path)
+    diagnostic = config_error.value.diagnostics[0]
+    assert diagnostic.file == path
+    assert diagnostic.field == "$"
+    assert diagnostic.severity == logging.ERROR
+    assert f"line {config_line}, column {column}" in diagnostic.message
+    assert "invalid or unsupported YAML" in diagnostic.message
+    assert str(path) in caplog.text
 
 
 @pytest.mark.parametrize("backend_type", ["image-server", "arbitrary-unsupported"])

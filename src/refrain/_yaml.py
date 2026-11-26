@@ -31,6 +31,15 @@ class _StrictSafeLoader(yaml.SafeLoader):
                     "mapping keys must be strings",
                     key_node.start_mark,
                 )
+            try:
+                hash(key)
+            except TypeError as error:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "mapping keys must be hashable",
+                    key_node.start_mark,
+                ) from error
             if key in keys:
                 raise yaml.constructor.ConstructorError(
                     "while constructing a mapping",
