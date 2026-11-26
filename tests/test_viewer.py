@@ -1718,7 +1718,7 @@ def test_finished_png_rejects_incomplete_terminal_checksum_before_use(
 
     assert viewer.main(arguments) == 1
     diagnostic = capsys.readouterr().err
-    assert str(path) in diagnostic
+    assert repr(str(path)) in diagnostic
     assert "finished PNG" in diagnostic
 
 
