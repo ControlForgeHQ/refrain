@@ -88,40 +88,52 @@ def recover_prepared_daily_images(
     ) -> None:
         prepared_metadata[variant_key] = metadata
 
-    prepared_variants = prepare_daily_images(
-        state.snapshot,
-        ordered_stages,
-        configuration,
-        missing,
-        chooser=chooser,
-        selection_revision=state.revision,
-        canonical_presentation=checkpoint["presentation"],
-        qr_declaration=qr_declaration,
-        on_metadata=remember_metadata,
-        on_resolved_bounds=remember_bounds,
-    )
-    try:
-        new_artifacts = artifact_store.store(
+    artifact_variants = dict(existing.variants)
+    new_artifacts = existing
+    choices_cache = {}
+    for key in missing:
+
+        def produce(write_stage):
+            index = 0
+
+            def persist_stage(stage_key, image):
+                nonlocal index
+                if stage_key != key or key not in prepared_metadata or index >= len(prepared_metadata[key]):
+                    raise DailyImagePreparationError("prepared stages do not match the requested group")
+                write_stage(image, prepared_metadata[key][index])
+                index += 1
+
+            prepare_daily_images(
+                state.snapshot,
+                ordered_stages,
+                configuration,
+                (key,),
+                chooser=chooser,
+                selection_revision=state.revision,
+                canonical_presentation=checkpoint["presentation"],
+                qr_declaration=qr_declaration,
+                on_metadata=remember_metadata,
+                on_resolved_bounds=remember_bounds,
+                _on_stage=persist_stage,
+                _choices_cache=choices_cache,
+            )
+
+        new_artifacts = artifact_store.store_generated(
             state.revision,
             ordered_stages,
-            prepared_variants,
-            prepared_metadata,
+            key,
+            produce,
             snapshot=state.snapshot,
             checkpoint=checkpoint,
             qr_declaration=qr_declaration,
         )
-        artifact_variants = dict(existing.variants)
         artifact_variants.update(new_artifacts.variants)
-        for output_specification, bounds in presentation_canvas_literary_bounds.items():
-            artifact_variants[output_specification] = replace(
-                new_artifacts.variant_for(output_specification),
-                presentation_canvas_literary_bounds=bounds,
-            )
-        return replace(new_artifacts, variants=MappingProxyType(artifact_variants))
-    finally:
-        for images in prepared_variants.values():
-            for image in images:
-                image.close()
+    for output_specification, bounds in presentation_canvas_literary_bounds.items():
+        artifact_variants[output_specification] = replace(
+            artifact_variants[output_specification],
+            presentation_canvas_literary_bounds=bounds,
+        )
+    return replace(new_artifacts, variants=MappingProxyType(artifact_variants))
 
 
 __all__ = ["recover_prepared_daily_images"]

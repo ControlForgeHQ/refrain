@@ -2394,7 +2394,15 @@ def test_continuous_reveal_preparation_continues_during_hold_and_latest_date_is_
     hold_state = {"started": False, "status": None}
     clock = RuntimeClock(at(10, 7), [at(10, 12), at(10, 18), at(10, 19), at(11, 7)])
 
-    stages, _, display = run_continuously(workspace, clock, monkeypatch, hold_state=hold_state)
+    def wait_for_latest(deadline, shutdown, **kwargs):
+        coordinator = hold_state.get("coordinator")
+        if coordinator is not None and coordinator.desired_identity == (2, 0):
+            assert coordinator.wait_for_publication((2, 0), timeout=2)
+        return clock.scheduling_wait(deadline, shutdown, **kwargs)
+
+    stages, _, display = run_continuously(
+        workspace, clock, monkeypatch, hold_state=hold_state, scheduling_wait=wait_for_latest
+    )
 
     assert hold_state["started"] and hold_state["status"] in (
         PublicationStatus.ACCEPTED,
@@ -2897,15 +2905,15 @@ def test_continuous_uncertain_publication_with_temporary_reload_failure(workspac
 
 def test_continuous_uncertain_artifact_publication_reloads_without_regeneration(workspace, monkeypatch) -> None:
     ordinary(workspace)
-    original = PreparedImageArtifactStore.store
+    original = PreparedImageArtifactStore.store_generated
     publications = []
 
-    def publish(self, revision, stages, images, metadata, **kwargs):
+    def publish(self, revision, stages, key, produce, **kwargs):
         publications.append(revision)
-        original(self, revision, stages, images, metadata, **kwargs)
+        original(self, revision, stages, key, produce, **kwargs)
         raise ArtifactWriteError("directory sync unconfirmed", published=True)
 
-    monkeypatch.setattr(PreparedImageArtifactStore, "store", publish)
+    monkeypatch.setattr(PreparedImageArtifactStore, "store_generated", publish)
     clock = RuntimeClock(at(10, 7), retries=[lambda: None])
     stages, _, _ = run_continuously(workspace, clock, monkeypatch)
     assert stages == [(1, 0)] and publications == [1]

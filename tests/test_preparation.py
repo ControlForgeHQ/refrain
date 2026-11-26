@@ -2525,6 +2525,37 @@ def test_reveal_stages_must_remain_cumulative(embedded_font: str) -> None:
         )
 
 
+def test_resize_close_failure_releases_original_and_replacement(monkeypatch) -> None:
+    image = Image.new("RGB", (20, 20))
+    resize = image.resize
+    close = image.close
+    replacements = []
+    attempted = False
+
+    def capture_resize(*args, **kwargs):
+        result = resize(*args, **kwargs)
+        replacements.append(result)
+        return result
+
+    def fail_once():
+        nonlocal attempted
+        if not attempted:
+            attempted = True
+            raise RuntimeError("injected close failure")
+        close()
+
+    monkeypatch.setattr(image, "resize", capture_resize)
+    monkeypatch.setattr(image, "close", fail_once)
+    with pytest.raises(RuntimeError, match="injected close failure"):
+        try:
+            preparation._resize_presentation_to_output(image, (10, 10))
+        finally:
+            image.close()
+    for candidate in (image, *replacements):
+        with pytest.raises(ValueError, match="closed"):
+            candidate.getpixel((0, 0))
+
+
 def test_missing_font_uses_packaged_emergency_font_when_default_pool_is_empty() -> None:
     snapshot = make_snapshot("missing-font")
 

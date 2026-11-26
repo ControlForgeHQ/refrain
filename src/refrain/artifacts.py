@@ -10,7 +10,7 @@ import re
 import shutil
 import stat
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -57,6 +57,10 @@ class ArtifactWriteError(ArtifactStoreError):
 
 class ArtifactCleanupError(ArtifactStoreError):
     """Cleanup failed; already published artifacts remain independent of cleanup."""
+
+
+class _ProducerFailure(Exception):
+    pass
 
 
 def _canonical_json(value: object) -> bytes:
@@ -573,6 +577,42 @@ class PreparedImageArtifactStore:
             raise ArtifactValidationError("stored preparation groups are not complete")
         return result
 
+    def store_generated(
+        self,
+        revision: int,
+        stages: Sequence[CompositionVisibility],
+        key: ResolvedOutputSpecification | PreparedImageVariantKey,
+        produce: Callable[[Callable[[Image.Image, dict[str, object]], None]], None],
+        *,
+        snapshot: DailySnapshot,
+        checkpoint: dict[str, object],
+        qr_declaration: dict[str, object] | None,
+    ) -> PreparedImageArtifactSet:
+        """Publish one complete group while the producer retains ownership of each image."""
+        _inputs(revision, stages)
+        self._validate_committed_stages(stages, snapshot)
+        _validate_context(revision, snapshot, checkpoint, qr_declaration)
+        specification, presentation = _variant_parts(key)
+        if key != _variant_key(specification, presentation, qr_declaration):
+            raise ValueError("variant key does not match the selected QR payload")
+        self._store_group(
+            revision,
+            stages,
+            presentation,
+            {specification: ()},
+            {specification: ()},
+            snapshot,
+            checkpoint,
+            qr_declaration,
+            produce=produce,
+        )
+        result, missing = self.load_groups(
+            revision, stages, (key,), snapshot=snapshot, checkpoint=checkpoint, qr_declaration=qr_declaration
+        )
+        if missing:
+            raise ArtifactValidationError("stored preparation groups are not complete")
+        return result
+
     def _store_group(
         self,
         revision: int,
@@ -583,6 +623,8 @@ class PreparedImageArtifactStore:
         snapshot: DailySnapshot,
         checkpoint: dict[str, object],
         qr_declaration: dict[str, object] | None,
+        *,
+        produce: Callable[[Callable[[Image.Image, dict[str, object]], None]], None] | None = None,
     ) -> PreparedImageArtifactSet:
         """Publish one complete compatible group; image inputs remain caller-owned."""
         expected_stages = _inputs(revision, stages)
@@ -595,6 +637,10 @@ class PreparedImageArtifactStore:
         metadata_by_specification: dict[ResolvedOutputSpecification, tuple[dict[str, object], ...]] = {}
         for specification in specifications:
             images = variants[specification]
+            if produce is not None:
+                if len(specifications) != 1:
+                    raise ValueError("streamed preparation requires exactly one output specification")
+                continue
             if not isinstance(images, Sequence) or isinstance(images, (str, bytes)) or not images:
                 raise ValueError(f"images for {specification!r} must be a nonempty sequence of complete Pillow images")
             if len(images) != len(expected_stages):
@@ -637,24 +683,55 @@ class PreparedImageArtifactStore:
         temporary = self.root / f".tmp-revision-{revision}-{token}"
         payload = directory / f"images-{token}"
         published = False
+        temporary_created = False
         try:
             self._check_root()
             _create_directories(self.root)
             _create_directories(directory)
             temporary.mkdir()
+            temporary_created = True
             variant_metadata = []
             stored_variants = {}
             for specification in specifications:
-                images = images_by_specification[specification]
                 variant_directory_name = _variant_directory_name(specification)
                 variant_directory = temporary / variant_directory_name
                 variant_directory.mkdir()
                 digests = []
                 metadata_digests = []
                 metadata_paths = []
-                for index, (image, metadata_document) in enumerate(
-                    zip(images, metadata_by_specification[specification], strict=True)
-                ):
+                mode = None
+                first_metadata = None
+                count = 0
+
+                def write_stage(image: Image.Image, metadata_document: dict[str, object]) -> None:
+                    nonlocal mode, first_metadata, count
+                    index = count
+                    if index >= len(expected_stages):
+                        raise ValueError("too many prepared stages")
+                    _validate_association(
+                        metadata_document,
+                        revision,
+                        expected_stages[index],
+                        specification,
+                        checkpoint,
+                        qr_declaration,
+                        presentation,
+                    )
+                    if first_metadata is None:
+                        first_metadata = copy.deepcopy(metadata_document)
+                    elif (
+                        metadata_document["effective_presentation"] != first_metadata["effective_presentation"]
+                        or metadata_document["rendered_qr"] != first_metadata["rendered_qr"]
+                    ):
+                        raise ValueError("effective presentation or QR changes between stages")
+                    if (
+                        not isinstance(image, Image.Image)
+                        or image.size != specification.requested_output_size
+                        or image.mode not in _MODES
+                        or (mode is not None and image.mode != mode)
+                    ):
+                        raise ValueError("invalid or inconsistent prepared stage image")
+                    mode = image.mode
                     path = variant_directory / f"stage-{index}.png"
                     with path.open("xb") as stream:
                         image.save(stream, format="PNG")
@@ -670,11 +747,36 @@ class PreparedImageArtifactStore:
                         os.fsync(stream.fileno())
                     metadata_digests.append(hashlib.sha256(metadata_bytes).hexdigest())
                     metadata_paths.append(payload / variant_directory_name / metadata_path.name)
+                    count += 1
+
+                if produce is None:
+                    for image, metadata_document in zip(
+                        images_by_specification[specification], metadata_by_specification[specification], strict=True
+                    ):
+                        write_stage(image, metadata_document)
+                else:
+
+                    def persist_stage(image: Image.Image, document: dict[str, object]) -> None:
+                        try:
+                            write_stage(image, document)
+                        except (OSError, ValueError) as error:
+                            raise ArtifactWriteError(
+                                f"cannot store prepared images at {directory}: {error}; prior manifest unchanged"
+                            ) from error
+
+                    try:
+                        produce(persist_stage)
+                    except ArtifactWriteError:
+                        raise
+                    except BaseException as error:
+                        raise _ProducerFailure from error
+                if count != len(expected_stages):
+                    raise ValueError("prepared images do not match the complete reveal-stage sequence")
                 variant_metadata.append(
                     {
                         "aspect_ratio": specification.aspect_ratio,
                         "requested_output_size": list(specification.requested_output_size),
-                        "mode": images[0].mode,
+                        "mode": mode,
                         "stages": [
                             {
                                 "visibility": visibility,
@@ -689,8 +791,8 @@ class PreparedImageArtifactStore:
                 )
                 stored_variants[specification] = PreparedImageArtifactVariant(
                     specification,
-                    images[0].mode,
-                    tuple(payload / variant_directory_name / f"stage-{i}.png" for i in range(len(images))),
+                    mode,
+                    tuple(payload / variant_directory_name / f"stage-{i}.png" for i in range(count)),
                     tuple(metadata_paths),
                     tuple(digests),
                     tuple(metadata_digests),
@@ -724,6 +826,8 @@ class PreparedImageArtifactStore:
                 _sync_directory(payload / _variant_directory_name(specification))
             _sync_directory(payload)
             _sync_directory(directory)
+        except _ProducerFailure as error:
+            raise error.__cause__ from None
         except (OSError, ValueError) as error:
             status = (
                 "complete set published; directory durability unconfirmed; reload before retry"
@@ -733,6 +837,9 @@ class PreparedImageArtifactStore:
             raise ArtifactWriteError(
                 f"cannot store prepared images at {directory}: {error}; {status}", published=published
             ) from error
+        finally:
+            if temporary_created and temporary.is_dir() and not _is_link(temporary):
+                shutil.rmtree(temporary, ignore_errors=True)
         group_variants = {
             _variant_key(specification, presentation, qr_declaration): variant
             for specification, variant in stored_variants.items()
