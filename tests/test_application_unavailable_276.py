@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from threading import Event
@@ -739,15 +740,19 @@ def test_startup_rejected_reveal_request_presents_committed_stage(workspace: Wor
     checkpoint_before = checkpoint.read_bytes()
     loaded_stages = []
     load_variants = application._load_stage_variants
+    evaluate = application.evaluate_scheduling
 
-    def reject_progress(store, revision, stage):
-        raise ValueError(f"stage {stage} is invalid")
+    def invalid_decision(current_time, configuration, state):
+        decision = evaluate(current_time, configuration, state)
+        if state is not None and decision.required_reveal_stage is not None:
+            return replace(decision, required_reveal_stage=len(state.snapshot.resolved_reveal_stages))
+        return decision
 
     def record_stage(artifacts, keys, stage):
         loaded_stages.append(stage)
         return load_variants(artifacts, keys, stage)
 
-    monkeypatch.setattr(application.PersistentStateStore, "advance_reveal_progress", reject_progress)
+    monkeypatch.setattr(application, "evaluate_scheduling", invalid_decision)
     monkeypatch.setattr(application, "_load_stage_variants", record_stage)
     result, display = workspace.run(at(10, 13))
 

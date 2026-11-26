@@ -80,6 +80,13 @@ def test_initial_invalidation_failure_prevents_state_commit(workspace, monkeypat
 def test_failed_content_checkpoint_write_does_not_repeat_selection(workspace, monkeypatch, caplog, published) -> None:
     original = CheckpointStore.initialize
     attempts = 0
+    selections = 0
+    original_select = application._select_snapshot
+
+    def select(*args):
+        nonlocal selections
+        selections += 1
+        return original_select(*args)
 
     def fail(self, state, qr):
         nonlocal attempts
@@ -89,11 +96,13 @@ def test_failed_content_checkpoint_write_does_not_repeat_selection(workspace, mo
         raise CheckpointError("disk full", published=published)
 
     monkeypatch.setattr(CheckpointStore, "initialize", fail)
+    monkeypatch.setattr(application, "_select_snapshot", select)
     result, display = workspace.run(at(10, 7))
     committed = workspace.load()
     assert committed is not None and committed.revision == 1
     assert result.state == committed
     assert attempts == 1
+    assert selections == 1
     assert len(workspace.history_records()) == 1
     assert "cannot persist content checkpoint" in caplog.text
     qr = _checkpoint(workspace)["content"]["qr"]

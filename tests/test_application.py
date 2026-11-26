@@ -2462,7 +2462,9 @@ def test_continuous_preparation_failure_after_daily_commit_does_not_reselect(wor
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
     clock = RuntimeClock(at(10, 7), [at(11, 6)], retries=[lambda: clock.move(at(11, 19))])
-    stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
+    stages, initialized, display = run_continuously(
+        workspace, clock, monkeypatch, await_publication_before_scheduling=True
+    )
     assert stages == [(1, 0), (2, 2)]
     assert attempts == [1, 2, 2]
     assert len(workspace.history_records()) == 2
@@ -2862,16 +2864,19 @@ def test_continuous_daily_display_failure_retains_commit_and_prepared_images(wor
     ordinary(workspace)
     initial_published = Event()
     daily_failed = Event()
+    daily_recovered = Event()
 
     class FailingDailyDisplay(FakeDisplay):
         def update(self, image: Image.Image) -> None:
-            if self.fail_update:
-                daily_failed.set()
-            else:
+            try:
                 super().update(image)
+            except DisplayBackendUpdateError:
+                daily_failed.set()
+                raise
+            if daily_failed.is_set():
+                daily_recovered.set()
+            else:
                 initial_published.set()
-                return
-            super().update(image)
 
     display = FailingDailyDisplay()
     prepared = []
@@ -2891,6 +2896,8 @@ def test_continuous_daily_display_failure_retains_commit_and_prepared_images(wor
         state = workspace.load()
         assert state.revision == len(workspace.history_records()) == 2
         assert len(png_files(workspace.artifacts)) == 3
+        display.fail_update = False
+        assert daily_recovered.wait(10)
         clock.set()
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
