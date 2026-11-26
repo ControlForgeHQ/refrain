@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from datetime import date, time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -794,6 +796,7 @@ def test_unreadable_content_file_is_reported(tmp_path: Path, monkeypatch: pytest
 def test_inaccessible_directory_during_traversal_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     write_entry(tmp_path / "available.yaml", entry_data(id="available"))
     blocked_directory = tmp_path / "blocked"
+    blocked_directory.mkdir()
 
     def walk_with_inaccessible_directory(root: Path, onerror=None):
         yield str(root), ["blocked"], ["available.yaml"]
@@ -808,6 +811,85 @@ def test_inaccessible_directory_during_traversal_is_reported(tmp_path: Path, mon
     assert str(blocked_directory) in diagnostics[0]
     assert ": $: cannot enumerate content directory:" in diagnostics[0]
     assert "permission denied" in diagnostics[0]
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+def test_discovery_excludes_redirected_directories(tmp_path: Path, kind: str) -> None:
+    if kind == "junction" and os.name != "nt":
+        pytest.skip("Windows junctions are unavailable on this platform")
+    library = tmp_path / "library"
+    write_entry(library / "nested" / "ordinary.yaml", entry_data(id="ordinary"))
+    outside = tmp_path / "outside"
+    write_entry(outside / "hidden.yaml", entry_data(id="hidden"))
+    link = library / "redirected"
+    if kind == "junction":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True)
+        if result.returncode:
+            pytest.skip(f"junction creation is unavailable: {result.stderr.decode(errors='replace')}")
+    else:
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"symlink creation is unavailable: {error}")
+
+    assert [entry.id for entry in load_content_library(library)] == ["ordinary"]
+
+
+def test_discovery_excludes_symlinked_content_files(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    write_entry(library / "ordinary.yaml", entry_data(id="ordinary"))
+    target = write_entry(tmp_path / "target.yaml", entry_data(id="linked"))
+    try:
+        (library / "linked.YAML").symlink_to(target)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    assert [entry.id for entry in load_content_library(library)] == ["ordinary"]
+
+
+def test_discovery_excludes_reparse_points_and_preserves_enumeration_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_entry(tmp_path / "ordinary.yaml", entry_data(id="ordinary"))
+    redirected_file = write_entry(tmp_path / "redirected.yaml", entry_data(id="redirected-file"))
+    redirected_dir = tmp_path / "redirected-dir"
+    write_entry(redirected_dir / "hidden.yaml", entry_data(id="redirected-dir"))
+    original_lstat = Path.lstat
+
+    def reparse_lstat(path: Path):
+        status = original_lstat(path)
+        if path in {redirected_file, redirected_dir}:
+            return SimpleNamespace(st_mode=status.st_mode, st_file_attributes=0x400)
+        return status
+
+    monkeypatch.setattr(Path, "lstat", reparse_lstat)
+    assert [entry.id for entry in load_content_library(tmp_path)] == ["ordinary"]
+
+    def failing_lstat(path: Path):
+        if path == redirected_dir:
+            raise PermissionError(13, "cannot inspect", str(path))
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    assert any("cannot enumerate content directory" in diagnostic for diagnostic in diagnostics_for(tmp_path))
+
+
+def test_uninspectable_content_file_is_excluded_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    write_entry(tmp_path / "ordinary.yaml", entry_data(id="ordinary"))
+    uninspectable = write_entry(tmp_path / "uninspectable.yaml", entry_data(id="uninspectable"))
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == uninspectable:
+            raise PermissionError(13, "cannot inspect", str(path))
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    assert [entry.id for entry in load_content_library(tmp_path)] == ["ordinary"]
+    assert "cannot read UTF-8 YAML file" in caplog.text
+    assert "cannot inspect" in caplog.text
 
 
 def test_directory_enumeration_exception_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

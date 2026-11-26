@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+import os
 import shutil
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -1138,6 +1142,218 @@ def test_asset_symlinks_are_not_followed_during_discovery(tmp_path: Path) -> Non
 
     assert "linked" not in config.backgrounds
     assert "linked-package" not in config.backgrounds
+
+
+def _write_discovery_package(directory: Path, category: str, identifier: str) -> Path:
+    if category == "fonts":
+        write_font_bundle(directory, identifier)
+        return directory / "font.yaml"
+    _write_png(directory / "image.png")
+    name = "background.yaml" if category == "backgrounds" else "decoration.yaml"
+    return _write_manifest(directory, name, {"format": 1, "id": identifier, "layers": [{"image": "image.png"}]})
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+@pytest.mark.parametrize("blocked_part", ["category", "directory", "manifest"])
+def test_resource_inspection_failure_is_reported_and_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, category: str, blocked_part: str
+) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / category
+    _write_discovery_package(root / "ordinary", category, "ordinary-resource")
+    blocked_dir = root / "blocked"
+    manifest = _write_discovery_package(blocked_dir, category, "blocked-resource")
+    _write_discovery_package(blocked_dir / "nested", category, "nested-resource")
+    _write_png(tmp_path / "assets" / "backgrounds" / "independent.png")
+    blocked = {"category": root, "directory": blocked_dir, "manifest": manifest}[blocked_part]
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise PermissionError("inspection denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    with caplog.at_level(logging.WARNING):
+        config = load_application_config(config_path)
+    registry = getattr(config, category)
+    assert "blocked-resource" not in registry
+    assert "nested-resource" not in registry
+    if blocked_part != "category":
+        assert "ordinary-resource" in registry
+    if category == "backgrounds" and blocked_part == "category":
+        assert "test-font" in config.fonts
+    else:
+        assert "independent" in config.backgrounds
+    assert any(
+        record.levelno == logging.WARNING
+        and str(blocked) in record.message
+        and "inspection denied" in record.message
+        and "excluded" in record.message
+        for record in caplog.records
+    )
+    if category == "backgrounds" and blocked_part == "manifest":
+        assert "image" not in registry
+
+
+def test_standalone_background_inspection_failure_is_reported(tmp_path: Path, monkeypatch, caplog) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / "backgrounds"
+    _write_png(root / "ordinary.png")
+    blocked = _write_png(root / "blocked.png")
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise OSError("inspection failed")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    config = load_application_config(config_path)
+    assert "ordinary" in config.backgrounds
+    assert "blocked" not in config.backgrounds
+    assert str(blocked) in caplog.text
+    assert "inspection failed" in caplog.text
+    assert "excluded" in caplog.text
+
+
+def test_absent_asset_paths_do_not_produce_inspection_warnings(tmp_path: Path, caplog) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    _write_png(tmp_path / "assets" / "backgrounds" / "ordinary.png")
+    with caplog.at_level(logging.WARNING):
+        config = load_application_config(config_path)
+    assert "ordinary" in config.backgrounds
+    assert "cannot inspect asset for filesystem redirection" not in caplog.text
+
+
+def test_asset_parent_inspection_failure_is_reported(tmp_path: Path, monkeypatch, caplog) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    blocked = tmp_path / "assets"
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise PermissionError("inspection denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    config = load_application_config(config_path)
+    assert "test-font" not in config.fonts
+    assert "alegreya" in config.fonts
+    for category in ("fonts", "backgrounds", "decorations"):
+        assert f"assets.{category}.{blocked}" in caplog.text
+    assert "inspection denied" in caplog.text
+    assert "excluded" in caplog.text
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+def test_resource_discovery_excludes_redirected_directories(tmp_path: Path, caplog, category: str, kind: str) -> None:
+    if kind == "junction" and os.name != "nt":
+        pytest.skip("Windows junctions are unavailable on this platform")
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / category
+    _write_discovery_package(root / "ordinary", category, "ordinary-resource")
+    outside = tmp_path / "outside" / category
+    _write_discovery_package(outside, category, "redirected-resource")
+    link = root / "redirected"
+    if kind == "junction":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True)
+        if result.returncode:
+            pytest.skip(f"junction creation is unavailable: {result.stderr.decode(errors='replace')}")
+    else:
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"symlink creation is unavailable: {error}")
+
+    registry = getattr(load_application_config(config_path), category)
+    assert "ordinary-resource" in registry
+    assert "redirected-resource" not in registry
+    assert "cannot inspect asset for filesystem redirection" not in caplog.text
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+def test_resource_discovery_excludes_redirected_manifests(tmp_path: Path, category: str) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / category
+    _write_discovery_package(root / "ordinary", category, "ordinary-resource")
+    manifest = _write_discovery_package(root / "redirected", category, "redirected-resource")
+    _write_discovery_package(root / "redirected" / "nested", category, "nested-resource")
+    target = tmp_path / f"{category}-manifest.yaml"
+    manifest.replace(target)
+    try:
+        manifest.symlink_to(target)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    registry = getattr(load_application_config(config_path), category)
+    assert "ordinary-resource" in registry
+    assert "redirected-resource" not in registry
+    assert "nested-resource" not in registry
+    if category == "backgrounds":
+        assert "image" not in registry
+
+
+def test_resource_discovery_excludes_reparse_points(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    paths = []
+    for category in ("fonts", "backgrounds", "decorations"):
+        root = tmp_path / "assets" / category
+        _write_discovery_package(root / "ordinary", category, f"ordinary-{category}")
+        paths.append(_write_discovery_package(root / "manifest", category, f"manifest-{category}"))
+        _write_discovery_package(root / "manifest" / "nested", category, f"nested-{category}")
+        directory = root / "directory"
+        _write_discovery_package(directory, category, f"directory-{category}")
+        paths.append(directory)
+    paths.append(_write_png(tmp_path / "assets" / "backgrounds" / "redirected.png"))
+    _write_png(tmp_path / "assets" / "backgrounds" / "ordinary.png")
+    original_lstat = Path.lstat
+
+    def reparse_lstat(path: Path):
+        status = original_lstat(path)
+        if path in paths:
+            return SimpleNamespace(st_mode=status.st_mode, st_file_attributes=0x400)
+        return status
+
+    monkeypatch.setattr(Path, "lstat", reparse_lstat)
+    config = load_application_config(config_path)
+    for category in ("fonts", "backgrounds", "decorations"):
+        registry = getattr(config, category)
+        assert f"ordinary-{category}" in registry
+        assert f"manifest-{category}" not in registry
+        assert f"directory-{category}" not in registry
+        assert f"nested-{category}" not in registry
+    assert "ordinary" in config.backgrounds
+    assert "redirected" not in config.backgrounds
+    assert "image" not in config.backgrounds
+
+
+def test_redirected_assets_root_is_not_traversed(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    _write_png(outside / "backgrounds" / "redirected.png")
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(_config_data()), encoding="utf-8")
+    try:
+        (tmp_path / "assets").symlink_to(outside, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    config = load_application_config(tmp_path / "config.yaml")
+    assert "redirected" not in config.backgrounds
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+def test_resource_packages_remain_discovery_boundaries(tmp_path: Path, category: str) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / category
+    _write_discovery_package(root / "outer", category, "outer-resource")
+    _write_discovery_package(root / "outer" / "nested", category, "nested-resource")
+
+    registry = getattr(load_application_config(config_path), category)
+    assert "outer-resource" in registry
+    assert "nested-resource" not in registry
+    if category == "backgrounds":
+        assert "image" not in registry
 
 
 @pytest.mark.parametrize(

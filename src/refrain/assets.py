@@ -14,6 +14,7 @@ from typing import TypeVar
 import yaml
 from PIL import Image, ImageFont
 
+from ._filesystem import is_redirected
 from ._yaml import load_yaml
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z", re.ASCII)
@@ -77,8 +78,20 @@ def _parse_palette_preference(value: object, field: str, report: Report) -> tupl
     return tuple(result) or None
 
 
-def _is_link(path: AssetPath) -> bool:
-    return isinstance(path, Path) and path.is_symlink()
+def _is_link(path: AssetPath, report: Report, category: str) -> bool:
+    if not isinstance(path, Path):
+        return False
+    try:
+        return is_redirected(path)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        report(
+            f"assets.{category}.{path}",
+            f"cannot inspect asset for filesystem redirection; it is excluded: {error}",
+            logging.WARNING,
+        )
+        return True
 
 
 def _children(path: AssetPath, report: Report | None = None, category: str = "assets") -> list[AssetPath]:
@@ -101,19 +114,21 @@ def _walk_packages(
     root: AssetPath, manifest: str, report: Report, category: str
 ) -> Iterable[tuple[AssetPath, AssetPath]]:
     def visit(directory: AssetPath):
-        if _is_link(directory):
+        if _is_link(directory, report, category):
             return
         manifest_path = directory.joinpath(manifest)
-        if not _is_link(manifest_path) and _exists(manifest_path):
+        if _is_link(manifest_path, report, category):
+            return
+        if _exists(manifest_path):
             yield directory, manifest_path
             return
         for child in _children(directory, report, category):
-            if _is_link(child):
+            if _is_link(child, report, category):
                 continue
             if child.is_dir():
                 yield from visit(child)
 
-    if not _is_link(root) and root.is_dir():
+    if not _is_link(root, report, category) and root.is_dir():
         yield from visit(root)
 
 
@@ -289,10 +304,12 @@ def discover_backgrounds(
 
     def scan(root: AssetPath, is_bundled: bool) -> None:
         def visit(directory: AssetPath) -> None:
-            if _is_link(directory):
+            if _is_link(directory, report, "backgrounds"):
                 return
             manifest = directory.joinpath("background.yaml")
-            if not _is_link(manifest) and _exists(manifest):
+            if _is_link(manifest, report, "backgrounds"):
+                return
+            if _exists(manifest):
                 field = str(manifest)
                 try:
                     data = _read_manifest(manifest)
@@ -404,7 +421,7 @@ def discover_backgrounds(
                 _validate_candidate(resource, identifier, is_bundled, candidates, field)
                 return
             for child in _children(directory, report, "backgrounds"):
-                if _is_link(child):
+                if _is_link(child, report, "backgrounds"):
                     continue
                 if child.is_dir():
                     visit(child)
@@ -423,11 +440,12 @@ def discover_backgrounds(
                         "background",
                     )
 
-        if root.is_dir() and not _is_link(root):
+        if not _is_link(root, report, "backgrounds") and root.is_dir():
             visit(root)
 
     scan(bundled_root, True)
-    scan(custom_root, False)
+    if not _is_link(custom_root.parent, report, "backgrounds"):
+        scan(custom_root, False)
     return _register_candidates(candidates, bundled_claims, "backgrounds", report)
 
 
@@ -598,6 +616,8 @@ def discover_decorations(
     candidates: list[tuple[str, DecorationResource, bool, str]] = []
     bundled_claims: dict[str, list[str]] = defaultdict(list)
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
+        if not is_bundled and _is_link(custom_root.parent, report, "decorations"):
+            continue
         for package, manifest in _walk_packages(root, "decoration.yaml", report, "decorations"):
             field = str(manifest)
             try:
@@ -828,6 +848,8 @@ def discover_fonts(
     candidates: list[tuple[str, FontResource, bool, str]] = []
     bundled_claims: dict[str, list[str]] = defaultdict(list)
     for root, is_bundled in ((bundled_root, True), (custom_root, False)):
+        if not is_bundled and _is_link(custom_root.parent, report, "fonts"):
+            continue
         for package, manifest in _walk_packages(root, "font.yaml", report, "fonts"):
             field = str(manifest)
             try:

@@ -16,6 +16,7 @@ from typing import Optional, Union
 
 import yaml
 
+from ._filesystem import is_redirected
 from ._yaml import load_yaml, yaml_error_location
 
 _ENTRY_FIELDS = {
@@ -710,16 +711,31 @@ def _load_content_library(
 
     discovery_diagnostics: list[ContentDiagnostic] = []
     files: list[Path] = []
+    inspection_errors: dict[Path, OSError] = {}
 
     def report_walk_error(error: OSError) -> None:
         affected_path = Path(error.filename) if error.filename else directory
         _diagnose(discovery_diagnostics, affected_path, "$", f"cannot enumerate content directory: {error}")
 
     try:
-        for root, _, filenames in os.walk(directory, onerror=report_walk_error):
-            files.extend(
-                Path(root) / filename for filename in filenames if Path(filename).suffix.lower() in {".yaml", ".yml"}
-            )
+        for root, directories, filenames in os.walk(directory, onerror=report_walk_error):
+            for name in directories[:]:
+                try:
+                    if is_redirected(Path(root) / name):
+                        directories.remove(name)
+                except OSError as error:
+                    directories.remove(name)
+                    report_walk_error(error)
+            for filename in filenames:
+                if Path(filename).suffix.lower() not in {".yaml", ".yml"}:
+                    continue
+                file = Path(root) / filename
+                try:
+                    if is_redirected(file):
+                        continue
+                except OSError as error:
+                    inspection_errors[file] = error
+                files.append(file)
     except OSError as error:
         report_walk_error(error)
     if discovery_diagnostics:
@@ -741,6 +757,8 @@ def _load_content_library(
     for file in sorted(files):
         file_diagnostics: list[ContentDiagnostic] = []
         try:
+            if file in inspection_errors:
+                raise inspection_errors[file]
             contents = file.read_text(encoding="utf-8")
             data = load_yaml(contents)
         except (OSError, UnicodeError) as error:
