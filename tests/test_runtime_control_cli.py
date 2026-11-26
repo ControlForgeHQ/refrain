@@ -52,7 +52,8 @@ def test_refresh_is_a_lock_free_runtime_control_client(
     ("status", "destinations", "diagnostic"),
     [
         (PublicationStatus.BUSY, {}, "busy"),
-        (PublicationStatus.STALE_PRESENTATION, {}, "no current scheduled presentation"),
+        (PublicationStatus.STALE_PRESENTATION, {}, "unavailable or changed during refresh"),
+        (PublicationStatus.NO_TARGET, {}, "no destinations are participating"),
         (PublicationStatus.FAILED, {"screen:one": (False, "device timed out")}, "device timed out"),
         (PublicationStatus.STOPPING, {}, "stopping"),
     ],

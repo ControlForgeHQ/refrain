@@ -160,13 +160,60 @@ def test_key_map_is_copied_and_changed_key_cannot_acknowledge_old_work():
         changed_images[changed["external"]] = Image.new("RGB", SPEC.requested_output_size, (3, 0, 0))
         coordinator.publish((1, 0), changed_images, destination_keys=changed)
         stale = coordinator.force_scheduled_publication((1, 0), _images(), destination_keys=KEYS)
-        assert stale.result.status is PublicationStatus.INVALID
+        assert stale.result.status is PublicationStatus.STALE_PRESENTATION
         release.set()
         assert coordinator.wait_for_publication((1, 0), 5)
         assert seen == [("external", 1), ("external", 3), ("internal", 1), ("different", 2)]
         assert coordinator.acknowledgements == {output.identifier: (1, 0) for output in OUTPUTS}
     finally:
         release.set()
+        coordinator.close()
+
+
+@pytest.mark.parametrize("change", ["output", "presentation"])
+def test_refresh_rechecks_current_destination_requirements(change):
+    seen = []
+
+    class Backend:
+        def publish(self, destination, image):
+            seen.append(destination.identifier)
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator((CONFIG,), lambda _: Backend(), retry=False)
+    try:
+        coordinator.publish((1, 0), _images(), destination_keys=KEYS)
+        assert coordinator.wait_for_publication((1, 0), 5)
+        seen.clear()
+        with coordinator._condition:
+            state = coordinator._states["external"]
+            if change == "output":
+                state.destination = replace(
+                    state.destination, output_specification=ResolvedOutputSpecification("4:3", (16, 12))
+                )
+            else:
+                state.destination = replace(state.destination, presentation=DestinationPresentation(background="none"))
+        images = _images()
+        result = coordinator.force_scheduled_publication((1, 0), images, destination_keys=KEYS).result
+        assert result.status is PublicationStatus.STALE_PRESENTATION
+        assert seen == []
+        for image in images.values():
+            with pytest.raises(ValueError):
+                image.getpixel((0, 0))
+    finally:
+        coordinator.close()
+
+
+def test_refresh_rejects_malformed_destination_keys_as_invalid():
+    coordinator = DisplayPublicationCoordinator((CONFIG,), lambda _: None)
+    try:
+        with coordinator._condition:
+            for state in coordinator._states.values():
+                state.desired_identity = (1, 0)
+        result = coordinator.force_scheduled_publication((1, 0), _images(), destination_keys={}).result
+        assert result.status is PublicationStatus.INVALID
+    finally:
         coordinator.close()
 
 

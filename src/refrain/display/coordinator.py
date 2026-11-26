@@ -68,6 +68,7 @@ class PublicationStatus(str, Enum):
     SUCCEEDED = "succeeded"
     BUSY = "busy"
     INVALID = "invalid"
+    NO_TARGET = "no-target"
     STALE_PRESENTATION = "stale-presentation"
     DESTINATION_NOT_FOUND = "destination-not-found"
     UNSUPPORTED = "unsupported"
@@ -481,22 +482,41 @@ class DisplayPublicationCoordinator:
             selected = tuple(key for key, state in self._states.items() if not state.withdrawn)
             if not selected:
                 self._close_images(images)
-                return self._rejected_operation(PublicationStatus.INVALID, selected)
+                return self._rejected_operation(PublicationStatus.NO_TARGET, selected)
             if any(self._states[key].desired_identity != identity for key in selected):
                 self._close_images(images)
-                return self._rejected_operation(PublicationStatus.INVALID, selected)
+                return self._rejected_operation(PublicationStatus.STALE_PRESENTATION, selected)
             if not isinstance(images, Mapping):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
-            try:
-                destination_keys = self._validated_destination_keys(destination_keys)
-            except ValueError:
+            if destination_keys is not None and (
+                not isinstance(destination_keys, Mapping)
+                or set(destination_keys) != set(self._states)
+                or any(
+                    not isinstance(key, (ResolvedOutputSpecification, PreparedImageVariantKey))
+                    for key in destination_keys.values()
+                )
+            ):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
             if any(
                 self._states[key].desired_key != self._destination_key(self._states[key].destination, destination_keys)
                 for key in selected
             ):
+                self._close_images(images)
+                return self._rejected_operation(PublicationStatus.STALE_PRESENTATION, selected)
+            if destination_keys is not None and any(
+                (prepared_key := destination_keys[key])
+                != self._states[key].destination.prepared_image_key_for_qr(
+                    prepared_key.qr_payload if isinstance(prepared_key, PreparedImageVariantKey) else None
+                )
+                for key in selected
+            ):
+                self._close_images(images)
+                return self._rejected_operation(PublicationStatus.STALE_PRESENTATION, selected)
+            try:
+                destination_keys = self._validated_destination_keys(destination_keys)
+            except ValueError:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.INVALID, selected)
             if any(

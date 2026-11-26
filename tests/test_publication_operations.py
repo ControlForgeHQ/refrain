@@ -1088,7 +1088,7 @@ def test_stale_forced_identity_is_rejected_without_backend_access(monkeypatch) -
 
         stale = coordinator.force_scheduled_publication((1, 0), stale_images)
 
-        assert stale.result.status is PublicationStatus.INVALID
+        assert stale.result.status is PublicationStatus.STALE_PRESENTATION
         assert coordinator.desired_identity == (2, 0)
         assert coordinator.acknowledgements == {"window": (2, 0)}
         assert publications == [7]
@@ -1109,8 +1109,31 @@ def test_forced_publication_without_current_scheduled_identity_is_rejected(monke
     closes = _track_image_closes(monkeypatch, images)
     try:
         forced = coordinator.force_scheduled_publication((1, 0), images)
-        assert forced.result.status is PublicationStatus.INVALID
+        assert forced.result.status is PublicationStatus.STALE_PRESENTATION
         assert factory_calls == []
+        assert closes[id(images[_WIDE])] == 1
+    finally:
+        coordinator.close()
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_refresh_with_no_participating_destinations_is_no_target(monkeypatch, configured) -> None:
+    calls = []
+
+    def factory(_configuration):
+        calls.append(True)
+        raise AssertionError("refresh must not initialize a backend")
+
+    configurations = (_configuration("window"),) if configured else ()
+    coordinator = DisplayPublicationCoordinator(configurations, factory)
+    images = _images(_WIDE)
+    closes = _track_image_closes(monkeypatch, images)
+    try:
+        if configured:
+            assert coordinator.withdraw_destination("window")
+        result = coordinator.force_scheduled_publication((1, 0), images).result
+        assert result.status is PublicationStatus.NO_TARGET
+        assert calls == []
         assert closes[id(images[_WIDE])] == 1
     finally:
         coordinator.close()

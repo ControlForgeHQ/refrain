@@ -280,7 +280,7 @@ def test_slow_refresh_preparation_does_not_block_scheduled_reveal(tmp_path, monk
         release.set()
         client_thread.join(5)
         assert not client_thread.is_alive()
-        assert results[0].status.value == "invalid"
+        assert results[0].status.value == "stale-presentation"
     finally:
         release.set()
         shutdown.set()

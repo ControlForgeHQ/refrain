@@ -168,6 +168,7 @@ def test_refresh_rejects_checkpoint_changed_during_preparation(workspace, monkey
 
     class Coordinator:
         desired_identity = (1, 0)
+        has_participating_destinations = True
 
     def admit(*_args):
         pytest.fail("refresh must reject checkpoint changes during preparation")
@@ -183,7 +184,7 @@ def test_refresh_rejects_checkpoint_changed_during_preparation(workspace, monkey
         Lock(),
         admit,
     )
-    assert result.result.status is PublicationStatus.INVALID
+    assert result.result.status is PublicationStatus.STALE_PRESENTATION
 
 
 def test_continuous_checkpoint_loss_replaces_same_stage_in_memory_artifacts(workspace, monkeypatch) -> None:
