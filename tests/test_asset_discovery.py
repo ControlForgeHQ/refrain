@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -1153,8 +1154,101 @@ def _write_discovery_package(directory: Path, category: str, identifier: str) ->
 
 
 @pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
+@pytest.mark.parametrize("blocked_part", ["category", "directory", "manifest"])
+def test_resource_inspection_failure_is_reported_and_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, category: str, blocked_part: str
+) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / category
+    _write_discovery_package(root / "ordinary", category, "ordinary-resource")
+    blocked_dir = root / "blocked"
+    manifest = _write_discovery_package(blocked_dir, category, "blocked-resource")
+    _write_discovery_package(blocked_dir / "nested", category, "nested-resource")
+    _write_png(tmp_path / "assets" / "backgrounds" / "independent.png")
+    blocked = {"category": root, "directory": blocked_dir, "manifest": manifest}[blocked_part]
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise PermissionError("inspection denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    with caplog.at_level(logging.WARNING):
+        config = load_application_config(config_path)
+    registry = getattr(config, category)
+    assert "blocked-resource" not in registry
+    assert "nested-resource" not in registry
+    if blocked_part != "category":
+        assert "ordinary-resource" in registry
+    if category == "backgrounds" and blocked_part == "category":
+        assert "test-font" in config.fonts
+    else:
+        assert "independent" in config.backgrounds
+    assert any(
+        record.levelno == logging.WARNING
+        and str(blocked) in record.message
+        and "inspection denied" in record.message
+        and "excluded" in record.message
+        for record in caplog.records
+    )
+    if category == "backgrounds" and blocked_part == "manifest":
+        assert "image" not in registry
+
+
+def test_standalone_background_inspection_failure_is_reported(tmp_path: Path, monkeypatch, caplog) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    root = tmp_path / "assets" / "backgrounds"
+    _write_png(root / "ordinary.png")
+    blocked = _write_png(root / "blocked.png")
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise OSError("inspection failed")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    config = load_application_config(config_path)
+    assert "ordinary" in config.backgrounds
+    assert "blocked" not in config.backgrounds
+    assert str(blocked) in caplog.text
+    assert "inspection failed" in caplog.text
+    assert "excluded" in caplog.text
+
+
+def test_absent_asset_paths_do_not_produce_inspection_warnings(tmp_path: Path, caplog) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    _write_png(tmp_path / "assets" / "backgrounds" / "ordinary.png")
+    with caplog.at_level(logging.WARNING):
+        config = load_application_config(config_path)
+    assert "ordinary" in config.backgrounds
+    assert "cannot inspect asset for filesystem redirection" not in caplog.text
+
+
+def test_asset_parent_inspection_failure_is_reported(tmp_path: Path, monkeypatch, caplog) -> None:
+    config_path = _write_config(tmp_path / "config.yaml")
+    blocked = tmp_path / "assets"
+    original_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise PermissionError("inspection denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+    config = load_application_config(config_path)
+    assert "test-font" not in config.fonts
+    assert "alegreya" in config.fonts
+    for category in ("fonts", "backgrounds", "decorations"):
+        assert f"assets.{category}.{blocked}" in caplog.text
+    assert "inspection denied" in caplog.text
+    assert "excluded" in caplog.text
+
+
+@pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
 @pytest.mark.parametrize("kind", ["symlink", "junction"])
-def test_resource_discovery_excludes_redirected_directories(tmp_path: Path, category: str, kind: str) -> None:
+def test_resource_discovery_excludes_redirected_directories(tmp_path: Path, caplog, category: str, kind: str) -> None:
     if kind == "junction" and os.name != "nt":
         pytest.skip("Windows junctions are unavailable on this platform")
     config_path = _write_config(tmp_path / "config.yaml")
@@ -1176,6 +1270,7 @@ def test_resource_discovery_excludes_redirected_directories(tmp_path: Path, cate
     registry = getattr(load_application_config(config_path), category)
     assert "ordinary-resource" in registry
     assert "redirected-resource" not in registry
+    assert "cannot inspect asset for filesystem redirection" not in caplog.text
 
 
 @pytest.mark.parametrize("category", ["fonts", "backgrounds", "decorations"])
