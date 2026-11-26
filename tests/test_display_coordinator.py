@@ -653,6 +653,9 @@ def test_blocked_workers_share_one_shutdown_deadline(monkeypatch) -> None:
         result = operation.wait(1)
         assert result.status is PublicationStatus.UNCONFIRMED
         assert all(success is None for success, _ in result.destinations.values())
+        start = time.monotonic()
+        assert coordinator.close() == workers
+        assert time.monotonic() - start < 0.15
         release.set()
         for worker in workers:
             worker.join(2)

@@ -1018,6 +1018,9 @@ class DisplayPublicationCoordinator:
         if deadline is None:
             deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
         self.begin_draining(deadline=deadline)
+        with self._condition:
+            assert self._shutdown_deadline is not None
+            deadline = self._shutdown_deadline
         for thread in self._threads:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
