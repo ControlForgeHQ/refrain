@@ -546,6 +546,123 @@ def test_shutdown_wait_is_bounded_and_keeps_active_image_alive(monkeypatch, capl
     assert backend_closed.wait(1)
 
 
+def test_shutdown_reports_partial_outcomes_and_cleans_independent_backends(monkeypatch) -> None:
+    monkeypatch.setattr(coordinator_module, "_SHUTDOWN_TIMEOUT", 0.1)
+    spec = ResolvedOutputSpecification("16:9", (8, 4))
+    entered, release, healthy_closed, failed_closed = Event(), Event(), Event(), Event()
+    published = []
+    configs = (
+        DisplayBackendConfiguration(
+            "publish",
+            outputs=tuple(DisplayOutputConfiguration(key, spec, audience="internal") for key in ("blocked", "queued")),
+        ),
+        DisplayBackendConfiguration(
+            "window", outputs=(DisplayOutputConfiguration("healthy", spec, audience="internal"),)
+        ),
+        DisplayBackendConfiguration(
+            "waveshare-13in3-e", outputs=(DisplayOutputConfiguration("failed", spec, audience="internal"),)
+        ),
+    )
+
+    class Backend:
+        def __init__(self, kind):
+            self.kind = kind
+
+        def publish(self, destination, image):
+            if destination.identifier == "blocked":
+                entered.set()
+                assert release.wait(5)
+                assert image.getpixel((0, 0)) == (7, 8, 9)
+            if destination.identifier == "failed":
+                raise DisplayBackendUpdateError("known failure", recoverable=False)
+            published.append(destination.identifier)
+
+        def close(self):
+            if self.kind == "window":
+                healthy_closed.set()
+                raise RuntimeError("cleanup failed")
+            if self.kind == "waveshare-13in3-e":
+                failed_closed.set()
+
+    coordinator = DisplayPublicationCoordinator(configs, lambda config: Backend(config.type))
+    image = Image.new("RGB", (8, 4), (7, 8, 9))
+    operation = coordinator.publish_transient(
+        "@all", {key: spec for key in ("blocked", "queued", "healthy", "failed")}, {spec: image}
+    )
+    try:
+        assert entered.wait(2)
+        assert wait_until(lambda: operation.result.destinations["healthy"][0] is True)
+        assert wait_until(lambda: operation.result.destinations["failed"][0] is False)
+        start = time.monotonic()
+        pending = coordinator.close()
+        assert time.monotonic() - start < 1
+        assert healthy_closed.is_set() and failed_closed.is_set()
+        result = operation.wait(1)
+        assert result.status is PublicationStatus.FAILED
+        assert result.destinations["healthy"] == (True, None)
+        assert result.destinations["failed"] == (False, "known failure")
+        assert result.destinations["blocked"][0] is None
+        assert result.destinations["queued"][0] is None
+        assert image.getpixel((0, 0)) == (7, 8, 9)
+        release.set()
+        for worker in pending:
+            worker.join(2)
+            assert not worker.is_alive()
+        operation.wait_for_release()
+        assert operation.result == result
+        assert "queued" not in published
+        with pytest.raises(ValueError):
+            image.getpixel((0, 0))
+    finally:
+        release.set()
+        coordinator.close()
+
+
+def test_blocked_workers_share_one_shutdown_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(coordinator_module, "_SHUTDOWN_TIMEOUT", 0.3)
+    spec = ResolvedOutputSpecification("16:9", (8, 4))
+    entered = {"window": Event(), "publish": Event()}
+    release = Event()
+    configs = tuple(
+        DisplayBackendConfiguration(kind, outputs=(DisplayOutputConfiguration(kind, spec, audience="internal"),))
+        for kind in entered
+    )
+
+    class Backend:
+        def __init__(self, kind):
+            self.kind = kind
+
+        def publish(self, destination, image):
+            entered[self.kind].set()
+            assert release.wait(5)
+            assert image.getpixel((0, 0)) == (3, 0, 0)
+
+        def close(self):
+            pass
+
+    coordinator = DisplayPublicationCoordinator(configs, lambda config: Backend(config.type))
+    operation = coordinator.publish_transient(
+        "@all", {key: spec for key in entered}, {spec: Image.new("RGB", (8, 4), (3, 0, 0))}
+    )
+    try:
+        assert all(event.wait(2) for event in entered.values())
+        start = time.monotonic()
+        workers = coordinator.close()
+        assert time.monotonic() - start < 0.55
+        assert len(workers) == 2
+        result = operation.wait(1)
+        assert result.status is PublicationStatus.UNCONFIRMED
+        assert all(success is None for success, _ in result.destinations.values())
+        release.set()
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+        assert operation.result == result
+    finally:
+        release.set()
+        coordinator.close()
+
+
 def test_drain_finishes_admitted_destinations_and_rejects_new_work() -> None:
     specification = ResolvedOutputSpecification("16:9", (8, 4))
     outputs = tuple(DisplayOutputConfiguration(name, specification, audience="internal") for name in ("one", "two"))

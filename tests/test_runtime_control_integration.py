@@ -400,7 +400,7 @@ def test_real_shutdown_defers_coordinator_until_admitted_refresh_completes(resid
         for worker in workers:
             worker.join(5)
             assert not worker.is_alive()
-        assert published == ["one", "two", "one", "two"]
+        assert published == ["one", "two", "one"]
     finally:
         release.set()
         connection.close()

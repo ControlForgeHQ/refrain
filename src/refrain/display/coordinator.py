@@ -94,8 +94,10 @@ class PublicationOperation:
     def __init__(self, result: PublicationResult, *, done: bool = False) -> None:
         self._result = result
         self._done = Event()
+        self._released = Event()
         if done:
             self._done.set()
+            self._released.set()
 
     @property
     def result(self) -> PublicationResult:
@@ -107,11 +109,17 @@ class PublicationOperation:
         return self._result
 
     def _complete(self, result: PublicationResult) -> None:
-        self._result = result
-        self._done.set()
+        if not self._done.is_set():
+            self._result = result
+            self._done.set()
 
     def _update(self, result: PublicationResult) -> None:
-        self._result = result
+        if not self._done.is_set():
+            self._result = result
+
+    def wait_for_release(self) -> None:
+        """Wait until workers no longer require this operation's resources."""
+        self._released.wait()
 
 
 @dataclass
@@ -803,6 +811,7 @@ class DisplayPublicationCoordinator:
         except Exception:
             _LOGGER.exception("Failed to release one-shot publication images")
         operation.operation._complete(PublicationResult(status, destinations))
+        operation.operation._released.set()
         self._condition.notify_all()
 
     def _record_one_shot_result(
@@ -831,6 +840,7 @@ class DisplayPublicationCoordinator:
                     state.hold_date = operation.hold_date
             if (
                 operation.forced
+                and not operation.operation._done.is_set()
                 and state.desired_identity == operation.identity
                 and state.desired_key == self._destination_key(state.destination, operation.destination_keys)
             ):
@@ -997,8 +1007,16 @@ class DisplayPublicationCoordinator:
             while any(state.one_shot is not None for state in self._states.values()):
                 self._condition.wait()
 
-    def close(self) -> tuple[Thread, ...]:
+    def close(self, *, deadline: float | None = None) -> tuple[Thread, ...]:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
+        if deadline is None:
+            deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
+        self.begin_draining()
+        for thread in self._threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
         with self._condition:
             self._stopping = True
             operations: set[int] = set()
@@ -1012,22 +1030,26 @@ class DisplayPublicationCoordinator:
                 if operation is None or id(operation) in operations:
                     continue
                 operations.add(id(operation))
+                outcomes = {
+                    key: operation.outcomes.get(key, (None, "shutdown deadline expired"))
+                    for key in operation.destinations
+                }
+                status = (
+                    PublicationStatus.FAILED
+                    if any(success is False for success, _ in outcomes.values())
+                    else PublicationStatus.UNCONFIRMED
+                )
+                operation.operation._complete(PublicationResult(status, MappingProxyType(outcomes)))
                 for key in operation.destinations:
                     destination_state = self._states[key]
                     if key not in operation.outcomes and not destination_state.one_shot_active:
                         self._record_one_shot_result(
                             destination_state,
                             operation,
-                            success=False,
-                            error="coordinator is stopping",
+                            success=None,
+                            error="shutdown deadline expired",
                         )
             self._condition.notify_all()
-        deadline = time.monotonic() + _SHUTDOWN_TIMEOUT
-        for thread in self._threads:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            thread.join(remaining)
         active_threads = tuple(thread for thread in self._threads if thread.is_alive())
         active_backend_types = {
             configuration.type
@@ -1095,6 +1117,8 @@ class DisplayPublicationCoordinator:
                 with self._condition:
                     while True:
                         if self._stopping:
+                            return
+                        if self._draining and not any(state.one_shot is not None for state in states):
                             return
                         now = time.monotonic()
                         one_shot_ready = next(

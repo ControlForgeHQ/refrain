@@ -1262,7 +1262,7 @@ def test_shutdown_retains_active_one_shot_image_until_backend_returns(monkeypatc
     finally:
         release.set()
         assert backend_closed.wait(1)
-    assert operation.wait(1).status is PublicationStatus.SUCCEEDED
+    assert operation.wait(1).status is PublicationStatus.UNCONFIRMED
 
 
 def test_shutdown_completes_active_one_shot_after_recoverable_failure(monkeypatch) -> None:
@@ -1284,7 +1284,44 @@ def test_shutdown_completes_active_one_shot_after_recoverable_failure(monkeypatc
         assert entered.wait(1)
         assert coordinator.close()
         release.set()
-        assert operation.wait(1).status is PublicationStatus.FAILED
+        assert operation.wait(1).status is PublicationStatus.UNCONFIRMED
+    finally:
+        release.set()
+        coordinator.close()
+
+
+def test_unconfirmed_forced_refresh_does_not_acknowledge_late_success(monkeypatch) -> None:
+    monkeypatch.setattr("refrain.display.coordinator._SHUTDOWN_TIMEOUT", 0.05)
+    monkeypatch.setattr("refrain.display.coordinator._MAX_RETRY_ATTEMPTS", 1)
+    entered, release, closed = Event(), Event(), Event()
+
+    class Backend:
+        def publish(self, _destination, image):
+            if image.getpixel((0, 0))[0] == 1:
+                raise DisplayBackendUpdateError("scheduled failure")
+            entered.set()
+            assert release.wait(5)
+
+        def close(self):
+            closed.set()
+
+    coordinator = DisplayPublicationCoordinator((_configuration("window"),), lambda _: Backend())
+    coordinator.publish((1, 0), _images(_WIDE, value=1))
+    assert _wait_until(lambda: coordinator.all_unavailable)
+    operation = coordinator.force_scheduled_publication((1, 0), _images(_WIDE, value=2))
+    try:
+        assert entered.wait(2)
+        workers = coordinator.close()
+        result = operation.wait(1)
+        assert result.status is PublicationStatus.UNCONFIRMED
+        assert result.destinations["window"][0] is None
+        assert coordinator.acknowledgements["window"] is None
+        release.set()
+        for worker in workers:
+            worker.join(2)
+        assert closed.wait(2)
+        assert operation.result == result
+        assert coordinator.acknowledgements["window"] is None
     finally:
         release.set()
         coordinator.close()

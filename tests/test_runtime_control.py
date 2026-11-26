@@ -289,6 +289,36 @@ def test_shutdown_preserves_admitted_staging_until_worker_finishes(runtime):
         release.set()
 
 
+def test_shutdown_deadline_reports_unconfirmed_but_retains_staging(runtime, monkeypatch):
+    path, coordinator, seen, entered, release, server = runtime
+    monkeypatch.setattr("refrain.display.coordinator._SHUTDOWN_TIMEOUT", 0.05)
+    release.clear()
+    entered.clear()
+    payloads = {SPEC: _png(SPEC)}
+    specifications = {"one": SPEC}
+    try:
+        with _raw(path) as connection:
+            connection.send_bytes(json.dumps(_request(specifications, payloads)).encode())
+            assert json.loads(connection.recv_bytes())["status"] == "ready"
+            connection.send_bytes(payloads[SPEC])
+            connection.send_bytes(b'{"commit":true}')
+            assert json.loads(connection.recv_bytes())["status"] == "accepted"
+            assert entered.wait(5)
+            assert server.close()
+            workers = coordinator.close()
+            result = json.loads(connection.recv_bytes())
+            assert result["status"] == "unconfirmed"
+            assert result["destinations"]["one"][0] is None
+            assert server._staging_path.is_dir()
+            release.set()
+            for worker in workers:
+                worker.join(2)
+            _wait_until(lambda: not server._staging_path.exists())
+            assert seen == [("one", (9, 8, 7))]
+    finally:
+        release.set()
+
+
 def test_callback_exception_after_admission_cannot_cancel_publication(runtime):
     path, _, seen, _, _, server = runtime
 
