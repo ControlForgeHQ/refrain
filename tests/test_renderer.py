@@ -7,6 +7,7 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 from resource_helpers import bundled_font_paths
 
+import refrain.renderer as renderer
 from refrain import (
     CompositionVisibility,
     LiteraryComposition,
@@ -890,6 +891,29 @@ def test_invalid_font_and_mismatched_background_are_rejected(resolved_font: Reso
     layout = make_layout("A quotation.", resolved_font)
     with pytest.raises(QuotationRenderError, match="dimensions"):
         render_reveal_stages(Image.new("RGB", (10, 10)), resolved_font, layout, (CompositionVisibility(),))
+
+
+def test_renderer_closes_partial_results_on_draw_failure(resolved_font: ResolvedFont, monkeypatch) -> None:
+    layout = make_layout("A quotation.", resolved_font)
+    background = Image.new("RGB", layout.image_size, "white")
+    images = []
+    copy = background.copy
+
+    def capture_copy():
+        image = copy()
+        images.append(image)
+        return image
+
+    def fail_draw(*args, **kwargs):
+        raise RuntimeError("injected draw failure")
+
+    monkeypatch.setattr(background, "copy", capture_copy)
+    monkeypatch.setattr(renderer, "_draw_field", fail_draw)
+    with pytest.raises(RuntimeError, match="injected draw failure"):
+        render_reveal_stages(background, resolved_font, layout, (CompositionVisibility(),))
+    with pytest.raises(ValueError, match="closed"):
+        images[0].getpixel((0, 0))
+    background.close()
 
 
 def test_empty_text_non_image_and_unsupported_mode_are_rejected(resolved_font: ResolvedFont) -> None:

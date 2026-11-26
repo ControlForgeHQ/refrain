@@ -335,7 +335,13 @@ def test_recovery_reuses_cache_without_preparation_and_rejects_changed_checkpoin
         calls.append(keys)
         assert kwargs["canonical_presentation"] == checkpoint["presentation"]
         kwargs["on_metadata"](key, _associations(state, stages, checkpoint, spec, kwargs["qr_declaration"]))
-        return {key: tuple(Image.new("RGB", spec.requested_output_size) for _ in stages)}
+        for _ in stages:
+            image = Image.new("RGB", spec.requested_output_size)
+            try:
+                kwargs["_on_stage"](key, image)
+            finally:
+                image.close()
+        return {key: ()}
 
     monkeypatch.setattr("refrain.recovery.prepare_daily_images", prepare)
     result = recover_prepared_daily_images(

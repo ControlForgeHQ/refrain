@@ -50,6 +50,7 @@ from .renderer import (
     CompositionVisibility,
     LiteraryComposition,
     QuotationRenderError,
+    _validate_reveal_stages,
     layout_composition,
     render_reveal_stages,
 )
@@ -1187,7 +1188,11 @@ def _scale_design_composition_to_presentation(
     if design_composition.size == presentation_canvas_size:
         return design_composition
     scaled = design_composition.resize(presentation_canvas_size, Image.Resampling.LANCZOS)
-    design_composition.close()
+    try:
+        design_composition.close()
+    except BaseException:
+        scaled.close()
+        raise
     return scaled
 
 
@@ -1196,7 +1201,11 @@ def _resize_presentation_to_output(image: Image.Image, requested_output_size: tu
     if image.size == requested_output_size:
         return image
     resized = image.resize(requested_output_size, Image.Resampling.LANCZOS)
-    image.close()
+    try:
+        image.close()
+    except BaseException:
+        resized.close()
+        raise
     return resized
 
 
@@ -1490,6 +1499,7 @@ def _prepare_daily_images_for_specification(
     on_presentation_image: (
         Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
     ) = None,
+    _on_stage: Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image], None] | None = None,
 ) -> tuple[Image.Image, ...]:
     """Prepare complete, independent images for explicit cumulative reveal stages.
 
@@ -1624,22 +1634,16 @@ def _prepare_daily_images_for_specification(
                 source_font=fonts["source"],
                 attribution_font=fonts["attribution"],
             )
-            images = render_reveal_stages(
-                background,
-                fonts["quotation"],
-                layout,
-                tuple(stages),
-                concealment="pixel-distortion",
-                source_font=fonts["source"],
-                attribution_font=fonts["attribution"],
-                text_color=text_color,
+            _validate_reveal_stages(
+                stages,
+                source_available=layout.byline is not None and layout.byline.source is not None,
+                attribution_available=layout.byline is not None and layout.byline.attribution is not None,
             )
+            images: list[Image.Image] = []
             qr_code = None
             try:
                 if qr_placement is not None:
                     qr_code = render_qr_code(qr_parameters, presentation_canvas_size, qr_placement)
-                    for image in images:
-                        composite_qr_code(image, qr_code)
                 diagnostics = PreparationDiagnostics(
                     geometry,
                     qr_placement,
@@ -1649,9 +1653,6 @@ def _prepare_daily_images_for_specification(
                 )
                 if on_diagnostics is not None:
                     on_diagnostics(output_specification, diagnostics)
-                if on_presentation_image is not None:
-                    for image in images:
-                        on_presentation_image(output_specification, image, diagnostics)
                 if on_metadata is not None:
                     if selection_revision is None:
                         raise DailyImagePreparationError("selection_revision is required when capturing metadata")
@@ -1742,8 +1743,33 @@ def _prepare_daily_images_for_specification(
                         for stage in stages
                     )
                     on_metadata(variant_key, metadata)
-                return tuple(_resize_presentation_to_output(image, geometry.requested_output_size) for image in images)
-            except Exception:
+                for stage in stages:
+                    image = render_reveal_stages(
+                        background,
+                        fonts["quotation"],
+                        layout,
+                        (stage,),
+                        concealment="pixel-distortion",
+                        source_font=fonts["source"],
+                        attribution_font=fonts["attribution"],
+                        text_color=text_color,
+                    )[0]
+                    try:
+                        if qr_code is not None:
+                            composite_qr_code(image, qr_code)
+                        if on_presentation_image is not None:
+                            on_presentation_image(output_specification, image, diagnostics)
+                        image = _resize_presentation_to_output(image, geometry.requested_output_size)
+                        if _on_stage is None:
+                            images.append(image)
+                            image = None
+                        else:
+                            _on_stage(variant_key, image)
+                    finally:
+                        if image is not None:
+                            image.close()
+                return tuple(images)
+            except BaseException:
                 for image in images:
                     image.close()
                 raise
@@ -1785,6 +1811,8 @@ def prepare_daily_images(
     on_presentation_image: (
         Callable[[ResolvedOutputSpecification, Image.Image, PreparationDiagnostics], None] | None
     ) = None,
+    _on_stage: Callable[[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image], None] | None = None,
+    _choices_cache: dict[DestinationPresentation, tuple[_PresentationChoices, ResolvedPresentation | None]] | None = None,
 ) -> Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, tuple[Image.Image, ...]]:
     """Prepare complete reveal-stage image variants for all required destination groups."""
     if not isinstance(snapshot, (DailySnapshot, _UncommittedLiteraryContent)):
@@ -1840,7 +1868,9 @@ def prepare_daily_images(
     try:
         for destination_presentation, specifications in group_specifications.items():
             group_presentation = resolved_presentation
-            if canonical_presentation is not None and not strict_published_presentation:
+            if _choices_cache is not None and destination_presentation in _choices_cache:
+                choices, group_presentation = _choices_cache[destination_presentation]
+            elif canonical_presentation is not None and not strict_published_presentation:
                 choices, group_presentation = _resolve_effective_choices(
                     snapshot,
                     configuration,
@@ -1871,6 +1901,8 @@ def prepare_daily_images(
                         else choices.decoration.presentation_insets
                     )
                     group_presentation = replace(group_presentation, insets=insets)
+            if _choices_cache is not None:
+                _choices_cache[destination_presentation] = (choices, group_presentation)
             for variant_key in sorted(
                 specifications,
                 key=lambda key: (
@@ -1902,6 +1934,7 @@ def prepare_daily_images(
                     qr_declaration=qr_declaration,
                     on_diagnostics=on_diagnostics,
                     on_presentation_image=on_presentation_image,
+                    _on_stage=_on_stage,
                 )
     except Exception:
         for images in results.values():

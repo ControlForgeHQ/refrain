@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import replace
@@ -10,6 +11,7 @@ import pytest
 from PIL import Image, ImageFont
 from resource_helpers import bundled_font_paths
 
+import refrain.preparation as preparation
 import refrain.recovery as recovery
 from refrain import (
     ApplicationConfiguration,
@@ -435,7 +437,9 @@ def test_reuses_complete_artifacts_without_preparing_or_writing(
     state_bytes_before = state_path.read_bytes()
 
     monkeypatch.setattr(recovery, "prepare_daily_images", lambda *_: pytest.fail("unexpected rendering"))
-    monkeypatch.setattr(PreparedImageArtifactStore, "store", lambda *_args, **_kwargs: pytest.fail("unexpected write"))
+    monkeypatch.setattr(
+        PreparedImageArtifactStore, "store_generated", lambda *_args, **_kwargs: pytest.fail("unexpected write")
+    )
     result = _recover(state, PreparedImageArtifactStore(artifact_store.root), _STAGES)
 
     assert result == expected
@@ -775,7 +779,7 @@ def test_rendering_failure_preserves_committed_state_and_storage(
         _recover(state, artifact_store, _STAGES)
 
     assert raised.value is error
-    assert not artifact_store.root.exists()
+    assert not tuple(artifact_store.root.glob("revision-*/group-*/manifest.json"))
     assert state_path.read_bytes() == before
     assert PersistentStateStore(state_path).load() == state
 
@@ -786,18 +790,24 @@ def test_storage_failure_is_preserved_and_closes_generated_images(
 ) -> None:
     state, state_path = committed_state
     before = state_path.read_bytes()
-    images = tuple(
-        Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color) for color in ("white", "gray", "black")
-    )
+    images = []
     error = ArtifactWriteError("injected storage failure", published=published)
+    render = preparation.render_reveal_stages
 
-    def prepare(*args, **kwargs):
-        metadata = _metadata_for(state, _STAGES)
-        kwargs["on_metadata"](_OUTPUT_SPECIFICATION, metadata[_OUTPUT_SPECIFICATION])
-        return {_OUTPUT_SPECIFICATION: images}
+    def capture(*args, **kwargs):
+        result = render(*args, **kwargs)
+        images.extend(result)
+        return result
 
-    monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
-    monkeypatch.setattr(artifact_store, "store", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(preparation, "render_reveal_stages", capture)
+
+    def fail_store(revision, stages, key, produce, **kwargs):
+        def fail_write(image, document):
+            raise error
+
+        return produce(fail_write)
+
+    monkeypatch.setattr(artifact_store, "store_generated", fail_store)
 
     with pytest.raises(ArtifactWriteError) as raised:
         _recover(state, artifact_store, _STAGES)
@@ -814,24 +824,142 @@ def test_successful_storage_closes_images_and_is_reusable_after_restart(
 ) -> None:
     state, state_path = committed_state
     before = state_path.read_bytes()
-    images = tuple(
-        Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size, color) for color in ("white", "gray", "black")
-    )
+    images = []
+    persisted_images = []
+    render = preparation.render_reveal_stages
+    store = artifact_store.store_generated
 
-    def prepare(*args, **kwargs):
-        metadata = _metadata_for(state, _STAGES)
-        kwargs["on_metadata"](_OUTPUT_SPECIFICATION, metadata[_OUTPUT_SPECIFICATION])
-        return {_OUTPUT_SPECIFICATION: images}
+    def capture(*args, **kwargs):
+        _assert_images_closed(tuple(images))
+        _assert_images_closed(tuple(persisted_images))
+        result = render(*args, **kwargs)
+        images.extend(result)
+        return result
 
-    monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
+    def capture_store(revision, stages, key, produce, **kwargs):
+        def capture_production(write):
+            def capture_stage(image, metadata):
+                persisted_images.append(image)
+                write(image, metadata)
+
+            produce(capture_stage)
+
+        return store(revision, stages, key, capture_production, **kwargs)
+
+    monkeypatch.setattr(preparation, "render_reveal_stages", capture)
+    monkeypatch.setattr(artifact_store, "store_generated", capture_store)
 
     result = _recover(state, artifact_store, _STAGES)
     reloaded = _load(PreparedImageArtifactStore(artifact_store.root), state, _STAGES)
 
     assert reloaded == result
+    assert len(images) == len(_STAGES)
     _assert_images_closed(images)
+    assert len(persisted_images) == len(_STAGES)
+    _assert_images_closed(tuple(persisted_images))
     assert state_path.read_bytes() == before
     assert PersistentStateStore(state_path).load() == state
+
+
+@pytest.mark.parametrize("failure", ["render", "write"])
+def test_partial_group_failure_preserves_healthy_set_and_releases_images(
+    committed_state, artifact_store, monkeypatch, failure
+) -> None:
+    state, state_path = committed_state
+    before = state_path.read_bytes()
+    checkpoint = _checkpoint(state)
+    shared = PreparedImageVariantKey(_OUTPUT_SPECIFICATION, DestinationPresentation(qr_enabled=False))
+    other = PreparedImageVariantKey(_OUTPUT_SPECIFICATION, DestinationPresentation(background="none"))
+    images = []
+    render = preparation.render_reveal_stages
+    save = Image.Image.save
+
+    def capture(*args, **kwargs):
+        _assert_images_closed(tuple(images))
+        if failure == "render" and len(images) == 4:
+            raise DailyImagePreparationError("injected partial rendering failure")
+        rendered = render(*args, **kwargs)
+        images.extend(rendered)
+        return rendered
+
+    def fail_write(image, stream, *args, **kwargs):
+        if failure == "write" and len(images) == 5:
+            raise OSError("injected partial write failure")
+        return save(image, stream, *args, **kwargs)
+
+    monkeypatch.setattr(preparation, "render_reveal_stages", capture)
+    monkeypatch.setattr(Image.Image, "save", fail_write)
+    with pytest.raises(DailyImagePreparationError if failure == "render" else ArtifactWriteError):
+        _recover_daily_images(
+            state, artifact_store, _STAGES, _CONFIGURATION, (shared, other),
+            checkpoint=checkpoint, qr_declaration=None,
+        )
+
+    _assert_images_closed(tuple(images))
+    healthy, missing = artifact_store.load_groups(
+        state.revision, _STAGES, (shared, other), snapshot=state.snapshot,
+        checkpoint=checkpoint, qr_declaration=None,
+    )
+    assert missing == (other,)
+    assert len(healthy.variant_for(shared).stage_paths) == len(_STAGES)
+    assert not list(artifact_store.root.glob(".tmp-revision-*"))
+    assert state_path.read_bytes() == before
+    assert PersistentStateStore(state_path).load() == state
+
+
+@pytest.mark.parametrize("order", [(0,), (1, 0, 2)])
+def test_streamed_store_rejects_incomplete_or_misordered_stages(committed_state, artifact_store, order) -> None:
+    state, state_path = committed_state
+    before = state_path.read_bytes()
+    checkpoint = _checkpoint(state)
+    metadata = _metadata_for(state, _STAGES)[_OUTPUT_SPECIFICATION]
+
+    def produce(write):
+        for index in order:
+            image = Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size)
+            try:
+                write(image, metadata[index])
+            finally:
+                image.close()
+
+    with pytest.raises(ArtifactWriteError):
+        artifact_store.store_generated(
+            state.revision, _STAGES, _OUTPUT_SPECIFICATION, produce,
+            snapshot=state.snapshot, checkpoint=checkpoint, qr_declaration=None,
+        )
+    assert not list(artifact_store.root.glob("revision-*/group-*/manifest.json"))
+    assert not list(artifact_store.root.glob(".tmp-revision-*"))
+    assert state_path.read_bytes() == before
+
+
+def test_streamed_store_rejects_mutated_metadata_without_replacing_healthy_set(committed_state, artifact_store) -> None:
+    state, _ = committed_state
+    existing = _store_images(artifact_store, state)
+    original_paths = _variant(existing).stage_paths
+    checkpoint = _checkpoint(state)
+    metadata = _metadata_for(state, _STAGES)[_OUTPUT_SPECIFICATION]
+    document = copy.deepcopy(metadata[0])
+
+    def produce(write):
+        image = Image.new("RGB", _OUTPUT_SPECIFICATION.requested_output_size)
+        try:
+            write(image, document)
+            document["visibility"] = metadata[1]["visibility"]
+            document["effective_presentation"]["style"] = (
+                "left-aligned" if document["effective_presentation"]["style"] == "centered" else "centered"
+            )
+            write(image, document)
+        finally:
+            image.close()
+
+    with pytest.raises(ArtifactWriteError, match="effective presentation"):
+        artifact_store.store_generated(
+            state.revision, _STAGES, _OUTPUT_SPECIFICATION, produce,
+            snapshot=state.snapshot, checkpoint=checkpoint, qr_declaration=None,
+        )
+    recovered = _load(artifact_store, state, _STAGES)
+    assert _variant(recovered).stage_paths == original_paths
+    assert not list(artifact_store.root.glob(".tmp-revision-*"))
 
 
 def test_artifact_root_access_failure_is_not_treated_as_a_cache_miss(
@@ -866,15 +994,11 @@ def test_artifact_validation_error_triggers_regeneration_but_access_error_does_n
 
     monkeypatch.setattr(artifact_store, "_load_group", fail_once)
     prepared = []
+    real_prepare = recovery.prepare_daily_images
 
     def prepare(snapshot, stages, configuration, output_specifications, **kwargs):
         prepared.append(tuple(stages))
-        metadata = _metadata_for(state, stages)
-        kwargs["on_metadata"](_OUTPUT_SPECIFICATION, metadata[_OUTPUT_SPECIFICATION])
-        return {
-            specification: tuple(Image.new("RGB", specification.requested_output_size, "white") for _ in stages)
-            for specification in output_specifications
-        }
+        return real_prepare(snapshot, stages, configuration, output_specifications, **kwargs)
 
     monkeypatch.setattr(recovery, "prepare_daily_images", prepare)
     result = _recover(state, artifact_store, _STAGES)

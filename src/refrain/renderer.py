@@ -8,6 +8,7 @@ import math
 import random
 import re
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -620,38 +621,44 @@ def _conceal_field(
     width, height = right - left, bottom - top
     cell_size = max(2, field.font_size // 6)
     coarse_size = (max(1, math.ceil(width / cell_size)), max(1, math.ceil(height / cell_size)))
-    glyphs = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(glyphs)
-    pillow_font = _load_font(font, field.font_size)
-    for line, position in zip(field.lines, field.positions, strict=True):
-        if line:
-            draw.text((position[0] - left, position[1] - top), line, font=pillow_font, fill=255)
-    coarse_glyphs = glyphs.resize(coarse_size, Image.Resampling.BOX)
-    neighborhood = coarse_glyphs.filter(ImageFilter.GaussianBlur(radius=1.15))
-    seed = int.from_bytes(hashlib.sha256(f"{font.identifier}\0{field.text}".encode()).digest(), "big")
-    randomizer = random.Random(seed)
-    alpha = Image.new("L", coarse_size)
-    garbled_cells = []
-    for density in neighborhood.get_flattened_data():
-        occupancy = min(0.56, 0.08 + density / 255 * 0.48)
-        garbled_cells.append(randomizer.randint(112, 232) if randomizer.random() < occupancy else 0)
-    alpha.putdata(garbled_cells)
-    alpha = alpha.resize((width, height), Image.Resampling.NEAREST)
+    with ExitStack() as stack:
+        glyphs = stack.enter_context(closing(Image.new("L", (width, height), 0)))
+        draw = ImageDraw.Draw(glyphs)
+        pillow_font = _load_font(font, field.font_size)
+        for line, position in zip(field.lines, field.positions, strict=True):
+            if line:
+                draw.text((position[0] - left, position[1] - top), line, font=pillow_font, fill=255)
+        coarse_glyphs = stack.enter_context(closing(glyphs.resize(coarse_size, Image.Resampling.BOX)))
+        neighborhood = stack.enter_context(closing(coarse_glyphs.filter(ImageFilter.GaussianBlur(radius=1.15))))
+        seed = int.from_bytes(hashlib.sha256(f"{font.identifier}\0{field.text}".encode()).digest(), "big")
+        randomizer = random.Random(seed)
+        coarse_alpha = stack.enter_context(closing(Image.new("L", coarse_size)))
+        garbled_cells = []
+        for density in neighborhood.get_flattened_data():
+            occupancy = min(0.56, 0.08 + density / 255 * 0.48)
+            garbled_cells.append(randomizer.randint(112, 232) if randomizer.random() < occupancy else 0)
+        coarse_alpha.putdata(garbled_cells)
+        alpha = stack.enter_context(closing(coarse_alpha.resize((width, height), Image.Resampling.NEAREST)))
 
-    crop = image.crop((left, top, right, bottom))
-    if image.mode == "1":
-        base = crop.convert("L")
-        concealed = Image.composite(Image.new("L", crop.size, 128), base, alpha)
-        image.paste(concealed.convert("1", dither=Image.Dither.FLOYDSTEINBERG), (left, top))
-    elif image.mode == "L":
-        concealed = Image.composite(Image.new("L", crop.size, 64), crop, alpha)
-        image.paste(concealed, (left, top))
-    else:
-        base = crop.convert("RGB")
-        concealed = Image.composite(Image.new("RGB", crop.size, (64, 64, 64)), base, alpha)
-        if image.mode == "RGBA":
-            concealed.putalpha(crop.getchannel("A"))
-        image.paste(concealed, (left, top))
+        crop = stack.enter_context(closing(image.crop((left, top, right, bottom))))
+        if image.mode == "1":
+            base = stack.enter_context(closing(crop.convert("L")))
+            fill = stack.enter_context(closing(Image.new("L", crop.size, 128)))
+            concealed = stack.enter_context(closing(Image.composite(fill, base, alpha)))
+            converted = stack.enter_context(closing(concealed.convert("1", dither=Image.Dither.FLOYDSTEINBERG)))
+            image.paste(converted, (left, top))
+        elif image.mode == "L":
+            fill = stack.enter_context(closing(Image.new("L", crop.size, 64)))
+            concealed = stack.enter_context(closing(Image.composite(fill, crop, alpha)))
+            image.paste(concealed, (left, top))
+        else:
+            base = stack.enter_context(closing(crop.convert("RGB")))
+            fill = stack.enter_context(closing(Image.new("RGB", crop.size, (64, 64, 64))))
+            concealed = stack.enter_context(closing(Image.composite(fill, base, alpha)))
+            if image.mode == "RGBA":
+                channel = stack.enter_context(closing(crop.getchannel("A")))
+                concealed.putalpha(channel)
+            image.paste(concealed, (left, top))
 
 
 def _attribution_color(mode: str) -> tuple[int, ...] | int:
@@ -764,28 +771,33 @@ def render_reveal_stages(
         fill = _color_for_mode(text_color, background.mode)
         attribution_fill = fill
     rendered: list[Image.Image] = []
-    for stage in stages:
-        image = background.copy()
-        draw = ImageDraw.Draw(image)
-        _draw_field(draw, font, layout.quotation, fill)
-        byline = layout.byline
-        if byline is not None:
-            if byline.attribution is not None:
-                if not stage.attribution:
-                    _conceal_field(image, attribution_font, byline.attribution)
-                else:
-                    _draw_field(draw, attribution_font, byline.attribution, attribution_fill)
-            if byline.source is not None:
-                if not stage.source:
-                    _conceal_field(image, source_font, byline.source)
-                else:
-                    _draw_field(draw, source_font, byline.source, fill)
-            punctuation = ImageDraw.Draw(image)
-            if byline.prefix is not None:
-                _draw_field(punctuation, font, byline.prefix, fill)
-            if byline.separator is not None:
-                _draw_field(punctuation, font, byline.separator, fill)
-        rendered.append(image)
+    try:
+        for stage in stages:
+            image = background.copy()
+            rendered.append(image)
+            draw = ImageDraw.Draw(image)
+            _draw_field(draw, font, layout.quotation, fill)
+            byline = layout.byline
+            if byline is not None:
+                if byline.attribution is not None:
+                    if not stage.attribution:
+                        _conceal_field(image, attribution_font, byline.attribution)
+                    else:
+                        _draw_field(draw, attribution_font, byline.attribution, attribution_fill)
+                if byline.source is not None:
+                    if not stage.source:
+                        _conceal_field(image, source_font, byline.source)
+                    else:
+                        _draw_field(draw, source_font, byline.source, fill)
+                punctuation = ImageDraw.Draw(image)
+                if byline.prefix is not None:
+                    _draw_field(punctuation, font, byline.prefix, fill)
+                if byline.separator is not None:
+                    _draw_field(punctuation, font, byline.separator, fill)
+    except BaseException:
+        for image in rendered:
+            image.close()
+        raise
     return tuple(rendered)
 
 
