@@ -4,6 +4,7 @@ import json
 import shutil
 from datetime import timedelta
 from pathlib import Path
+from threading import Event
 
 import pytest
 from PIL import Image
@@ -663,6 +664,50 @@ def test_transient_recovery_after_lost_fallback_does_not_block_shared_backend(wo
             assert result.status is application.PublicationStatus.SUCCEEDED
         assert coordinator._states["first"].preparation_error is not None
     finally:
+        coordinator.close()
+
+
+def test_older_terminal_failure_marks_queued_fallback_lost(workspace: Workspace, monkeypatch) -> None:
+    configuration = application.load_application_config(workspace.config)
+    output = configuration.display_backends[0].outputs[0]
+    started = Event()
+    release = Event()
+    calls = 0
+
+    class Backend:
+        def publish(self, destination, image):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                assert release.wait(2)
+                raise DisplayBackendUpdateError("older presentation failed", recoverable=True)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(coordinator_module, "_MAX_RETRY_ATTEMPTS", 1)
+    coordinator = application.DisplayPublicationCoordinator(configuration.display_backends, lambda _: Backend())
+    try:
+        specification = output.output_specification
+        image_size = specification.requested_output_size
+        coordinator.publish_transient_presentation((0, -1), {output.prepared_image_key: Image.new("RGB", image_size)})
+        assert started.wait(2)
+        coordinator.publish_transient_presentation(
+            (-1, 1), {output.prepared_image_key: Image.new("RGB", image_size)}, allow_missing=True
+        )
+        release.set()
+        assert not coordinator.wait_for_publication((-1, 1), timeout=2)
+        assert coordinator._states[output.identifier].preparation_error is not None
+        for _ in range(2):
+            result = coordinator.publish_transient(
+                output.identifier,
+                {output.identifier: specification},
+                {specification: Image.new("RGB", image_size)},
+            ).wait(2)
+            assert result.status is application.PublicationStatus.SUCCEEDED
+    finally:
+        release.set()
         coordinator.close()
 
 

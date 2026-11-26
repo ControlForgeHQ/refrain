@@ -1234,6 +1234,12 @@ class DisplayPublicationCoordinator:
                                 self._release(presentation)
                         if ready.terminal:
                             if (
+                                ready.pending is not None
+                                and ready.pending.allow_missing
+                                and ready.desired_identity == ready.pending.identity
+                            ):
+                                ready.preparation_error = "fallback image lost after backend failure"
+                            if (
                                 one_shot is None
                                 and presentation is not None
                                 and presentation.allow_missing
