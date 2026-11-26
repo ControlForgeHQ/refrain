@@ -9,7 +9,7 @@ import sys
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import BinaryIO, Mapping, Sequence
 
 from PIL import Image, ImageOps
 
@@ -515,6 +515,20 @@ def _finished_png_bit_depth(path: str | Path) -> int:
     return header[24]
 
 
+def _validate_finished_png_end(source: BinaryIO) -> None:
+    source.seek(8)
+    while True:
+        header = source.read(8)
+        if len(header) != 8:
+            raise ValueError("PNG has no complete end chunk")
+        length = int.from_bytes(header[:4], "big")
+        if header[4:] == b"IEND":
+            if length != 0 or source.read(4) != b"\xaeB`\x82" or source.read(1):
+                raise ValueError("PNG has an invalid or incomplete end chunk")
+            return
+        source.seek(length + 4, 1)
+
+
 def _load_finished_image(path: str | Path) -> Image.Image:
     """Load an unchanged, fully validated single-frame RGB PNG."""
     try:
@@ -530,6 +544,7 @@ def _load_finished_image(path: str | Path) -> Image.Image:
             if source.mode != "RGB":
                 raise ViewerError(f"finished PNG {str(path)!r} must use RGB mode; found {source.mode}")
             expected_size = source.size
+            _validate_finished_png_end(source.fp)
             source.verify()
         if _finished_png_bit_depth(path) != 8:
             raise ViewerError(f"finished PNG {str(path)!r} must use 8-bit RGB channels")
