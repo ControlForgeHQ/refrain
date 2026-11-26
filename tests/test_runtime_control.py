@@ -99,7 +99,9 @@ def test_refresh_outcomes_survive_control_transport(runtime, monkeypatch, capsys
 
     monkeypatch.setattr(cli, "resolve_application_paths", lambda: SimpleNamespace(control_metadata_file=path))
     assert cli.main(["--refresh"]) == 1
-    assert "unavailable or changed during refresh" in capsys.readouterr().err
+    diagnostic = capsys.readouterr().err
+    assert "unavailable or changed during refresh" in diagnostic
+    assert "no terminal outcome" not in diagnostic
     assert seen == []
 
     assert coordinator.withdraw_destination("one")

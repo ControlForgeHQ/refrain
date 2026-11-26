@@ -136,6 +136,8 @@ def _report_refresh_result(result: PublicationResult) -> int:
     message = messages.get(result.status, f"refresh ended with unexpected status {result.status.value!r}")
     print(f"refrain: {message}.", file=sys.stderr)
     for identifier, (success, error) in result.destinations.items():
+        if result.status is PublicationStatus.STALE_PRESENTATION and success is None and error is None:
+            continue
         if success is not True:
             detail = error or ("publication failed" if success is False else "no terminal outcome reported")
             print(f"  {identifier}: {detail}", file=sys.stderr)
