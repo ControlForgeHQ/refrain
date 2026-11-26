@@ -671,6 +671,7 @@ def _commit_startup_selection(
             and state.snapshot == snapshot
             and state.repetition_history == proposal.proposed_repetition_history
         ):
+            _LOGGER.warning("Selection was committed, but a subsequent operation failed: %s", commit_error)
             _record_selection_history(history_store, state)
             return state
         raise
@@ -838,9 +839,11 @@ def run_startup(
                 coordinator.wait_for_publication(identity)
                 return StartupResult(state, None, False)
             assert state is not None and decision.required_reveal_stage is not None
-            stage = decision.required_reveal_stage
+            requested_stage = stage = decision.required_reveal_stage
             if stage > state.highest_reveal_stage:
                 state = _persist_reveal_progress(store, state, stage)
+                if stage > state.highest_reveal_stage:
+                    stage = state.highest_reveal_stage
             checkpoint = _complete_checkpoint(store, state, configuration, chooser)
             artifacts = _recover_images(
                 state,
@@ -870,7 +873,7 @@ def run_startup(
                     image.close()
                 raise ApplicationError(f"scheduling evaluation failed before daily publication: {error}") from error
             if final_decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION) or (
-                final_decision.required_reveal_stage != stage
+                final_decision.required_reveal_stage != requested_stage
             ):
                 for image in images.values():
                     image.close()

@@ -2323,7 +2323,9 @@ def test_continuous_missed_simultaneous_and_out_of_order_reveals(
 def test_continuous_daily_transitions_preserve_histories(workspace, monkeypatch) -> None:
     workspace.entry("many", 'quotations:\n  - "First."\n  - "Second."\n  - "Third."\n')
     clock = RuntimeClock(at(10, 7), [at(11, 6), at(11, 6), at(12, 6), at(13, 6)])
-    stages, initialized, display = run_continuously(workspace, clock, monkeypatch)
+    stages, initialized, display = run_continuously(
+        workspace, clock, monkeypatch, await_publication_before_scheduling=True
+    )
     state = workspace.load()
     history = workspace.history_records()
     assert stages == [(1, 0), (2, 0), (3, 0), (4, 0)]
@@ -2514,9 +2516,20 @@ def test_continuous_display_retry_without_event_or_reselection(workspace, monkey
 
 def test_continuous_failed_display_skips_to_newer_desired_selection(workspace, monkeypatch) -> None:
     ordinary(workspace)
-    display = FakeDisplay(fail_update=True)
+    failed = Event()
 
-    clock = RuntimeClock(at(10, 7), [at(14, 19)])
+    class FailingDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            failed.set()
+            super().update(image)
+
+    display = FailingDisplay(fail_update=True)
+
+    def advance_after_failure():
+        assert failed.wait(10)
+        clock.move(at(14, 19))
+
+    clock = RuntimeClock(at(10, 7), [advance_after_failure])
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 0), (2, 2)]
     assert len(workspace.history_records()) == 2
@@ -2847,7 +2860,20 @@ def test_continuous_slow_preparation_rechecks_latest_stage_before_presenting(wor
 
 def test_continuous_daily_display_failure_retains_commit_and_prepared_images(workspace, monkeypatch) -> None:
     ordinary(workspace)
-    display = FakeDisplay()
+    initial_published = Event()
+    daily_failed = Event()
+
+    class FailingDailyDisplay(FakeDisplay):
+        def update(self, image: Image.Image) -> None:
+            if self.fail_update:
+                daily_failed.set()
+            else:
+                super().update(image)
+                initial_published.set()
+                return
+            super().update(image)
+
+    display = FailingDailyDisplay()
     prepared = []
     original = application.recover_prepared_daily_images
 
@@ -2856,17 +2882,19 @@ def test_continuous_daily_display_failure_retains_commit_and_prepared_images(wor
         return original(state, *args, **kwargs)
 
     def fail_daily_update():
+        assert initial_published.wait(10)
         display.fail_update = True
         clock.move(at(11, 6))
 
-    def restore_display():
+    def verify_daily_failure():
+        assert daily_failed.wait(10)
         state = workspace.load()
         assert state.revision == len(workspace.history_records()) == 2
         assert len(png_files(workspace.artifacts)) == 3
-        display.fail_update = False
+        clock.set()
 
     monkeypatch.setattr(application, "recover_prepared_daily_images", recover)
-    clock = RuntimeClock(at(10, 7), [fail_daily_update], retries=[restore_display])
+    clock = RuntimeClock(at(10, 7), [fail_daily_update, verify_daily_failure])
     stages, initialized, _ = run_continuously(workspace, clock, monkeypatch, display)
     assert stages == [(1, 0), (2, 0)] and prepared == [1, 2]
     assert initialized == ["waveshare-13in3-e"] and display.closed == 1

@@ -731,6 +731,35 @@ def test_invalid_reveal_request_warns_preserves_state_and_continues(workspace: W
     assert "Invalid requested reveal stage" in caplog.text
 
 
+def test_startup_rejected_reveal_request_presents_committed_stage(workspace: Workspace, monkeypatch, caplog) -> None:
+    ordinary(workspace)
+    workspace.run(at(10, 8))
+    state_before = workspace.state.read_bytes()
+    checkpoint = workspace.state.with_name("publication.json")
+    checkpoint_before = checkpoint.read_bytes()
+    loaded_stages = []
+    load_variants = application._load_stage_variants
+
+    def reject_progress(store, revision, stage):
+        raise ValueError(f"stage {stage} is invalid")
+
+    def record_stage(artifacts, keys, stage):
+        loaded_stages.append(stage)
+        return load_variants(artifacts, keys, stage)
+
+    monkeypatch.setattr(application.PersistentStateStore, "advance_reveal_progress", reject_progress)
+    monkeypatch.setattr(application, "_load_stage_variants", record_stage)
+    result, display = workspace.run(at(10, 13))
+
+    assert result.presented_stage == 0
+    assert result.state.highest_reveal_stage == 0
+    assert loaded_stages == [0]
+    assert len(display.images) == 1
+    assert workspace.state.read_bytes() == state_before
+    assert checkpoint.read_bytes() == checkpoint_before
+    assert "Invalid requested reveal stage" in caplog.text
+
+
 def test_post_commit_checkpoint_failure_does_not_repeat_selection(workspace: Workspace, monkeypatch) -> None:
     ordinary(workspace)
     original = application.CheckpointStore.initialize

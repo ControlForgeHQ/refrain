@@ -79,28 +79,37 @@ def test_initial_invalidation_failure_prevents_state_commit(workspace, monkeypat
 @pytest.mark.parametrize("published", [False, True])
 def test_failed_content_checkpoint_write_does_not_repeat_selection(workspace, monkeypatch, caplog, published) -> None:
     original = CheckpointStore.initialize
+    attempts = 0
 
     def fail(self, state, qr):
+        nonlocal attempts
+        attempts += 1
         if published:
             original(self, state, qr)
         raise CheckpointError("disk full", published=published)
 
     monkeypatch.setattr(CheckpointStore, "initialize", fail)
-    with pytest.raises(ApplicationError, match="content checkpoint"):
-        workspace.run(at(10, 7))
+    result, display = workspace.run(at(10, 7))
     committed = workspace.load()
     assert committed is not None and committed.revision == 1
-    assert len(workspace.history_records()) == 1
-    monkeypatch.setattr(CheckpointStore, "initialize", original)
-    monkeypatch.setattr(application, "_select_snapshot", lambda *_args: pytest.fail("must not reselect"))
-    result, display = workspace.run(at(10, 7))
     assert result.state == committed
+    assert attempts == 1
+    assert len(workspace.history_records()) == 1
+    assert "cannot persist content checkpoint" in caplog.text
     qr = _checkpoint(workspace)["content"]["qr"]
     if published:
         assert [declaration["payload"] for declaration in qr] == ["public", "private"]
     else:
         assert qr == []
         assert "QR payloads cannot be recovered" in caplog.text
+    for image in display.images:
+        image.close()
+
+    monkeypatch.setattr(CheckpointStore, "initialize", original)
+    monkeypatch.setattr(application, "_select_snapshot", lambda *_args: pytest.fail("must not reselect"))
+    result, display = workspace.run(at(10, 7))
+    assert result.state == committed
+    assert _checkpoint(workspace)["content"]["qr"] == qr
     assert len(workspace.history_records()) == 1
     for image in display.images:
         image.close()
