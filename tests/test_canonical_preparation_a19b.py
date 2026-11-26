@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date, time
@@ -7,17 +8,22 @@ from pathlib import Path
 from random import Random
 
 import pytest
+from PIL import Image
 
 import refrain.preparation as preparation
+from refrain.checkpoint import CheckpointStore, validate_checkpoint
 from refrain.config import (
     ApplicationConfiguration,
+    DecorationLayerResource,
+    DecorationResource,
     DestinationPresentation,
     FontResource,
     PreparedImageVariantKey,
     RevealSchedule,
 )
 from refrain.geometry import PresentationInsets, ResolvedOutputSpecification
-from refrain.persistence import DailySnapshot, SchedulingContext
+from refrain.persistence import DailySnapshot, PersistentState, SchedulingContext
+from refrain.publication_metadata import finalize_publication_metadata
 from refrain.renderer import CompositionVisibility
 
 
@@ -214,6 +220,108 @@ def test_missing_canonical_font_uses_default_without_changing_checkpoint():
     try:
         assert associations[specification][0]["effective_presentation"]["fonts"]["bundle"] == "lora"
         assert canonical == original
+    finally:
+        for images in variants.values():
+            for image in images:
+                image.close()
+
+
+@pytest.mark.parametrize("condition", ["tintable", "layer-untintable", "decoration-untintable", "failed"])
+def test_unavailable_persisted_decoration_tint_preserves_checkpoint_and_effective_metadata(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, condition: str
+) -> None:
+    snapshot, configuration = _inputs()
+    snapshot = replace(snapshot, decoration="frame", decoration_color=("retired",))
+    layer_path = tmp_path / "frame.png"
+    with Image.new("RGBA", (8, 8), (200, 30, 40, 128)) as layer_image:
+        layer_image.save(layer_path)
+    layer = DecorationLayerResource(layer_path, "cover")
+    decoration = DecorationResource("frame", (layer,), False)
+    configuration = replace(
+        configuration,
+        decorations={"frame": decoration},
+        palette={"black": "#000000", "retired": "#ff0000", "alternative": "#00ff00"},
+        default_decoration_colors=("alternative",),
+    )
+    state = PersistentState(1, snapshot, frozenset({snapshot.quotation_identity}), 0)
+    store = CheckpointStore(tmp_path / "publication.json")
+    store.initialize(state, [])
+    checkpoint = store.complete(
+        state, lambda selected, _content: preparation.resolve_canonical_presentation(selected, configuration)
+    )
+    assert checkpoint["presentation"]["decoration"] == "frame"
+    assert checkpoint["presentation"]["colors"]["decoration"] == "retired"
+    before = store.path.read_bytes()
+
+    if condition == "layer-untintable":
+        decoration = replace(decoration, layers=(replace(layer, tintable=False),))
+    elif condition == "decoration-untintable":
+        decoration = replace(decoration, tintable=False)
+    elif condition == "failed":
+        layer_path.unlink()
+    configuration = replace(
+        configuration,
+        decorations={"frame": decoration},
+        palette={"black": "#000000", "alternative": "#00ff00"},
+    )
+    checkpoint = store.complete(state, lambda *_: pytest.fail("canonical choices must not be reselected"))
+    validate_checkpoint(checkpoint, state, require_presentation=True)
+
+    class FontChoiceOnly:
+        def choice(self, values):
+            assert values == ["lora"], "preparation must not randomly select a replacement color"
+            return values[0]
+
+    specification = ResolvedOutputSpecification("16:10", (320, 200))
+    associations = {}
+    with caplog.at_level(logging.WARNING):
+        variants = preparation.prepare_daily_images(
+            snapshot,
+            (CompositionVisibility(),),
+            configuration,
+            (specification,),
+            chooser=FontChoiceOnly(),
+            canonical_presentation=checkpoint["presentation"],
+            selection_revision=state.revision,
+            on_metadata=associations.__setitem__,
+        )
+    try:
+        pixel = variants[specification][0].getpixel((5, 5))
+        prepared = associations[specification][0]
+        completed = finalize_publication_metadata(
+            checkpoint,
+            publication_type="scheduled",
+            publication_id="event",
+            published_at="2026-10-26T06:00:00Z",
+            destination_id="screen",
+            output_specification=specification,
+            audience="internal",
+            selection_revision=prepared["selection_revision"],
+            visibility=prepared["visibility"],
+            effective_presentation=prepared["effective_presentation"],
+            rendered_qr=prepared["rendered_qr"],
+            prepared_output_specification=prepared["output_specification"],
+        )
+        effective = completed["presentation"]
+        if condition == "tintable":
+            assert pixel == (127, 127, 127)
+            assert effective["decoration"] == "frame"
+            assert effective["colors"]["decoration"] == "black"
+            assert "decoration color 'retired' is unavailable; using black" in caplog.text
+        elif condition == "failed":
+            assert pixel == (255, 255, 255)
+            assert effective["decoration"] == "none"
+            assert effective["colors"]["decoration"] is None
+            assert "discard" in caplog.text
+        else:
+            assert pixel == (227, 142, 147)
+            assert effective["decoration"] == "frame"
+            assert effective["colors"]["decoration"] is None
+            assert "decoration color 'retired' is unavailable" not in caplog.text
+        assert store.path.read_bytes() == before
+        assert store.complete(state, lambda *_: pytest.fail("canonical choices must remain persisted")) == checkpoint
+        assert checkpoint["presentation"]["decoration"] == "frame"
+        assert checkpoint["presentation"]["colors"]["decoration"] == "retired"
     finally:
         for images in variants.values():
             for image in images:
