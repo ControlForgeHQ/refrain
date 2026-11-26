@@ -161,7 +161,7 @@ def test_invalid_checkpoint_fields_rejected(checkpoint, mutation):
         lambda d: d["publication"].update(id=" "),
         lambda d: d["publication"].update(timestamp="2026-11-18T00:00:00+00:00"),
         lambda d: d["publication"].update(timestamp="2026-02-29T00:00:00Z"),
-        lambda d: d["publication"].update(destination_id="a" * 257),
+        lambda d: d["publication"].update(destination_id="a" * 256),
         lambda d: d["publication"]["output_specification"].update(aspect_ratio="1:1"),
         lambda d: d["publication"]["output_specification"].update(requested_output_size=[True, 1]),
         lambda d: d["publication"]["output_specification"].update(requested_output_size=[3841, 1]),
@@ -174,6 +174,13 @@ def test_invalid_completed_fields_rejected(checkpoint, mutation):
     mutation(document)
     with pytest.raises(PublicationMetadataError):
         validate_publication_metadata(document, stage="scheduled", audience="external")
+
+
+@pytest.mark.parametrize("identifier", ["a" * 255, "CoN"])
+def test_metadata_accepts_general_destination_identifiers(identifier):
+    document = transient()
+    document["publication"]["destination_id"] = identifier
+    validate_publication_metadata(document, stage="transient")
 
 
 def test_scheduled_serialization_requires_audience_but_context_free_validation_does_not(checkpoint):

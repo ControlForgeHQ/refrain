@@ -117,7 +117,7 @@ Font-size bounds and insets are effective configuration values in design-canvas 
 | `id` | String | Nonblank publication-event identifier. Filesystem datasets additionally satisfy the manifest identity constraints below. |
 | `type` | String | `"scheduled"` or `"transient"`. |
 | `timestamp` | String | Valid UTC RFC-3339 timestamp ending in `Z`. |
-| `destination_id` | String | Configured destination identifier matching `[A-Za-z0-9][A-Za-z0-9_-]*`, at most 256 characters. |
+| `destination_id` | String | Configured destination identifier as defined in [Application Configuration](CONFIGURATION.md#destinations). |
 | `output_specification` | Object | Exactly `aspect_ratio` and `requested_output_size`, as below. |
 
 `id` identifies one publication event, independently of selection revision and visibility. `timestamp` denotes the event timestamp, not the logical display date. Naive timestamps and local-time strings without an offset are invalid; the JSON value is UTC with `Z`.
@@ -157,7 +157,7 @@ For filesystem publication, `id` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,239}` and m
 
 Both referenced filenames are relative single-component names in the same destination directory, derived exactly from that identity. Arbitrary paths, separators, dots in the ID, traversal components, drive-qualified paths, and absolute paths are invalid. The stable manifest filename is always `manifest.json`.
 
-The destination directory is a direct child of the effective `storage.publish` root and is named from the validated destination ID. That ID uses `[A-Za-z0-9][A-Za-z0-9_-]*`, at most 255 ASCII characters. Configured `publish` IDs also exclude the Windows-reserved device names above and are unique under case-insensitive comparison. Destination and storage configuration are defined in [Application Configuration](CONFIGURATION.md#destinations) and [Storage](CONFIGURATION.md#storage).
+The destination directory is a direct child of the effective `storage.publish` root and is named from the validated destination ID. Destination identifier constraints and storage configuration are defined in [Application Configuration](CONFIGURATION.md#destinations) and [Storage](CONFIGURATION.md#storage).
 
 ### Dataset consistency
 

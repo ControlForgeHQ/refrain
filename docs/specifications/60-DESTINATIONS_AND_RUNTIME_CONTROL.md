@@ -200,7 +200,7 @@ The transport limits are:
 |---|---|
 | Concurrent connections | 2 |
 | JSON metadata per message | 64 KiB |
-| Configured destination ID | 256 characters |
+| Configured destination ID | As defined in [Application Configuration](../schemas/CONFIGURATION.md#destinations) |
 | Destinations per transient request | 64 |
 | Image variants per transient request | 64 |
 | Encoded image size | 32 MiB each |

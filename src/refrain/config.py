@@ -30,7 +30,7 @@ from .geometry import (
 )
 
 _DISPLAY_BACKENDS = {"window", "waveshare-13in3-e", "publish"}
-_MAX_DESTINATION_IDENTIFIER_LENGTH = 256
+_MAX_DESTINATION_IDENTIFIER_LENGTH = 255
 _DESTINATION_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _WINDOWS_RESERVED_DESTINATION_IDS = {
     "CON",
@@ -814,7 +814,7 @@ def _parse_destinations(
             ):
                 report(
                     f"{field}.id",
-                    "is required and must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most 256 characters",
+                    "is required and must match [A-Za-z0-9][A-Za-z0-9_-]* and be at most 255 ASCII characters",
                     logging.ERROR,
                 )
                 continue
@@ -832,9 +832,6 @@ def _parse_destinations(
                 )
                 continue
             if backend_type == "publish":
-                if len(identifier) > 255:
-                    report(f"{field}.id", "publish destination IDs must be at most 255 characters", logging.ERROR)
-                    continue
                 if identifier.upper() in _WINDOWS_RESERVED_DESTINATION_IDS:
                     report(
                         f"{field}.id",
