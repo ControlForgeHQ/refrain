@@ -1687,6 +1687,54 @@ def test_finished_png_validation_rejects_unsupported_inputs(tmp_path: Path, kind
         viewer._load_finished_image(path)
 
 
+@pytest.mark.parametrize("removed", [1, 4])
+@pytest.mark.parametrize("push", [False, True])
+def test_finished_png_rejects_incomplete_terminal_checksum_before_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], removed: int, push: bool
+) -> None:
+    path = tmp_path / "finished.png"
+    with Image.new("RGB", (8, 6), (10, 20, 30)) as image:
+        image.putpixel((3, 2), (40, 50, 60))
+        image.save(path)
+    with viewer._load_finished_image(path) as image:
+        assert image.getpixel((0, 0)) == (10, 20, 30)
+        assert image.getpixel((3, 2)) == (40, 50, 60)
+    path.write_bytes(path.read_bytes()[:-removed])
+
+    class Client:
+        def __init__(self, _metadata_path: Path) -> None:
+            pass
+
+        def discover(self):
+            return (_push_destination("screen", ResolvedOutputSpecification("4:3", (8, 6))),)
+
+        def publish_transient(self, *_args, **_kwargs):
+            pytest.fail("invalid image was published")
+
+    monkeypatch.setattr(viewer, "show_preview_window", lambda *_: pytest.fail("invalid image was displayed"))
+    monkeypatch.setattr(viewer, "resolve_application_paths", lambda: SimpleNamespace(control_metadata_file=path))
+    monkeypatch.setattr(viewer, "RuntimeControlClient", Client)
+    arguments = ["--image", str(path), "--push", "screen"] if push else ["--image", str(path), "--window"]
+
+    assert viewer.main(arguments) == 1
+    diagnostic = capsys.readouterr().err
+    assert repr(str(path)) in diagnostic
+    assert "finished PNG" in diagnostic
+
+
+@pytest.mark.parametrize(
+    "end_chunk", [b"\x00\x00\x00\x00IEND\x00\x00\x00\x00", b"\x00\x00\x00\x01IENDx\x00\x00\x00\x00"]
+)
+def test_finished_png_rejects_invalid_terminal_chunk(tmp_path: Path, end_chunk: bytes) -> None:
+    path = tmp_path / "finished.png"
+    with Image.new("RGB", (8, 6)) as image:
+        image.save(path)
+    path.write_bytes(path.read_bytes()[:-12] + end_chunk)
+
+    with pytest.raises(viewer.ViewerError, match="finished PNG"):
+        viewer._load_finished_image(path)
+
+
 def test_finished_png_rejects_16_bit_rgb_that_pillow_would_reduce(tmp_path: Path) -> None:
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
