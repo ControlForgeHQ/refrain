@@ -8,6 +8,7 @@ import time
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 from pathlib import Path
 from threading import Condition, Event, Thread
@@ -22,6 +23,7 @@ from ..config import (
     PreparedImageVariantKey,
 )
 from ..geometry import ResolvedOutputSpecification
+from ..publication_storage import PublicationStorageError
 from . import (
     DisplayBackend,
     DisplayBackendError,
@@ -74,6 +76,7 @@ class PublicationStatus(str, Enum):
     UNSUPPORTED = "unsupported"
     WITHDRAWN = "withdrawn"
     FAILED = "failed"
+    UNCONFIRMED = "unconfirmed"
     STOPPING = "stopping"
 
 
@@ -118,12 +121,14 @@ class _OneShotPublication:
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | StagedTransientImages
     metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None
     destinations: tuple[str, ...]
-    outcomes: dict[str, tuple[bool, str | None]]
+    outcomes: dict[str, tuple[bool | None, str | None]]
     retry_at: dict[str, float]
     retry_delay: dict[str, float]
     retry_attempts: dict[str, int]
     forced: bool
     destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None
+    hold_date: date | None = None
+    hold_expired: bool = False
 
 
 @dataclass
@@ -148,6 +153,8 @@ class _DestinationState:
     transient_supported: bool = True
     one_shot: _OneShotPublication | None = None
     one_shot_active: bool = False
+    hold_date: date | None = None
+    expiry_pending: bool = False
 
 
 class DisplayPublicationCoordinator:
@@ -162,6 +169,7 @@ class DisplayPublicationCoordinator:
         all_unavailable_event: Event | None = None,
         all_withdrawn_event: Event | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        logical_date: Callable[[], date] | None = None,
         transient_capabilities: Mapping[str, bool] | None = None,
         publication_finalizer: (
             Callable[[DisplayOutputConfiguration, dict[str, object] | None], dict[str, object]] | None
@@ -173,9 +181,11 @@ class DisplayPublicationCoordinator:
         self._all_unavailable_event = all_unavailable_event
         self._all_withdrawn_event = all_withdrawn_event
         self._monotonic_clock = monotonic_clock
+        self._logical_date = logical_date
         self._publication_finalizer = publication_finalizer
         self._stopping = False
         self._draining = False
+        self._active_transient: _OneShotPublication | None = None
         self._states = {
             destination.identifier: _DestinationState(configuration, destination, destination.identifier)
             for configuration in configurations
@@ -432,6 +442,8 @@ class DisplayPublicationCoordinator:
         destinations: Iterable[str] | str,
         output_specifications: Mapping[str, ResolvedOutputSpecification],
         images: Mapping[ResolvedOutputSpecification, Image.Image] | StagedTransientImages,
+        *,
+        all_day: bool = False,
     ) -> PublicationOperation:
         """Atomically admit complete caller-prepared images to selected destinations.
 
@@ -439,6 +451,10 @@ class DisplayPublicationCoordinator:
         including when validation or admission fails.
         """
         with self._condition:
+            if not isinstance(all_day, bool) or (all_day and self._logical_date is None):
+                self._close_images(images)
+                return self._rejected_operation(PublicationStatus.INVALID, None)
+            current_date = self._observe_logical_date()
             selected, error = self._resolve_destinations(destinations)
             if error is not None:
                 self._close_images(images)
@@ -459,11 +475,13 @@ class DisplayPublicationCoordinator:
             if self._stopping or self._draining:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.STOPPING, selected)
-            if self._backend_busy(selected):
+            if self._active_transient is not None or self._backend_busy(selected):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.BUSY, selected)
             self._renew_recovery(self._states[key] for key in selected)
-            return self._admit_one_shot(selected, images, identity=None, forced=False)
+            return self._admit_one_shot(
+                selected, images, identity=None, forced=False, hold_date=current_date if all_day else None
+            )
 
     def force_scheduled_publication(
         self,
@@ -471,6 +489,8 @@ class DisplayPublicationCoordinator:
         images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
         *,
         destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+        expected_date: date | None = None,
+        admission_check: Callable[[], bool] | None = None,
     ) -> PublicationOperation:
         """Republish the current scheduled identity to participants.
 
@@ -537,10 +557,25 @@ class DisplayPublicationCoordinator:
             if self._stopping or self._draining:
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.STOPPING, selected)
+            if expected_date is not None and (self._logical_date is None or self._logical_date() != expected_date):
+                self._close_images(images)
+                return self._rejected_operation(PublicationStatus.STALE_PRESENTATION, selected)
+            if admission_check is not None:
+                try:
+                    current = admission_check()
+                except Exception:
+                    self._close_images(images)
+                    raise
+                if not current:
+                    self._close_images(images)
+                    return self._rejected_operation(PublicationStatus.STALE_PRESENTATION, selected)
             if self._backend_busy(selected):
                 self._close_images(images)
                 return self._rejected_operation(PublicationStatus.BUSY, selected)
             self._renew_recovery(self._states[key] for key in selected)
+            for state in self._states.values():
+                state.hold_date = None
+                state.expiry_pending = False
             return self._admit_one_shot(
                 selected, images, identity=identity, forced=True, metadata=metadata, destination_keys=destination_keys
             )
@@ -552,12 +587,20 @@ class DisplayPublicationCoordinator:
         metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
         *,
         destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+        expected_date: date | None = None,
+        admission_check: Callable[[], bool] | None = None,
     ) -> PublicationOperation:
         """Force scheduled publication with the metadata from its prepared variants."""
         with self._condition:
             self._publication_metadata[identity] = metadata
             try:
-                return self.force_scheduled_publication(identity, images, destination_keys=destination_keys)
+                return self.force_scheduled_publication(
+                    identity,
+                    images,
+                    destination_keys=destination_keys,
+                    expected_date=expected_date,
+                    admission_check=admission_check,
+                )
             finally:
                 self._publication_metadata.pop(identity, None)
 
@@ -653,11 +696,17 @@ class DisplayPublicationCoordinator:
         for state in self._states.values():
             if state.backend_configuration.type not in backend_types:
                 continue
-            if state.active_identity is not None or state.pending is not None or state.one_shot is not None:
+            if (
+                state.active_identity is not None
+                or (state.pending is not None and state.hold_date is None and not state.expiry_pending)
+                or state.one_shot is not None
+            ):
                 return True
             if (
                 not state.terminal
                 and not state.withdrawn
+                and state.hold_date is None
+                and not state.expiry_pending
                 and state.preparation_error is None
                 and state.desired_identity is not None
                 and state.desired_identity != state.successful_identity
@@ -692,6 +741,7 @@ class DisplayPublicationCoordinator:
         forced: bool,
         metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]] | None = None,
         destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey] | None = None,
+        hold_date: date | None = None,
     ) -> PublicationOperation:
         if isinstance(images, StagedTransientImages):
             owned_images = images
@@ -718,12 +768,16 @@ class DisplayPublicationCoordinator:
             retry_attempts={key: 0 for key in destinations},
             forced=forced,
             destination_keys=destination_keys,
+            hold_date=hold_date,
         )
+        if not forced:
+            self._active_transient = one_shot
         for key in destinations:
             state = self._states[key]
             state.one_shot = one_shot
             if state.terminal:
                 one_shot.outcomes[key] = (False, state.error or "destination is unavailable")
+                state.one_shot = None
         self._complete_one_shot_if_ready(one_shot)
         self._condition.notify_all()
         return operation
@@ -731,15 +785,19 @@ class DisplayPublicationCoordinator:
     def _complete_one_shot_if_ready(self, operation: _OneShotPublication) -> None:
         if len(operation.outcomes) != len(operation.destinations):
             return
-        status = (
-            PublicationStatus.SUCCEEDED
-            if all(success for success, _error in operation.outcomes.values())
-            else PublicationStatus.FAILED
-        )
+        outcomes = [success for success, _error in operation.outcomes.values()]
+        if all(success is True for success in outcomes):
+            status = PublicationStatus.SUCCEEDED
+        elif any(success is False for success in outcomes):
+            status = PublicationStatus.FAILED
+        else:
+            status = PublicationStatus.UNCONFIRMED
         destinations = MappingProxyType({key: operation.outcomes[key] for key in operation.destinations})
         for key in operation.destinations:
             if self._states[key].one_shot is operation:
                 self._states[key].one_shot = None
+        if self._active_transient is operation:
+            self._active_transient = None
         try:
             self._close_images(operation.images)
         except Exception:
@@ -752,12 +810,25 @@ class DisplayPublicationCoordinator:
         state: _DestinationState,
         operation: _OneShotPublication,
         *,
-        success: bool,
+        success: bool | None,
         error: str | None = None,
     ) -> None:
+        current_date = self._observe_logical_date()
         operation.outcomes[state.key] = (success, error)
+        if state.one_shot is operation:
+            state.one_shot = None
         if success:
             state.error = None
+            if not operation.forced:
+                if operation.hold_date is None:
+                    state.hold_date = None
+                elif (
+                    not self._stopping
+                    and not self._draining
+                    and not operation.hold_expired
+                    and operation.hold_date == current_date
+                ):
+                    state.hold_date = operation.hold_date
             if (
                 operation.forced
                 and state.desired_identity == operation.identity
@@ -765,6 +836,13 @@ class DisplayPublicationCoordinator:
             ):
                 state.successful_identity = operation.identity
                 state.successful_at = self._monotonic_clock()
+                if (
+                    state.pending is not None
+                    and state.pending.identity == operation.identity
+                    and self._destination_key(state.destination, state.pending.destination_keys) == state.desired_key
+                ):
+                    self._release(state.pending)
+                    state.pending = None
         elif not state.withdrawn:
             state.error = error
         operation.operation._update(
@@ -774,6 +852,37 @@ class DisplayPublicationCoordinator:
             )
         )
         self._complete_one_shot_if_ready(operation)
+
+    def expire_all_day_holds(self, expected_date: date) -> bool:
+        """Release holds only when the reconciled date is still current."""
+        with self._condition:
+            current_date = self._observe_logical_date()
+            if current_date != expected_date:
+                return False
+            for state in self._states.values():
+                state.expiry_pending = False
+            self._condition.notify_all()
+            return True
+
+    def _observe_logical_date(self) -> date | None:
+        if self._logical_date is None:
+            return None
+        current_date = self._logical_date()
+        for state in self._states.values():
+            if state.hold_date is not None and state.hold_date != current_date:
+                state.hold_date = None
+                state.expiry_pending = True
+            operation = state.one_shot
+            if (
+                operation is not None
+                and operation.hold_date is not None
+                and not operation.hold_expired
+                and operation.hold_date != current_date
+            ):
+                operation.hold_expired = True
+                for key in operation.destinations:
+                    self._states[key].expiry_pending = True
+        return current_date
 
     def clear_desired(self) -> None:
         """Discard pending scheduled images without interrupting active updates."""
@@ -867,6 +976,7 @@ class DisplayPublicationCoordinator:
         with self._condition:
             self._draining = True
             for state in self._states.values():
+                state.hold_date = None
                 self._release(state.pending)
                 state.pending = None
                 operation = state.one_shot
@@ -893,6 +1003,7 @@ class DisplayPublicationCoordinator:
             self._stopping = True
             operations: set[int] = set()
             for state in self._states.values():
+                state.hold_date = None
                 self._release(state.pending)
                 state.pending = None
                 state.desired_identity = None
@@ -1005,6 +1116,8 @@ class DisplayPublicationCoordinator:
                                 if not one_shot_barrier
                                 and not state.terminal
                                 and not state.withdrawn
+                                and state.hold_date is None
+                                and not state.expiry_pending
                                 and state.pending is not None
                                 and state.retry_at <= now
                             ),
@@ -1040,6 +1153,8 @@ class DisplayPublicationCoordinator:
                             and state.pending is not None
                             and state.one_shot is None
                             and not state.withdrawn
+                            and state.hold_date is None
+                            and not state.expiry_pending
                             and state.retry_at > now
                         ]
                         deadlines.extend(
@@ -1208,6 +1323,8 @@ class DisplayPublicationCoordinator:
                             publication_finalizer=self._publication_finalizer,
                         )
                 except Exception as error:
+                    cause = error.__cause__
+                    uncertain = one_shot is not None and isinstance(cause, PublicationStorageError) and cause.published
                     recoverable = isinstance(error, DisplayBackendError) and error.recoverable and self._retry
                     with self._condition:
                         if one_shot is not None:
@@ -1215,10 +1332,14 @@ class DisplayPublicationCoordinator:
                             ready.retry_attempts = one_shot.retry_attempts[ready.key]
                         else:
                             ready.retry_attempts += 1
-                        ready.recoverable_failure = recoverable
+                        ready.recoverable_failure = recoverable or uncertain
                         attempt = ready.retry_attempts
                         retry = (
-                            recoverable and attempt < _MAX_RETRY_ATTEMPTS and not self._stopping and not self._draining
+                            recoverable
+                            and not uncertain
+                            and attempt < _MAX_RETRY_ATTEMPTS
+                            and not self._stopping
+                            and not self._draining
                         )
                         if not ready.withdrawn:
                             ready.error = str(error)
@@ -1235,7 +1356,7 @@ class DisplayPublicationCoordinator:
                                 self._record_one_shot_result(
                                     ready,
                                     one_shot,
-                                    success=False,
+                                    success=None if uncertain else False,
                                     error=str(error),
                                 )
                         else:

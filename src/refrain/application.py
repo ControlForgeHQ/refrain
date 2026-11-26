@@ -58,6 +58,7 @@ from .scheduling import (
     SchedulingAction,
     SchedulingDecision,
     SchedulingEvaluationError,
+    _local_display_date,
     evaluate_scheduling,
     resolve_reveal_stages,
 )
@@ -516,15 +517,7 @@ def _refresh_scheduled(
     wall_clock: Callable[[], datetime],
     shutdown: Event,
     state_lock: Lock,
-    admit: Callable[
-        [
-            tuple[int, int],
-            Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
-            Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
-            Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey],
-        ],
-        PublicationOperation,
-    ],
+    admit: Callable[..., PublicationOperation],
     remember_artifacts: Callable[[int, PreparedImageArtifactSet], None] | None = None,
     artifact_lock: Lock | None = None,
 ) -> PublicationOperation:
@@ -588,7 +581,23 @@ def _refresh_scheduled(
                 if remember_artifacts is not None:
                     remember_artifacts(current.revision, artifacts)
                 transferred = True
-                return admit(identity, images, metadata, _destination_keys(configuration, current_checkpoint))
+
+                def admission_check() -> bool:
+                    latest = evaluate_scheduling(wall_clock(), configuration, current)
+                    return (
+                        latest.required_reveal_stage == identity[1]
+                        and current.revision == identity[0]
+                        and latest.display_date is None
+                    )
+
+                return admit(
+                    identity,
+                    images,
+                    metadata,
+                    _destination_keys(configuration, current_checkpoint),
+                    expected_date=current.snapshot.display_date,
+                    admission_check=admission_check,
+                )
         except BaseException:
             if not transferred:
                 for image in images.values():
@@ -959,6 +968,9 @@ def run_application(
     artifact_lock = Lock()
     control: RuntimeControlServer | None = None
 
+    def logical_date() -> date:
+        return _local_display_date(wall_clock(), configuration.day_start)
+
     def remember_artifacts(revision: int, recovered: PreparedImageArtifactSet) -> None:
         nonlocal artifact_revision, artifacts
         artifact_revision = revision
@@ -1041,6 +1053,7 @@ def run_application(
                 configuration.display_backends,
                 backend_factory,
                 monotonic_clock=monotonic_clock,
+                logical_date=logical_date,
                 publication_finalizer=_finalize_publication_event,
             )
             try:
@@ -1111,6 +1124,8 @@ def run_application(
                         with state_lock:
                             if coordinator is not None:
                                 coordinator.clear_desired()
+                                if not coordinator.expire_all_day_holds(display_date):
+                                    continue
                         pending_selection_date = display_date
                         latest_desired = None
                         fallback_date = None
@@ -1126,6 +1141,7 @@ def run_application(
                                 configuration.display_backends,
                                 backend_factory,
                                 monotonic_clock=monotonic_clock,
+                                logical_date=logical_date,
                                 publication_finalizer=_finalize_publication_event,
                             )
                         identity = (-1, display_date.toordinal())
@@ -1166,6 +1182,8 @@ def run_application(
                                         identity,
                                         images,
                                     )
+                                if not coordinator.expire_all_day_holds(display_date):
+                                    continue
                             if fallback_pending:
                                 fallback_retry_at = monotonic_clock() + fallback_retry_delay
                                 fallback_retry_delay = min(60.0, fallback_retry_delay * 2)
@@ -1174,6 +1192,8 @@ def run_application(
                         if fallback_pending:
                             remaining = max(0.0, fallback_retry_at - monotonic_clock())
                             deadline = min(now.astimezone(timezone.utc) + timedelta(seconds=remaining), deadline)
+                        if not coordinator.expire_all_day_holds(display_date):
+                            continue
                         scheduling_wait(deadline, shutdown, wall_clock=wall_clock, monotonic_clock=monotonic_clock)
                         continue
                     if library_retry_date == display_date and monotonic_clock() < library_retry_at:
@@ -1182,6 +1202,9 @@ def run_application(
                         deadline = min(now.astimezone(timezone.utc) + timedelta(seconds=remaining), boundary)
                         if coordinator is not None and show_information(now, deadline):
                             continue
+                        if coordinator is not None:
+                            if not coordinator.expire_all_day_holds(display_date):
+                                continue
                         scheduling_wait(deadline, shutdown, wall_clock=wall_clock, monotonic_clock=monotonic_clock)
                         continue
                     try:
@@ -1206,6 +1229,7 @@ def run_application(
                                 configuration.display_backends,
                                 backend_factory,
                                 monotonic_clock=monotonic_clock,
+                                logical_date=logical_date,
                                 publication_finalizer=_finalize_publication_event,
                             )
                         library_retry_date = display_date
@@ -1286,6 +1310,7 @@ def run_application(
                         configuration.display_backends,
                         backend_factory,
                         monotonic_clock=monotonic_clock,
+                        logical_date=logical_date,
                         publication_finalizer=_finalize_publication_event,
                     )
                 if show_information(now, next_scheduling_deadline(now, configuration, state)):
@@ -1329,6 +1354,8 @@ def run_application(
                     last_failure = None
                 retry_delay = 1.0
                 deadline = next_scheduling_deadline(now, configuration, state)
+                if not coordinator.expire_all_day_holds(state.snapshot.display_date):
+                    continue
                 scheduling_wait(deadline, shutdown, wall_clock=wall_clock, monotonic_clock=monotonic_clock)
             except (_RetryableApplicationError, NoEligibleQuotationError, StateRecoveryError) as error:
                 if isinstance(error, StateRecoveryError) and not isinstance(error.__cause__, OSError):

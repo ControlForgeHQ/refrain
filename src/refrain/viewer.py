@@ -803,6 +803,7 @@ def _report_push_result(
             "push was not accepted because publication is busy; wait for the current update to finish"
         ),
         PublicationStatus.FAILED: "push publication failed",
+        PublicationStatus.UNCONFIRMED: "push publication outcome is unconfirmed",
         PublicationStatus.STOPPING: "the resident Refrain runtime is stopping or rejected the push",
         PublicationStatus.INVALID: (
             "the resident Refrain runtime rejected the push as invalid; a destination or output specification may "
@@ -817,13 +818,20 @@ def _report_push_result(
     else:
         message = messages.get(result.status, f"push ended with unexpected status {result.status.value!r}")
     print(f"refrain-viewer: {message}.", file=sys.stderr)
+    if result.status in (PublicationStatus.FAILED, PublicationStatus.UNCONFIRMED) and any(
+        success is None for success, _error in result.destinations.values()
+    ):
+        print("  Publication may have occurred; do not retry automatically.", file=sys.stderr)
     for identifier in sorted(expected | set(result.destinations)):
         if identifier not in result.destinations:
             print(f"  {identifier}: no terminal outcome reported", file=sys.stderr)
             continue
         success, error = result.destinations[identifier]
         if success is not True:
-            detail = error or ("publication failed" if success is False else "no terminal outcome reported")
+            if success is None and result.status in (PublicationStatus.FAILED, PublicationStatus.UNCONFIRMED):
+                detail = "outcome unconfirmed" + (f": {error}" if error else "")
+            else:
+                detail = error or ("publication failed" if success is False else "no terminal outcome reported")
             print(f"  {identifier}: {detail}", file=sys.stderr)
     return 1
 
@@ -837,6 +845,7 @@ def _run_push(
     debug_layout: bool,
     image_path: str | Path | None = None,
     qr_overrides: Mapping[str, str | None] | None = None,
+    all_day: bool = False,
 ) -> int:
     try:
         paths = resolve_application_paths()
@@ -926,6 +935,7 @@ def _run_push(
             images,
             audiences={str(destination["identifier"]): destination["audience"] for destination in selected},
             on_accepted=report_accepted,
+            **({"all_day": True} if all_day else {}),
         )
     except RuntimeUnconfirmed:
         print(
@@ -1147,12 +1157,15 @@ def _parser() -> argparse.ArgumentParser:
         metavar="TARGET",
         help="publish a rendered presentation through resident destinations",
     )
+    parser.add_argument("--all-day", action="store_true", help="hold a successful push for the current display day")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
+    if arguments.all_day and arguments.push is None:
+        parser.error("--all-day requires --push")
     if arguments.no_qr and (arguments.qr_external is not None or arguments.qr_internal is not None):
         parser.error("--no-qr cannot be combined with --qr-external or --qr-internal")
     if arguments.publication is not None:
@@ -1178,6 +1191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 overrides=PresentationOverrides(),
                 debug_layout=False,
                 image_path=arguments.image,
+                all_day=arguments.all_day,
             )
         try:
             run_image_viewer(arguments.image)
@@ -1236,6 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides=overrides,
             debug_layout=arguments.debug_layout,
             qr_overrides=qr_overrides,
+            all_day=arguments.all_day,
         )
     try:
         run_viewer(

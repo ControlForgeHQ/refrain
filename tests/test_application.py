@@ -435,9 +435,11 @@ def test_refresh_reports_regenerated_artifacts_to_scheduler(workspace: Workspace
         desired_identity = (1, 1)
         has_participating_destinations = True
 
-    def admit(_identity, images, metadata, destination_keys):
+    def admit(_identity, images, metadata, destination_keys, *, expected_date, admission_check):
         assert metadata
         assert set(destination_keys) == {"epaper"}
+        assert expected_date == state.snapshot.display_date
+        assert admission_check()
         for image in images.values():
             image.close()
         return PublicationOperation(PublicationResult(PublicationStatus.SUCCEEDED, {}), done=True)
@@ -1898,6 +1900,7 @@ def run_continuously(
     presentations = []
     initializations = []
     coordinators = []
+    hold_state = kwargs.pop("hold_state", None)
 
     class TrackingCoordinator(application.DisplayPublicationCoordinator):
         def __init__(self, *args, **coordinator_kwargs):
@@ -1909,6 +1912,20 @@ def run_continuously(
             self.requested.append(identity)
             presentations.append(identity)
             super().publish(identity, image, **kwargs)
+            if hold_state is not None and identity == (1, 0) and not hold_state["started"]:
+                hold_state["coordinator"] = self
+                assert self.wait_for_publication(identity, timeout=2)
+                destination_key = self.destination_identifiers[0]
+                destination = self._states[destination_key].destination
+                held_image = Image.new("RGB", destination.output_specification.requested_output_size, (7, 8, 9))
+                operation = self.publish_transient(
+                    destination_key,
+                    {destination_key: destination.output_specification},
+                    {destination.output_specification: held_image},
+                    all_day=True,
+                )
+                hold_state["started"] = True
+                hold_state["status"] = operation.wait(2).status
 
     def initialize(configuration):
         initializations.append(configuration.type)
@@ -1970,6 +1987,9 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
 
         def clear_desired(self):
             self.desired_identity = None
+
+        def expire_all_day_holds(self, expected_date):
+            return True
 
         def close(self):
             self.closed = True
@@ -2353,6 +2373,26 @@ def test_continuous_reveals_reuse_artifacts_and_one_backend(workspace, monkeypat
     assert [image.getpixel((192, 162)) for image in display.images] == [(255, 255, 255)] * 3
     for image in display.images:
         image.close()
+
+
+def test_continuous_reveal_preparation_continues_during_hold_and_latest_date_is_delivered(
+    workspace: Workspace, monkeypatch
+) -> None:
+    ordinary(workspace)
+    hold_state = {"started": False, "status": None}
+    clock = RuntimeClock(at(10, 7), [at(10, 12), at(10, 18), at(10, 19), at(11, 7)])
+
+    stages, _, display = run_continuously(workspace, clock, monkeypatch, hold_state=hold_state)
+
+    assert hold_state["started"] and hold_state["status"] in (
+        PublicationStatus.ACCEPTED,
+        PublicationStatus.SUCCEEDED,
+    )
+    assert stages[:3] == [(1, 0), (1, 1), (1, 2)]
+    assert stages[-1] == (2, 0)
+    assert hold_state["coordinator"].acknowledgements == {"epaper": (2, 0)}
+    assert workspace.load().revision == 2
+    assert display.closed == 1
 
 
 def test_continuous_reports_pending_backend_shutdown(workspace, monkeypatch) -> None:

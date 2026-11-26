@@ -120,6 +120,7 @@ def _report_refresh_result(result: PublicationResult) -> int:
             "refresh was not accepted because publication is busy; wait for the current update to finish"
         ),
         PublicationStatus.FAILED: "refresh publication failed",
+        PublicationStatus.UNCONFIRMED: "refresh publication outcome is unconfirmed",
         PublicationStatus.STOPPING: "the resident Refrain runtime is stopping or rejected the refresh",
         PublicationStatus.INVALID: "the resident Refrain runtime rejected the refresh as invalid",
         PublicationStatus.NO_TARGET: (
@@ -135,11 +136,18 @@ def _report_refresh_result(result: PublicationResult) -> int:
     }
     message = messages.get(result.status, f"refresh ended with unexpected status {result.status.value!r}")
     print(f"refrain: {message}.", file=sys.stderr)
+    if result.status in (PublicationStatus.FAILED, PublicationStatus.UNCONFIRMED) and any(
+        success is None for success, _error in result.destinations.values()
+    ):
+        print("  Publication may have occurred; do not retry automatically.", file=sys.stderr)
     for identifier, (success, error) in result.destinations.items():
         if result.status is PublicationStatus.STALE_PRESENTATION and success is None and error is None:
             continue
         if success is not True:
-            detail = error or ("publication failed" if success is False else "no terminal outcome reported")
+            if success is None and result.status in (PublicationStatus.FAILED, PublicationStatus.UNCONFIRMED):
+                detail = "outcome unconfirmed" + (f": {error}" if error else "")
+            else:
+                detail = error or ("publication failed" if success is False else "no terminal outcome reported")
             print(f"  {identifier}: {detail}", file=sys.stderr)
     return 1
 

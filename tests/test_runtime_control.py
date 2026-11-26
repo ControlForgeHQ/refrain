@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
+from datetime import date
 from multiprocessing.connection import Client, Connection
 from threading import Event, Thread
 
@@ -58,14 +59,24 @@ def runtime(tmp_path):
             DisplayOutputConfiguration("two", SPEC, audience="internal"),
         ),
     )
-    coordinator = DisplayPublicationCoordinator((config,), lambda _: Backend(), retry=False)
+    coordinator = DisplayPublicationCoordinator(
+        (config,),
+        lambda _: Backend(),
+        retry=False,
+        logical_date=lambda: date(2026, 3, 15),
+    )
     coordinator.publish((1, 0), {SPEC: Image.new("RGB", SPEC.requested_output_size, (1, 2, 3))})
     assert coordinator.wait_for_publication((1, 0), 2)
     seen.clear()
 
     def refresh(admit):
         image = Image.new("RGB", SPEC.requested_output_size, (1, 2, 3))
-        return admit((1, 0), {SPEC: image})
+        return admit(
+            (1, 0),
+            {SPEC: image},
+            expected_date=date(2026, 3, 15),
+            admission_check=lambda: True,
+        )
 
     path = tmp_path / "runtime.json"
     server = RuntimeControlServer(coordinator, path, refresh)
@@ -123,7 +134,7 @@ def _wait_until(predicate):
 def _request(specifications, payloads, *, preflight=True):
     indices = {spec: index for index, spec in enumerate(payloads)}
     return {
-        "version": 2,
+        "version": 1,
         "operation": "publish",
         "preflight": preflight,
         "target": list(specifications),
@@ -140,6 +151,91 @@ def _png(specification):
     with Image.new("RGB", specification.requested_output_size, (9, 8, 7)) as image, io.BytesIO() as data:
         image.save(data, format="PNG")
         return data.getvalue()
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true", [], {}])
+def test_invalid_hold_intent_rejected_before_transfer(runtime, value):
+    path, _, seen, _, _, _ = runtime
+    request = _request({"one": SPEC}, {SPEC: _png(SPEC)})
+    request["all_day"] = value
+    with _raw(path) as connection:
+        connection.send_bytes(json.dumps(request).encode())
+        assert json.loads(connection.recv_bytes())["status"] == "invalid"
+    assert not seen
+
+
+@pytest.mark.parametrize("hold", [False, True])
+def test_client_transmits_hold_intent(monkeypatch, tmp_path, hold):
+    client = RuntimeControlClient(tmp_path / "endpoint.json")
+    requests = []
+    monkeypatch.setattr(client, "_publish", lambda request, payloads, callback: requests.append(request))
+    with Image.new("RGB", SPEC.requested_output_size) as image:
+        client.publish_transient("one", {"one": SPEC}, {SPEC: image}, audiences={"one": "internal"}, all_day=hold)
+    assert requests[0]["version"] == 1
+    assert requests[0]["all_day"] is hold
+
+
+def test_client_rejects_non_boolean_hold_intent(tmp_path):
+    client = RuntimeControlClient(tmp_path / "endpoint.json")
+    with pytest.raises(RuntimeProtocolError, match="all_day"):
+        client.publish_transient("one", {}, {}, all_day=1)
+
+
+def test_hold_intent_reaches_resident_admission(runtime, monkeypatch):
+    path, coordinator, seen, _, _, _ = runtime
+    monkeypatch.setattr(coordinator, "_logical_date", lambda: date(2026, 11, 26))
+    admitted = []
+    original = coordinator.publish_transient
+
+    def observe(*args, **kwargs):
+        admitted.append(kwargs.get("all_day", False))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator, "publish_transient", observe)
+    with Image.new("RGB", SPEC.requested_output_size, (9, 8, 7)) as image:
+        result = RuntimeControlClient(path).publish_transient(
+            "one", {"one": SPEC}, {SPEC: image}, audiences={"one": "internal"}, all_day=True
+        )
+    assert result.status is PublicationStatus.SUCCEEDED
+    _wait_until(lambda: not runtime[-1]._staging_path.exists())
+    with _raw(path) as connection:
+        payload = _png(SPEC)
+        connection.send_bytes(json.dumps(_request({"one": SPEC}, {SPEC: payload})).encode())
+        assert json.loads(connection.recv_bytes())["status"] == "ready"
+        connection.send_bytes(payload)
+        connection.send_bytes(b'{"commit":true}')
+        status = json.loads(connection.recv_bytes())["status"]
+        if status == "accepted":
+            status = json.loads(connection.recv_bytes())["status"]
+        assert status == "succeeded"
+    assert admitted == [True, False]
+    assert len(seen) == 2
+
+
+def test_disconnected_all_day_client_does_not_cancel_resident_hold(runtime, monkeypatch):
+    path, coordinator, seen, entered, release, server = runtime
+    monkeypatch.setattr(coordinator, "_logical_date", lambda: date(2026, 11, 26))
+    payload = _png(SPEC)
+    request = _request({"one": SPEC}, {SPEC: payload})
+    request["all_day"] = True
+    release.clear()
+    entered.clear()
+    try:
+        with _raw(path) as connection:
+            connection.send_bytes(json.dumps(request).encode())
+            assert json.loads(connection.recv_bytes())["status"] == "ready"
+            connection.send_bytes(payload)
+            connection.send_bytes(b'{"commit":true}')
+            assert json.loads(connection.recv_bytes())["status"] == "accepted"
+            assert entered.wait(2)
+        release.set()
+        _wait_until(lambda: not server._staging_path.exists())
+        coordinator.publish((1, 1), {SPEC: Image.new("RGB", SPEC.requested_output_size, (4, 5, 6))})
+        _wait_until(lambda: coordinator.acknowledgements["two"] == (1, 1))
+        assert coordinator.acknowledgements["one"] == (1, 0)
+        assert seen == [("one", (9, 8, 7)), ("two", (4, 5, 6))]
+    finally:
+        release.set()
 
 
 def test_transient_slot_blocks_during_transfer_and_cleans_disconnect(runtime):
@@ -826,7 +922,7 @@ def test_transient_destination_count_remains_bounded(runtime):
         connection.send_bytes(
             json.dumps(
                 {
-                    "version": 2,
+                    "version": 1,
                     "operation": "publish",
                     "target": identifiers,
                     "specifications": {identifier: specification for identifier in identifiers},
@@ -881,7 +977,7 @@ def test_server_rejects_resource_limits_before_image_transfer(runtime, limit, mo
     specification = control_module._spec_to_wire(SPEC)
     identifiers = ["one", "two"]
     request = {
-        "version": 2,
+        "version": 1,
         "operation": "publish",
         "target": identifiers,
         "specifications": {identifier: specification for identifier in identifiers},
@@ -917,7 +1013,7 @@ def test_non_rgb_png_rejected_before_admission(runtime, mode):
         payload = data.getvalue()
     specification = {"aspect_ratio": "16:9", "size": [16, 9]}
     request = {
-        "version": 2,
+        "version": 1,
         "operation": "publish",
         "target": ["one"],
         "specifications": {"one": specification},
@@ -1072,7 +1168,7 @@ def test_close_returns_running_refresh_handler_for_ownership_retention(tmp_path)
     server.start()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert entered.wait(1)
         pending = server.close()
         assert pending and all(isinstance(worker, Thread) for worker in pending)
@@ -1109,7 +1205,7 @@ def test_refresh_admission_guard_rejects_disconnection_or_shutdown(runtime, tmp_
     server.start()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert preparing.wait(1)
         if shutdown:
             assert server.close()
@@ -1205,7 +1301,7 @@ def test_transient_guard_rejects_disconnection_or_shutdown(runtime, tmp_path, sh
             payload = data.getvalue()
         specification = {"aspect_ratio": "16:9", "size": [16, 9]}
         message = {
-            "version": 2,
+            "version": 1,
             "operation": "publish",
             "target": ["one"],
             "specifications": {"one": specification},
@@ -1251,7 +1347,7 @@ def test_shutdown_event_rejects_and_releases_prepared_refresh(runtime, tmp_path)
     server.start()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert entered.wait(1)
         shutdown.set()
         release.set()
@@ -1322,10 +1418,10 @@ def test_stalled_publication_response_is_bounded(monkeypatch):
 @pytest.mark.parametrize(
     "message",
     [
-        {"version": 999, "operation": "discover"},
-        {"version": 2, "operation": "unknown"},
-        {"version": 2, "operation": "refresh", "identity": [1, 0]},
-        {"version": 2, "operation": "publish", "target": [], "specifications": {}, "images": []},
+        {"version": 2, "operation": "discover"},
+        {"version": 1, "operation": "unknown"},
+        {"version": 1, "operation": "refresh", "identity": [1, 0]},
+        {"version": 1, "operation": "publish", "target": [], "specifications": {}, "images": []},
     ],
 )
 def test_invalid_requests_never_publish(runtime, message):
@@ -1337,11 +1433,20 @@ def test_invalid_requests_never_publish(runtime, message):
     assert seen == []
 
 
+def test_version_two_is_rejected_as_unsupported(runtime):
+    path, _, seen, _, _, _ = runtime
+    with _raw(path) as connection:
+        connection.send_bytes(b'{"version":2,"operation":"discover"}')
+        response = json.loads(connection.recv_bytes())
+    assert response == {"version": 1, "status": "unsupported-protocol"}
+    assert not seen
+
+
 def test_incomplete_payload_never_publishes(runtime):
     path, _, seen, _, _, _ = runtime
     spec = {"aspect_ratio": "16:9", "size": [16, 9]}
     request = {
-        "version": 2,
+        "version": 1,
         "operation": "publish",
         "target": ["one"],
         "specifications": {"one": spec},
@@ -1359,7 +1464,7 @@ def test_disconnect_before_complete_transfer_never_publishes(runtime):
     path, _, seen, _, _, _ = runtime
     spec = {"aspect_ratio": "16:9", "size": [16, 9]}
     message = {
-        "version": 2,
+        "version": 1,
         "operation": "publish",
         "target": ["one"],
         "specifications": {"one": spec},
@@ -1393,7 +1498,7 @@ def test_invalid_image_descriptor_or_payload_never_publishes(runtime, encoding, 
     path, _, seen, _, _, _ = runtime
     spec = {"aspect_ratio": "16:9", "size": size}
     message = {
-        "version": 2,
+        "version": 1,
         "operation": "publish",
         "target": ["one"],
         "specifications": {"one": spec},
@@ -1419,7 +1524,7 @@ def test_busy_and_changed_specification_are_rejected(runtime):
     release.clear()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert json.loads(connection.recv_bytes())["status"] == "accepted"
         assert entered.wait(1)
         with Image.new("RGB", SPEC.requested_output_size) as image:
@@ -1473,7 +1578,7 @@ def test_disconnect_after_admission_does_not_cancel(runtime):
     entered.clear()
     release.clear()
     connection = _raw(path)
-    connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+    connection.send_bytes(b'{"version":1,"operation":"refresh"}')
     assert json.loads(connection.recv_bytes())["status"] == "accepted"
     assert entered.wait(1)
     connection.close()
@@ -1519,7 +1624,7 @@ def test_shutdown_retains_admitted_work_until_all_destinations_finish(runtime):
     release.clear()
     connection = _raw(path)
     try:
-        connection.send_bytes(b'{"version":2,"operation":"refresh"}')
+        connection.send_bytes(b'{"version":1,"operation":"refresh"}')
         assert json.loads(connection.recv_bytes())["status"] == "accepted"
         assert entered.wait(1)
         connection.close()
