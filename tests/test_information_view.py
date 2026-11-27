@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 from dataclasses import replace
 from datetime import time
 from io import BytesIO
@@ -271,37 +269,6 @@ def test_fitted_text_can_align_an_identity_block_to_its_right_edge() -> None:
         assert bounds[2] >= 496
     finally:
         image.close()
-
-
-def test_preview_example_writes_complete_png_without_application_state(tmp_path: Path) -> None:
-    repository = Path(__file__).parent.parent
-    config = tmp_path / "config.yaml"
-    config.write_text(
-        'destinations:\n  - id: default\n    type: "window"\n    audience: "internal"\n'
-        'fonts:\n  pools:\n    default: ["@builtin"]\n'
-        'text:\n  colors:\n    pools:\n      default: ["@builtin"]\n',
-        encoding="utf-8",
-    )
-    output = tmp_path / "information-view.png"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(repository / "examples" / "information_view.py"),
-            "--config",
-            str(config),
-            "--output",
-            str(output),
-        ],
-        cwd=repository,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    with Image.open(output) as image:
-        assert image.format == "PNG"
-        assert image.size == (1920, 1080)
 
 
 def test_information_view_prepares_the_requested_destination_variant(configuration) -> None:

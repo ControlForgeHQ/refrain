@@ -1,7 +1,7 @@
 [project]
 name = "controlforge-refrain"
 version = "0.1.0"
-description = "Hardware-independent quotation content loading and validation"
+description = "Daily quotations with progressive reveal across digital displays"
 requires-python = ">=3.13"
 dependencies = [
     "PyYAML>=6.0.3,<7",
