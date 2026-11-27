@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
+import traceback
 from pathlib import Path
 
 import pytest
@@ -147,6 +150,45 @@ def test_shared_yaml_document_rules(tmp_path: Path, contents: str) -> None:
     file.write_text(contents, encoding="utf-8")
     with pytest.raises(ApplicationConfigurationError):
         load_image_server_config(file)
+
+
+@pytest.mark.parametrize(
+    ("contents", "location"),
+    [
+        (b"example: {private-sentinel: [}\n", "line 1, column"),
+        (b"private-sentinel: one\nprivate-sentinel: two\n", "line 2, column"),
+        (b"example: !private-sentinel value\n", "line 1, column"),
+        (b"example: &private-sentinel value\n", None),
+        (b"example: private-sentinel\xff\n", None),
+    ],
+)
+def test_invalid_yaml_diagnostics_do_not_expose_source(tmp_path, caplog, contents, location):
+    file = tmp_path / "config.yaml"
+    file.write_bytes(contents)
+    with caplog.at_level(logging.ERROR), pytest.raises(ApplicationConfigurationError) as raised:
+        load_image_server_config(file)
+    diagnostics = caplog.text + str(raised.value) + "".join(traceback.format_exception(raised.value))
+    assert "private-sentinel" not in diagnostics
+    assert str(file) in diagnostics
+    assert raised.value.diagnostics[0].severity == logging.ERROR
+    assert "invalid or unsupported YAML" in diagnostics or "invalid UTF-8 encoding" in diagnostics
+    if location is not None:
+        assert location in diagnostics
+
+
+def test_invalid_yaml_cli_exit_and_diagnostics(tmp_path):
+    file = tmp_path / "config.yaml"
+    file.write_text("example: {private-sentinel: [}\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "refrain.image_server", "--config", str(file)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 78
+    assert str(file) in result.stderr
+    assert "invalid or unsupported YAML" in result.stderr and "line 1, column" in result.stderr
+    assert "private-sentinel" not in result.stderr and "private-sentinel" not in result.stdout
 
 
 def test_resident_ignores_image_server_section(tmp_path: Path, caplog) -> None:

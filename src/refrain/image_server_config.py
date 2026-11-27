@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 import yaml
 
@@ -32,11 +32,11 @@ class ImageServerConfiguration:
     host: str = _DEFAULT_HOST
     port: int = _DEFAULT_PORT
 
-    def read_current(self, destination_id: str) -> PublicationDataset:
+    def read_current(self, destination_id: str, *, cancelled: Callable[[], bool] | None = None) -> PublicationDataset:
         """Read a configured destination's complete, verified current dataset."""
         if destination_id not in self.destinations:
             raise PublicationStorageError(f"destination is not configured for the image server: {destination_id!r}")
-        return PublicationStore(self.publication_root).read_current(destination_id)
+        return PublicationStore(self.publication_root).read_current(destination_id, cancelled=cancelled)
 
 
 def _valid_host(value: object) -> bool:
@@ -87,13 +87,16 @@ def load_image_server_config(
 
     try:
         data = load_yaml(file.read_text(encoding="utf-8"), allow_non_string_keys=True)
-    except (OSError, UnicodeError) as error:
+    except OSError as error:
         report("$", f"cannot read UTF-8 YAML file: {error}", logging.ERROR)
         reject_document(error)
+    except UnicodeError:
+        report("$", "cannot read UTF-8 YAML file: invalid UTF-8 encoding", logging.ERROR)
+        reject_document()
     except yaml.YAMLError as error:
         location = yaml_error_location(error)
-        report("$", f"invalid or unsupported YAML: {f'{location}: ' if location else ''}{error}", logging.ERROR)
-        reject_document(error)
+        report("$", f"invalid or unsupported YAML{f' at {location}' if location else ''}", logging.ERROR)
+        reject_document()
     if not isinstance(data, dict):
         report("$", "must contain one top-level mapping", logging.ERROR)
         reject_document()

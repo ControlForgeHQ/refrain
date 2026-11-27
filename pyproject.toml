@@ -12,6 +12,7 @@ dependencies = [
 [project.scripts]
 refrain = "refrain.__main__:main"
 refrain-viewer = "refrain.viewer:main"
+refrain-image-server = "refrain.image_server:main"
 
 [project.optional-dependencies]
 hardware = [
