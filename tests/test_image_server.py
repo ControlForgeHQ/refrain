@@ -11,7 +11,6 @@ import subprocess
 import sysconfig
 import threading
 import time
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -531,71 +530,57 @@ def test_concurrent_publication_replacement_uses_only_verified_images(service, m
 def test_write_inactivity_terminates_stalled_loopback(service, monkeypatch):
     _publish(service)
     dataset = service.config.read_current("screen")
-    dataset = replace(dataset, image=dataset.image + b"x" * (16 * 1024 * 1024))
-    monkeypatch.setattr(ImageServerConfiguration, "read_current", lambda _self, _dest, **_kwargs: dataset)
     monkeypatch.setattr(image_server, "WRITE_INACTIVITY_TIMEOUT", 0.15)
+    monkeypatch.setattr(image_server, "RESPONSE_TIMEOUT", 30.0)
     original = image_server._SocketWriter.write
     transmitting = threading.Event()
     resume = threading.Event()
-    timeouts = []
+    timed_out = threading.Event()
+    timeouts: list[float] = []
 
-    class ObservedConnection:
-        def __init__(self, connection):
-            self.connection = connection
-            self.timeout = None
-
+    class StalledConnection:
         def settimeout(self, timeout):
-            self.timeout = timeout
-            self.connection.settimeout(timeout)
+            timeouts.append(timeout)
 
         def send(self, data):
-            started = time.monotonic()
-            try:
-                return self.connection.send(data)
-            except socket.timeout:
-                timeouts.append((self.timeout, time.monotonic() - started))
-                raise
-
-    def send_large(self, data):
-        if data.startswith(b"\x89PNG"):
-            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-            original(self, data[:1024])
             transmitting.set()
             if not resume.wait(2):
                 raise RuntimeError("test did not resume response transmission")
-            self.connection = ObservedConnection(self.connection)
-            return 1024 + original(self, data[1024:])
+            threading.Event().wait(timeouts[-1])
+            timed_out.set()
+            raise socket.timeout("controlled stalled write")
+
+    def stall_body(self, data):
+        if data.startswith(b"\x89PNG"):
+            self.connection = StalledConnection()
         return original(self, data)
 
-    monkeypatch.setattr(image_server._SocketWriter, "write", send_large)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-        client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
-        client.settimeout(2)
-        client.connect(service.server_address[:2])
+    monkeypatch.setattr(image_server._SocketWriter, "write", stall_body)
+    with socket.create_connection(service.server_address[:2], timeout=2) as client:
         try:
             client.sendall(b"GET /destination/screen/current HTTP/1.1\r\nHost: localhost\r\n\r\n")
             assert transmitting.wait(2)
             response = b""
-            while b"\r\n\r\n\x89PNG" not in response:
+            while b"\r\n\r\n" not in response:
                 chunk = client.recv(4096)
                 assert chunk
                 response += chunk
             assert response.startswith(b"HTTP/1.1 200 ")
             assert f"Content-Length: {len(dataset.image)}\r\n".encode() in response
+            assert response.endswith(b"\r\n\r\n")
             assert service.verification.acquire(timeout=2)
             service.verification.release()
             with service._condition:
                 assert service._clients
+                assert timeouts == [image_server.WRITE_INACTIVITY_TIMEOUT]
                 resume.set()
                 deadline = time.monotonic() + 2
                 while service._clients:
                     remaining = deadline - time.monotonic()
                     assert remaining > 0
                     service._condition.wait(remaining)
-            assert len(timeouts) == 1
-            timeout, elapsed = timeouts[0]
-            assert timeout == image_server.WRITE_INACTIVITY_TIMEOUT
-            assert elapsed >= timeout * 0.8
+            assert timed_out.is_set()
+            assert client.recv(1) == b""
             acquired = 0
             try:
                 for _ in range(image_server.HANDLER_LIMIT):
@@ -606,6 +591,27 @@ def test_write_inactivity_terminates_stalled_loopback(service, monkeypatch):
                     service.handlers.release()
         finally:
             resume.set()
+    monkeypatch.setattr(image_server._SocketWriter, "write", original)
+    assert _request(service)[::2] == (200, dataset.image)
+
+
+def test_response_writer_limits_each_write_by_inactivity_and_remaining_deadline(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(image_server.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(image_server, "WRITE_INACTIVITY_TIMEOUT", 0.15)
+    monkeypatch.setattr(image_server, "RESPONSE_TIMEOUT", 0.25)
+    timeouts = []
+
+    class ProgressingConnection:
+        def settimeout(self, timeout):
+            timeouts.append(timeout)
+
+        def send(self, data):
+            clock[0] += 0.1
+            return 1
+
+    assert image_server._SocketWriter(ProgressingConnection()).write(b"123") == 3
+    assert timeouts == pytest.approx([0.15, 0.15, 0.05])
 
 
 def test_response_deadline_starts_on_first_write_and_bounds_progress(monkeypatch):
