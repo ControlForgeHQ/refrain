@@ -150,6 +150,46 @@ def test_image_server_reads_verified_publications_without_writer_path_protection
     assert config.read_current("screen").manifest.publication_id == "recovered"
 
 
+def test_image_server_retries_replaced_dataset_and_rejects_redirected_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symlink_or_skip
+) -> None:
+    root = tmp_path / "published"
+    writer = _store(root)
+    with _image(1) as image:
+        writer.publish("screen", image, _metadata("old"), audience="internal")
+    file = tmp_path / "config.yaml"
+    data = {
+        "destinations": [{"id": "screen", "type": "publish"}],
+        "image-server": {"destinations": ["screen"]},
+        "storage": {"publish": str(root)},
+    }
+    file.write_text(yaml.safe_dump(data), encoding="utf-8")
+    config = load_image_server_config(file)
+    original = PublicationStore._read_dataset
+    replaced = False
+
+    def replace_before_read(store: PublicationStore, destination: Path, manifest: PublicationManifest):
+        nonlocal replaced
+        if manifest.publication_id == "old" and not replaced:
+            replaced = True
+            with _image(2) as image:
+                writer.publish("screen", image, _metadata("new"), audience="internal")
+        return original(store, destination, manifest)
+
+    monkeypatch.setattr(PublicationStore, "_read_dataset", replace_before_read)
+    dataset = config.read_current("screen")
+    assert dataset.manifest.publication_id == "new"
+    assert hashlib.sha256(dataset.image).hexdigest() == dataset.manifest.image_sha256
+
+    link = tmp_path / "linked"
+    symlink_or_skip(link, root, directory=True)
+    data["storage"]["publish"] = str(link)
+    file.write_text(yaml.safe_dump(data), encoding="utf-8")
+    linked_config = load_image_server_config(file)
+    with pytest.raises(PublicationStorageError, match="link|reparse"):
+        linked_config.read_current("screen")
+
+
 def test_manifest_contract_round_trips_and_rejects_unsafe_or_unknown_values() -> None:
     manifest = PublicationManifest(
         "publication-1",
