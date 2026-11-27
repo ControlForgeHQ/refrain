@@ -408,31 +408,59 @@ def test_requests_do_not_modify_publication_files(service):
     assert before == after
 
 
-def test_concurrent_publication_replacement_uses_only_verified_images(service):
+def test_concurrent_publication_replacement_uses_only_verified_images(service, monkeypatch):
     _publish(service, "initial", value=0)
     first = service.config.read_current("screen").image
     _publish(service, "other-image", value=5)
-    second = service.config.read_current("screen").image
-    start = threading.Event()
+    previous = service.config.read_current("screen")
+    second = previous.image
+    entered, release = threading.Event(), threading.Event()
     errors = []
+    failed_replacements = []
+    replace_manifest = PublicationStore._replace_manifest
+
+    def replace_once(source, target):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+            raise PermissionError("controlled manifest replacement failure")
+        replace_manifest(source, target)
+
+    monkeypatch.setattr(PublicationStore, "_replace_manifest", staticmethod(replace_once))
 
     def publish():
         try:
-            assert start.wait(2)
             for index in range(12):
-                _publish(service, f"replacement-{index}", transient=True, value=5 if index % 2 else 0)
+                before = service.config.read_current("screen")
+                try:
+                    _publish(service, f"replacement-{index}", transient=True, value=5 if index % 2 else 0)
+                except PublicationStorageError as error:
+                    if error.published or not isinstance(error.__cause__, PermissionError):
+                        raise
+                    assert service.config.read_current("screen") == before
+                    failed_replacements.append(index)
         except Exception as error:
             errors.append(error)
 
     writer = threading.Thread(target=publish, daemon=True)
     writer.start()
-    start.set()
-    for _ in range(25):
-        status, _, body = _request(service)
-        assert status in (200, 503)
-        assert (status == 200 and body in (first, second)) or (status == 503 and not body)
-    writer.join(5)
-    assert not writer.is_alive() and not errors
+    try:
+        assert entered.wait(5)
+        assert _request(service)[::2] == (200, second)
+        release.set()
+        for _ in range(25):
+            status, _, body = _request(service)
+            assert status in (200, 503)
+            assert (status == 200 and body in (first, second)) or (status == 503 and not body)
+    finally:
+        release.set()
+        writer.join(10)
+    assert not writer.is_alive() and not errors and 0 in failed_replacements
+
+    _publish(service, "recovered", transient=True, value=5)
+    recovered = service.config.read_current("screen")
+    assert recovered.manifest.publication_id == "recovered"
+    assert _request(service)[::2] == (200, recovered.image)
 
 
 def test_write_inactivity_terminates_stalled_loopback(service, monkeypatch):
