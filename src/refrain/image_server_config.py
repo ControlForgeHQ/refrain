@@ -87,13 +87,16 @@ def load_image_server_config(
 
     try:
         data = load_yaml(file.read_text(encoding="utf-8"), allow_non_string_keys=True)
-    except (OSError, UnicodeError) as error:
+    except OSError as error:
         report("$", f"cannot read UTF-8 YAML file: {error}", logging.ERROR)
         reject_document(error)
+    except UnicodeError:
+        report("$", "cannot read UTF-8 YAML file: invalid UTF-8 encoding", logging.ERROR)
+        reject_document()
     except yaml.YAMLError as error:
         location = yaml_error_location(error)
-        report("$", f"invalid or unsupported YAML: {f'{location}: ' if location else ''}{error}", logging.ERROR)
-        reject_document(error)
+        report("$", f"invalid or unsupported YAML{f' at {location}' if location else ''}", logging.ERROR)
+        reject_document()
     if not isinstance(data, dict):
         report("$", "must contain one top-level mapping", logging.ERROR)
         reject_document()
