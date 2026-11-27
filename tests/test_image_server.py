@@ -11,6 +11,7 @@ import subprocess
 import sysconfig
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -530,27 +531,81 @@ def test_concurrent_publication_replacement_uses_only_verified_images(service, m
 def test_write_inactivity_terminates_stalled_loopback(service, monkeypatch):
     _publish(service)
     dataset = service.config.read_current("screen")
+    dataset = replace(dataset, image=dataset.image + b"x" * (16 * 1024 * 1024))
     monkeypatch.setattr(ImageServerConfiguration, "read_current", lambda _self, _dest, **_kwargs: dataset)
     monkeypatch.setattr(image_server, "WRITE_INACTIVITY_TIMEOUT", 0.15)
     original = image_server._SocketWriter.write
+    transmitting = threading.Event()
+    resume = threading.Event()
+    timeouts = []
+
+    class ObservedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+            self.timeout = None
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+            self.connection.settimeout(timeout)
+
+        def send(self, data):
+            started = time.monotonic()
+            try:
+                return self.connection.send(data)
+            except socket.timeout:
+                timeouts.append((self.timeout, time.monotonic() - started))
+                raise
 
     def send_large(self, data):
         if data.startswith(b"\x89PNG"):
             self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-            data = b"x" * (16 * 1024 * 1024)
+            original(self, data[:1024])
+            transmitting.set()
+            if not resume.wait(2):
+                raise RuntimeError("test did not resume response transmission")
+            self.connection = ObservedConnection(self.connection)
+            return 1024 + original(self, data[1024:])
         return original(self, data)
 
     monkeypatch.setattr(image_server._SocketWriter, "write", send_large)
-    with socket.create_connection(service.server_address[:2], timeout=2) as client:
-        client.sendall(b"GET /destination/screen/current HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        deadline = time.monotonic() + 2
-        with service._condition:
-            while not service._clients:
-                assert time.monotonic() < deadline
-                service._condition.wait(0.01)
-            while service._clients:
-                assert time.monotonic() < deadline
-                service._condition.wait(0.05)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        client.settimeout(2)
+        client.connect(service.server_address[:2])
+        try:
+            client.sendall(b"GET /destination/screen/current HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            assert transmitting.wait(2)
+            response = b""
+            while b"\r\n\r\n\x89PNG" not in response:
+                chunk = client.recv(4096)
+                assert chunk
+                response += chunk
+            assert response.startswith(b"HTTP/1.1 200 ")
+            assert f"Content-Length: {len(dataset.image)}\r\n".encode() in response
+            assert service.verification.acquire(timeout=2)
+            service.verification.release()
+            with service._condition:
+                assert service._clients
+                resume.set()
+                deadline = time.monotonic() + 2
+                while service._clients:
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0
+                    service._condition.wait(remaining)
+            assert len(timeouts) == 1
+            timeout, elapsed = timeouts[0]
+            assert timeout == image_server.WRITE_INACTIVITY_TIMEOUT
+            assert elapsed >= timeout * 0.8
+            acquired = 0
+            try:
+                for _ in range(image_server.HANDLER_LIMIT):
+                    assert service.handlers.acquire(timeout=2)
+                    acquired += 1
+            finally:
+                for _ in range(acquired):
+                    service.handlers.release()
+        finally:
+            resume.set()
 
 
 def test_response_deadline_starts_on_first_write_and_bounds_progress(monkeypatch):
