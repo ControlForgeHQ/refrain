@@ -324,11 +324,7 @@ def _publish_scheduled(
     metadata: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, dict[str, object]],
     destination_keys: Mapping[str, ResolvedOutputSpecification | PreparedImageVariantKey],
 ) -> None:
-    publish_with_metadata = getattr(coordinator, "publish_with_metadata", None)
-    if callable(publish_with_metadata):
-        publish_with_metadata(identity, images, metadata, destination_keys=destination_keys)
-    else:
-        coordinator.publish(identity, images)
+    coordinator.publish_with_metadata(identity, images, metadata, destination_keys=destination_keys)
 
 
 def _finalize_publication_event(
@@ -387,12 +383,7 @@ def _publish_information_view(
     coordinator: DisplayPublicationCoordinator,
     images: Mapping[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image],
 ) -> None:
-    identity = _INFORMATION_VIEW_IDENTITY
-    publish_transient_presentation = getattr(coordinator, "publish_transient_presentation", None)
-    if callable(publish_transient_presentation):
-        publish_transient_presentation(identity, images)
-    else:
-        coordinator.publish(identity, images)
+    coordinator.publish_transient_presentation(_INFORMATION_VIEW_IDENTITY, images)
 
 
 def _publish_transient_fallback(

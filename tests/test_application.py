@@ -2004,15 +2004,28 @@ def install_recording_coordinator(monkeypatch, *, acknowledge_information_view: 
         def __init__(self, *_args, **_kwargs):
             self.desired_identity = None
             self.requested = []
+            self.scheduled_requests = []
+            self.transient_requests = []
+            self.transient_allow_missing = []
+            self.scheduled_metadata = []
             self.acknowledged = set()
             self.closed = False
             self.all_unavailable = False
             self.has_participating_destinations = True
             instances.append(self)
 
-        def publish(self, identity, images):
+        def publish_with_metadata(self, identity, images, metadata, *, destination_keys=None):
             self.requested.append(identity)
+            self.scheduled_requests.append(identity)
+            self.scheduled_metadata.append((identity, metadata, destination_keys))
             self.desired_identity = identity
+            for image in images.values():
+                image.close()
+
+        def publish_transient_presentation(self, identity, images, *, allow_missing=False):
+            self.requested.append(identity)
+            self.transient_requests.append(identity)
+            self.transient_allow_missing.append(allow_missing)
             for image in images.values():
                 image.close()
             if acknowledge_information_view and identity == application._INFORMATION_VIEW_IDENTITY:
@@ -2110,6 +2123,11 @@ def test_information_interval_uses_monotonic_time_across_wall_clock_adjustments(
     )
 
     assert coordinators[0].requested == [(0, -1), (1, 0)]
+    assert coordinators[0].transient_requests == [application._INFORMATION_VIEW_IDENTITY]
+    assert coordinators[0].transient_allow_missing == [False]
+    assert coordinators[0].scheduled_requests == [(1, 0)]
+    assert coordinators[0].desired_identity == (1, 0)
+    assert len(coordinators[0].scheduled_metadata[0][1]) == 1
     assert clock.elapsed == 2
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
