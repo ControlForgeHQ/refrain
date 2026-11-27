@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -56,7 +56,6 @@ from .recovery import recover_prepared_daily_images
 from .runtime_control import RuntimeControlServer, TransientAdmissionGuard
 from .scheduling import (
     SchedulingAction,
-    SchedulingDecision,
     SchedulingEvaluationError,
     _local_display_date,
     evaluate_scheduling,
@@ -86,15 +85,6 @@ class _UnavailableLibraryError(_RetryableApplicationError):
 
 class NoEligibleQuotationError(ApplicationError):
     """Raised when no quotation is eligible for the requested display date."""
-
-
-@dataclass(frozen=True)
-class StartupResult:
-    """Startup outcome; the stage is absent when no scheduled presentation was published."""
-
-    state: PersistentState | None
-    presented_stage: int | None
-    selected_initial_quotation: bool
 
 
 BackendFactory = Callable[[DisplayBackendConfiguration], DisplayBackend]
@@ -642,255 +632,6 @@ def _record_selection_history(history_store: GlobalHistoryStore, state: Persiste
         _LOGGER.warning("Committed selection %s was not recorded in global history: %s", state.revision, error)
 
 
-def _commit_startup_selection(
-    store: PersistentStateStore,
-    artifact_store: PreparedImageArtifactStore,
-    history_store: GlobalHistoryStore,
-    configuration: ApplicationConfiguration,
-    proposal: SelectionProposal,
-    snapshot: DailySnapshot,
-) -> PersistentState:
-    try:
-        state = _commit_selection_with_checkpoint(store, artifact_store, configuration, proposal, snapshot)
-    except _RetryableApplicationError as commit_error:
-        try:
-            state = _reload(store)
-        except InvalidSelectionStateError:
-            raise commit_error
-        if (
-            state is not None
-            and state.revision == proposal.base_revision + 1
-            and state.snapshot == snapshot
-            and state.repetition_history == proposal.proposed_repetition_history
-        ):
-            _LOGGER.warning("Selection was committed, but a subsequent operation failed: %s", commit_error)
-            _record_selection_history(history_store, state)
-            return state
-        raise
-    _record_selection_history(history_store, state)
-    return state
-
-
-def run_startup(
-    config_file: str | Path | ApplicationConfiguration,
-    state_path: str | Path,
-    artifact_root: str | Path,
-    *,
-    history_path: str | Path,
-    now: datetime | None = None,
-    random_source: random.Random | None = None,
-    backend_factory: BackendFactory = _default_backend_factory,
-    wall_clock: Callable[[], datetime] | None = None,
-    monotonic_clock: Callable[[], float] = time.monotonic,
-    wait: Callable[[float], None] = time.sleep,
-) -> StartupResult:
-    """Run one startup cycle: recover or select, prepare images, and publish the required stage.
-
-    ``now`` defaults to the current UTC time and exists so tests can control scheduling.
-    """
-    configuration = _load_configuration(config_file)
-    backend_factory = _configured_backend_factory(configuration, backend_factory)
-    store = PersistentStateStore(Path(state_path).absolute())
-    history_store = _create_history_store(store.path, history_path)
-    artifact_store = PreparedImageArtifactStore(Path(artifact_root).absolute())
-    current_time = (
-        wall_clock() if now is None and wall_clock is not None else (datetime.now(timezone.utc) if now is None else now)
-    )
-
-    def read_current_time() -> datetime:
-        if wall_clock is not None:
-            return wall_clock()
-        if now is not None:
-            return now
-        return datetime.now(timezone.utc)
-
-    recovered_invalid: InvalidSelectionStateError | None = None
-    try:
-        state = _reload(store)
-    except InvalidSelectionStateError as error:
-        _LOGGER.error("%s", error)
-        recovered_invalid = error
-        state = None
-    chooser = random_source if random_source is not None else random.Random()
-    fallback_date: date | None = None
-
-    def select_if_required(current: datetime) -> tuple[PersistentState | None, SchedulingDecision]:
-        nonlocal state, recovered_invalid, fallback_date
-        decision = evaluate_scheduling(current, configuration, state)
-        while decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION):
-            assert decision.display_date is not None
-            if fallback_date == decision.display_date:
-                return state, decision
-            try:
-                proposal, snapshot = _select_snapshot(
-                    configuration, decision.display_date, chooser, recovered_invalid or state
-                )
-            except NoEligibleQuotationError as error:
-                _LOGGER.warning("%s; presenting the no-eligible-content fallback", error)
-                fallback_date = decision.display_date
-                return state, decision
-            except _UnavailableLibraryError as error:
-                if state is None and recovered_invalid is None:
-                    raise ApplicationError(f"cannot establish an initial presentation: {error}") from error
-                raise
-            state = _commit_startup_selection(store, artifact_store, history_store, configuration, proposal, snapshot)
-            recovered_invalid = None
-            fallback_date = None
-            decision = evaluate_scheduling(read_current_time(), configuration, state)
-        return state, decision
-
-    try:
-        initial = state is None and recovered_invalid is None
-        try:
-            state, decision = select_if_required(current_time)
-        except _UnavailableLibraryError as error:
-            _LOGGER.warning("Cannot establish current presentation: %s", error)
-            return StartupResult(state, None, False)
-    except SchedulingEvaluationError as error:
-        raise ApplicationError(f"scheduling evaluation failed: {error}") from error
-
-    coordinator: DisplayPublicationCoordinator | None = None
-    pending_information_images: dict[ResolvedOutputSpecification, Image.Image] | None = None
-    information_images_transferred = False
-    try:
-        if configuration.information_view_duration > 0:
-            try:
-                prepared_information = prepare_information_view(
-                    configuration, configuration.required_output_specifications
-                )
-                information_images = {
-                    specification: images[-1] for specification, images in prepared_information.items()
-                }
-                pending_information_images = information_images
-            except InformationViewPreparationError as error:
-                _LOGGER.warning("Cannot prepare information view; proceeding to daily presentation: %s", error)
-            else:
-                coordinator = DisplayPublicationCoordinator(
-                    configuration.display_backends,
-                    backend_factory,
-                    retry=False,
-                    monotonic_clock=monotonic_clock,
-                    publication_finalizer=_finalize_publication_event,
-                )
-                _publish_information_view(
-                    coordinator,
-                    _destination_variant_images(configuration, information_images),
-                )
-                information_images_transferred = True
-                pending_information_images = None
-                if coordinator.wait_for_any_publication(
-                    _INFORMATION_VIEW_IDENTITY,
-                    timeout=_INFORMATION_VIEW_PUBLICATION_TIMEOUT,
-                ):
-                    acknowledged_at = coordinator.first_successful_publication_time(_INFORMATION_VIEW_IDENTITY)
-                    if acknowledged_at is not None:
-                        remaining = configuration.information_view_duration - (monotonic_clock() - acknowledged_at)
-                        if remaining > 0:
-                            wait(remaining)
-                else:
-                    _LOGGER.warning(
-                        "Information view was not published within the initial attempt period; "
-                        "proceeding to daily presentation"
-                    )
-        while True:
-            current_time = read_current_time()
-            try:
-                try:
-                    state, decision = select_if_required(current_time)
-                except _UnavailableLibraryError as error:
-                    _LOGGER.warning("Cannot establish current presentation: %s", error)
-                    return StartupResult(state, None, initial)
-            except SchedulingEvaluationError as error:
-                raise ApplicationError(f"scheduling evaluation failed before daily presentation: {error}") from error
-            if fallback_date is not None and decision.display_date == fallback_date:
-                try:
-                    prepared = prepare_no_eligible_fallback(
-                        configuration,
-                        configuration.required_prepared_image_keys,
-                        on_variant_error=_fallback_variant_failure,
-                    )
-                except DailyImagePreparationError as error:
-                    raise ApplicationError(f"cannot prepare no-eligible-content fallback: {error}") from error
-                if not prepared:
-                    raise ApplicationError("cannot prepare the no-eligible-content fallback for any destination")
-                images = {key: variants[-1] for key, variants in prepared.items()}
-                if evaluate_scheduling(read_current_time(), configuration, None).display_date != fallback_date:
-                    for image in images.values():
-                        image.close()
-                    continue
-                if coordinator is None:
-                    coordinator = DisplayPublicationCoordinator(
-                        configuration.display_backends,
-                        backend_factory,
-                        retry=False,
-                        monotonic_clock=monotonic_clock,
-                        publication_finalizer=_finalize_publication_event,
-                    )
-                identity = (-1, fallback_date.toordinal())
-                _publish_transient_fallback(coordinator, identity, images)
-                coordinator.wait_for_publication(identity)
-                return StartupResult(state, None, False)
-            assert state is not None and decision.required_reveal_stage is not None
-            requested_stage = stage = decision.required_reveal_stage
-            if stage > state.highest_reveal_stage:
-                state = _persist_reveal_progress(store, state, stage)
-                if stage > state.highest_reveal_stage:
-                    stage = state.highest_reveal_stage
-            checkpoint = _complete_checkpoint(store, state, configuration, chooser)
-            artifacts = _recover_images(
-                state,
-                artifact_store,
-                configuration,
-                chooser,
-                checkpoint,
-            )
-            images: dict[ResolvedOutputSpecification | PreparedImageVariantKey, Image.Image] | None = None
-            try:
-                images = _load_stage_variants(
-                    artifacts,
-                    artifacts.variant_keys,
-                    stage,
-                )
-                metadata = _load_stage_metadata(artifacts, artifacts.variant_keys, stage, checkpoint)
-            except ArtifactStoreError as error:
-                if images is not None:
-                    for image in images.values():
-                        image.close()
-                raise ApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-            assert images is not None
-            try:
-                final_decision = evaluate_scheduling(read_current_time(), configuration, state)
-            except SchedulingEvaluationError as error:
-                for image in images.values():
-                    image.close()
-                raise ApplicationError(f"scheduling evaluation failed before daily publication: {error}") from error
-            if final_decision.action in (SchedulingAction.INITIAL_SELECTION, SchedulingAction.NEW_SELECTION) or (
-                final_decision.required_reveal_stage != requested_stage
-            ):
-                for image in images.values():
-                    image.close()
-                continue
-            identity = (state.revision, stage)
-            if coordinator is None:
-                coordinator = DisplayPublicationCoordinator(
-                    configuration.display_backends,
-                    backend_factory,
-                    retry=False,
-                    monotonic_clock=monotonic_clock,
-                    publication_finalizer=_finalize_publication_event,
-                )
-            _publish_scheduled(coordinator, identity, images, metadata, _destination_keys(configuration, checkpoint))
-            coordinator.wait_for_publication(identity)
-            break
-    finally:
-        if coordinator is not None:
-            coordinator.close()
-        if pending_information_images is not None and not information_images_transferred:
-            for image in pending_information_images.values():
-                image.close()
-    return StartupResult(state=state, presented_stage=stage, selected_initial_quotation=initial)
-
-
 def run_application(
     config_file: str | Path | ApplicationConfiguration,
     state_path: str | Path,
@@ -1376,7 +1117,5 @@ def run_application(
 __all__ = [
     "ApplicationError",
     "NoEligibleQuotationError",
-    "StartupResult",
-    "run_startup",
     "run_application",
 ]

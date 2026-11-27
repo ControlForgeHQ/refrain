@@ -10,7 +10,7 @@ import yaml
 from test_application import FakeDisplay, RuntimeClock, Workspace, at
 
 import refrain.application as application
-from refrain import ApplicationError, PersistentStateStore, PreparedImageArtifactStore
+from refrain import PersistentStateStore, PreparedImageArtifactStore
 from refrain.checkpoint import CheckpointError, CheckpointStore
 from refrain.display.coordinator import PublicationStatus
 
@@ -42,7 +42,7 @@ def _checkpoint(workspace: Workspace) -> dict:
 def test_initial_commit_resolves_qr_and_routes_distinct_audience_keys(workspace: Workspace) -> None:
     result, display = workspace.run(at(10, 7))
     checkpoint = _checkpoint(workspace)
-    assert result.state.revision == 1
+    assert result.revision == 1
     assert checkpoint["content"]["qr"] == [
         {"visibility": ["external"], "payload": "public"},
         {"visibility": ["internal"], "payload": "private"},
@@ -58,7 +58,7 @@ def test_initial_commit_resolves_qr_and_routes_distinct_audience_keys(workspace:
 
 
 @pytest.mark.parametrize("operation", ["checkpoint", "artifacts"])
-def test_initial_invalidation_failure_prevents_state_commit(workspace, monkeypatch, operation) -> None:
+def test_initial_invalidation_failure_prevents_state_commit(workspace, monkeypatch, caplog, operation) -> None:
     checkpoint = workspace.state.with_name("publication.json")
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_text("orphan", encoding="utf-8")
@@ -70,10 +70,11 @@ def test_initial_invalidation_failure_prevents_state_commit(workspace, monkeypat
 
     owner = CheckpointStore if operation == "checkpoint" else PreparedImageArtifactStore
     monkeypatch.setattr(owner, "invalidate" if operation == "checkpoint" else "invalidate_all", fail)
-    with pytest.raises(ApplicationError, match="invalidate orphan"):
-        workspace.run(at(10, 7))
+    result, display = workspace.run(at(10, 7))
+    assert result is None and not display.images
     assert not workspace.state.exists()
     assert not workspace.history.exists()
+    assert "cannot invalidate orphan selection artifacts: blocked" in caplog.text
 
 
 @pytest.mark.parametrize("published", [False, True])
@@ -97,10 +98,10 @@ def test_failed_content_checkpoint_write_does_not_repeat_selection(workspace, mo
 
     monkeypatch.setattr(CheckpointStore, "initialize", fail)
     monkeypatch.setattr(application, "_select_snapshot", select)
-    result, display = workspace.run(at(10, 7))
+    result, display = workspace.run(at(10, 7), retries=1)
     committed = workspace.load()
     assert committed is not None and committed.revision == 1
-    assert result.state == committed
+    assert result == committed
     assert attempts == 1
     assert selections == 1
     assert len(workspace.history_records()) == 1
@@ -117,14 +118,14 @@ def test_failed_content_checkpoint_write_does_not_repeat_selection(workspace, mo
     monkeypatch.setattr(CheckpointStore, "initialize", original)
     monkeypatch.setattr(application, "_select_snapshot", lambda *_args: pytest.fail("must not reselect"))
     result, display = workspace.run(at(10, 7))
-    assert result.state == committed
+    assert result == committed
     assert _checkpoint(workspace)["content"]["qr"] == qr
     assert len(workspace.history_records()) == 1
     for image in display.images:
         image.close()
 
 
-def test_failed_reveal_checkpoint_update_recovers_state_first(workspace, monkeypatch) -> None:
+def test_failed_reveal_checkpoint_update_recovers_state_first(workspace, monkeypatch, caplog) -> None:
     initial, display = workspace.run(at(10, 7))
     for image in display.images:
         image.close()
@@ -137,14 +138,15 @@ def test_failed_reveal_checkpoint_update_recovers_state_first(workspace, monkeyp
         return original(self, state, resolver)
 
     monkeypatch.setattr(CheckpointStore, "complete", fail_advanced)
-    with pytest.raises(ApplicationError, match="checkpoint"):
-        workspace.run(at(10, 13))
+    result, display = workspace.run(at(10, 13))
+    assert result.highest_reveal_stage == 1 and not display.images
     assert workspace.load().highest_reveal_stage == 1
     assert _checkpoint(workspace) == before
+    assert "checkpoint" in caplog.text and "disk full" in caplog.text
     monkeypatch.setattr(CheckpointStore, "complete", original)
     result, display = workspace.run(at(10, 13))
     recovered = _checkpoint(workspace)
-    assert result.state.revision == initial.state.revision
+    assert result.revision == initial.revision
     assert recovered["presentation"] == before["presentation"]
     assert recovered["content"]["qr"] == before["content"]["qr"]
     assert recovered["content"]["reveal_stage"]["source"] is True
