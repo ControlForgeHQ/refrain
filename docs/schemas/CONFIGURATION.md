@@ -208,7 +208,13 @@ Overrides affect scheduled image preparation. They do not define independent art
 
 Only `refrain-image-server` interprets and validates the `image-server` section.
 
-The standalone image server validates the required `image-server` settings, applicable publication destination definitions, and storage paths needed for its own operation. It does not require content-library loading, font-resource resolution, artistic preparation, or other resident-only services merely to consume verified publication datasets.
+The standalone image server consumes only the `image-server` section, destination identities and types from `destinations`, and `storage.publish`.
+
+The `destinations` field must be a nonempty sequence. Each destination ID selected by the image server must identify exactly one destination mapping with `type: "publish"` and satisfy the identifier constraints defined in [Destinations](#destinations), including case-insensitive directory-name uniqueness among configured `publish` destinations.
+
+Destination fields other than `id` and `type`, and destination declarations unrelated to establishing the identity, type, and uniqueness of selected publication destinations, are ignored without diagnostics.
+
+When supplied, `storage` must be a mapping. Validate and resolve `storage.publish` according to [Storage](#storage). Ignore all other storage fields without diagnostics.
 
 The optional top-level `image-server` mapping configures the separately supervised `refrain-image-server` consumer and contains only:
 
