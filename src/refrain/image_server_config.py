@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 import yaml
 
@@ -32,11 +32,11 @@ class ImageServerConfiguration:
     host: str = _DEFAULT_HOST
     port: int = _DEFAULT_PORT
 
-    def read_current(self, destination_id: str) -> PublicationDataset:
+    def read_current(self, destination_id: str, *, cancelled: Callable[[], bool] | None = None) -> PublicationDataset:
         """Read a configured destination's complete, verified current dataset."""
         if destination_id not in self.destinations:
             raise PublicationStorageError(f"destination is not configured for the image server: {destination_id!r}")
-        return PublicationStore(self.publication_root).read_current(destination_id)
+        return PublicationStore(self.publication_root).read_current(destination_id, cancelled=cancelled)
 
 
 def _valid_host(value: object) -> bool:

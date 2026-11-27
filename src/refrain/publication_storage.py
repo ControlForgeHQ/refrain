@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 from PIL import Image
 
@@ -625,11 +625,13 @@ class PublicationStore:
         if publication.get("destination_id") != destination_id:
             raise PublicationStorageError("publication metadata destination does not match its owning directory")
 
-    def read_current(self, destination_id: str) -> PublicationDataset:
-        """Read and verify the current publication using only its manifest and files."""
+    def read_current(self, destination_id: str, *, cancelled: Callable[[], bool] | None = None) -> PublicationDataset:
+        """Read the current publication, optionally cancelling before a verification attempt."""
         destination_id = self._destination_id(destination_id)
         last_error: PublicationStorageError | None = None
         for _attempt in range(2):
+            if cancelled is not None and cancelled():
+                raise PublicationStorageError("publication verification cancelled")
             try:
                 destination = self._destination(destination_id, create=False)
                 dataset = self._load_current(destination)
