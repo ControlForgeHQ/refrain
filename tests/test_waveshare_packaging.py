@@ -120,6 +120,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
         entries.read_string(entry_points.decode("utf-8"))
         assert dict(entries["console_scripts"]) == {
             "refrain": "refrain.__main__:main",
+            "refrain-image-server": "refrain.image_server:main",
             "refrain-viewer": "refrain.viewer:main",
         }
 

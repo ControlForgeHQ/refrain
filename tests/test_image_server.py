@@ -186,11 +186,14 @@ def test_body_reception_shares_absolute_request_deadline(service, monkeypatch):
         for _ in range(10):
             try:
                 connection.sendall(b"x")
-            except OSError:
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 break
             time.sleep(0.06)
-        assert connection.recv(1) == b""
-        assert time.monotonic() - start < 0.8
+        try:
+            assert connection.recv(1) == b""
+        except (ConnectionAbortedError, ConnectionResetError):
+            pass
+        assert 0.24 <= time.monotonic() - start < 0.8
 
 
 def test_request_deadline_is_absolute_under_dribble(service, monkeypatch):
@@ -200,11 +203,14 @@ def test_request_deadline_is_absolute_under_dribble(service, monkeypatch):
         for _ in range(10):
             try:
                 connection.sendall(b"x")
-            except OSError:
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 break
             time.sleep(0.06)
-        assert connection.recv(1) == b""
-        assert time.monotonic() - start < 0.8
+        try:
+            assert connection.recv(1) == b""
+        except (ConnectionAbortedError, ConnectionResetError):
+            pass
+        assert 0.24 <= time.monotonic() - start < 0.8
 
 
 def test_blocked_verifier_is_daemon_and_cannot_succeed_after_shutdown(service, monkeypatch):
