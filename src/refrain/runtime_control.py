@@ -671,25 +671,20 @@ class RuntimeControlServer:
                         except (OSError, EOFError, RuntimeProtocolError) as error:
                             DisplayPublicationCoordinator._close_images(images)
                             raise RuntimeAdmissionRejected("control client disconnected before admission") from error
-                        publish_with_metadata = getattr(
-                            self._coordinator,
-                            "force_scheduled_publication_with_metadata",
-                            None,
-                        )
                         admission_kwargs = {}
                         if expected_date is not None:
                             admission_kwargs["expected_date"] = expected_date
                         if admission_check is not None:
                             admission_kwargs["admission_check"] = admission_check
-                        if metadata is not None and callable(publish_with_metadata):
+                        if metadata is not None:
                             if destination_keys is None:
-                                return publish_with_metadata(
+                                return self._coordinator.force_scheduled_publication_with_metadata(
                                     identity,
                                     images,
                                     metadata,
                                     **admission_kwargs,
                                 )
-                            return publish_with_metadata(
+                            return self._coordinator.force_scheduled_publication_with_metadata(
                                 identity,
                                 images,
                                 metadata,
