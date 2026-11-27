@@ -46,8 +46,11 @@ The service's `HOME`, `XDG_CONFIG_HOME`, and `XDG_STATE_HOME` affect standard pa
 Extract the installed resource, then install a local copy for customization:
 
 ```sh
-/opt/refrain/venv/bin/python -c 'from importlib.resources import files; print(files("refrain").joinpath("systemd", "refrain-image-server.service").read_text(encoding="utf-8"), end="")' > /tmp/refrain-image-server.service
-sudo install -m 0644 /tmp/refrain-image-server.service /etc/systemd/system/refrain-image-server.service
+unit_dir=$(mktemp -d)
+/opt/refrain/venv/bin/python -c 'from importlib.resources import files; print(files("refrain").joinpath("systemd", "refrain-image-server.service").read_text(encoding="utf-8"), end="")' > "$unit_dir/refrain-image-server.service"
+sudo install -m 0644 "$unit_dir/refrain-image-server.service" /etc/systemd/system/refrain-image-server.service
+rm "$unit_dir/refrain-image-server.service"
+rmdir "$unit_dir"
 sudoedit /etc/systemd/system/refrain-image-server.service
 ```
 
@@ -59,6 +62,8 @@ Keep the supplied supervision settings: configuration exit 78 is not restarted; 
 sudo systemctl daemon-reload
 sudo systemctl enable --now refrain-image-server.service
 ```
+
+If binding to a specific LAN address, the address must exist before the listener starts. Otherwise repeated bind failures can exhaust the start limit before networking is ready. Where appropriate, configure the OS network manager's wait-online service and add `Wants=network-online.target` and `After=network-online.target` to a local image-server unit drop-in; verify that the network manager's definition of online actually covers the selected address. This is optional network ordering, not a dependency on the resident. After changing a drop-in, reload systemd and restart the image server; after a start-limit failure, inspect the journal and reset the failed state before starting it again.
 
 Enablement is optional and independent of `refrain.service`. To run in the foreground instead, use the same identity and environment as the service and invoke `/opt/refrain/venv/bin/refrain-image-server --config /absolute/path/config.yaml`; omit `--config` only when the intended standard configuration is in that identity's environment. Stop the foreground instance before starting another instance on the same address and port.
 
