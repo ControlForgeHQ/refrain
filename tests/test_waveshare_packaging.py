@@ -134,6 +134,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
     assert any(name.endswith("assets/branding/refrain-logo.png") for name in sdist_names)
     for package in (wheel_names, sdist_names):
         assert any(name.endswith("systemd/refrain.service") for name in package)
+        assert any(name.endswith("systemd/refrain-image-server.service") for name in package)
         assert any(name.endswith("config.default.yaml") for name in package)
     for names, package_root in (
         (wheel_names, "refrain"),
@@ -198,6 +199,7 @@ def test_wheel_and_sdist_exclude_external_native_libraries(tmp_path: Path) -> No
                 assert _application_version() == version("controlforge-refrain")
                 root = files("refrain")
                 assert root.joinpath("systemd", "refrain.service").is_file()
+                assert root.joinpath("systemd", "refrain-image-server.service").read_text(encoding="utf-8")
                 assert root.joinpath("assets", "branding", "controlforge-logo.png").is_file()
                 assert root.joinpath("config.default.yaml").is_file()
                 assert root.joinpath("sample_content").is_dir()
