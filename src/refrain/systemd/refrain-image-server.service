@@ -1,0 +1,19 @@
+[Unit]
+Description=Refrain independent image server
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=REPLACE_WITH_OWNER
+Environment="HOME=/REPLACE/WITH/OWNER/HOME"
+ExecStart=/REPLACE/WITH/VENV/bin/refrain-image-server
+Restart=on-failure
+RestartSec=10s
+RestartPreventExitStatus=78
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
