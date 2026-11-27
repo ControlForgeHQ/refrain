@@ -15,6 +15,7 @@ from PIL import Image
 import refrain.publication_storage as publication_storage_module
 from refrain.config import load_application_config
 from refrain.geometry import ResolvedOutputSpecification
+from refrain.image_server_config import load_image_server_config
 from refrain.paths import ApplicationPaths
 from refrain.publication_metadata import finalize_publication_metadata
 from refrain.publication_storage import (
@@ -100,6 +101,53 @@ def _store(root: Path, *, protected_paths=()) -> PublicationStore:
 
 def _image(value: int = 0) -> Image.Image:
     return Image.new("RGB", _OUTPUT.requested_output_size, (value, 0, 0))
+
+
+def test_image_server_reads_verified_publications_without_writer_path_protections(tmp_path: Path) -> None:
+    root = tmp_path / "published"
+    writer = _store(root)
+    with _image() as image:
+        writer.publish("screen", image, _metadata("scheduled"), audience="internal")
+    file = tmp_path / "config.yaml"
+    file.write_text(
+        yaml.safe_dump(
+            {
+                "destinations": [{"id": "screen", "type": "publish"}, {"id": "other", "type": "publish"}],
+                "image-server": {"destinations": ["screen", "other"]},
+                "storage": {"publish": str(root), "state": str(root)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_image_server_config(file)
+    before = {path.name: path.read_bytes() for path in (root / "screen").iterdir()}
+    dataset = config.read_current("screen")
+    assert dataset.metadata["publication"]["type"] == "scheduled"
+    assert dataset.image == before["scheduled.png"]
+    with pytest.raises(PublicationStorageError):
+        config.read_current("other")
+    assert {path.name: path.read_bytes() for path in (root / "screen").iterdir()} == before
+    with _image() as image, pytest.raises(PublicationStorageError, match="overlaps"):
+        _store(root, protected_paths=(root,)).publish("screen", image, _metadata("refused"), audience="internal")
+
+    transient = finalize_publication_metadata(
+        None,
+        publication_type="transient",
+        publication_id="transient",
+        published_at=datetime(2026, 11, 16, 6, 0, tzinfo=timezone.utc),
+        destination_id="other",
+        output_specification=_OUTPUT,
+    )
+    with _image(1) as image:
+        writer.publish("other", image, transient)
+    assert config.read_current("other").metadata == transient
+    (root / "screen" / "scheduled.png").write_bytes(b"damaged")
+    with pytest.raises(PublicationStorageError, match="hash"):
+        config.read_current("screen")
+    assert config.read_current("other").metadata == transient
+    with _image(2) as image:
+        writer.publish("screen", image, _metadata("recovered"), audience="internal")
+    assert config.read_current("screen").manifest.publication_id == "recovered"
 
 
 def test_manifest_contract_round_trips_and_rejects_unsafe_or_unknown_values() -> None:

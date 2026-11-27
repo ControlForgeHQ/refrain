@@ -460,7 +460,7 @@ class PublicationStore:
     ) -> None:
         self.root = _absolute(root)
         self.configuration = configuration
-        self.application_paths = application_paths or resolve_application_paths()
+        self.application_paths = application_paths
         self.protected_paths = tuple(protected_paths)
 
     @classmethod
@@ -482,7 +482,8 @@ class PublicationStore:
 
     def _validate_root(self) -> Path:
         protected_paths = list(self.protected_paths)
-        standard_root = Path(self.application_paths.publish_directory)
+        paths = self.application_paths or resolve_application_paths()
+        standard_root = Path(paths.publish_directory)
         if self.root != standard_root:
             protected_paths.append(standard_root)
         if self.configuration is not None and self.configuration.storage.publish is not None:
@@ -492,7 +493,7 @@ class PublicationStore:
         self.root = validate_publication_root(
             self.root,
             protected_paths=protected_paths,
-            application_paths=self.application_paths,
+            application_paths=paths,
             configuration=self.configuration,
         )
         return self.root
@@ -507,9 +508,11 @@ class PublicationStore:
         return value
 
     def _destination(self, destination_id: str, *, create: bool) -> Path:
-        self._validate_root()
         if create:
+            self._validate_root()
             _create_directory(self.root)
+        else:
+            _check_path_components(self.root)
         destination = self.root / destination_id
         if destination.parent != self.root:
             raise PublicationStorageError("destination directory must be a direct child of the publication root")
