@@ -4,7 +4,6 @@ from .application import (
     ApplicationError,
     NoEligibleQuotationError,
     StartupResult,
-    present_prepared_stage,
     run_application,
     run_startup,
 )
@@ -132,7 +131,6 @@ __all__ = [
     "ApplicationError",
     "NoEligibleQuotationError",
     "StartupResult",
-    "present_prepared_stage",
     "run_application",
     "run_startup",
     "ArtifactAccessError",

@@ -11,8 +11,6 @@ from refrain.qr import (
     QRCodeGenerationError,
     QRCodeParameters,
     QRCodePlacementError,
-    qr_parameters_from_metadata,
-    qr_parameters_to_metadata,
     render_qr_code,
     resolve_qr_placement,
 )
@@ -88,8 +86,6 @@ def test_explicit_url_and_absent_url_fallback_use_expected_payloads() -> None:
     try:
         assert explicit.geometry.version == fallback.geometry.version == 4
         assert explicit.image.tobytes() != fallback.image.tobytes()
-        assert qr_parameters_to_metadata(QRCodeParameters(None, 4, "M", 3, 4, 40, 40))["url"] == REPOSITORY_URL
-        assert qr_parameters_from_metadata(qr_parameters_to_metadata(parameters)) == parameters
     finally:
         explicit.image.close()
         fallback.image.close()

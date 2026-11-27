@@ -62,10 +62,6 @@ class DisplayBackendError(RuntimeError):
         super().__init__(message)
 
 
-class DisplayBackendUnavailableError(DisplayBackendError):
-    """Raised when a recognized display backend has not been implemented."""
-
-
 class DisplayBackendInitializationError(DisplayBackendError):
     """Raised when a display backend cannot initialize its presentation resources."""
 
@@ -108,7 +104,6 @@ __all__ = [
     "DisplayBackendCloseError",
     "DisplayBackendError",
     "DisplayBackendInitializationError",
-    "DisplayBackendUnavailableError",
     "DisplayBackendUpdateError",
     "PublicationDisplayBackend",
     "create_display_backend",

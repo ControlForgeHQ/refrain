@@ -1007,12 +1007,6 @@ class DisplayPublicationCoordinator:
                     )
             self._condition.notify_all()
 
-    def wait_for_drain(self) -> None:
-        """Wait for admitted one-shot operations to reach terminal results."""
-        with self._condition:
-            while any(state.one_shot is not None for state in self._states.values()):
-                self._condition.wait()
-
     def close(self, *, deadline: float | None = None) -> tuple[Thread, ...]:
         """Stop requests and wait a bounded time without interrupting active backend calls."""
         if deadline is None:
