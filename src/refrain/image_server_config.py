@@ -156,12 +156,16 @@ def load_image_server_config(
     root = None
     if "publish" in storage:
         value = storage["publish"]
-        if not isinstance(value, str) or not value:
-            report("storage.publish", "must be a nonempty path string", logging.ERROR)
+        if not isinstance(value, str) or not value or "\0" in value:
+            report("storage.publish", "must be a nonempty path string without NUL characters", logging.ERROR)
         else:
             root = Path(value)
             if not root.is_absolute():
                 root = file.parent / root
+            if not root.is_absolute():
+                report(
+                    "storage.publish", "must resolve to an absolute path relative to the configuration", logging.ERROR
+                )
     finish()
     if root is None:
         paths = paths or resolve_application_paths()

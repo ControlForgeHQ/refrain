@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -98,11 +99,20 @@ def test_required_section_is_fatal(tmp_path: Path, section: object) -> None:
         _load(tmp_path, {"image-server": section})
 
 
-@pytest.mark.parametrize("storage", [None, [], {"publish": ""}, {"publish": False}])
+@pytest.mark.parametrize("storage", [None, [], {"publish": ""}, {"publish": False}, {"publish": "bad\0path"}])
 def test_invalid_publication_storage_is_fatal(tmp_path: Path, storage: object) -> None:
     data = _config()
     data["storage"] = storage
     with pytest.raises(ApplicationConfigurationError, match="storage"):
+        _load(tmp_path, data)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows drive-relative paths require Windows path semantics")
+def test_unresolvable_drive_relative_publication_path_is_fatal(tmp_path: Path) -> None:
+    other_drive = "Z:" if tmp_path.drive.upper() != "Z:" else "Y:"
+    data = _config()
+    data["storage"] = {"publish": other_drive + "publication"}
+    with pytest.raises(ApplicationConfigurationError, match="storage.publish"):
         _load(tmp_path, data)
 
 

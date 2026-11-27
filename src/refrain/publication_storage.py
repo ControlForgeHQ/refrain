@@ -180,6 +180,8 @@ def _check_path_components(path: Path) -> None:
 
 def _absolute(path: str | os.PathLike[str]) -> Path:
     value = Path(path)
+    if "\0" in os.fspath(value):
+        raise PublicationStorageError("publication and protected paths must not contain NUL characters")
     if not value.is_absolute():
         raise PublicationStorageError(f"publication and protected paths must be absolute: {value}")
     return Path(os.path.normpath(os.fspath(value)))
