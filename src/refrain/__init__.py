@@ -3,9 +3,7 @@
 from .application import (
     ApplicationError,
     NoEligibleQuotationError,
-    StartupResult,
     run_application,
-    run_startup,
 )
 from .artifacts import (
     ArtifactAccessError,
@@ -130,9 +128,7 @@ from .timekeeping import next_scheduling_deadline, wait_for_scheduling_event
 __all__ = [
     "ApplicationError",
     "NoEligibleQuotationError",
-    "StartupResult",
     "run_application",
-    "run_startup",
     "ArtifactAccessError",
     "ArtifactCleanupError",
     "ArtifactStoreError",
