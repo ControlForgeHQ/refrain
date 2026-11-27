@@ -30,7 +30,6 @@ from refrain import (
     StateRecoveryError,
     normalize_quotation,
     run_application,
-    run_startup,
 )
 from refrain.__main__ import main
 from refrain.display import (
@@ -142,19 +141,71 @@ class Workspace:
         Image.new("RGB", (1600, 1200), color).save(path)
         return path
 
-    def run(self, now: datetime, display: FakeDisplay | None = None, **kwargs):
+    def run(
+        self,
+        now: datetime,
+        display: FakeDisplay | None = None,
+        *,
+        await_publication=True,
+        before_shutdown=None,
+        retries=0,
+        **kwargs,
+    ):
         display = display or FakeDisplay()
-        result = run_startup(
-            self.config,
-            self.state,
-            self.artifacts,
-            history_path=self.history,
-            now=now,
-            random_source=Random(1),
-            backend_factory=lambda configuration: display,
-            **kwargs,
-        )
-        return result, display
+        coordinators = []
+        requests = []
+        elapsed = [0.0]
+        original_coordinator = application.DisplayPublicationCoordinator
+
+        class TrackingCoordinator(original_coordinator):
+            def __init__(self, *args, **coordinator_kwargs):
+                super().__init__(*args, **coordinator_kwargs)
+                coordinators.append(self)
+
+            def publish(self, identity, images, **publish_kwargs):
+                requests.append(identity)
+                return super().publish(identity, images, **publish_kwargs)
+
+        class StopOnRetry(Event):
+            def wait(self, timeout=None):
+                nonlocal retries
+                if retries:
+                    retries -= 1
+                    elapsed[0] += timeout
+                    return False
+                self.set()
+                return True
+
+        shutdown = StopOnRetry()
+
+        def scheduling_wait(_deadline, _wake_event, **_kwargs):
+            if await_publication and requests:
+                assert coordinators[-1].wait_for_publication(requests[-1], timeout=10)
+            if before_shutdown is not None:
+                assert before_shutdown.wait(10)
+            shutdown.set()
+            return True
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(application, "DisplayPublicationCoordinator", TrackingCoordinator)
+            run_application(
+                self.config,
+                self.state,
+                self.artifacts,
+                history_path=self.history,
+                shutdown_event=shutdown,
+                wall_clock=kwargs.pop("wall_clock", lambda: now),
+                monotonic_clock=kwargs.pop("monotonic_clock", lambda: elapsed[0]),
+                random_source=kwargs.pop("random_source", Random(1)),
+                backend_factory=kwargs.pop("backend_factory", lambda configuration: display),
+                scheduling_wait=kwargs.pop("scheduling_wait", scheduling_wait),
+                **kwargs,
+            )
+        try:
+            state = self.load()
+        except application.InvalidSelectionStateError:
+            state = None
+        return state, display
 
     def load(self):
         return PersistentStateStore(self.state).load()
@@ -265,13 +316,9 @@ quotations:
     data["storage"] = {"publish": str(publication_root)}
     workspace.config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
-    result = run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 13),
-        random_source=Random(1),
+    result, _ = workspace.run(
+        at(10, 13),
+        backend_factory=application._default_backend_factory,
     )
 
     configuration = application.load_application_config(workspace.config)
@@ -279,7 +326,7 @@ quotations:
     published = {
         identifier: store.read_current(identifier) for identifier in ("web-external", "web-internal", "web-custom")
     }
-    assert result.presented_stage == 1
+    assert result.highest_reveal_stage == 1
     assert len({dataset.manifest.publication_id for dataset in published.values()}) == 3
     assert published["web-external"].metadata["content"]["reveal_stage"] == {
         "quotation": True,
@@ -300,18 +347,15 @@ quotations:
         def choice(self, _values):
             pytest.fail("valid restart cache must not reselect content or artistic resources")
 
-    restarted = run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 13),
+    restarted, _ = workspace.run(
+        at(10, 13),
         random_source=RejectingChooser(),
+        backend_factory=application._default_backend_factory,
     )
     republished = {
         identifier: store.read_current(identifier) for identifier in ("web-external", "web-internal", "web-custom")
     }
-    assert restarted.state == result.state
+    assert restarted == result
     assert all(
         republished[identifier].manifest.publication_id != published[identifier].manifest.publication_id
         for identifier in published
@@ -360,7 +404,7 @@ def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_r
     state_bytes = workspace.state.read_bytes()
     history_bytes = workspace.history.read_bytes()
     configuration = application.load_application_config(workspace.config)
-    revision_directory = workspace.artifacts / f"revision-{first.state.revision}"
+    revision_directory = workspace.artifacts / f"revision-{first.revision}"
     manifests = list(revision_directory.glob("group-*/manifest.json"))
     assert len(manifests) == 1
     old_manifest_path = manifests[0]
@@ -379,17 +423,12 @@ def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_r
             "prepare_daily_images",
             lambda *_args, **_kwargs: pytest.fail("valid restart cache must not rerender"),
         )
-        restarted = run_startup(
-            workspace.config,
-            workspace.state,
-            workspace.artifacts,
-            history_path=workspace.history,
-            now=at(10, 13),
+        restarted, _ = workspace.run(
+            at(10, 13),
             random_source=RejectingChooser(),
-            backend_factory=lambda _configuration: FakeDisplay(),
         )
 
-    assert restarted.state == first.state
+    assert restarted == first
     assert workspace.state.read_bytes() == state_bytes
     assert workspace.history.read_bytes() == history_bytes
 
@@ -404,14 +443,9 @@ def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_r
     with monkeypatch.context() as patch:
         patch.setattr(application, "_select_snapshot", lambda *_args, **_kwargs: pytest.fail("must not reselect"))
         patch.setattr(recovery, "prepare_daily_images", count_rendering)
-        regenerated = run_startup(
-            workspace.config,
-            workspace.state,
-            workspace.artifacts,
-            history_path=workspace.history,
-            now=at(10, 13),
+        regenerated, _ = workspace.run(
+            at(10, 13),
             random_source=Random(1),
-            backend_factory=lambda _configuration: FakeDisplay(),
         )
 
     new_manifest = old_manifest_path.read_bytes()
@@ -419,7 +453,7 @@ def test_startup_restart_reuses_cache_and_regenerates_damaged_metadata_without_r
     replacement_metadata = sorted(payload_directory.glob("variant-*/stage-*.json"))
     assert len(render_calls) == 1
     assert new_manifest != old_manifest
-    assert regenerated.state == first.state
+    assert regenerated == first
     assert workspace.state.read_bytes() == state_bytes
     assert workspace.history.read_bytes() == history_bytes
     assert len(replacement_metadata) == expected_metadata_count
@@ -833,8 +867,8 @@ def test_decoration_color_preference_is_preserved(workspace: Workspace) -> None:
 def test_committed_color_preferences_are_not_resolved_palette_values(workspace: Workspace) -> None:
     ordinary(workspace, extra="text_color: red\ndecoration_color: green\n")
     state, _ = workspace.run(at(10, 7))
-    assert state.state.snapshot.text_color == ("red",)
-    assert state.state.snapshot.decoration_color == ("green",)
+    assert state.snapshot.text_color == ("red",)
+    assert state.snapshot.decoration_color == ("green",)
     serialized = workspace.state.read_text(encoding="utf-8")
     assert "text_color_rgb" not in serialized
     assert "decoration_color_rgb" not in serialized
@@ -996,7 +1030,7 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
     )
     ordinary(workspace)
     first, first_display = workspace.run(at(10, 7))
-    snapshot = first.state.snapshot
+    snapshot = first.snapshot
     assert snapshot.decoration is None
     assert first_display.images[-1].getpixel((250, 10)) == (227, 137, 147)
 
@@ -1005,7 +1039,7 @@ def test_normal_runtime_regenerates_with_current_decoration_resources(workspace:
         artifact.unlink()
     second, second_display = workspace.run(at(10, 7))
 
-    assert second.state == first.state
+    assert second == first
     assert second_display.images[-1].getpixel((250, 10)) == (255, 255, 255)
     assert "decoration identifier 'custom' is unavailable" in caplog.text
 
@@ -1020,7 +1054,7 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
     )
     ordinary(workspace)
     first, first_display = workspace.run(at(10, 7))
-    assert first.state.snapshot.background is None
+    assert first.snapshot.background is None
     assert first_display.images[-1].getpixel((0, 0)) == (100, 140, 180)
     path.unlink()
     workspace.background("fallback-paper")
@@ -1028,12 +1062,12 @@ def test_committed_background_survives_restart_config_changes_and_resource_loss(
         _CONFIG.replace("fonts:", 'backgrounds:\n  pools:\n    default: ["fallback-paper"]\nfonts:')
     )
     second, second_display = workspace.run(at(10, 7))
-    assert second.state == first.state
+    assert second == first
     assert second_display.images[-1].tobytes() == first_display.images[-1].tobytes()
     for artifact in png_files(workspace.artifacts):
         artifact.unlink()
     third, third_display = workspace.run(at(10, 7))
-    assert third.state == first.state
+    assert third == first
     assert third_display.images[-1].getpixel((0, 0)) != first_display.images[-1].getpixel((0, 0))
 
 
@@ -1042,7 +1076,7 @@ def test_committed_text_color_preference_survives_palette_changes_and_regenerati
     ordinary(workspace, extra="text_color: red\n")
 
     first, first_display = workspace.run(at(10, 7))
-    assert first.state.snapshot.text_color == ("red",)
+    assert first.snapshot.text_color == ("red",)
     assert (200, 47, 50) in first_display.images[-1].get_flattened_data()
     state_bytes = workspace.state.read_bytes()
 
@@ -1051,7 +1085,7 @@ def test_committed_text_color_preference_survives_palette_changes_and_regenerati
         artifact.unlink()
     second, second_display = workspace.run(at(10, 7))
 
-    assert second.state == first.state
+    assert second == first
     assert workspace.state.read_bytes() == state_bytes
     assert second_display.images[-1].tobytes() != first_display.images[-1].tobytes()
     assert (0, 255, 0) in second_display.images[-1].get_flattened_data()
@@ -1066,7 +1100,7 @@ def test_first_startup_commits_snapshot_and_presents(workspace: Workspace) -> No
     result, display = workspace.run(at(10, 7))
 
     state = workspace.load()
-    assert result.selected_initial_quotation and result.presented_stage == 0
+    assert result == state and state.highest_reveal_stage == 0
     assert state is not None and state.revision == 1 and state.highest_reveal_stage == 0
     snapshot = state.snapshot
     assert snapshot.quotation_text == "An ordinary quotation."
@@ -1099,56 +1133,34 @@ def test_daily_snapshot_does_not_persist_qr_rendering_parameters(workspace: Work
     ordinary(workspace)
     result, _ = workspace.run(at(10, 7))
     serialized = workspace.state.read_text(encoding="utf-8")
-    assert result.state.snapshot.quotation_text == "An ordinary quotation."
+    assert result.snapshot.quotation_text == "An ordinary quotation."
     assert "qr_code" not in serialized
     assert "quiet_zone" not in serialized
 
 
-def test_startup_advances_reveal_due_during_information_interval(workspace: Workspace) -> None:
+def test_startup_advances_reveal_due_during_information_interval(workspace: Workspace, monkeypatch) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
-    elapsed = [0.0]
-    current_time = [at(10, 11, 59)]
-
-    def wait(duration: float) -> None:
-        elapsed[0] += duration
-        current_time[0] = at(10, 12, 1)
-
-    result, display = workspace.run(
-        at(10, 11, 59),
-        wall_clock=lambda: current_time[0],
-        monotonic_clock=lambda: elapsed[0],
-        wait=wait,
-    )
+    clock = RuntimeClock(at(10, 11, 59), [at(10, 12, 1)])
+    stages, _, display = run_continuously(workspace, clock, monkeypatch, await_publication_before_scheduling=True)
 
     state = workspace.load()
-    assert result.presented_stage == 1
+    assert stages == [application._INFORMATION_VIEW_IDENTITY, (1, 1)]
     assert state.highest_reveal_stage == 1
     assert [image.size for image in display.images] == [(1600, 1200), (1600, 1200)]
     assert display.images[0].tobytes() != display.images[1].tobytes()
     assert state.revision == 1 and len(workspace.history_records()) == 1
 
 
-def test_startup_selects_current_date_after_information_interval(workspace: Workspace) -> None:
+def test_startup_selects_current_date_after_information_interval(workspace: Workspace, monkeypatch) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 60"))
-    elapsed = [0.0]
-    current_time = [at(10, 5, 59)]
+    clock = RuntimeClock(at(10, 5, 59), [at(10, 6, 1)])
+    stages, _, display = run_continuously(workspace, clock, monkeypatch, await_publication_before_scheduling=True)
 
-    def wait(duration: float) -> None:
-        elapsed[0] += duration
-        current_time[0] = at(10, 6, 1)
-
-    result, display = workspace.run(
-        at(10, 5, 59),
-        wall_clock=lambda: current_time[0],
-        monotonic_clock=lambda: elapsed[0],
-        wait=wait,
-    )
-
-    assert result.state.revision == 2
-    assert result.state.snapshot.display_date == date(2026, 3, 10)
-    assert result.presented_stage == 0
+    assert workspace.load().revision == 2
+    assert workspace.load().snapshot.display_date == date(2026, 3, 10)
+    assert stages == [application._INFORMATION_VIEW_IDENTITY, (2, 0)]
     assert len(display.sizes) == 2
     assert [record["display_date"][-2:] for record in workspace.history_records()] == ["09", "10"]
 
@@ -1165,7 +1177,7 @@ def test_nondefault_day_start_sets_initial_snapshot_reveal_time(workspace: Works
     result, _ = workspace.run(at(10, 8, 30))
 
     state = workspace.load()
-    assert result.presented_stage == 0
+    assert result.highest_reveal_stage == 0
     assert state is not None
     assert state.snapshot.reveal_schedule["quotation"] == "08:00"
     assert "reveal.quotation" in caplog.text
@@ -1186,17 +1198,12 @@ def test_startup_publishes_matching_prepared_variants_to_configured_backends(wor
     def factory(configuration):
         return displays[configuration.type]
 
-    result = run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 7),
-        random_source=Random(1),
+    result, _ = workspace.run(
+        at(10, 7),
         backend_factory=factory,
     )
 
-    assert result.state.revision == 1
+    assert result.revision == 1
     assert displays["window"].sizes == [(1920, 1080)] and displays["window"].closed == 1
     assert displays["publish"].sizes == [(3840, 2400)] and displays["publish"].closed == 1
     assert displays["window"].images[0].getpixel((192, 162)) == (255, 255, 255)
@@ -1218,7 +1225,7 @@ def test_history_write_failure_does_not_interrupt_startup_presentation(
 
     result, display = workspace.run(at(10, 7))
 
-    assert result.state.revision == 1
+    assert result.revision == 1
     assert display.sizes == [(1600, 1200)]
     assert len(png_files(workspace.artifacts)) == 3
     assert "was not recorded in global history" in caplog.text
@@ -1346,21 +1353,21 @@ def test_committed_custom_font_recovers_without_registry_and_regenerates_with_bu
     ordinary(workspace, extra='font: "custom-font"\n')
     first, _ = workspace.run(at(10, 8))
     committed_bytes = workspace.state.read_bytes()
-    assert first.state.snapshot.font == "custom-font"
+    assert first.snapshot.font == "custom-font"
 
     custom_font.unlink()
     with caplog.at_level(logging.WARNING):
         recovered, _ = workspace.run(at(10, 9))
-    assert not recovered.selected_initial_quotation
+    assert recovered == first
     assert "custom-font" in caplog.text
     assert workspace.state.read_bytes() == committed_bytes
 
     png_files(workspace.artifacts)[0].write_bytes(b"damaged image")
     with caplog.at_level(logging.WARNING):
         regenerated, _ = workspace.run(at(10, 9))
-    assert not regenerated.selected_initial_quotation
+    assert regenerated == first
     assert "Requested font 'custom-font'" in caplog.text
-    assert workspace.load() == first.state
+    assert workspace.load() == first
     assert workspace.state.read_bytes() == committed_bytes
 
 
@@ -1380,14 +1387,14 @@ def test_reveal_overrides_and_simultaneous_reveals(workspace: Workspace) -> None
         "source": "10:00",
         "attribution": "10:00",
     }
-    assert result.presented_stage == 1
+    assert result.highest_reveal_stage == 1
     assert len(png_files(workspace.artifacts)) == 2
 
 
 def test_attribution_can_reveal_before_source(workspace: Workspace) -> None:
     ordinary(workspace, extra='reveal:\n  attribution: "09:00"\n')
     result, _ = workspace.run(at(10, 9, 30))
-    assert result.presented_stage == 1
+    assert result.highest_reveal_stage == 1
     assert len(png_files(workspace.artifacts)) == 3
 
 
@@ -1435,7 +1442,7 @@ def test_effective_reveal_schedules_reject_before_selection_and_duplicate_reconc
     with caplog.at_level(logging.WARNING):
         result, _ = workspace.run(at(10, 10))
 
-    assert result.state.snapshot.quotation_text == "Accepted despite shared ID."
+    assert result.snapshot.quotation_text == "Accepted despite shared ID."
     for field in invalid_fields:
         assert f"invalid.yaml: reveal.{field}: effective time 09:59 precedes configured day start 10:00" in caplog.text
     assert "conflicting duplicate identifier 'shared'" not in caplog.text
@@ -1450,12 +1457,12 @@ def test_overrides_equal_to_day_start_are_accepted(workspace: Workspace) -> None
 
     result, _ = workspace.run(at(10, 10))
 
-    assert result.state.snapshot.reveal_schedule == {
+    assert result.snapshot.reveal_schedule == {
         "quotation": "10:00",
         "source": "10:00",
         "attribution": "10:00",
     }
-    assert result.presented_stage == 0
+    assert result.highest_reveal_stage == 0
 
 
 def test_invalid_override_before_day_start_commits_nothing(workspace: Workspace) -> None:
@@ -1474,7 +1481,7 @@ def test_all_invalid_effective_schedules_preserve_committed_state_and_history(wo
 
     result, display = workspace.run(at(11, 8))
 
-    assert result.presented_stage is None
+    assert result == PersistentStateStore(workspace.state).load()
     assert not display.images
     assert workspace.state.read_bytes() == state_before
     assert workspace.history.read_bytes() == history_before
@@ -1483,7 +1490,7 @@ def test_all_invalid_effective_schedules_preserve_committed_state_and_history(wo
 def test_startup_after_reveal_times_presents_latest_stage(workspace: Workspace) -> None:
     ordinary(workspace)
     result, display = workspace.run(at(10, 19))
-    assert result.presented_stage == 2
+    assert result.highest_reveal_stage == 2
     assert workspace.load().highest_reveal_stage == 2
     assert workspace.load().revision == 1
 
@@ -1500,7 +1507,7 @@ def test_repeated_startup_preserves_selection_and_artifacts(workspace: Workspace
 
     monkeypatch.setattr("refrain.recovery.prepare_daily_images", fail)
     result, display = workspace.run(at(10, 9))
-    assert not result.selected_initial_quotation
+    assert result == first
     assert workspace.load() == first
     assert workspace.state.read_bytes() == state_bytes
     assert {path: path.stat().st_mtime_ns for path in png_files(workspace.artifacts)} == artifact_times
@@ -1521,7 +1528,7 @@ def test_matching_logical_date_and_missing_content_do_not_reselect(workspace: Wo
         first.snapshot,
         first.repetition_history,
     )
-    assert result.presented_stage == 0
+    assert result.highest_reveal_stage == 0
     assert len(display.sizes) == 1
 
 
@@ -1545,12 +1552,12 @@ def test_backward_clock_does_not_hide_reached_stage(workspace: Workspace) -> Non
     ordinary(workspace)
     workspace.run(at(10, 19))
     result, display = workspace.run(at(10, 7))
-    assert result.presented_stage == 2
+    assert result.highest_reveal_stage == 2
     reference = workspace.run(at(10, 19))[1]
     assert display.images[0].tobytes() == reference.images[0].tobytes()
     result, _ = workspace.run(at(9, 7))
-    assert result.presented_stage == 0
-    assert result.state.revision == 2 and result.state.snapshot.display_date == date(2026, 3, 9)
+    assert result.highest_reveal_stage == 0
+    assert result.revision == 2 and result.snapshot.display_date == date(2026, 3, 9)
 
 
 def test_restart_into_previously_displayed_date_creates_new_revision(workspace: Workspace) -> None:
@@ -1560,25 +1567,24 @@ def test_restart_into_previously_displayed_date_creates_new_revision(workspace: 
     second, _ = workspace.run(at(11, 7))
     third, _ = workspace.run(at(10, 7))
 
-    assert [first.state.revision, second.state.revision, third.state.revision] == [1, 2, 3]
+    assert [first.revision, second.revision, third.revision] == [1, 2, 3]
     assert [
-        first.state.snapshot.display_date,
-        second.state.snapshot.display_date,
-        third.state.snapshot.display_date,
+        first.snapshot.display_date,
+        second.snapshot.display_date,
+        third.snapshot.display_date,
     ] == [
         date(2026, 3, 10),
         date(2026, 3, 11),
         date(2026, 3, 10),
     ]
     assert [record["display_date"][-2:] for record in workspace.history_records()] == ["10", "11", "10"]
-    assert third.state.highest_reveal_stage == 0
+    assert third.highest_reveal_stage == 0
 
 
 def test_no_eligible_content_commits_nothing(workspace: Workspace) -> None:
     workspace.entry("other", 'eligibility:\n  - month: 7\nquotations:\n  - "Summer."\n')
     result, display = workspace.run(at(10, 8))
-    assert result.state is None and result.presented_stage is None
-    assert not result.selected_initial_quotation
+    assert result is None
     assert display.sizes == [(1600, 1200)]
     assert workspace.load() is None and not workspace.artifacts.exists()
 
@@ -1588,7 +1594,7 @@ def test_invalid_content_is_excluded_and_invalid_configuration_remains_fatal(wor
     (workspace.content / "bad.yaml").write_text("id: 5\n", encoding="utf-8")
     with caplog.at_level(logging.WARNING):
         result, _ = workspace.run(at(10, 8))
-    assert result.selected_initial_quotation
+    assert result.revision == 1
     assert "bad.yaml" in caplog.text
     assert workspace.load().revision == 1
 
@@ -1616,12 +1622,29 @@ def test_naive_timestamp_is_rejected(workspace: Workspace) -> None:
 def test_default_timestamp_is_used_when_omitted(workspace: Workspace) -> None:
     ordinary(workspace)
     display = FakeDisplay()
-    run_startup(
+    shutdown = Event()
+
+    def stop_after_publication(_deadline, _wake_event, **_kwargs):
+        assert display.published.wait(10)
+        shutdown.set()
+        return True
+
+    display.published = Event()
+    original_update = display.update
+
+    def update(image):
+        original_update(image)
+        display.published.set()
+
+    display.update = update
+    run_application(
         workspace.config,
         workspace.state,
         workspace.artifacts,
         history_path=workspace.history,
+        shutdown_event=shutdown,
         backend_factory=lambda c: display,
+        scheduling_wait=stop_after_publication,
     )
     assert workspace.load().revision == 1
 
@@ -1660,16 +1683,12 @@ def test_startup_reconciles_changed_and_added_publish_outputs_without_reselectio
             pass
 
     first_backend = OutputRecordingBackend()
-    first_result = run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 19),
+    first_result, _ = workspace.run(
+        at(10, 19),
         backend_factory=lambda _configuration: first_backend,
     )
     committed = workspace.load()
-    assert first_result.state == committed
+    assert first_result == committed
     assert set(first_backend.images) == {"default"}
     for image in first_backend.images.values():
         image.close()
@@ -1687,12 +1706,8 @@ def test_startup_reconciles_changed_and_added_publish_outputs_without_reselectio
         encoding="utf-8",
     )
     current_backend = OutputRecordingBackend()
-    second_result = run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 19),
+    second_result, _ = workspace.run(
+        at(10, 19),
         backend_factory=lambda _configuration: current_backend,
     )
     state = workspace.load()
@@ -1703,7 +1718,7 @@ def test_startup_reconciles_changed_and_added_publish_outputs_without_reselectio
         "hallway": ResolvedOutputSpecification("16:10", (800, 500)),
     }
 
-    assert second_result.state == committed == state
+    assert second_result == committed == state
     assert state.revision == committed.revision
     assert state.highest_reveal_stage == committed.highest_reveal_stage
     assert set(current_backend.images) == set(expected_specifications)
@@ -1725,36 +1740,47 @@ def test_startup_reconciles_changed_and_added_publish_outputs_without_reselectio
         image.close()
 
 
-def test_display_initialization_failure_does_not_prevent_resident_publication_state(workspace: Workspace) -> None:
+def test_display_initialization_failure_does_not_prevent_resident_publication_state(
+    workspace: Workspace, caplog
+) -> None:
     ordinary(workspace)
+    attempted = Event()
 
     def factory(configuration):
+        attempted.set()
         raise DisplayBackendInitializationError("no display")
 
-    result = run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 8),
+    result, _ = workspace.run(
+        at(10, 8),
+        await_publication=False,
+        before_shutdown=attempted,
         backend_factory=factory,
     )
-    assert result.selected_initial_quotation
+    assert result.revision == 1
+    assert "no display" in caplog.text
     state = workspace.load()
     assert state.revision == 1 and state.highest_reveal_stage == 0
     result, _ = workspace.run(at(10, 8))
-    assert not result.selected_initial_quotation and workspace.load() == state
+    assert result == state and workspace.load() == state
 
 
-def test_display_update_failure_closes_backend_and_persists_required_reveal(workspace: Workspace) -> None:
+def test_display_update_failure_closes_backend_and_persists_required_reveal(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
-    display = FakeDisplay(fail_update=True)
-    workspace.run(at(10, 19), display)
+    attempted = Event()
+
+    class FailingDisplay(FakeDisplay):
+        def update(self, image):
+            attempted.set()
+            super().update(image)
+
+    display = FailingDisplay(fail_update=True)
+    workspace.run(at(10, 19), display, await_publication=False, before_shutdown=attempted)
     assert display.closed == 1
+    assert "update failed" in caplog.text
     state = workspace.load()
     assert state.revision == 1 and state.highest_reveal_stage == 2
     result, _ = workspace.run(at(10, 19))
-    assert result.presented_stage == 2 and workspace.load().revision == 1
+    assert result.highest_reveal_stage == 2 and workspace.load().revision == 1
 
 
 def test_display_close_failure_is_reported_without_reselection(workspace: Workspace, caplog) -> None:
@@ -1780,18 +1806,19 @@ def test_loaded_images_are_closed(workspace: Workspace, monkeypatch) -> None:
     assert closed
 
 
-def test_artifact_failure_preserves_selection(workspace: Workspace) -> None:
+def test_artifact_failure_preserves_selection(workspace: Workspace, caplog) -> None:
     ordinary(workspace)
     workspace.run(at(10, 8))
     state_bytes = workspace.state.read_bytes()
     history_bytes = workspace.history.read_bytes()
     shutil.rmtree(workspace.artifacts)
     workspace.artifacts.write_text("a file, not a directory", encoding="utf-8")
-    with pytest.raises(ApplicationError, match="artifact"):
-        workspace.run(at(10, 8))
+    result, display = workspace.run(at(10, 8))
+    assert result is not None and not display.images
     assert workspace.load().revision == 1
     assert workspace.state.read_bytes() == state_bytes
     assert workspace.history.read_bytes() == history_bytes
+    assert "artifact" in caplog.text and "retrying" in caplog.text
 
 
 def test_uncertain_commit_publication_is_resolved_by_reloading(workspace: Workspace, monkeypatch) -> None:
@@ -1804,19 +1831,20 @@ def test_uncertain_commit_publication_is_resolved_by_reloading(workspace: Worksp
 
     monkeypatch.setattr(PersistentStateStore, "commit", commit)
     result, _ = workspace.run(at(10, 8))
-    assert result.state.revision == 1 and len(workspace.history_records()) == 1
+    assert result.revision == 1 and len(workspace.history_records()) == 1
 
 
-def test_unpublished_commit_failure_is_reported(workspace: Workspace, monkeypatch) -> None:
+def test_unpublished_commit_failure_is_reported(workspace: Workspace, monkeypatch, caplog) -> None:
     ordinary(workspace)
 
     def commit(self, *args, **kwargs):
         raise StateCommitError("disk full")
 
     monkeypatch.setattr(PersistentStateStore, "commit", commit)
-    with pytest.raises(ApplicationError, match="disk full"):
-        workspace.run(at(10, 8))
+    result, display = workspace.run(at(10, 8))
+    assert result is None and not display.images
     assert workspace.load() is None
+    assert "cannot commit selection: disk full" in caplog.text
 
 
 def test_uncertain_reveal_progress_publication_is_resolved_by_reloading(workspace: Workspace, monkeypatch) -> None:
@@ -1830,10 +1858,10 @@ def test_uncertain_reveal_progress_publication_is_resolved_by_reloading(workspac
 
     monkeypatch.setattr(PersistentStateStore, "advance_reveal_progress", advance)
     result, _ = workspace.run(at(10, 19))
-    assert result.state.highest_reveal_stage == 2 and workspace.load().revision == 1
+    assert result.highest_reveal_stage == 2 and workspace.load().revision == 1
 
 
-def test_failed_reveal_progress_update_is_reported(workspace: Workspace, monkeypatch) -> None:
+def test_failed_reveal_progress_update_is_reported(workspace: Workspace, monkeypatch, caplog) -> None:
     ordinary(workspace)
     workspace.run(at(10, 8))
 
@@ -1842,9 +1870,10 @@ def test_failed_reveal_progress_update_is_reported(workspace: Workspace, monkeyp
 
     monkeypatch.setattr(PersistentStateStore, "advance_reveal_progress", advance)
     display = FakeDisplay()
-    with pytest.raises(ApplicationError, match="reveal progress"):
-        workspace.run(at(10, 19), display)
+    result, _ = workspace.run(at(10, 19), display)
+    assert result.highest_reveal_stage == 0
     assert display.closed == 0 and workspace.load().highest_reveal_stage == 0
+    assert "reveal progress" in caplog.text and "disk full" in caplog.text
 
 
 def test_command_line_reports_errors(workspace: Workspace, capsys) -> None:
@@ -1946,6 +1975,8 @@ def run_continuously(
             coordinator = coordinators[-1]
             identity = coordinator.requested[-1]
             assert coordinator.wait_for_publication(identity, timeout=2)
+            if shutdown is not clock:
+                return False
         return scheduling_wait(deadline, shutdown, **wait_kwargs)
 
     with monkeypatch.context() as patch:
@@ -2260,14 +2291,13 @@ def test_information_view_publication_uses_and_releases_pillow_images(workspace:
 
     monkeypatch.setattr(application, "prepare_information_view", capture)
     display = TypeCheckingDisplay()
-    run_startup(
-        workspace.config,
-        workspace.state,
-        workspace.artifacts,
-        history_path=workspace.history,
-        now=at(10, 7),
-        backend_factory=lambda _configuration: display,
-        wait=lambda _duration: None,
+    clock = RuntimeClock(at(10, 7), [at(10, 7, 1)])
+    run_continuously(
+        workspace,
+        clock,
+        monkeypatch,
+        display,
+        await_publication_before_scheduling=True,
     )
 
     assert len(display.images) == 2
@@ -2278,7 +2308,9 @@ def test_information_view_publication_uses_and_releases_pillow_images(workspace:
         image.close()
 
 
-def test_information_view_images_close_if_publication_never_takes_ownership(workspace: Workspace, monkeypatch) -> None:
+def test_information_view_is_not_prepared_if_coordinator_initialization_fails(
+    workspace: Workspace, monkeypatch
+) -> None:
     ordinary(workspace)
     workspace.config.write_text(workspace.config.read_text(encoding="utf-8").replace("duration: 0", "duration: 1"))
     generated = []
@@ -2297,17 +2329,15 @@ def test_information_view_images_close_if_publication_never_takes_ownership(work
     monkeypatch.setattr(application, "prepare_information_view", prepare)
     monkeypatch.setattr(application, "DisplayPublicationCoordinator", fail_coordinator)
     with pytest.raises(RuntimeError, match="coordinator initialization failed"):
-        run_startup(
+        run_application(
             workspace.config,
             workspace.state,
             workspace.artifacts,
             history_path=workspace.history,
-            now=at(10, 7),
+            wall_clock=lambda: at(10, 7),
         )
 
-    assert len(generated) == 1
-    with pytest.raises(ValueError, match="closed"):
-        generated[0].getpixel((0, 0))
+    assert generated == []
 
 
 def test_shutdown_during_information_publication_releases_backend_safely(workspace: Workspace) -> None:

@@ -39,8 +39,8 @@ def test_invalid_selection_replaced_using_recovered_revision_and_history(workspa
 
     replacement, _ = workspace.run(at(10, 8))
 
-    assert replacement.state.revision == original.state.revision + 1
-    assert replacement.state.repetition_history == original.state.repetition_history
+    assert replacement.revision == original.revision + 1
+    assert replacement.repetition_history == original.repetition_history
     assert len(workspace.history_records()) == 2
 
 
@@ -55,7 +55,7 @@ def test_invalid_selection_and_unavailable_library_preserve_state(workspace: Wor
 
     result, display = workspace.run(at(10, 8))
 
-    assert result.state is None and result.presented_stage is None
+    assert result is None
     assert workspace.state.read_bytes() == original
     assert not display.images
 
@@ -97,7 +97,7 @@ def test_resident_library_retry_is_monotonic_and_not_bypassed_by_wakes(workspace
 
 def test_startup_fallback_rechecks_date_after_rendering(workspace: Workspace, monkeypatch) -> None:
     workspace.entry("special", 'eligibility:\n  - month: 3\n    day: 11\nquotations:\n  - "Tomorrow"\n')
-    times = iter((at(10, 8), at(11, 8), at(11, 8), at(11, 8), at(11, 8), at(11, 8)))
+    now = [at(10, 8)]
     images = []
 
     def prepare(configuration, keys, **kwargs):
@@ -105,12 +105,13 @@ def test_startup_fallback_rechecks_date_after_rendering(workspace: Workspace, mo
             key: (Image.new("RGB", getattr(key, "output_specification", key).requested_output_size),) for key in keys
         }
         images.extend(variant[0] for variant in result.values())
+        now[0] = at(11, 8)
         return result
 
     monkeypatch.setattr(application, "prepare_no_eligible_fallback", prepare)
-    result, display = workspace.run(at(10, 8), wall_clock=lambda: next(times, at(11, 8)))
+    result, display = workspace.run(at(10, 8), wall_clock=lambda: now[0])
 
-    assert result.state.snapshot.display_date.day == 11
+    assert result.snapshot.display_date.day == 11
     assert len(display.images) == 1
     with pytest.raises(ValueError, match="closed"):
         images[0].getpixel((0, 0))
@@ -241,7 +242,7 @@ def test_invalid_selection_healthy_fallback_preserves_file(workspace: Workspace,
     monkeypatch.setattr(application, "prepare_no_eligible_fallback", prepare)
     result, display = workspace.run(at(10, 8))
 
-    assert result.state is None and not result.selected_initial_quotation
+    assert result is None
     assert workspace.state.read_bytes() == original
     assert len(workspace.history_records()) == 1
     assert len(display.images) == 1
@@ -456,7 +457,7 @@ def test_startup_publishes_healthy_fallback_variant_when_another_fails(workspace
     monkeypatch.setattr(preparation, "_prepare_daily_images_for_specification", render_variant)
     result, display = workspace.run(at(10, 8))
 
-    assert result.presented_stage is None and not result.selected_initial_quotation
+    assert result is None
     assert display.sizes == [(800, 500)]
     assert not workspace.state.exists() and not workspace.history.exists()
 
@@ -756,8 +757,7 @@ def test_startup_rejected_reveal_request_presents_committed_stage(workspace: Wor
     monkeypatch.setattr(application, "_load_stage_variants", record_stage)
     result, display = workspace.run(at(10, 13))
 
-    assert result.presented_stage == 0
-    assert result.state.highest_reveal_stage == 0
+    assert result.highest_reveal_stage == 0
     assert loaded_stages == [0]
     assert len(display.images) == 1
     assert workspace.state.read_bytes() == state_before
@@ -765,7 +765,7 @@ def test_startup_rejected_reveal_request_presents_committed_stage(workspace: Wor
     assert "Invalid requested reveal stage" in caplog.text
 
 
-def test_post_commit_checkpoint_failure_does_not_repeat_selection(workspace: Workspace, monkeypatch) -> None:
+def test_post_commit_checkpoint_failure_does_not_repeat_selection(workspace: Workspace, monkeypatch, caplog) -> None:
     ordinary(workspace)
     original = application.CheckpointStore.initialize
     calls = 0
@@ -778,9 +778,10 @@ def test_post_commit_checkpoint_failure_does_not_repeat_selection(workspace: Wor
         return original(store, state, qr)
 
     monkeypatch.setattr(application.CheckpointStore, "initialize", fail_once)
-    result, _ = workspace.run(at(10, 8))
+    result, _ = workspace.run(at(10, 8), retries=1)
 
-    assert result.state.revision == 1
+    assert result.revision == 1
     assert workspace.load().revision == 1
     assert len(workspace.history_records()) == 1
     assert calls == 1
+    assert "cannot persist content checkpoint" in caplog.text
