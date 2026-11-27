@@ -239,6 +239,10 @@ The publication root and every destination directory are Refrain-owned storage, 
 
 Before creating a publication destination or performing destructive cleanup, verify that the effective publication root and its cleanup scope do not overlap protected Refrain data.
 
+Protected-path overlap validation is a filesystem publication writer responsibility. Read-only consumers do not perform protected-path overlap validation or require knowledge of other configured application storage locations.
+
+Consumers remain subject to the applicable path and component safety and dataset verification requirements defined in this specification.
+
 Protected data includes:
 
 - Configuration files and directories.

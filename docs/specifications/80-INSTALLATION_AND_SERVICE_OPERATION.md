@@ -85,7 +85,7 @@ Prepared-image artifacts are derived data under the effective `storage.artifacts
 
 Filesystem publication datasets are stored under the effective `storage.publish` directory. Each destination owns a direct child named from its validated destination ID.
 
-The effective publication root must satisfy the protected-path and filesystem-containment requirements in [Publication paths and containment](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-paths-and-containment) and the single-writer requirement in [Publication destinations and ownership](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-destinations-and-ownership).
+Filesystem publication writers and consumers must satisfy their applicable requirements defined in [Publication paths and containment](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-paths-and-containment). Writers must also satisfy the single-writer requirement defined in [Publication destinations and ownership](70-FILESYSTEM_PUBLICATION_AND_CONSUMERS.md#publication-destinations-and-ownership).
 
 Standard installation-management commands use only standard paths, regardless of runtime configuration overrides.
 
