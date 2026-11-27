@@ -226,14 +226,45 @@ class ImageHTTPServer(ThreadingMixIn, HTTPServer):
         message = str(error)
         missing = message.startswith(("publication destination does not exist:", "publication manifest is missing:"))
         kind = "missing" if missing else "invalid or inaccessible"
+        cause = error.__cause__
+        if missing:
+            detail = "current publication is missing; wait for the publisher to create it"
+        elif isinstance(cause, PermissionError):
+            detail = "access denied; check the image-server account's publication read permissions"
+        elif isinstance(cause, FileNotFoundError):
+            detail = "a referenced publication file is missing; check the publisher and dataset"
+        elif isinstance(cause, OSError):
+            detail = "filesystem access failed; check publication storage and read permissions"
+        elif message.startswith(("publication image hash", "publication metadata hash")):
+            detail = "dataset checksum mismatch; check the publisher and dataset integrity"
+        elif message.startswith(("publication manifest changed", "publication manifest changed while")):
+            detail = "publication changed during verification; check the publisher if this persists"
+        elif message.startswith(("manifest ", "unsupported publication manifest", "current publication manifest")):
+            detail = "publication manifest is invalid; check the publisher and manifest"
+        elif message.startswith(
+            ("current publication metadata", "completed publication metadata", "publication metadata")
+        ):
+            detail = "publication metadata is invalid or inconsistent; check the publisher and dataset"
+        elif message.startswith("published image"):
+            detail = "publication image is invalid or inconsistent; check the publisher and dataset"
+        elif message.startswith(("refusing to", "publication path", "publication destination is not")):
+            detail = "publication path is unsafe or invalid; check the configured publication storage"
+        else:
+            detail = "verification failed; check publication storage, read permissions, and dataset integrity"
         fingerprint = hashlib.sha256(message.encode("utf-8", errors="replace")).digest()
         state = (kind, fingerprint)
         with self._condition:
-            if self._failures.get(destination) == state:
+            previous = self._failures.get(destination)
+            if previous == state:
                 return
             self._failures[destination] = state
         _LOGGER.log(
-            logging.DEBUG if missing else logging.WARNING, "Publication %s for destination %s", kind, destination
+            logging.DEBUG if missing else logging.WARNING,
+            "Publication %s for destination %s%s: %s",
+            kind,
+            destination,
+            " (failure condition changed)" if previous is not None else "",
+            detail,
         )
 
     def report_recovery(self, destination: str) -> None:

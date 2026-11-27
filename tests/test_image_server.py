@@ -90,6 +90,41 @@ def test_publication_http_semantics_and_replacement(service, caplog):
         assert sum("invalid or inaccessible" in r.message for r in caplog.records) == 1
 
 
+def test_conditional_head_matches_get_after_current_verification(service):
+    _publish(service)
+    _, initial, image = _request(service)
+    tag = initial["ETag"]
+    for condition, expected in (
+        (tag, 304),
+        ("W/" + tag, 304),
+        (f'"different", W/{tag}', 304),
+        ("*", 304),
+        ('"different"', 200),
+    ):
+        get_status, get_headers, get_body = _request(service, headers={"If-None-Match": condition})
+        head_status, head_headers, head_body = _request(service, method="HEAD", headers={"If-None-Match": condition})
+        assert get_status == head_status == expected
+        assert head_body == b""
+        assert get_body == (image if expected == 200 else b"")
+        for header in ("Content-Type", "Content-Length", "ETag", "Cache-Control"):
+            assert head_headers.get(header) == get_headers.get(header)
+        assert head_headers["ETag"] == tag
+        assert head_headers["Cache-Control"] == "no-cache"
+
+    image_path = service.config.publication_root / "screen" / "first.png"
+    image_path.write_bytes(b"damaged")
+    for method in ("GET", "HEAD"):
+        status, headers, body = _request(service, method=method, headers={"If-None-Match": tag})
+        assert status == 503 and headers["Cache-Control"] == "no-store" and not body
+        assert "ETag" not in headers
+
+    (service.config.publication_root / "screen" / "manifest.json").unlink()
+    for method in ("GET", "HEAD"):
+        status, headers, body = _request(service, method=method, headers={"If-None-Match": "*"})
+        assert status == 503 and headers["Cache-Control"] == "no-store" and not body
+        assert "ETag" not in headers
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -373,6 +408,35 @@ def test_failure_logging_does_not_disclose_untrusted_reader_error(service, monke
             assert _request(service)[0] == 503
     assert secret not in caplog.text
     assert sum("invalid or inaccessible" in record.message for record in caplog.records) == 2
+    assert "failure condition changed" in caplog.text
+    assert "check publication storage, read permissions, and dataset integrity" in caplog.text
+
+
+def test_publication_failure_diagnostics_identify_changed_conditions(service, monkeypatch, caplog):
+    _publish(service)
+    image = service.config.publication_root / "screen" / "first.png"
+    original = ImageServerConfiguration.read_current
+    image.write_bytes(b"damaged")
+    with caplog.at_level(logging.DEBUG):
+        assert _request(service)[0] == 503
+        assert _request(service)[0] == 503
+
+        def denied(_config, _destination, **_kwargs):
+            raise PublicationStorageError("cannot read private path") from PermissionError("private path")
+
+        monkeypatch.setattr(ImageServerConfiguration, "read_current", denied)
+        assert _request(service)[0] == 503
+        assert _request(service)[0] == 503
+        monkeypatch.setattr(ImageServerConfiguration, "read_current", original)
+        _publish(service, "recovered", value=5)
+        assert _request(service)[0] == 200
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert "checksum mismatch" in warnings[0]
+    assert "access denied" in warnings[1] and "failure condition changed" in warnings[1]
+    assert "read permissions" in warnings[1]
+    assert "private path" not in caplog.text and str(service.config.publication_root) not in caplog.text
+    assert "Publication recovered for destination screen" in caplog.text
 
 
 def test_inaccessible_destination_is_isolated_and_recovers(service, monkeypatch, caplog):
