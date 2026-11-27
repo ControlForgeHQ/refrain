@@ -174,39 +174,6 @@ def _unknown_fields(data: Mapping[str, object], allowed: set[str], field: str, r
         report(f"{field}.{key}", "is not a supported manifest field; it is ignored", logging.WARNING)
 
 
-def _parse_manifest(
-    manifest_path: AssetPath,
-    category: str,
-    allowed: set[str],
-    report: Report,
-) -> tuple[AssetPath, dict[str, object]] | None:
-    field = str(manifest_path)
-    try:
-        data = _read_manifest(manifest_path)
-    except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
-        report(field, f"manifest is invalid and the asset is excluded: {error}", logging.WARNING)
-        return None
-    _unknown_fields(data, allowed, field, report)
-    if type(data.get("format")) is not int or data.get("format") != 1:
-        report(
-            f"{field}.format",
-            "must be the supported integer manifest version 1; the asset is excluded",
-            logging.WARNING,
-        )
-        return None
-    identifier = data.get("id")
-    if not valid_identifier(identifier):
-        report(f"{field}.id", "must be a nonempty ASCII identifier; the asset is excluded", logging.WARNING)
-        return None
-    image = data.get("image")
-    try:
-        image_path = _manifest_path(manifest_path.parent, image, {".png"})
-    except Exception as error:
-        report(f"{field}.image", f"is invalid; the asset is excluded: {error}", logging.WARNING)
-        return None
-    return image_path, data
-
-
 def _font_validation_error(path: AssetPath) -> str | None:
     try:
         with path.open("rb") as stream:

@@ -194,50 +194,6 @@ def resolve_qr_placement(
     )
 
 
-def qr_parameters_to_metadata(parameters: QRCodeParameters) -> dict[str, object]:
-    validate_qr_parameters(parameters)
-    return {
-        "url": REPOSITORY_URL if parameters.url is None else parameters.url,
-        "version": parameters.version,
-        "error_correction": parameters.error_correction,
-        "module_size": parameters.module_size,
-        "quiet_zone": parameters.quiet_zone,
-        "right_offset": parameters.right_offset,
-        "bottom_offset": parameters.bottom_offset,
-    }
-
-
-def qr_parameters_from_metadata(value: object) -> QRCodeParameters:
-    if not isinstance(value, Mapping):
-        raise QRCodeGenerationError("snapshot.presentation_metadata.qr_code must be a mapping")
-    fields = {
-        "url",
-        "version",
-        "error_correction",
-        "module_size",
-        "quiet_zone",
-        "right_offset",
-        "bottom_offset",
-    }
-    if set(value) != fields:
-        raise QRCodeGenerationError("snapshot.presentation_metadata.qr_code must contain exactly the QR parameters")
-    if not isinstance(value["url"], str) or not value["url"]:
-        raise QRCodeGenerationError("snapshot QR URL must be a nonempty resolved string")
-    if type(value["version"]) is not int or not 1 <= value["version"] <= 40:
-        raise QRCodeGenerationError("snapshot QR version must be an integer from 1 through 40")
-    parameters = QRCodeParameters(
-        url=value["url"],
-        version=value["version"],
-        error_correction=value["error_correction"],
-        module_size=value["module_size"],
-        quiet_zone=value["quiet_zone"],
-        right_offset=value["right_offset"],
-        bottom_offset=value["bottom_offset"],
-    )
-    validate_qr_parameters(parameters)
-    return parameters
-
-
 def validate_qr_parameters(parameters: QRCodeParameters) -> None:
     if not isinstance(parameters, QRCodeParameters):
         raise QRCodeGenerationError("parameters must be a QRCodeParameters value")
@@ -397,8 +353,6 @@ __all__ = [
     "QRCodeParameters",
     "REPOSITORY_URL",
     "composite_qr_code",
-    "qr_parameters_from_metadata",
-    "qr_parameters_to_metadata",
     "render_qr_code",
     "resolve_qr_placement",
     "validate_qr_parameters",

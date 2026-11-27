@@ -36,16 +36,10 @@ _MANIFEST_FIELDS = {
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,254}\Z")
 _PUBLICATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,239}\Z")
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
-_TEMPORARY = re.compile(r"\.refrain-[0-9a-f]{32}\.manifest\.tmp\Z")
 _MAX_MANIFEST_BYTES = 64 * 1024
 _MAX_METADATA_BYTES = 16 * 1024 * 1024
 _MAX_IMAGE_BYTES = 64 * 1024 * 1024
 _LOGGER = logging.getLogger(__name__)
-
-
-def _generated_publication_name(name: str) -> bool:
-    stem, suffix = os.path.splitext(name)
-    return suffix in {".png", ".json"} and bool(_PUBLICATION_ID.fullmatch(stem))
 
 
 def _valid_destination_identifier(value: str) -> bool:
@@ -307,43 +301,6 @@ def validate_publication_root(
         raise PublicationStorageError(f"cannot inspect publication root {root_path}: {error}") from error
     if not stat.S_ISDIR(status.st_mode):
         raise PublicationStorageError(f"publication root is not a directory: {root_path}")
-    return root_path
-
-
-def validate_publication_tree(root: str | os.PathLike[str], *, application_paths: ApplicationPaths) -> Path:
-    """Validate a standard publication tree before installation maintenance removes it."""
-    root_path = validate_publication_root(root, application_paths=application_paths)
-    try:
-        root_path.lstat()
-    except FileNotFoundError:
-        return root_path
-    except OSError as error:
-        raise PublicationStorageError(f"cannot inspect publication root {root_path}: {error}") from error
-
-    def inspect(directory: Path, *, is_root: bool = False) -> None:
-        try:
-            children = tuple(directory.iterdir())
-        except OSError as error:
-            raise PublicationStorageError(f"cannot inspect publication directory {directory}: {error}") from error
-        for child in children:
-            try:
-                status = child.lstat()
-            except OSError as error:
-                raise PublicationStorageError(f"cannot inspect publication object {child}: {error}") from error
-            if _is_redirect(child, status):
-                raise PublicationStorageError(f"refusing to remove a linked publication object: {child}")
-            if is_root:
-                if not _valid_destination_identifier(child.name) or not stat.S_ISDIR(status.st_mode):
-                    raise PublicationStorageError(f"refusing to remove an unexpected publication object: {child}")
-                inspect(child)
-            elif not stat.S_ISREG(status.st_mode) or not (
-                child.name == "manifest.json"
-                or _generated_publication_name(child.name)
-                or _TEMPORARY.fullmatch(child.name)
-            ):
-                raise PublicationStorageError(f"refusing to remove an unexpected publication object: {child}")
-
-    inspect(root_path, is_root=True)
     return root_path
 
 
@@ -696,10 +653,6 @@ class PublicationStore:
     @staticmethod
     def _replace_manifest(temporary: Path, manifest_path: Path) -> None:
         os.replace(temporary, manifest_path)
-
-    @staticmethod
-    def _generated_name(name: str) -> bool:
-        return _generated_publication_name(name)
 
     def _cleanup_contents(self, destination: Path, keep: set[str]) -> None:
         root = self._validate_root()

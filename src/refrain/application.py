@@ -27,7 +27,7 @@ from .config import (
     load_application_config,
 )
 from .content import ContentEntry, ContentLibraryError, Quotation, _load_effective_content_library, resolve_qr_payloads
-from .display import DisplayBackend, DisplayBackendError, DisplayBackendUpdateError, create_display_backend
+from .display import DisplayBackend, DisplayBackendUpdateError, create_display_backend
 from .display.coordinator import (
     DisplayPublicationCoordinator,
     PublicationOperation,
@@ -286,27 +286,6 @@ def _persist_reveal_progress(store: PersistentStateStore, state: PersistentState
     except ValueError as error:
         _LOGGER.warning("Invalid requested reveal stage %s; retaining committed progression: %s", stage, error)
         return state
-
-
-def present_prepared_stage(
-    backend: DisplayBackend,
-    artifacts: PreparedImageArtifactSet,
-    output_specification: ResolvedOutputSpecification,
-    stage: int,
-) -> None:
-    """Load one prepared stage, submit it to ``backend``, and release the loaded image."""
-    try:
-        image: Image.Image = artifacts.load_stage(output_specification, stage)
-    except ArtifactStoreError as error:
-        raise _RetryableApplicationError(f"cannot load prepared image for stage {stage}: {error}") from error
-    try:
-        backend.update(image)
-    except DisplayBackendError as error:
-        if not error.recoverable:
-            raise ApplicationError(f"display update failed: {error}") from error
-        raise _RetryableApplicationError(f"display update failed: {error}") from error
-    finally:
-        image.close()
 
 
 def _load_configuration(config_file: str | Path | ApplicationConfiguration) -> ApplicationConfiguration:
@@ -1398,7 +1377,6 @@ __all__ = [
     "ApplicationError",
     "NoEligibleQuotationError",
     "StartupResult",
-    "present_prepared_stage",
     "run_startup",
     "run_application",
 ]
