@@ -67,6 +67,7 @@ from .geometry import (
     resolve_presentation_geometry,
     scale_design_geometry_to_presentation,
 )
+from .image_server_config import ImageServerConfiguration, load_image_server_config
 from .persistence import (
     DailySnapshot,
     GlobalHistoryRecord,
@@ -166,6 +167,7 @@ __all__ = [
     "PublicationManifest",
     "PublicationStorageError",
     "PublicationStore",
+    "ImageServerConfiguration",
     "parse_publication_manifest",
     "serialize_publication_manifest",
     "validate_publication_root",
@@ -220,6 +222,7 @@ __all__ = [
     "UnsupportedStateVersionError",
     "load_content_library",
     "load_application_config",
+    "load_image_server_config",
     "load_background_image",
     "load_decoration_layer_image",
     "layout_composition",
